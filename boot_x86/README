@@ -1,0 +1,2 @@
+A short program that boots into 64-bit long mode on an emulated and/or
+virtualized amd64 platform. Could be used as a basis for a L4 microkernel.
