@@ -3,10 +3,14 @@
 #include "16550.h"
 
 
+extern void printf(const char *fmt, ...)
+	__attribute__((format(printf, 1, 2)));
+
+
 /* rudimentary serial port output from µiX */
 #define COM_PORT 0x3f8
 
-static void computchar(unsigned char ch)
+void computchar(unsigned char ch)
 {
 //	unsigned int iter = 1;
 
@@ -53,5 +57,5 @@ void kmain(void *mbd, unsigned int magic)
 	videoram[1] = 0x07;		/* light grey (7) on black (0). */
 
 	/* also, output some stuff to the serial port. */
-	putstr("hello, world!\n");
+	printf("hello, world! mbd is at %d\n", (int)mbd);
 }

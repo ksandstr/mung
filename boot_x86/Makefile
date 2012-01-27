@@ -2,7 +2,7 @@
 all: image.bin
 
 
-image.bin: loader.o kmain.o
+image.bin: loader.o kmain.o printf.o
 	ld -T linker.ld -o $@ $^
 
 
