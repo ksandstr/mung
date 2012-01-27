@@ -4,11 +4,40 @@
 #include "multiboot.h"
 
 
+typedef unsigned long pdir_t;
+typedef unsigned long page_t;
+
+
 extern void printf(const char *fmt, ...)
 	__attribute__((format(printf, 1, 2)));
 
 
 #define CHECK_FLAG(mask, bit) (((mask) & (bit)) != 0)
+
+#define PAGE_ALIGN __attribute__((aligned(4096)))
+
+/* x86 page directory flags */
+#define PDIR_PRESENT (1 << 0)
+#define PDIR_RW (1 << 1)
+#define PDIR_USER (1 << 2)
+#define PDIR_WRITETHROUGH (1 << 3)
+#define PDIR_CACHEDISABLE (1 << 4)
+#define PDIR_ACCESSED (1 << 5)
+#define PDIR_LARGE (1 << 6)
+#define PDIR_IGNORED (1 << 7)
+
+/* x86 page table flags */
+#define PT_PRESENT (1 << 0)
+#define PT_RW (1 << 1)
+#define PT_USER (1 << 2)
+#define PT_WRITETHROUGH (1 << 3)
+#define PT_CACHEDISABLE (1 << 4)
+#define PT_ACCESSED (1 << 5)
+#define PT_DIRTY (1 << 6)
+#define PT_GLOBAL (1 << 7)
+
+
+static pdir_t kernel_pdirs[1024] PAGE_ALIGN;
 
 
 /* rudimentary serial port output from µiX */
@@ -48,6 +77,31 @@ void putstr(const char *str)
 }
 
 
+static void setup_paging(void)
+{
+	/* all present bits are turned off. */
+	for(int i=0; i < 1024; i++) kernel_pdirs[i] = 0;
+
+	/* identitymap the first 4 megabytes from 0 */
+	static page_t pages[1024] PAGE_ALIGN;
+	kernel_pdirs[0] = (pdir_t)&pages[0];
+	kernel_pdirs[0] |= PDIR_PRESENT | PDIR_RW | PDIR_USER;
+
+	for(int i=0; i < 1024; i++) {
+		pages[i] = (i << 12) | PT_PRESENT | PT_RW | PT_USER;
+	}
+
+	/* load the page table, then. */
+	__asm__ __volatile__ (
+		"\tmovl %0, %%cr3\n"
+		"\tmovl %%cr0, %%eax\n"
+		"\torl $0x80000000, %%eax\n"
+		"\tmovl %%eax, %%cr0\n"
+		:
+		: "a" (kernel_pdirs));
+}
+
+
 void kmain(void *mbd, unsigned int magic)
 {
 	if(magic != 0x2BADB002) {
@@ -61,7 +115,7 @@ void kmain(void *mbd, unsigned int magic)
 	videoram[1] = 0x07;		/* light grey (7) on black (0). */
 
 	/* also, output some stuff to the serial port. */
-	printf("hello, world! mbd is at %d\n", (int)mbd);
+	printf("hello, world! mbd is at 0x%x\n", (unsigned)mbd);
 
 	struct multiboot_info *mbi = mbd;
 	printf("flags 0x%x\n", mbi->flags);
@@ -91,6 +145,8 @@ void kmain(void *mbd, unsigned int magic)
 		}
 	}
 
+	printf("setting up paging...\n");
+	setup_paging();
 
 	printf("slamming teh brakes now.\n");
 }
