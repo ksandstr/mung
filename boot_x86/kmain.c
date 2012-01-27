@@ -7,6 +7,14 @@
 typedef unsigned long pdir_t;
 typedef unsigned long page_t;
 
+struct idt_entry {
+	unsigned short offset_1;
+	unsigned short selector;
+	unsigned char zero_0;
+	unsigned char type_attr;
+	unsigned short offset_2;
+} __attribute__((packed));
+
 
 extern void printf(const char *fmt, ...)
 	__attribute__((format(printf, 1, 2)));
@@ -35,6 +43,13 @@ extern void printf(const char *fmt, ...)
 #define PT_ACCESSED (1 << 5)
 #define PT_DIRTY (1 << 6)
 #define PT_GLOBAL (1 << 7)
+
+/* IDT type attr bits */
+#define IDT_PRESENT (1 << 7)
+#define IDT_PRIVILEGE ((1 << 6) | (1 << 5))
+#define IDT_STORAGE (1 << 4)
+#define IDT_GATE_TYPE 0x0f
+
 
 
 static pdir_t kernel_pdirs[1024] PAGE_ALIGN;
@@ -102,17 +117,77 @@ static void setup_paging(void)
 }
 
 
+static void setup_idt(void)
+{
+	extern void isr_top(void);
+	extern void isr14_top(void);
+
+	static struct idt_entry ints[256];
+	for(int i=0; i < 256; i++) {
+		ints[i] = (struct idt_entry){ /* all zero */ };
+	}
+
+	unsigned short sel;
+	__asm__ __volatile__ ("\tmovl %%cs, %%eax\n": "=a" (sel));
+	printf("using selector %d\n", (int)sel);
+
+	/* division by zero */
+	ints[0] = (struct idt_entry){
+		.offset_1 = (unsigned long)&isr_top & 0xffff,
+		.offset_2 = (unsigned long)&isr_top >> 16,
+		.selector = sel,
+		.type_attr = IDT_PRESENT | 0xe,		/* 32-bit interrupt gate */
+	};
+
+	/* pagefaults */
+	ints[14] = (struct idt_entry){
+		.offset_1 = (unsigned long)&isr14_top & 0xffff,
+		.offset_2 = (unsigned long)&isr14_top >> 16,
+		.selector = sel,
+		.type_attr = IDT_PRESENT | 0xe,		/* 32-bit interrupt gate */
+	};
+
+	struct {
+		unsigned short limit;
+		unsigned long base;
+	} __attribute__((packed)) idt_desc = {
+		.limit = sizeof(ints),
+		.base = (unsigned long)&ints[0],
+	};
+	__asm__ __volatile__("\tlidt %0\n":: "m" (idt_desc));
+}
+
+
+void isr_bottom()
+{
+	unsigned char *videoram = (unsigned char *)0xb8000;
+	videoram[0] = 'A';
+	videoram[1] = 0x07;		/* light grey (7) on black (0). */
+
+	asm("cli; hlt");
+}
+
+
+void isr14_bottom(unsigned long fault_addr)
+{
+#if 0
+	unsigned char *videoram = (unsigned char *)0xb8000;
+	videoram[0] = 'Z';
+	videoram[1] = 0x07;		/* light grey (7) on black (0). */
+#endif
+
+	printf("page fault at 0x%x\n", (unsigned int)fault_addr);
+
+	asm("cli; hlt");
+}
+
+
 void kmain(void *mbd, unsigned int magic)
 {
 	if(magic != 0x2BADB002) {
 		/* hang! */
 		return;
 	}
-
-	/* Print a letter to screen to see everything is working: */
-	unsigned char *videoram = (unsigned char *)0xb8000;
-	videoram[0] = 'A';
-	videoram[1] = 0x07;		/* light grey (7) on black (0). */
 
 	/* also, output some stuff to the serial port. */
 	printf("hello, world! mbd is at 0x%x\n", (unsigned)mbd);
@@ -147,6 +222,17 @@ void kmain(void *mbd, unsigned int magic)
 
 	printf("setting up paging...\n");
 	setup_paging();
+
+	printf("setting up interrupts...\n");
+	setup_idt();
+
+#if 0
+	static int zero;
+	printf("divide by zero: %d\n", 777 / zero);
+#endif
+
+	/* page fault. probably. */
+	*(char *)0xdeadbeef = 1;
 
 	printf("slamming teh brakes now.\n");
 }

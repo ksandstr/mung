@@ -1,13 +1,16 @@
 
+CFLAGS=-O2 -Wall -std=gnu99
+
+
 all: image.bin
 
 
-image.bin: loader.o kmain.o printf.o
+image.bin: loader.o isr.o kmain.o printf.o
 	ld -T linker.ld -o $@ $^
 
 
 %.o: %.c
-	$(CC) -m32 -c -o $@ $< -Wall -std=gnu99 -nostdlib -fno-builtin \
+	$(CC) -m32 -c -o $@ $< $(CFLAGS) -nostdlib -fno-builtin \
 		-nostartfiles -nodefaultlibs
 
 
