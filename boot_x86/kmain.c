@@ -7,6 +7,8 @@
 typedef unsigned long pdir_t;
 typedef unsigned long page_t;
 
+typedef unsigned int u32;
+
 struct idt_entry {
 	unsigned short offset_1;
 	unsigned short selector;
@@ -14,6 +16,29 @@ struct idt_entry {
 	unsigned char type_attr;
 	unsigned short offset_2;
 } __attribute__((packed));
+
+
+/* courtesy of L4Ka::pistachio */
+struct x86_exregs {
+	u32 reason;
+	u32 es;
+	u32 ds;
+	u32 edi;
+	u32 esi;
+	u32 ebp;
+	u32 __esp;
+	u32 ebx;
+	u32 edx;
+	u32 ecx;
+	u32 eax;
+	/* trapgate frame */
+	u32 error;
+	u32 eip;
+	u32 cs;
+	u32 eflags;
+	u32 esp;
+	u32 ss;
+};
 
 
 extern void printf(const char *fmt, ...)
@@ -175,24 +200,33 @@ void isr_bottom()
 }
 
 
-void isr14_bottom(unsigned long fault_addr)
+void isr14_bottom(struct x86_exregs *regs)
 {
+	u32 fault_addr;
+	__asm__ __volatile__("\tmovl %%cr2, %0\n": "=r" (fault_addr));
+
 #if 0
 	unsigned char *videoram = (unsigned char *)0xb8000;
 	videoram[0] = 'Z';
 	videoram[1] = 0x07;		/* light grey (7) on black (0). */
 #endif
 
-	printf("page fault at 0x%x\n", (unsigned int)fault_addr);
+	printf("page fault at 0x%x (eip 0x%x)\n", fault_addr, regs->eip);
 
 	/* set up an identity mapping if it's in the first 4 MiB. */
 	if(fault_addr < 1024 * 4096) {
 		int dir = fault_addr >> 22, p = (fault_addr >> 12) & 0xfff;
-		printf("pdir is 0x%x (%d), p %d\n",
-			(unsigned int)kernel_pdirs[dir], dir, p);
 		page_t *pages = (page_t *)(kernel_pdirs[dir] & ~0xfff);
 		pages[p] = (p << 12) | PT_PRESENT | PT_RW;
+#if 1
+		/* valid since the 80486. */
 		__asm__ volatile("invlpg %0"::"m" (*(char *)fault_addr): "memory");
+#else
+		__asm__ __volatile__(
+			"\tmovl %%cr3, %%eax\n"
+			"\tmovl %%eax, %%cr3\n"
+			::: "eax", "memory");
+#endif
 	} else {
 		printf("unable to handle. halting.\n");
 		asm("cli; hlt");

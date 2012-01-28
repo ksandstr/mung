@@ -1,6 +1,8 @@
 
 	.global isr_top
+	.type isr_top, @function
 
+# NOTE: this is broken. should be reworked to resemble isr14_top instead.
 isr_top:
 	pushal
 	pushl %gs
@@ -17,20 +19,18 @@ isr_top:
 
 
 	.global isr14_top
+	.type isr14_top, @function
 
 isr14_top:
 	pushal
-	pushl %gs
-	pushl %fs
 	pushl %ds
 	pushl %es
-	movl %cr2, %eax
-	pushl %eax
+	pushl $14		# exception 14, #PF
+	pushl %esp
 	call isr14_bottom
-	popl %eax
+	addl $8, %esp
 	popl %es
 	popl %ds
-	popl %fs
-	popl %gs
 	popal
+	addl $4, %esp		# the error code
 	iret
