@@ -2,7 +2,17 @@
 CFLAGS=-O2 -Wall -std=gnu99
 
 
-all: image.bin
+all: tags image.bin
+
+
+clean:
+	@rm -f *.o
+
+distclean: clean
+	@rm -f image.bin tags
+
+tags: $(wildcard *.[ch])
+	@ctags -R .
 
 
 image.bin: loader.o isr.o kmain.o printf.o
