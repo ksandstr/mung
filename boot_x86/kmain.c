@@ -103,7 +103,13 @@ static void setup_paging(void)
 	kernel_pdirs[0] |= PDIR_PRESENT | PDIR_RW | PDIR_USER;
 
 	for(int i=0; i < 1024; i++) {
-		pages[i] = (i << 12) | PT_PRESENT | PT_RW | PT_USER;
+		if(i < 512) {
+			/* first two megs are mapped right away. */
+			pages[i] = (i << 12) | PT_PRESENT | PT_RW;
+		} else {
+			/* the other two, test out paging. */
+			pages[i] = 0;
+		}
 	}
 
 	/* load the page table, then. */
@@ -113,7 +119,8 @@ static void setup_paging(void)
 		"\torl $0x80000000, %%eax\n"
 		"\tmovl %%eax, %%cr0\n"
 		:
-		: "a" (kernel_pdirs));
+		: "a" (kernel_pdirs)
+		: "memory");
 }
 
 
@@ -178,7 +185,18 @@ void isr14_bottom(unsigned long fault_addr)
 
 	printf("page fault at 0x%x\n", (unsigned int)fault_addr);
 
-	asm("cli; hlt");
+	/* set up an identity mapping if it's in the first 4 MiB. */
+	if(fault_addr < 1024 * 4096) {
+		int dir = fault_addr >> 22, p = (fault_addr >> 12) & 0xfff;
+		printf("pdir is 0x%x (%d), p %d\n",
+			(unsigned int)kernel_pdirs[dir], dir, p);
+		page_t *pages = (page_t *)(kernel_pdirs[dir] & ~0xfff);
+		pages[p] = (p << 12) | PT_PRESENT | PT_RW;
+		__asm__ volatile("invlpg %0"::"m" (*(char *)fault_addr): "memory");
+	} else {
+		printf("unable to handle. halting.\n");
+		asm("cli; hlt");
+	}
 }
 
 
@@ -220,18 +238,23 @@ void kmain(void *mbd, unsigned int magic)
 		}
 	}
 
-	printf("setting up paging...\n");
-	setup_paging();
-
 	printf("setting up interrupts...\n");
 	setup_idt();
+
+	printf("setting up paging...\n");
+	setup_paging();
 
 #if 0
 	static int zero;
 	printf("divide by zero: %d\n", 777 / zero);
 #endif
 
-	/* page fault. probably. */
+	/* handleable fault. */
+	volatile char *memory = (char *)0x210000;
+	memory[0] = 1;
+	memory[1] = 2;
+
+	/* somewhat less so. */
 	*(char *)0xdeadbeef = 1;
 
 	printf("slamming teh brakes now.\n");
