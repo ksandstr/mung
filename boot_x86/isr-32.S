@@ -8,10 +8,10 @@ isr_top:
 	pushl %ds
 	pushl %es
 	call isr_bottom
-	popl %gs
-	popl %fs
-	popl %ds
 	popl %es
+	popl %ds
+	popl %fs
+	popl %gs
 	popal
 	iret
 
@@ -28,9 +28,9 @@ isr14_top:
 	pushl %eax
 	call isr14_bottom
 	popl %eax
-	popl %gs
-	popl %fs
-	popl %ds
 	popl %es
+	popl %ds
+	popl %fs
+	popl %gs
 	popal
 	iret
