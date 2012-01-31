@@ -203,7 +203,8 @@ void isr_bottom()
 void isr14_bottom(struct x86_exregs *regs)
 {
 	u32 fault_addr;
-	__asm__ __volatile__("\tmovl %%cr2, %0\n": "=r" (fault_addr));
+	__asm__ __volatile__("\tmovl %%cr2, %0\n" : "=r" (fault_addr)
+		:: "memory");
 
 #if 0
 	unsigned char *videoram = (unsigned char *)0xb8000;
