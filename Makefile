@@ -1,5 +1,5 @@
 
-CFLAGS=-O2 -Wall -std=gnu99
+CFLAGS=-O2 -Wall -std=gnu99 -I include -fno-builtin -nostdlib
 
 
 all: tags image.bin
@@ -16,13 +16,15 @@ tags: $(wildcard *.[ch])
 
 
 image.bin: loader.o isr.o kmain.o printf.o
-	ld -T linker.ld -o $@ $^
+	@echo "  LD $@"
+	@ld -T linker.ld -o $@ $^
 
 
 %.o: %.c
-	$(CC) -m32 -c -o $@ $< $(CFLAGS) -nostdlib -fno-builtin \
-		-nostartfiles -nodefaultlibs
+	@echo "  CC $@"
+	@$(CC) -m32 -c -o $@ $< $(CFLAGS) -nostartfiles -nodefaultlibs
 
 
 %.o: %-32.S
-	as --32 -o $@ $<
+	@echo "  AS $@"
+	@as --32 -o $@ $<
