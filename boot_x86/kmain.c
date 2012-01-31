@@ -212,7 +212,11 @@ void isr14_bottom(struct x86_exregs *regs)
 	videoram[1] = 0x07;		/* light grey (7) on black (0). */
 #endif
 
-	printf("page fault at 0x%x (eip 0x%x)\n", fault_addr, regs->eip);
+	printf("pf (%s, %s, %s) @ 0x%x (eip 0x%x)\n",
+		CHECK_FLAG(regs->error, 4) ? "user" : "supervisor",
+		CHECK_FLAG(regs->error, 2) ? "write" : "read",
+		CHECK_FLAG(regs->error, 1) ? "protection" : "notpresent",
+		fault_addr, regs->eip);
 
 	/* set up an identity mapping if it's in the first 4 MiB. */
 	if(fault_addr < 1024 * 4096) {
