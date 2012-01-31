@@ -1,2 +1,5 @@
-This directory contains miscellaneous hacks. These are distinct from
-prototypes in that they have genuine use once ready.
+This is an experimental microkernel for the x86 architecture, following the
+L4.X2 specification. Licensed under the GNU GPL version 3, found in the
+COPYING file in this directory.
+
+  - Kalle A. Sandström <ksandstr@iki.fi>
