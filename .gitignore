@@ -1,3 +1,5 @@
 .*.sw[opn]
 *~
 *.o
+*.bin
+tags
