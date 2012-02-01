@@ -1,4 +1,6 @@
 
+#include <ukernel/types.h>
+
 #include "ioport.h"
 #include "16550.h"
 #include "multiboot.h"
@@ -6,8 +8,6 @@
 
 typedef unsigned long pdir_t;
 typedef unsigned long page_t;
-
-typedef unsigned int u32;
 
 struct idt_entry {
 	unsigned short offset_1;
@@ -20,24 +20,24 @@ struct idt_entry {
 
 /* courtesy of L4Ka::pistachio */
 struct x86_exregs {
-	u32 reason;
-	u32 es;
-	u32 ds;
-	u32 edi;
-	u32 esi;
-	u32 ebp;
-	u32 __esp;
-	u32 ebx;
-	u32 edx;
-	u32 ecx;
-	u32 eax;
+	uint32_t reason;
+	uint32_t es;
+	uint32_t ds;
+	uint32_t edi;
+	uint32_t esi;
+	uint32_t ebp;
+	uint32_t __esp;
+	uint32_t ebx;
+	uint32_t edx;
+	uint32_t ecx;
+	uint32_t eax;
 	/* trapgate frame */
-	u32 error;
-	u32 eip;
-	u32 cs;
-	u32 eflags;
-	u32 esp;
-	u32 ss;
+	uint32_t error;
+	uint32_t eip;
+	uint32_t cs;
+	uint32_t eflags;
+	uint32_t esp;
+	uint32_t ss;
 };
 
 
@@ -202,7 +202,7 @@ void isr_bottom()
 
 void isr14_bottom(struct x86_exregs *regs)
 {
-	u32 fault_addr;
+	uint32_t fault_addr;
 	__asm__ __volatile__("\tmovl %%cr2, %0\n" : "=r" (fault_addr)
 		:: "memory");
 
