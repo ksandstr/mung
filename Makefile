@@ -15,7 +15,8 @@ tags: $(wildcard *.[ch])
 	@ctags -R .
 
 
-image.bin: loader.o isr.o kmain.o printf.o fake_stdio.o
+image.bin: loader.o isr.o kmain.o printf.o fake_stdio.o string.o dlmalloc.o \
+		heap.o
 	@echo "  LD $@"
 	@ld -T linker.ld -o $@ $^
 
@@ -28,3 +29,6 @@ image.bin: loader.o isr.o kmain.o printf.o fake_stdio.o
 %.o: %-32.S
 	@echo "  AS $@"
 	@as --32 -o $@ $<
+
+
+dlmalloc.o: CFLAGS += -Wno-unused-variable
