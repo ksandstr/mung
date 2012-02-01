@@ -1,4 +1,5 @@
 
+#include <stdio.h>
 #include <ukernel/types.h>
 #include <ukernel/ioport.h>
 #include <ukernel/16550.h>
@@ -38,10 +39,6 @@ struct x86_exregs {
 	uint32_t esp;
 	uint32_t ss;
 };
-
-
-extern void printf(const char *fmt, ...)
-	__attribute__((format(printf, 1, 2)));
 
 
 #define CHECK_FLAG(mask, bit) (((mask) & (bit)) != 0)

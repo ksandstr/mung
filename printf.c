@@ -4,6 +4,9 @@
  * vim:ts=8:
  */
 
+#include <stdio.h>
+
+
 extern void computchar(unsigned char c);
 
 

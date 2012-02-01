@@ -1,5 +1,5 @@
 
-CFLAGS=-O2 -Wall -std=gnu99 -I include -fno-builtin -nostdlib
+CFLAGS=-O2 -Wall -std=gnu99 -I include -I include/fake_clib -fno-builtin -nostdlib
 
 
 all: tags image.bin
@@ -15,7 +15,7 @@ tags: $(wildcard *.[ch])
 	@ctags -R .
 
 
-image.bin: loader.o isr.o kmain.o printf.o
+image.bin: loader.o isr.o kmain.o printf.o fake_stdio.o
 	@echo "  LD $@"
 	@ld -T linker.ld -o $@ $^
 
