@@ -1,9 +1,8 @@
 
 #include <ukernel/types.h>
-
-#include "ioport.h"
-#include "16550.h"
-#include "multiboot.h"
+#include <ukernel/ioport.h>
+#include <ukernel/16550.h>
+#include <multiboot.h>
 
 
 typedef unsigned long pdir_t;
