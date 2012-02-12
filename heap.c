@@ -10,8 +10,13 @@
 #include "multiboot.h"
 #include "mm.h"
 
-/* leave uppermost 128k unused */
-#define HEAP_TOP 0xfffe0000
+/* leave uppermost 128k unused
+ *
+ * FIXME: that doesn't work. probably a segmentation issue. the lower heap top
+ * works just fine though.
+ */
+//#define HEAP_TOP 0xfffe0000
+#define HEAP_TOP 0x80000000u
 
 #define N_FIRST_PAGES (2 * 1024 * 1024 / PAGE_SIZE)
 
