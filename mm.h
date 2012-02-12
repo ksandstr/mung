@@ -46,7 +46,14 @@ extern void init_kernel_heap(
 extern void add_boot_pages(intptr_t start, intptr_t end);
 
 
-/* page-grain allocator. works during early boot, backs the slab allocator. */
+/* supervisor page table access from kmain.c */
+
+extern void put_supervisor_page(intptr_t addr, uint32_t page_id);
+
+
+/* from heap.c, a page-grain allocator.
+ * works during early boot already, backs the slab allocator.
+ */
 
 extern struct page *get_kern_page(void);
 extern void free_kern_page(struct page *p);

@@ -117,11 +117,14 @@ void putstr(const char *str)
 }
 
 
-static void put_supervisor_page(intptr_t addr, uint32_t page_id)
+void put_supervisor_page(intptr_t addr, uint32_t page_id)
 {
+//	printf("%s: addr 0x%x, page_id %u\n", __func__, (unsigned)addr, page_id);
 	pdir_t *dir = &kernel_pdirs[addr >> 22];
 	page_t *pages;
 	if(unlikely(!CHECK_FLAG(*dir, PDIR_PRESENT))) {
+		printf("%s: directory for 0x%x not present\n", __func__,
+			(unsigned)addr);
 		struct page *pg = get_kern_page();
 		pages = pg->vm_addr;
 		*dir = (pdir_t)(pg->id << 12) | PDIR_PRESENT | PDIR_RW;
@@ -144,6 +147,14 @@ static void setup_paging(intptr_t id_start, intptr_t id_end)
 {
 	/* all present bits are turned off. */
 	for(int i=0; i < 1024; i++) kernel_pdirs[i] = 0;
+
+	/* allocate page directory for the heap to avoid recursion in
+	 * get_kern_page() (this comes from the early heap, and thus has identity
+	 * mapping)
+	 */
+	intptr_t slop = reserve_heap_page();
+	struct page *pg = get_kern_page();
+	put_supervisor_page(slop, pg->id);
 
 	/* identitymap between id_start and id_end inclusive */
 	id_start &= ~PAGE_MASK;

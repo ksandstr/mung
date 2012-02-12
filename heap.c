@@ -43,9 +43,7 @@ void *sbrk(intptr_t increment)
 /* reserves address space in the sbrk()-style heap. */
 intptr_t reserve_heap_page(void)
 {
-#if 0
 	heap_pos -= PAGE_SIZE;
-#endif
 	return heap_pos;
 }
 
@@ -101,8 +99,10 @@ struct page *get_kern_page(void)
 	struct page *p = container_of(k_free_pages.n.next, struct page, link);
 	list_del(&p->link);
 	if(p->vm_addr == NULL) {
-		/* FIXME: map the page in */
-		printf("FOOOOO!\n");
+		/* map it in. */
+		intptr_t addr = reserve_heap_page();
+		put_supervisor_page(addr, p->id);
+		p->vm_addr = (void *)addr;
 	}
 	return p;
 }
