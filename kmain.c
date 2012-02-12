@@ -132,7 +132,7 @@ static void put_supervisor_page(intptr_t addr, uint32_t page_id)
 		pages = (void *)(*dir & ~PAGE_MASK);
 	}
 
-	int poffs = (addr >> 12) & 0xfff;
+	int poffs = (addr >> 12) & 0x3ff;
 	pages[poffs] = (page_id << PAGE_BITS) | PT_PRESENT | PT_RW;
 
 	/* valid since the 80486. */
@@ -237,7 +237,7 @@ void isr14_bottom(struct x86_exregs *regs)
 #endif
 
 	/* set up an identity mapping if it's in the first 4 MiB. */
-	int dir = fault_addr >> 22, p = (fault_addr >> 12) & 0xfff;
+	int dir = fault_addr >> 22, p = (fault_addr >> 12) & 0x3ff;
 	page_t *pages = (page_t *)(kernel_pdirs[dir] & ~0xfff);
 	if(pages == NULL) {
 		/* TODO: track this page: it is used for kernel-space page tables. */
