@@ -15,10 +15,10 @@ tags: $(wildcard *.[ch])
 	@ctags -R .
 
 
-image.bin: loader.o isr.o kmain.o printf.o fake_stdio.o string.o dlmalloc.o \
-		heap.o
+image.bin: linker.ld loader.o isr.o kmain.o printf.o fake_stdio.o string.o \
+		dlmalloc.o heap.o
 	@echo "  LD $@"
-	@ld -T linker.ld -o $@ $^
+	@ld -T linker.ld -o $@ $(filter %.o,$^)
 
 
 %.o: %.c

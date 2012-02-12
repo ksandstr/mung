@@ -1,4 +1,5 @@
-ENTRY(loader)
+OUTPUT_FORMAT("elf32-i386")
+ENTRY("loader")
 
 SECTIONS {
 	. = 0x00100000;
