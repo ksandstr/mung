@@ -15,6 +15,8 @@
 
 # loader program
 	.global loader
+	.global _start
+_start:
 loader:
 	movl $(stack + STACKSIZE), %esp
 

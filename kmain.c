@@ -1,13 +1,17 @@
 
 #include <stdio.h>
+#include <stdbool.h>
 #include <ukernel/types.h>
 #include <ukernel/ioport.h>
 #include <ukernel/16550.h>
-#include <multiboot.h>
+#include <ccan/likely/likely.h>
+
+#include "multiboot.h"
+#include "mm.h"
 
 
-typedef unsigned long pdir_t;
-typedef unsigned long page_t;
+typedef uint32_t pdir_t;
+typedef uint32_t page_t;
 
 struct idt_entry {
 	unsigned short offset_1;
@@ -113,27 +117,44 @@ void putstr(const char *str)
 }
 
 
-static void setup_paging(void)
+static void put_supervisor_page(intptr_t addr, uint32_t page_id)
+{
+	pdir_t *dir = &kernel_pdirs[addr >> 22];
+	page_t *pages;
+	if(unlikely(!CHECK_FLAG(*dir, PDIR_PRESENT))) {
+		struct page *pg = get_kern_page();
+		pages = pg->vm_addr;
+		*dir = (pdir_t)(pg->id << 12) | PDIR_PRESENT | PDIR_RW;
+	} else {
+		/* FIXME: access the page directory via a id-to-vm mapping, even
+		 * though these are guaranteed idempotent right now.
+		 */
+		pages = (void *)(*dir & ~PAGE_MASK);
+	}
+
+	int poffs = (addr >> 12) & 0xfff;
+	pages[poffs] = (page_id << PAGE_BITS) | PT_PRESENT | PT_RW;
+
+	/* valid since the 80486. */
+	__asm__ volatile("invlpg %0"::"m" (*(char *)addr): "memory");
+}
+
+
+static void setup_paging(intptr_t id_start, intptr_t id_end)
 {
 	/* all present bits are turned off. */
 	for(int i=0; i < 1024; i++) kernel_pdirs[i] = 0;
 
-	/* identitymap the first 4 megabytes from 0 */
-	static page_t pages[1024] PAGE_ALIGN;
-	kernel_pdirs[0] = (pdir_t)&pages[0];
-	kernel_pdirs[0] |= PDIR_PRESENT | PDIR_RW | PDIR_USER;
-
-	for(int i=0; i < 1024; i++) {
-		if(i < 512) {
-			/* first two megs are mapped right away. */
-			pages[i] = (i << 12) | PT_PRESENT | PT_RW;
-		} else {
-			/* the other two, test out paging. */
-			pages[i] = 0;
-		}
+	/* identitymap between id_start and id_end inclusive */
+	id_start &= ~PAGE_MASK;
+	id_end = (id_end + PAGE_SIZE - 1) & ~PAGE_MASK;
+	for(intptr_t addr = id_start; addr < id_end; addr += PAGE_SIZE) {
+		put_supervisor_page(addr, addr >> PAGE_BITS);
 	}
 
-	/* load the page table, then. */
+	/* load the supervisor page table (kernel_pdirs into CR3), then enable
+	 * paging.
+	 */
 	__asm__ __volatile__ (
 		"\tmovl %0, %%cr3\n"
 		"\tmovl %%cr0, %%eax\n"
@@ -142,6 +163,13 @@ static void setup_paging(void)
 		:
 		: "a" (kernel_pdirs)
 		: "memory");
+}
+
+
+static void panic(const char *message)
+{
+	printf("PANIC: %s\n", message);
+	asm("cli; hlt");
 }
 
 
@@ -208,37 +236,90 @@ void isr14_bottom(struct x86_exregs *regs)
 	videoram[1] = 0x07;		/* light grey (7) on black (0). */
 #endif
 
-	printf("pf (%s, %s, %s) @ 0x%x (eip 0x%x)\n",
-		CHECK_FLAG(regs->error, 4) ? "user" : "supervisor",
-		CHECK_FLAG(regs->error, 2) ? "write" : "read",
-		CHECK_FLAG(regs->error, 1) ? "protection" : "notpresent",
-		fault_addr, regs->eip);
-
 	/* set up an identity mapping if it's in the first 4 MiB. */
-	if(fault_addr < 1024 * 4096) {
-		int dir = fault_addr >> 22, p = (fault_addr >> 12) & 0xfff;
-		page_t *pages = (page_t *)(kernel_pdirs[dir] & ~0xfff);
+	int dir = fault_addr >> 22, p = (fault_addr >> 12) & 0xfff;
+	page_t *pages = (page_t *)(kernel_pdirs[dir] & ~0xfff);
+	if(pages == NULL) {
+		/* TODO: track this page: it is used for kernel-space page tables. */
+		struct page *pg = get_kern_page();
+		pages = pg->vm_addr;
+		for(int i=0; i < 1024; i++) pages[i] = 0;
+		kernel_pdirs[dir] = (pdir_t)(pg->id << PAGE_BITS) | PDIR_PRESENT | PDIR_RW;
+	}
+	if(fault_addr < 4 * 1024 * 1024) {
+		/* idempotent mappings of low physical RAM (ugly) */
 		pages[p] = (p << 12) | PT_PRESENT | PT_RW;
-#if 1
-		/* valid since the 80486. */
-		__asm__ volatile("invlpg %0"::"m" (*(char *)fault_addr): "memory");
-#else
-		__asm__ __volatile__(
-			"\tmovl %%cr3, %%eax\n"
-			"\tmovl %%eax, %%cr3\n"
-			::: "eax", "memory");
-#endif
+	} else if((fault_addr & 0xf0000000) == 0xf0000000) {
+		if(!CHECK_FLAG(pages[p], PT_PRESENT)) {
+			/* allocate. */
+			struct page *pg = get_kern_page();
+			pages[p] = (pg->id << PAGE_BITS) | PT_PRESENT | PT_RW;
+			printf("allocated physical page 0x%x for fault in kernel memory\n",
+				(unsigned)pg->id << PAGE_BITS);
+		}
 	} else {
+		printf("pf (%s, %s, %s) @ 0x%x (eip 0x%x)\n",
+			CHECK_FLAG(regs->error, 4) ? "user" : "supervisor",
+			CHECK_FLAG(regs->error, 2) ? "write" : "read",
+			CHECK_FLAG(regs->error, 1) ? "protection" : "notpresent",
+			fault_addr, regs->eip);
+
 		printf("unable to handle. halting.\n");
 		asm("cli; hlt");
+	}
+#if 1
+	/* valid since the 80486. */
+	__asm__ volatile("invlpg %0"::"m" (*(char *)fault_addr): "memory");
+#else
+	__asm__ __volatile__(
+		"\tmovl %%cr3, %%eax\n"
+		"\tmovl %%eax, %%cr3\n"
+		::: "eax", "memory");
+#endif
+}
+
+
+static void add_mbi_memory(
+	struct multiboot_info *mbi,
+	intptr_t excl_start,
+	intptr_t excl_end)
+{
+	printf("%s: excl_start 0x%x, excl_end 0x%x\n", __func__,
+		(unsigned)excl_start, (unsigned)excl_end);
+	for(struct multiboot_mmap_entry *mm = (void *)mbi->mmap_addr;
+		(unsigned long)mm < mbi->mmap_addr + mbi->mmap_length;
+		mm = (void *)mm + mm->size + sizeof(mm->size))
+	{
+		if(mm->type != MULTIBOOT_MEMORY_AVAILABLE
+			|| mm->len < PAGE_SIZE
+			|| mm->addr > (uint64_t)~0u)
+		{
+			continue;
+		}
+
+		intptr_t start = mm->addr, end = (mm->addr + mm->len) & ~PAGE_MASK;
+		if(start > excl_end || end < excl_start) {
+			add_boot_pages(start, end);
+		} else if(start >= excl_start && end <= excl_end) {
+			/* skip entirely */
+		} else if(start >= excl_start) {
+			add_boot_pages(excl_end + 1, end);
+		} else if(end <= excl_end) {
+			add_boot_pages(start, excl_start - 1);
+		} else {
+			/* brute force. */
+			for(intptr_t p = start; p < end; p += PAGE_SIZE) {
+				if(p < excl_start || p > excl_end) {
+					add_boot_pages(p, p + PAGE_SIZE - 1);
+				}
+			}
+		}
 	}
 }
 
 
-void malloc_panic(void)
-{
-	printf("malloc panic!\n");
-	asm("cli; hlt");
+void malloc_panic(void) {
+	panic("malloc failure!");
 }
 
 
@@ -265,6 +346,9 @@ void kmain(void *mbd, unsigned int magic)
 		printf("mods_count %u, mods_addr 0x%x\n", mbi->mods_count,
 			mbi->mods_addr);
 	}
+
+	bool found_mem = false;
+	intptr_t resv_start = 0, resv_end = 0;
 	if(CHECK_FLAG(mbi->flags, MULTIBOOT_INFO_MEM_MAP)) {
 		printf("multiboot memory map (0x%x, length 0x%x):\n",
 			mbi->mmap_addr, mbi->mmap_length);
@@ -277,14 +361,36 @@ void kmain(void *mbd, unsigned int magic)
 					? "available" : "reserved",
 				(unsigned)mm->addr, (unsigned)mm->size,
 				(unsigned)mm->len, (int)(mm->len / (1024 * 1024)));
+
+			if(mm->type == MULTIBOOT_MEMORY_AVAILABLE
+				&& mm->len >= 8 * 1024 * 1024
+				&& mm->addr <= ~0u)
+			{
+				found_mem = true;
+				init_kernel_heap(mm, &resv_start, &resv_end);
+			}
 		}
+	}
+	if(!found_mem) {
+		panic("didn't find any memory in multiboot spec!");
 	}
 
 	printf("setting up interrupts...\n");
 	setup_idt();
 
-	printf("setting up paging...\n");
-	setup_paging();
+	printf("setting up paging (id maps between 0x%x and 0x%x)...\n",
+		(unsigned)resv_start, (unsigned)resv_end);
+	setup_paging(resv_start, resv_end);
+	printf("adding identity maps for MBI memory...\n");
+	/* NOTE: this is a big hack: generally the MBI info fits in less than 4k
+	 * of memory.
+	 */
+	put_supervisor_page((intptr_t)mbi & ~PAGE_MASK, (intptr_t)mbi >> PAGE_BITS);
+
+	if(CHECK_FLAG(mbi->flags, MULTIBOOT_INFO_MEM_MAP)) {
+		printf("adding MultiBoot memory...\n");
+		add_mbi_memory(mbi, resv_start & ~PAGE_MASK, resv_end | PAGE_MASK);
+	}
 
 #if 0
 	static int zero;
@@ -295,6 +401,12 @@ void kmain(void *mbd, unsigned int magic)
 	volatile char *memory = (char *)0x210000;
 	memory[0] = 1;
 	memory[1] = 2;
+
+	/* malloc test. */
+	char *foo = malloc(64);
+	foo[0] = 'q';
+	foo[1] = 'w';
+	foo[2] = 'e';
 
 	/* somewhat less so. */
 	*(char *)0xdeadbeef = 1;

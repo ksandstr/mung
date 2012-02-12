@@ -1,5 +1,8 @@
 
-CFLAGS=-O2 -Wall -std=gnu99 -I include -I include/fake_clib -fno-builtin -nostdlib
+# FIXME: remove -DNDEBUG when there's a proper <assert.h> in this tree
+CFLAGS=-O2 -Wall -march=native -std=gnu99 -I include -I include/fake_clib \
+	-I ~/src/ccan \
+	-fno-builtin -nostdlib -DNDEBUG
 
 
 all: tags image.bin
@@ -16,7 +19,7 @@ tags: $(wildcard *.[ch])
 
 
 image.bin: linker.ld loader.o isr.o kmain.o printf.o fake_stdio.o string.o \
-		dlmalloc.o heap.o
+		dlmalloc.o heap.o slab.o
 	@echo "  LD $@"
 	@ld -T linker.ld -o $@ $(filter %.o,$^)
 
