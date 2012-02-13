@@ -129,6 +129,19 @@ static void NORETURN panic(const char *message)
 }
 
 
+static struct page *find_page_by_id(uint32_t id)
+{
+	/* TODO: use a more efficient mapping than a search over a linked
+	 * list...
+	 */
+	struct page *page;
+	list_for_each(&resv_page_list, page, link) {
+		if(page->id == id) return page;
+	}
+	return NULL;
+}
+
+
 void put_supervisor_page(intptr_t addr, uint32_t page_id)
 {
 //	printf("%s: addr 0x%x, page_id %u\n", __func__, (unsigned)addr, page_id);
@@ -144,22 +157,9 @@ void put_supervisor_page(intptr_t addr, uint32_t page_id)
 		*dir = (pdir_t)(pg->id << 12) | PDIR_PRESENT | PDIR_RW;
 		list_add(&resv_page_list, &pg->link);
 	} else {
-		/* TODO: use a more efficient mapping than a search over a linked
-		 * list...
-		 */
-		struct page *dir_page;
-		bool found = false;
-		list_for_each(&resv_page_list, dir_page, link) {
-			if(dir_page->id == (*dir >> PAGE_BITS)) {
-				found = true;
-				break;
-			}
-		}
-		if(found) {
-			pages = dir_page->vm_addr;
-		} else {
-			panic("directory page not found!");
-		}
+		struct page *dir_page = find_page_by_id(*dir >> PAGE_BITS);
+		if(dir_page == NULL) panic("directory page not found!");
+		pages = dir_page->vm_addr;
 	}
 
 	int poffs = (addr >> 12) & 0x3ff;
