@@ -18,7 +18,7 @@
 struct page
 {
 	struct list_node link;
-	void *vm_addr;		/* address in kernel space */
+	void *vm_addr;		/* address in kernel space, NULL if not mapped */
 
 	/* page IDs are physical address >> PAGE_BITS, which allows referencing of
 	 * 44 bits of physical memory (i.e. 16 TiB).

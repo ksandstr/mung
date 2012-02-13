@@ -6,6 +6,7 @@
 #include <ukernel/16550.h>
 #include <ccan/likely/likely.h>
 #include <ccan/compiler/compiler.h>
+#include <ccan/list/list.h>
 
 #include "multiboot.h"
 #include "mm.h"
@@ -79,6 +80,7 @@ struct x86_exregs {
 
 
 static pdir_t kernel_pdirs[1024] PAGE_ALIGN;
+static struct list_head resv_page_list = LIST_HEAD_INIT(resv_page_list);
 
 
 /* rudimentary serial port output from µiX */
@@ -136,13 +138,28 @@ void put_supervisor_page(intptr_t addr, uint32_t page_id)
 		printf("%s: directory for 0x%x not present\n", __func__,
 			(unsigned)addr);
 		struct page *pg = get_kern_page();
+		printf("%s: new directory page allocated at 0x%x (phys 0x%x)\n",
+			__func__, (unsigned)pg->vm_addr, (unsigned)(pg->id << PAGE_BITS));
 		pages = pg->vm_addr;
 		*dir = (pdir_t)(pg->id << 12) | PDIR_PRESENT | PDIR_RW;
+		list_add(&resv_page_list, &pg->link);
 	} else {
-		/* FIXME: access the page directory via a id-to-vm mapping, even
-		 * though these are guaranteed idempotent right now.
+		/* TODO: use a more efficient mapping than a search over a linked
+		 * list...
 		 */
-		pages = (void *)(*dir & ~PAGE_MASK);
+		struct page *dir_page;
+		bool found = false;
+		list_for_each(&resv_page_list, dir_page, link) {
+			if(dir_page->id == (*dir >> PAGE_BITS)) {
+				found = true;
+				break;
+			}
+		}
+		if(found) {
+			pages = dir_page->vm_addr;
+		} else {
+			panic("directory page not found!");
+		}
 	}
 
 	int poffs = (addr >> 12) & 0x3ff;
@@ -157,14 +174,6 @@ static void setup_paging(intptr_t id_start, intptr_t id_end)
 {
 	/* all present bits are turned off. */
 	for(int i=0; i < 1024; i++) kernel_pdirs[i] = 0;
-
-	/* allocate page directory for the heap to avoid recursion in
-	 * get_kern_page() (this comes from the early heap, and thus has identity
-	 * mapping)
-	 */
-	intptr_t slop = reserve_heap_page();
-	struct page *pg = get_kern_page();
-	put_supervisor_page(slop, pg->id);
 
 	/* identitymap between id_start and id_end inclusive */
 	id_start &= ~PAGE_MASK;

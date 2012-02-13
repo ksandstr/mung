@@ -96,7 +96,12 @@ void init_kernel_heap(
 struct page *get_kern_page(void)
 {
 //	assert(!list_empty(&k_free_pages));
-	struct page *p = container_of(k_free_pages.n.next, struct page, link);
+	/* (get from tail of list, as that's where the idempotent heap is during
+	 * early boot. otherwise there is endless recursion through
+	 * put_supervisor_page()'s not finding the page directory for the vm
+	 * heap.)
+	 */
+	struct page *p = container_of(k_free_pages.n.prev, struct page, link);
 	list_del(&p->link);
 	if(p->vm_addr == NULL) {
 		/* map it in. */
