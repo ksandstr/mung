@@ -447,7 +447,7 @@ void kmain(void *mbd, unsigned int magic)
 	foo[1] = 'w';
 	foo[2] = 'e';
 	foo[3] = '\0';
-	printf("should say `qwe': `%s'\n", foo);
+	printf("string at 0x%x should say `qwe': `%s'\n", (unsigned)foo, foo);
 	free(foo);
 
 	printf("slamming teh brakes now.\n");

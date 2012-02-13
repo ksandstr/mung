@@ -21,7 +21,8 @@
 #define N_FIRST_PAGES (2 * 1024 * 1024 / PAGE_SIZE)
 
 
-static struct list_head k_free_pages = LIST_HEAD_INIT(k_free_pages);
+static struct list_head k_free_pages = LIST_HEAD_INIT(k_free_pages),
+	k_heap_pages = LIST_HEAD_INIT(k_heap_pages);
 static struct kmem_cache *mm_page_cache = NULL;
 
 static intptr_t heap_pos = HEAP_TOP;
@@ -29,13 +30,15 @@ static intptr_t heap_pos = HEAP_TOP;
 
 void *sbrk(intptr_t increment)
 {
-#if 0
 	if(increment > 0) {
-		int n_pages = (increment + 4095) >> 12;
-		heap_pos -= n_pages << 12;
-		add_supervisor_pages(heap_pos, n_pages);
+		int n_pages = (increment + PAGE_SIZE - 1) >> PAGE_BITS;
+		heap_pos -= n_pages << PAGE_BITS;
+		for(int i=0; i < n_pages; i++) {
+			struct page *pg = get_kern_page();
+			list_add(&k_heap_pages, &pg->link);
+			put_supervisor_page(heap_pos + i * PAGE_SIZE, pg->id);
+		}
 	}
-#endif
 	return (void *)heap_pos;
 }
 
