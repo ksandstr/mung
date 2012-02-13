@@ -81,6 +81,7 @@ struct x86_exregs {
 
 static pdir_t *kernel_pdirs = NULL;
 static struct list_head resv_page_list = LIST_HEAD_INIT(resv_page_list);
+static struct page *next_dir_page = NULL;
 
 
 /* rudimentary serial port output from µiX */
@@ -160,15 +161,17 @@ void put_supervisor_page(intptr_t addr, uint32_t page_id)
 //	printf("%s: addr 0x%x, page_id %u\n", __func__, (unsigned)addr, page_id);
 	pdir_t *dir = &kernel_pdirs[addr >> 22];
 	page_t *pages;
+	bool alloc_next = false;
 	if(unlikely(!CHECK_FLAG(*dir, PDIR_PRESENT))) {
-		printf("%s: directory for 0x%x not present\n", __func__,
-			(unsigned)addr);
-		struct page *pg = get_kern_page();
-		printf("%s: new directory page allocated at 0x%x (phys 0x%x)\n",
-			__func__, (unsigned)pg->vm_addr, (unsigned)(pg->id << PAGE_BITS));
+		if(next_dir_page == NULL) {
+			panic("terrible recursion in put_supervisor_page()!");
+		}
+		struct page *pg = next_dir_page;
+		next_dir_page = NULL;
+		alloc_next = true;
 		pages = pg->vm_addr;
+		for(int i = 0; i < 1024; i++) pages[i] = 0;
 		*dir = (pdir_t)(pg->id << 12) | PDIR_PRESENT | PDIR_RW;
-		list_add(&resv_page_list, &pg->link);
 	} else {
 		struct page *dir_page = find_page_by_id(*dir >> PAGE_BITS);
 		if(dir_page == NULL) panic("directory page not found!");
@@ -180,6 +183,11 @@ void put_supervisor_page(intptr_t addr, uint32_t page_id)
 
 	/* valid since the 80486. */
 	__asm__ volatile("invlpg %0"::"m" (*(char *)addr): "memory");
+
+	if(alloc_next) {
+		next_dir_page = get_kern_page();
+		list_add(&resv_page_list, &next_dir_page->link);
+	}
 }
 
 
@@ -191,6 +199,9 @@ static void setup_paging(intptr_t id_start, intptr_t id_end)
 	list_add(&resv_page_list, &kspace_pg->link);
 	/* all present bits are turned off. */
 	for(int i=0; i < 1024; i++) kernel_pdirs[i] = 0;
+
+	next_dir_page = get_kern_page();
+	list_add(&resv_page_list, &next_dir_page->link);
 
 	/* identitymap between id_start and id_end inclusive */
 	id_start &= ~PAGE_MASK;
