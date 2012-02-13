@@ -79,7 +79,7 @@ struct x86_exregs {
 
 
 
-static pdir_t kernel_pdirs[1024] PAGE_ALIGN;
+static pdir_t *kernel_pdirs = NULL;
 static struct list_head resv_page_list = LIST_HEAD_INIT(resv_page_list);
 
 
@@ -172,6 +172,10 @@ void put_supervisor_page(intptr_t addr, uint32_t page_id)
 
 static void setup_paging(intptr_t id_start, intptr_t id_end)
 {
+	/* allocate the page directory table for the supervisor address space. */
+	struct page *kspace_pg = get_kern_page();
+	kernel_pdirs = kspace_pg->vm_addr;
+	list_add(&resv_page_list, &kspace_pg->link);
 	/* all present bits are turned off. */
 	for(int i=0; i < 1024; i++) kernel_pdirs[i] = 0;
 
