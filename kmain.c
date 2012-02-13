@@ -5,6 +5,7 @@
 #include <ukernel/ioport.h>
 #include <ukernel/16550.h>
 #include <ccan/likely/likely.h>
+#include <ccan/compiler/compiler.h>
 
 #include "multiboot.h"
 #include "mm.h"
@@ -117,6 +118,15 @@ void putstr(const char *str)
 }
 
 
+static void NORETURN panic(const char *message)
+{
+	printf("PANIC: %s\n", message);
+	while(true) {
+		asm("cli; hlt");
+	}
+}
+
+
 void put_supervisor_page(intptr_t addr, uint32_t page_id)
 {
 //	printf("%s: addr 0x%x, page_id %u\n", __func__, (unsigned)addr, page_id);
@@ -174,13 +184,6 @@ static void setup_paging(intptr_t id_start, intptr_t id_end)
 		:
 		: "a" (kernel_pdirs)
 		: "memory");
-}
-
-
-static void panic(const char *message)
-{
-	printf("PANIC: %s\n", message);
-	asm("cli; hlt");
 }
 
 
