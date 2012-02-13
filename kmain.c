@@ -129,6 +129,19 @@ static void NORETURN panic(const char *message)
 }
 
 
+static int __attribute__((pure)) list_length(struct list_head *list)
+{
+	int count = 0;
+	for(struct list_node *n = resv_page_list.n.next;
+		n != &resv_page_list.n;
+		n = n->next)
+	{
+		count++;
+	}
+	return count;
+}
+
+
 static struct page *find_page_by_id(uint32_t id)
 {
 	/* TODO: use a more efficient mapping than a search over a linked
@@ -410,7 +423,8 @@ void kmain(void *mbd, unsigned int magic)
 	setup_paging(resv_start, resv_end);
 	printf("adding identity maps for MBI memory...\n");
 	/* NOTE: this is a big hack: generally the MBI info fits in less than 4k
-	 * of memory.
+	 * of memory. FIXME: it should also take the MBI page out of circulation
+	 * until it's no longer required.
 	 */
 	put_supervisor_page((intptr_t)mbi & ~PAGE_MASK, (intptr_t)mbi >> PAGE_BITS);
 
@@ -419,24 +433,22 @@ void kmain(void *mbd, unsigned int magic)
 		add_mbi_memory(mbi, resv_start & ~PAGE_MASK, resv_end | PAGE_MASK);
 	}
 
+	printf("so far, the kernel reserves %d pages (%u KiB) of memory.\n",
+		list_length(&resv_page_list), list_length(&resv_page_list) * PAGE_SIZE / 1024);
+
 #if 0
 	static int zero;
 	printf("divide by zero: %d\n", 777 / zero);
 #endif
 
-	/* handleable fault. */
-	volatile char *memory = (char *)0x210000;
-	memory[0] = 1;
-	memory[1] = 2;
-
-	/* malloc test. */
+	printf("performing malloc test...\n");
 	char *foo = malloc(64);
 	foo[0] = 'q';
 	foo[1] = 'w';
 	foo[2] = 'e';
-
-	/* somewhat less so. */
-	*(char *)0xdeadbeef = 1;
+	foo[3] = '\0';
+	printf("should say `qwe': `%s'\n", foo);
+	free(foo);
 
 	printf("slamming teh brakes now.\n");
 }
