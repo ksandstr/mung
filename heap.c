@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <stdint.h>
 #include <stdbool.h>
+#include <assert.h>
 #include <ccan/list/list.h>
 #include <ccan/container_of/container_of.h>
 #include <ccan/alignof/alignof.h>
@@ -97,7 +98,7 @@ void init_kernel_heap(
 
 struct page *get_kern_page(void)
 {
-//	assert(!list_empty(&k_free_pages));
+	assert(!list_empty(&k_free_pages));
 	/* (get from tail of list, as that's where the idempotent heap is during
 	 * early boot. otherwise there is endless recursion through
 	 * put_supervisor_page()'s not finding the page directory for the vm
