@@ -1,6 +1,7 @@
 
 #include <stdio.h>
 #include <stdbool.h>
+#include <assert.h>
 #include <ukernel/types.h>
 #include <ukernel/ioport.h>
 #include <ukernel/16550.h>
@@ -127,6 +128,18 @@ static void NORETURN panic(const char *message)
 	while(true) {
 		asm("cli; hlt");
 	}
+}
+
+
+void __assert_failure(
+	const char *condition,
+	const char *file,
+	unsigned int line,
+	const char *function)
+{
+	printf("assert(%s) failed in `%s' (%s:%u)\n", condition, function,
+		file, line);
+	panic("*** assertion failure");
 }
 
 
