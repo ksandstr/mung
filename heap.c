@@ -100,9 +100,9 @@ struct page *get_kern_page(void)
 {
 	assert(!list_empty(&k_free_pages));
 	/* (get from tail of list, as that's where the idempotent heap is during
-	 * early boot. otherwise there is endless recursion through
-	 * put_supervisor_page()'s not finding the page directory for the vm
-	 * heap.)
+	 * early boot. otherwise there is a chance of endless recursion through
+	 * put_supervisor_page()'s not finding the page directory for the vm heap.
+	 * [... more recently though, .next seems to work just as well.])
 	 */
 	struct page *p = container_of(k_free_pages.n.prev, struct page, link);
 	list_del(&p->link);
