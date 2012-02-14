@@ -521,10 +521,6 @@ MAX_RELEASE_CHECK_RATE   default: 4095 unless not HAVE_MMAP
 #include <stddef.h>
 #include <string.h>
 
-#ifndef NDEBUG
-#define NDEBUG
-#endif
-
 #define LACKS_SYS_TYPES_H
 #define LACKS_ERRNO_H
 #define LACKS_TIME_H
