@@ -119,7 +119,11 @@ void *kmem_cache_alloc(struct kmem_cache *cache)
 	void *ret = slab->freelist, *next = *(void **)ret;
 	slab->in_use++;
 	intptr_t bump = (cache->size + cache->align - 1) & ~(cache->align - 1);
-	if(next != NULL) slab->freelist = next; else slab->freelist += bump;
+	if(next != NULL) slab->freelist = next;
+	else {
+		slab->freelist += bump;
+		*(void **)slab->freelist = NULL;
+	}
 	if(slab->freelist + bump >= (void *)slab + PAGE_SIZE) {
 		/* it became full. */
 		list_del_from(&cache->partial_list, &slab->link);
