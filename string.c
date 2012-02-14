@@ -22,8 +22,7 @@
 
 #include <string.h>
 #include <stdlib.h>
-
-#include <ukernel/types.h>
+#include <stdint.h>
 
 
 void *memcpy(void *dst, const void *src, size_t len)

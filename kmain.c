@@ -2,7 +2,6 @@
 #include <stdio.h>
 #include <stdbool.h>
 #include <assert.h>
-#include <ukernel/types.h>
 #include <ukernel/ioport.h>
 #include <ukernel/16550.h>
 #include <ccan/likely/likely.h>

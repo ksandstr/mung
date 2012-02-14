@@ -2,7 +2,6 @@
 #include <stdio.h>
 #include <stdint.h>
 #include <stdbool.h>
-#include <ukernel/types.h>
 #include <ccan/list/list.h>
 #include <ccan/container_of/container_of.h>
 #include <ccan/alignof/alignof.h>
