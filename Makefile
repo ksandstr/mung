@@ -11,8 +11,10 @@ all: tags image.bin
 clean:
 	@rm -f *.o
 
+
 distclean: clean
-	@rm -f image.bin tags
+	@rm -f image.bin tags .deps
+
 
 tags: $(wildcard *.[ch])
 	@ctags -R .
@@ -26,7 +28,9 @@ image.bin: linker.ld loader.o isr.o kmain.o printf.o fake_stdio.o string.o \
 
 %.o: %.c
 	@echo "  CC $@"
-	@$(CC) -m32 -c -o $@ $< $(CFLAGS) -nostartfiles -nodefaultlibs
+	@$(CC) -m32 -c -o $@ $< $(CFLAGS) -nostartfiles -nodefaultlibs -MMD
+	@test -d .deps || mkdir -p .deps
+	@mv $(<:.c=.d) .deps/
 
 
 %.o: %-32.S
@@ -35,3 +39,10 @@ image.bin: linker.ld loader.o isr.o kmain.o printf.o fake_stdio.o string.o \
 
 
 dlmalloc.o: CFLAGS += -Wno-unused-variable
+
+
+.deps:
+	@mkdir -p .deps
+
+
+include $(wildcard .deps/*.d)
