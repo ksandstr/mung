@@ -13,7 +13,8 @@ clean:
 
 
 distclean: clean
-	@rm -f image.bin tags .deps
+	@rm -f image.bin tags
+	@rm -rf .deps
 
 
 tags: $(wildcard *.[ch])
