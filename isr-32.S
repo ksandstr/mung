@@ -38,6 +38,25 @@ isr14_top:
 	iret
 
 
+# TODO: make this a macro.
+	.global isr_irq0_top
+	.type isr_irq0_top, @function
+
+	.align 16, 0
+isr_irq0_top:
+	pushal
+	pushl %ds
+	pushl %es
+	pushl $0x8000		# IRQ 0
+	pushl %esp
+	call isr_irq0_bottom
+	addl $8, %esp
+	popl %es
+	popl %ds
+	popal
+	iret
+
+
 	.global isr_irq1_top
 	.type isr_irq1_top, @function
 

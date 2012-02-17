@@ -5,6 +5,7 @@
 #include <ukernel/ioport.h>
 #include <ukernel/interrupt.h>
 #include <ukernel/16550.h>
+#include <ukernel/timer.h>
 #include <ccan/likely/likely.h>
 #include <ccan/compiler/compiler.h>
 #include <ccan/list/list.h>
@@ -200,6 +201,8 @@ static struct page *next_dir_page = NULL;
 
 static struct tss kernel_tss;
 static uint8_t syscall_stack[16 * 1024];
+
+static uint32_t timer_count = 0;
 
 
 /* rudimentary serial port output from µiX */
@@ -453,6 +456,7 @@ static void setup_idt(void)
 {
 	extern void isr_top(void);
 	extern void isr14_top(void);
+	extern void isr_irq0_top(void);
 	extern void isr_irq1_top(void);
 
 	static struct idt_entry ints[256];
@@ -476,6 +480,14 @@ static void setup_idt(void)
 	ints[14] = (struct idt_entry){
 		.offset_1 = (unsigned long)&isr14_top & 0xffff,
 		.offset_2 = (unsigned long)&isr14_top >> 16,
+		.selector = sel,
+		.type_attr = IDT_PRESENT | 0xe,		/* 32-bit interrupt gate */
+	};
+
+	/* the timer interrupt */
+	ints[0x20] = (struct idt_entry){
+		.offset_1 = (unsigned long)&isr_irq0_top & 0xffff,
+		.offset_2 = (unsigned long)&isr_irq0_top >> 16,
 		.selector = sel,
 		.type_attr = IDT_PRESENT | 0xe,		/* 32-bit interrupt gate */
 	};
@@ -566,23 +578,29 @@ void isr14_bottom(struct x86_exregs *regs)
 
 static void pump_keyboard(void)
 {
-	int n_bytes = 0;
 	for(;;) {
 		uint8_t status = inb(KBD_STATUS_REG);
 		if(!CHECK_FLAG(status, KBD_STAT_OBF)) break;
 
-		/* uint8_t byte = */ inb(KBD_DATA_REG);
-		n_bytes++;
+		uint8_t byte = inb(KBD_DATA_REG);
+		if(byte == 0x39) {
+			printf("spacebar was pressed. timer count %d\n",
+				timer_count);
+		}
 	}
+}
 
-	printf("pumped %d bytes from keyboard\n", n_bytes);
+
+/* the timer interrupt. */
+void isr_irq0_bottom(struct x86_exregs *frame)
+{
+	timer_count++;
+	pic_send_eoi(0);
 }
 
 
 void isr_irq1_bottom(struct x86_exregs *frame)
 {
-	static int count = 0;
-	printf("got keyboard interrupt (count now %d)\n", ++count);
 	pump_keyboard();
 	pic_send_eoi(1);
 }
@@ -742,9 +760,13 @@ void kmain(void *mbd, unsigned int magic)
 	pump_keyboard();
 	pic_clear_mask(0x02, 0x00);
 
+	printf("enabling timer interrupt\n");
+	setup_timer_ch0();
+	pic_clear_mask(0x01, 0x00);
+
 	while(true) {
 		asm volatile ("hlt");
-		printf("came out of halt-state!\n");
+//		printf("came out of halt-state!\n");
 	}
 
 	printf("slamming teh brakes now.\n");

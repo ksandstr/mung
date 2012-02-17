@@ -21,7 +21,7 @@ tags: $(wildcard *.[ch])
 
 
 image.bin: linker.ld loader.o isr.o kmain.o printf.o fake_stdio.o string.o \
-		dlmalloc.o heap.o slab.o pic.o
+		dlmalloc.o heap.o slab.o pic.o timer.o
 	@echo "  LD $@"
 	@ld -T linker.ld -o $@ $(filter %.o,$^)
 
