@@ -20,6 +20,7 @@ struct gdt_entry {
 	uint8_t base_2;
 } __attribute__((packed));
 
+
 /* the descriptor structure that LGDT eats */
 struct gdt_desc {
 	uint16_t limit;
@@ -82,17 +83,19 @@ void setup_gdt(void)
 {
 	assert(sizeof(struct gdt_entry) == 8);
 
-	static struct gdt_entry gdt_array[8] PAGE_ALIGN;
-	for(int i=0; i < 8; i++) gdt_array[i] = (struct gdt_entry){ };
+	static struct gdt_entry gdt_array[N_KERNEL_SEGS] PAGE_ALIGN;
+	for(int i=0; i < N_KERNEL_SEGS; i++) {
+		gdt_array[i] = (struct gdt_entry){ };
+	}
 
 	gdt_array[0] = GDT_ENTRY(0, 0, 0, 0);
-	gdt_array[1] = GDT_ENTRY(0, 0xfffff,
+	gdt_array[SEG_KERNEL_CODE] = GDT_ENTRY(0, 0xfffff,
 		DESC_A_PRESENT | DESC_A_RW | DESC_A_SYSTEM | DESC_A_EX,
 		DESC_F_SZ | DESC_F_GR);
-	gdt_array[2] = GDT_ENTRY(0, 0xfffff,
+	gdt_array[SEG_KERNEL_DATA] = GDT_ENTRY(0, 0xfffff,
 		DESC_A_PRESENT | DESC_A_RW | DESC_A_SYSTEM, DESC_F_SZ | DESC_F_GR);
-	gdt_array[3] = GDT_ENTRY((intptr_t)&kernel_tss, sizeof(kernel_tss),
-		DESC_A_PRESENT | DESC_A_TSS_32BIT, DESC_F_SZ);
+	gdt_array[SEG_KERNEL_TSS] = GDT_ENTRY((intptr_t)&kernel_tss,
+		sizeof(kernel_tss), DESC_A_PRESENT | DESC_A_TSS_32BIT, DESC_F_SZ);
 
 	static struct gdt_desc gd = {
 		.limit = sizeof(gdt_array) - 1,
@@ -105,17 +108,17 @@ void setup_gdt(void)
 #endif
 
 	asm volatile ("lgdt %0" :: "m" (gd) : "memory");
-	asm volatile ("ltr %%ax" :: "a" (3 * 8) : "memory");
+	asm volatile ("ltr %%ax" :: "a" (SEG_KERNEL_TSS * 8) : "memory");
 	asm volatile (
 		"\tljmp %0,$1f\n"
 		"1:\n"
-		:: "i" (1 * 8));
+		:: "i" (SEG_KERNEL_CODE * 8));
 	asm volatile (
 		"\tmov %0, %%ds\n"
 		"\tmov %0, %%es\n"
 		"\tmov %0, %%fs\n"
 		"\tmov %0, %%gs\n"
 		"\tmov %0, %%ss\n"
-		:: "r" (2 * 8)
+		:: "r" (SEG_KERNEL_DATA * 8)
 		: "memory");
 }
