@@ -297,6 +297,21 @@ static inline void irq_enable(void) {
 }
 
 
+static void set_int_gate(
+	struct idt_entry *ints,
+	int vector,
+	void (*tophalf)(void),
+	int selector)
+{
+	ints[vector] = (struct idt_entry){
+		.offset_1 = (uintptr_t)tophalf & 0xffff,
+		.offset_2 = (uintptr_t)tophalf >> 16,
+		.selector = selector,
+		.type_attr = IDT_PRESENT | 0xe,		/* 32-bit interrupt gate */
+	};
+}
+
+
 static void setup_idt(void)
 {
 	extern void isr_top(void);
@@ -309,41 +324,17 @@ static void setup_idt(void)
 		ints[i] = (struct idt_entry){ /* all zero */ };
 	}
 
-	unsigned short sel;
-	__asm__ __volatile__ ("\tmovl %%cs, %%eax\n": "=a" (sel));
-	printf("using code selector %d\n", (int)sel);
-
 	/* division by zero */
-	ints[0] = (struct idt_entry){
-		.offset_1 = (unsigned long)&isr_top & 0xffff,
-		.offset_2 = (unsigned long)&isr_top >> 16,
-		.selector = sel,
-		.type_attr = IDT_PRESENT | 0xe,		/* 32-bit interrupt gate */
-	};
+	set_int_gate(ints, 0, &isr_top, SEG_KERNEL_CODE << 3);
 
 	/* pagefaults */
-	ints[14] = (struct idt_entry){
-		.offset_1 = (unsigned long)&isr14_top & 0xffff,
-		.offset_2 = (unsigned long)&isr14_top >> 16,
-		.selector = sel,
-		.type_attr = IDT_PRESENT | 0xe,		/* 32-bit interrupt gate */
-	};
+	set_int_gate(ints, 14, &isr14_top, SEG_KERNEL_CODE << 3);
 
 	/* the timer interrupt */
-	ints[0x20] = (struct idt_entry){
-		.offset_1 = (unsigned long)&isr_irq0_top & 0xffff,
-		.offset_2 = (unsigned long)&isr_irq0_top >> 16,
-		.selector = sel,
-		.type_attr = IDT_PRESENT | 0xe,		/* 32-bit interrupt gate */
-	};
+	set_int_gate(ints, 0x20, &isr_irq0_top, SEG_KERNEL_CODE << 3);
 
 	/* the keyboard interrupt */
-	ints[0x21] = (struct idt_entry){
-		.offset_1 = (unsigned long)&isr_irq1_top & 0xffff,
-		.offset_2 = (unsigned long)&isr_irq1_top >> 16,
-		.selector = sel,
-		.type_attr = IDT_PRESENT | 0xe,		/* 32-bit interrupt gate */
-	};
+	set_int_gate(ints, 0x21, &isr_irq1_top, SEG_KERNEL_CODE << 3);
 
 	static struct {
 		unsigned short limit;
