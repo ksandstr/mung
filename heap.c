@@ -3,13 +3,14 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <assert.h>
-#include <ukernel/slab.h>
 #include <ccan/list/list.h>
 #include <ccan/container_of/container_of.h>
 #include <ccan/alignof/alignof.h>
 
+#include <ukernel/mm.h>
+#include <ukernel/slab.h>
+
 #include "multiboot.h"
-#include "mm.h"
 
 /* leave uppermost 128k unused
  *

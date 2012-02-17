@@ -6,6 +6,7 @@
 #include <ccan/compiler/compiler.h>
 #include <ccan/list/list.h>
 
+#include <ukernel/mm.h>
 #include <ukernel/ioport.h>
 #include <ukernel/interrupt.h>
 #include <ukernel/16550.h>
@@ -14,7 +15,6 @@
 #include <ukernel/misc.h>
 
 #include "multiboot.h"
-#include "mm.h"
 
 
 typedef uint32_t pdir_t;

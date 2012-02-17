@@ -5,14 +5,14 @@
 #include <stdint.h>
 #include <assert.h>
 #include <stdbool.h>
-#include <ukernel/slab.h>
 #include <ccan/list/list.h>
 #include <ccan/container_of/container_of.h>
 #include <ccan/compiler/compiler.h>
 #include <ccan/alignof/alignof.h>
 #include <ccan/likely/likely.h>
 
-#include "mm.h"
+#include <ukernel/slab.h>
+#include <ukernel/mm.h>
 
 
 #define SLAB_FIRST(cache, slab) \

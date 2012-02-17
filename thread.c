@@ -6,11 +6,10 @@
 #include <ccan/alignof/alignof.h>
 #include <ccan/list/list.h>
 
+#include <ukernel/mm.h>
 #include <ukernel/slab.h>
 #include <ukernel/thread.h>
 #include <ukernel/misc.h>
-
-#include "mm.h"
 
 
 struct thread *current_thread = NULL;
