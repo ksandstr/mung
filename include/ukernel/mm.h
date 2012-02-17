@@ -13,6 +13,8 @@
 #define PAGE_BITS 12
 #define PAGE_MASK 0xfff
 
+#define PAGE_ALIGN __attribute__((aligned(4096)))
+
 
 /* represents a hardware page. */
 struct page

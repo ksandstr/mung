@@ -6,6 +6,9 @@
 #include <ccan/compiler/compiler.h>
 
 
+#define CHECK_FLAG(mask, bit) (((mask) & (bit)) != 0)
+
+
 extern void NORETURN panic(const char *message);
 
 #endif

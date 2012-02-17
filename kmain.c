@@ -8,6 +8,8 @@
 
 #include <ukernel/mm.h>
 #include <ukernel/ioport.h>
+#include <ukernel/gdt.h>
+#include <ukernel/tss.h>
 #include <ukernel/interrupt.h>
 #include <ukernel/16550.h>
 #include <ukernel/timer.h>
@@ -26,93 +28,6 @@ struct idt_entry {
 	unsigned char zero_0;
 	unsigned char type_attr;
 	unsigned short offset_2;
-} __attribute__((packed));
-
-
-struct gdt_entry {
-	uint16_t limit_0;
-	uint16_t base_0;
-	uint8_t base_1;
-	uint8_t access;
-	uint8_t flags_limit1;		/* upper 4 bits = flags, lower 4 = limit 16-19 */
-	uint8_t base_2;
-} __attribute__((packed));
-
-/* the descriptor structure that LGDT eats */
-struct gdt_desc {
-	uint16_t limit;
-	uint32_t base;
-} __attribute__((packed));
-
-
-/* type fields for code/data */
-#define DESC_A_ACCESSED (1 << 0)
-#define DESC_A_RW (1 << 1)		/* readable / read-write */
-#define DESC_A_DC (1 << 2)		/* direction/conforming bit */
-#define DESC_A_EX (1 << 3)		/* executable bit */
-
-/* type values for system descriptors (well, just the one) */
-#define DESC_A_TSS_32BIT 0x09
-
-#define DESC_A_SYSTEM (1 << 4)	/* clear for system, set for code/data */
-#define DESC_A_PRIV_MASK ((1 << 5) | (1 << 6))
-#define DESC_A_PRESENT (1 << 7)
-
-#define DESC_F_SZ (1 << 2)		/* 0 = 16 bit, 1 = 32 bit */
-#define DESC_F_GR (1 << 3)		/* 0 = bytes, 1 = 4k pages */
-
-#define GDT_ENTRY(base, limit, access_, flags) \
-	((struct gdt_entry){ \
-		.base_0 = (base) & 0xffff, \
-		.base_1 = ((base) >> 16) & 0xff, \
-		.base_2 = ((base) >> 24) & 0xff, \
-		.access = (access_), \
-		.limit_0 = (limit) & 0xffff, \
-		.flags_limit1 = (flags) << 4 | (((limit) >> 16) & 0xf), \
-	})
-
-
-/* x86 task state segment. */
-struct tss
-{
-	uint16_t link;
-	uint16_t resv_0;
-	uint32_t esp0;
-	uint16_t ss0;
-	uint16_t resv_1;
-	uint32_t esp1;
-	uint16_t ss1;
-	uint16_t resv_2;
-	uint32_t esp2;
-	uint16_t ss2;
-	uint16_t resv_3;
-	uint32_t cr3;
-	uint32_t eip;
-	uint32_t eflags;
-	uint32_t eax;
-	uint32_t ecx;
-	uint32_t edx;
-	uint32_t ebx;
-	uint32_t esp;
-	uint32_t ebp;
-	uint32_t esi;
-	uint32_t edi;
-	uint16_t es;
-	uint16_t resv_4;
-	uint16_t cs;
-	uint16_t resv_5;
-	uint16_t ss;
-	uint16_t resv_6;
-	uint16_t ds;
-	uint16_t resv_7;
-	uint16_t fs;
-	uint16_t resv_8;
-	uint16_t gs;
-	uint16_t resv_9;
-	uint16_t ldtr;
-	uint16_t resv_10;
-	uint16_t resv_11;
-	uint16_t iopb_offset;
 } __attribute__((packed));
 
 
@@ -138,10 +53,6 @@ struct x86_exregs {
 	uint32_t ss;
 };
 
-
-#define CHECK_FLAG(mask, bit) (((mask) & (bit)) != 0)
-
-#define PAGE_ALIGN __attribute__((aligned(4096)))
 
 /* x86 page directory flags */
 #define PDIR_PRESENT (1 << 0)
@@ -197,12 +108,12 @@ struct x86_exregs {
 #define KBD_KBF_PCCOMPAT	0x80	/* PC compat crap, must be 0 */
 
 
+struct tss kernel_tss;
 
 static pdir_t *kernel_pdirs = NULL;
 static struct list_head resv_page_list = LIST_HEAD_INIT(resv_page_list);
 static struct page *next_dir_page = NULL;
 
-static struct tss kernel_tss;
 static uint8_t syscall_stack[4096] PAGE_ALIGN;
 
 static uint32_t timer_count = 0;
@@ -360,7 +271,7 @@ static void setup_paging(intptr_t id_start, intptr_t id_end)
 }
 
 
-static void init_tss(struct tss *t)
+static void init_kernel_tss(struct tss *t)
 {
 	assert(sizeof(struct tss) == 104);
 
@@ -383,75 +294,6 @@ static inline void irq_disable(void) {
 
 static inline void irq_enable(void) {
 	asm volatile ("sti" ::: "memory");
-}
-
-
-void dump_gdt(struct gdt_desc *gd)
-{
-	printf("gdt_desc: base 0x%x, limit %u\n", gd->base, gd->limit);
-	for(int i=0; i < ((int)gd->limit + 1) / 8; i++) {
-		const struct gdt_entry *ge = (void *)gd->base + i * 8;
-		if(!CHECK_FLAG(ge->access, DESC_A_PRESENT)) {
-			printf("GDT entry %d not present\n", i);
-			continue;
-		}
-		printf("GDT entry %d (selector 0x%x, access 0x%x, flags 0x%x):\n",
-			i, (unsigned)i * 8, ge->access, ge->flags_limit1 & 0xf0);
-		printf("  base 0x%x, limit 0x%x (%s)",
-			(uint32_t)ge->base_0 | (uint32_t)ge->base_1 << 16
-				| (uint32_t)ge->base_2 << 24,
-			(uint32_t)ge->limit_0 | ((uint32_t)ge->flags_limit1 & 0xf) << 16,
-			CHECK_FLAG(ge->flags_limit1 >> 4, DESC_F_GR) ? "pages" : "bytes");
-		printf(", %s, %s\n",
-			CHECK_FLAG(ge->access, DESC_A_EX) ? "code" : "data",
-			CHECK_FLAG(ge->flags_limit1 >> 4, DESC_F_SZ) ? "32-bit" : "16-bit");
-	}
-}
-
-
-/* create a nice, friendly global descriptor table. */
-static void setup_gdt(void)
-{
-	assert(sizeof(struct gdt_entry) == 8);
-
-	init_tss(&kernel_tss);
-
-	static struct gdt_entry gdt_array[8] PAGE_ALIGN;
-	for(int i=0; i < 8; i++) gdt_array[i] = (struct gdt_entry){ };
-
-	gdt_array[0] = GDT_ENTRY(0, 0, 0, 0);
-	gdt_array[1] = GDT_ENTRY(0, 0xfffff,
-		DESC_A_PRESENT | DESC_A_RW | DESC_A_SYSTEM | DESC_A_EX,
-		DESC_F_SZ | DESC_F_GR);
-	gdt_array[2] = GDT_ENTRY(0, 0xfffff,
-		DESC_A_PRESENT | DESC_A_RW | DESC_A_SYSTEM, DESC_F_SZ | DESC_F_GR);
-	gdt_array[3] = GDT_ENTRY((intptr_t)&kernel_tss, sizeof(kernel_tss),
-		DESC_A_PRESENT | DESC_A_TSS_32BIT, DESC_F_SZ);
-
-	static struct gdt_desc gd = {
-		.limit = sizeof(gdt_array) - 1,
-		.base = (intptr_t)gdt_array,
-	};
-
-#if 0
-	printf("about to load (gdt_array at 0x%x):\n", (unsigned)&gdt_array[0]);
-	dump_gdt(&gd);
-#endif
-
-	asm volatile ("lgdt %0" :: "m" (gd) : "memory");
-	asm volatile ("ltr %%ax" :: "a" (3 * 8) : "memory");
-	asm volatile (
-		"\tljmp %0,$1f\n"
-		"1:\n"
-		:: "i" (1 * 8));
-	asm volatile (
-		"\tmov %0, %%ds\n"
-		"\tmov %0, %%es\n"
-		"\tmov %0, %%fs\n"
-		"\tmov %0, %%gs\n"
-		"\tmov %0, %%ss\n"
-		:: "r" (2 * 8)
-		: "memory");
 }
 
 
@@ -685,6 +527,8 @@ void kmain(void *mbd, unsigned int magic)
 
 	/* also, output some stuff to the serial port. */
 	printf("hello, world! mbd is at 0x%x\n", (unsigned)mbd);
+
+	init_kernel_tss(&kernel_tss);
 
 	/* initialize interrupt-related data structures with the I bit cleared. */
 	irq_disable();
