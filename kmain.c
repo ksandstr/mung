@@ -2,13 +2,16 @@
 #include <stdio.h>
 #include <stdbool.h>
 #include <assert.h>
+#include <ccan/likely/likely.h>
+#include <ccan/compiler/compiler.h>
+#include <ccan/list/list.h>
+
 #include <ukernel/ioport.h>
 #include <ukernel/interrupt.h>
 #include <ukernel/16550.h>
 #include <ukernel/timer.h>
-#include <ccan/likely/likely.h>
-#include <ccan/compiler/compiler.h>
-#include <ccan/list/list.h>
+#include <ukernel/thread.h>
+#include <ukernel/misc.h>
 
 #include "multiboot.h"
 #include "mm.h"
@@ -242,7 +245,7 @@ void putstr(const char *str)
 }
 
 
-static void NORETURN panic(const char *message)
+void NORETURN panic(const char *message)
 {
 	printf("PANIC: %s\n", message);
 	while(true) {
@@ -645,6 +648,29 @@ static void add_mbi_memory(
 }
 
 
+static void test_thread(void *ptr)
+{
+	int x = 666;
+	printf("test thread active! local variable at 0x%x.\n", (unsigned)&x);
+
+	yield(NULL);
+
+	printf("test thread was returned into. ptr is `%s'\n",
+		(const char *)ptr);
+}
+
+
+static void thread_test(void)
+{
+	struct thread *other = create_thread(&test_thread, "hello, thread!");
+	printf("other thread created. switching...\n");
+	yield(other);
+	printf("back in old thread. boinking yield...\n");
+	for(int i=0; i < 8; i++) yield(NULL);
+	printf("thread_test() ends.\n");
+}
+
+
 void malloc_panic(void) {
 	panic("malloc failure!");
 }
@@ -764,10 +790,11 @@ void kmain(void *mbd, unsigned int magic)
 	setup_timer_ch0();
 	pic_clear_mask(0x01, 0x00);
 
+	init_threading();
+	thread_test();
+
+	printf("kmain() entering halt-sleep.\n");
 	while(true) {
 		asm volatile ("hlt");
-//		printf("came out of halt-state!\n");
 	}
-
-	printf("slamming teh brakes now.\n");
 }
