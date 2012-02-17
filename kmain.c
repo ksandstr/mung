@@ -571,8 +571,7 @@ static void pump_keyboard(void)
 		uint8_t status = inb(KBD_STATUS_REG);
 		if(!CHECK_FLAG(status, KBD_STAT_OBF)) break;
 
-		uint8_t byte = inb(KBD_DATA_REG);
-		printf("keyboard: 0x%x\n", byte);
+		/* uint8_t byte = */ inb(KBD_DATA_REG);
 		n_bytes++;
 	}
 
@@ -737,22 +736,16 @@ void kmain(void *mbd, unsigned int magic)
 	printf("string at 0x%x should say `qwe': `%s'\n", (unsigned)foo, foo);
 	free(foo);
 
-	printf("triggering keyboard handler spuriously:\n");
-	asm volatile ("int $0x21");
-
-#if 0
 	printf("enabling keyboard & keyboard interrupt\n");
 	outb(KBD_CMD_REG, KBD_CMD_WRITECMD);
 	outb(KBD_CMD_REG, KBD_KBF_KEYINTR | KBD_KBF_KEY_ENABLE);
 	pump_keyboard();
-	pic_set_mask(0xff, 0xff);
 	pic_clear_mask(0x02, 0x00);
 
 	while(true) {
 		asm volatile ("hlt");
 		printf("came out of halt-state!\n");
 	}
-#endif
 
 	printf("slamming teh brakes now.\n");
 }
