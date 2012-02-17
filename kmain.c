@@ -113,7 +113,7 @@ struct tss
 	uint16_t resv_10;
 	uint16_t resv_11;
 	uint16_t iopb_offset;
-};
+} __attribute__((packed));
 
 
 /* courtesy of L4Ka::pistachio */
@@ -203,7 +203,7 @@ static struct list_head resv_page_list = LIST_HEAD_INIT(resv_page_list);
 static struct page *next_dir_page = NULL;
 
 static struct tss kernel_tss;
-static uint8_t syscall_stack[16 * 1024];
+static uint8_t syscall_stack[4096] PAGE_ALIGN;
 
 static uint32_t timer_count = 0;
 
@@ -362,7 +362,7 @@ static void setup_paging(intptr_t id_start, intptr_t id_end)
 
 static void init_tss(struct tss *t)
 {
-//	assert(sizeof(struct tss) == 108);
+	assert(sizeof(struct tss) == 104);
 
 	intptr_t stk = (intptr_t)&syscall_stack[0];
 	stk += sizeof(syscall_stack) - 16;
