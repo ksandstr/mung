@@ -1,8 +1,7 @@
 
-# FIXME: remove -DNDEBUG when there's a proper <assert.h> in this tree
 CFLAGS=-O2 -Wall -march=native -std=gnu99 -I include -I include/fake_clib \
 	-I ~/src/ccan \
-	-fno-builtin -nostdlib -DNDEBUG
+	-fno-builtin -nostdlib
 
 
 all: tags image.bin

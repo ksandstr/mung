@@ -145,7 +145,7 @@ void *kmem_cache_zalloc(struct kmem_cache *cache)
 void kmem_cache_free(struct kmem_cache *cache, void *ptr)
 {
 	struct slab *slab = (struct slab *)((intptr_t)ptr & ~PAGE_MASK);
-	assert(slab->inuse > 0);
+	assert(slab->in_use > 0);
 	if(slab->freelist == NULL) {
 		/* reinstate into the partial slab list */
 		list_add(&cache->partial_list, &slab->link);
@@ -177,7 +177,7 @@ int kmem_cache_shrink(struct kmem_cache *cache)
 	struct slab *next, *slab;
 	int n_freed = 0;
 	list_for_each_safe(&cache->free_list, slab, next, link) {
-		assert(slab->inuse == 0);
+		assert(slab->in_use == 0);
 		list_del_from(&cache->free_list, &slab->link);
 		free_kern_page(slab->mm_page);
 		n_freed++;
