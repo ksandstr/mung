@@ -344,8 +344,8 @@ static void setup_idt(int code_seg)
 	set_int_gate(ints, 0x21, &isr_irq1_top, code_sel);	/* IRQ1 (keyboard) */
 
 	struct {
-		unsigned short limit;
-		unsigned long base;
+		uint16_t limit;
+		uint32_t base;
 	} __attribute__((packed)) idt_desc = {
 		.limit = sizeof(ints),
 		.base = KERNEL_TO_LINEAR((uintptr_t)&ints[0]),
