@@ -341,12 +341,12 @@ static void setup_idt(int code_seg)
 	set_int_gate(ints, 0x20, &isr_irq0_top, code_sel);	/* IRQ0 (timer) */
 	set_int_gate(ints, 0x21, &isr_irq1_top, code_sel);	/* IRQ1 (keyboard) */
 
-	static struct {
+	struct {
 		unsigned short limit;
 		unsigned long base;
 	} __attribute__((packed)) idt_desc = {
 		.limit = sizeof(ints),
-		.base = (unsigned long)&ints[0],
+		.base = KERNEL_TO_LINEAR((uintptr_t)&ints[0]),
 	};
 	__asm__ __volatile__("\tlidt %0\n":: "m" (idt_desc));
 }
@@ -610,7 +610,9 @@ void kmain(void *mbd, unsigned int magic)
 	printf("going high!\n");
 	irq_disable();
 	go_high();
-	printf("high! resetting interrupts.\n");
+	printf("high! resetting GDT...\n");
+	setup_gdt();
+	printf("and interrupts...\n");
 	setup_idt(SEG_KERNEL_CODE_HIGH);
 	irq_enable();
 	printf("like, howl, cat!\n");

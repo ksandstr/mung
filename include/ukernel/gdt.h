@@ -1,6 +1,18 @@
 
+/* stuff for handling segmentation on the x86 */
+
 #ifndef SEEN_UKERNEL_GDT_H
 #define SEEN_UKERNEL_GDT_H
+
+#include <stdbool.h>
+
+#include <ukernel/mm.h>
+
+
+#define KERNEL_TO_LINEAR(addr) (is_kernel_high ? (addr) + KERNEL_SEG_START : (addr))
+
+/* false at boot, set to true by go_high() */
+extern bool is_kernel_high;
 
 
 /* descriptor indexes loaded by setup_gdt(). */

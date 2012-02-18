@@ -3,6 +3,7 @@
 
 #include <stdio.h>
 #include <stdint.h>
+#include <stdbool.h>
 #include <assert.h>
 
 #include <ukernel/mm.h>
@@ -55,6 +56,9 @@ struct gdt_desc {
 	})
 
 
+bool is_kernel_high = false;
+
+
 void dump_gdt(struct gdt_desc *gd)
 {
 	printf("gdt_desc: base 0x%x, limit %u\n", gd->base, gd->limit);
@@ -94,8 +98,9 @@ void setup_gdt(void)
 		DESC_F_SZ | DESC_F_GR);
 	gdt_array[SEG_KERNEL_DATA] = GDT_ENTRY(0, 0xfffff,
 		DESC_A_PRESENT | DESC_A_RW | DESC_A_SYSTEM, DESC_F_SZ | DESC_F_GR);
-	gdt_array[SEG_KERNEL_TSS] = GDT_ENTRY((intptr_t)&kernel_tss,
-		sizeof(kernel_tss), DESC_A_PRESENT | DESC_A_TSS_32BIT, DESC_F_SZ);
+	gdt_array[SEG_KERNEL_TSS] = GDT_ENTRY(
+		KERNEL_TO_LINEAR((intptr_t)&kernel_tss), sizeof(kernel_tss),
+		DESC_A_PRESENT | DESC_A_TSS_32BIT, DESC_F_SZ);
 
 	/* special segments that make kernel code and data appear at low
 	 * addresses, even though they are at the top of the linear address space.
@@ -108,9 +113,9 @@ void setup_gdt(void)
 		KERNEL_SEG_SIZE >> PAGE_BITS,
 		DESC_A_PRESENT | DESC_A_RW | DESC_A_SYSTEM, DESC_F_SZ | DESC_F_GR);
 
-	static struct gdt_desc gd = {
+	struct gdt_desc gd = {
 		.limit = sizeof(gdt_array) - 1,
-		.base = (intptr_t)gdt_array,
+		.base = KERNEL_TO_LINEAR((intptr_t)gdt_array),
 	};
 
 #if 0
@@ -160,4 +165,6 @@ void go_high(void)
 		"\tmov %0, %%ss\n"
 		:: "r" (data_sel)
 		: "memory");
+
+	is_kernel_high = true;		/* the muthafuckin' d-a-e */
 }
