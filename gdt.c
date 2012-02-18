@@ -62,8 +62,9 @@ bool is_kernel_high = false;
 void dump_gdt(struct gdt_desc *gd)
 {
 	printf("gdt_desc: base 0x%x, limit %u\n", gd->base, gd->limit);
+	void *base = (void *)(gd->base < KERNEL_SEG_START ? gd->base : gd->base - KERNEL_SEG_START);
 	for(int i=0; i < ((int)gd->limit + 1) / 8; i++) {
-		const struct gdt_entry *ge = (void *)gd->base + i * 8;
+		const struct gdt_entry *ge = base + i * 8;
 		if(!CHECK_FLAG(ge->access, DESC_A_PRESENT)) {
 			printf("GDT entry %d not present\n", i);
 			continue;
@@ -125,18 +126,20 @@ void setup_gdt(void)
 
 	asm volatile ("lgdt %0" :: "m" (gd) : "memory");
 	asm volatile ("ltr %%ax" :: "a" (SEG_KERNEL_TSS * 8) : "memory");
-	asm volatile (
-		"\tljmp %0,$1f\n"
-		"1:\n"
-		:: "i" (SEG_KERNEL_CODE * 8));
-	asm volatile (
-		"\tmov %0, %%ds\n"
-		"\tmov %0, %%es\n"
-		"\tmov %0, %%fs\n"
-		"\tmov %0, %%gs\n"
-		"\tmov %0, %%ss\n"
-		:: "r" (SEG_KERNEL_DATA * 8)
-		: "memory");
+	if(!is_kernel_high) {
+		asm volatile (
+			"\tljmp %0,$1f\n"
+			"1:\n"
+			:: "i" (SEG_KERNEL_CODE * 8));
+		asm volatile (
+			"\tmov %0, %%ds\n"
+			"\tmov %0, %%es\n"
+			"\tmov %0, %%fs\n"
+			"\tmov %0, %%gs\n"
+			"\tmov %0, %%ss\n"
+			:: "r" (SEG_KERNEL_DATA * 8)
+			: "memory");
+	}
 }
 
 
