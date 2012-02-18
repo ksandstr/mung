@@ -326,6 +326,7 @@ static void set_int_gate(
 static void setup_idt(int code_seg)
 {
 	extern void isr_top(void);
+	extern void isr13_top(void);
 	extern void isr14_top(void);
 	extern void isr_irq0_top(void);
 	extern void isr_irq1_top(void);
@@ -337,6 +338,7 @@ static void setup_idt(int code_seg)
 
 	int code_sel = code_seg << 3;		/* always go to ring 0. */
 	set_int_gate(ints, 0, &isr_top, code_sel);		/* div by zero */
+	set_int_gate(ints, 13, &isr13_top, code_sel);	/* general protection */
 	set_int_gate(ints, 14, &isr14_top, code_sel);	/* pagefault */
 	set_int_gate(ints, 0x20, &isr_irq0_top, code_sel);	/* IRQ0 (timer) */
 	set_int_gate(ints, 0x21, &isr_irq1_top, code_sel);	/* IRQ1 (keyboard) */
@@ -358,6 +360,14 @@ void isr_bottom()
 	videoram[0] = 'A';
 	videoram[1] = 0x07;		/* light grey (7) on black (0). */
 
+	asm("cli; hlt");
+}
+
+
+void isr13_bottom(struct x86_exregs *regs)
+{
+	printf("#GP(0x%x) at eip 0x%x, esp 0x%x\n", regs->error,
+		regs->eip, regs->esp);
 	asm("cli; hlt");
 }
 

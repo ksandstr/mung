@@ -19,6 +19,25 @@ isr_top:
 	iret
 
 
+	.global isr13_top
+	.type isr13_top, @function
+
+	.align 16,0
+isr13_top:
+	pushal
+	pushl %ds
+	pushl %es
+	pushl $13		# exception 13, #GP
+	pushl %esp
+	call isr13_bottom
+	addl $8, %esp
+	popl %es
+	popl %ds
+	popal
+	addl $4, %esp		# the error code
+	iret
+
+
 	.global isr14_top
 	.type isr14_top, @function
 
