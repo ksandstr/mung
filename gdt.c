@@ -5,10 +5,10 @@
 #include <stdint.h>
 #include <assert.h>
 
-#include <ukernel/gdt.h>
 #include <ukernel/mm.h>
 #include <ukernel/tss.h>
 #include <ukernel/misc.h>
+#include <ukernel/gdt.h>
 
 
 struct gdt_entry {
@@ -97,6 +97,17 @@ void setup_gdt(void)
 	gdt_array[SEG_KERNEL_TSS] = GDT_ENTRY((intptr_t)&kernel_tss,
 		sizeof(kernel_tss), DESC_A_PRESENT | DESC_A_TSS_32BIT, DESC_F_SZ);
 
+	/* special segments that make kernel code and data appear at low
+	 * addresses, even though they are at the top of the linear address space.
+	 */
+	gdt_array[SEG_KERNEL_CODE_HIGH] = GDT_ENTRY(KERNEL_SEG_START,
+		KERNEL_SEG_SIZE >> PAGE_BITS,
+		DESC_A_PRESENT | DESC_A_RW | DESC_A_SYSTEM | DESC_A_EX,
+		DESC_F_SZ | DESC_F_GR);
+	gdt_array[SEG_KERNEL_DATA_HIGH] = GDT_ENTRY(KERNEL_SEG_START,
+		KERNEL_SEG_SIZE >> PAGE_BITS,
+		DESC_A_PRESENT | DESC_A_RW | DESC_A_SYSTEM, DESC_F_SZ | DESC_F_GR);
+
 	static struct gdt_desc gd = {
 		.limit = sizeof(gdt_array) - 1,
 		.base = (intptr_t)gdt_array,
@@ -120,5 +131,33 @@ void setup_gdt(void)
 		"\tmov %0, %%gs\n"
 		"\tmov %0, %%ss\n"
 		:: "r" (SEG_KERNEL_DATA * 8)
+		: "memory");
+}
+
+
+void go_high(void)
+{
+	printf("%s: kernel seg at [0x%x .. 0x%x], length 0x%x (%d MiB)\n",
+		__func__, KERNEL_SEG_START, KERNEL_SEG_START + KERNEL_SEG_SIZE - 1,
+		KERNEL_SEG_SIZE, KERNEL_SEG_SIZE / (1024 * 1024));
+
+	const int data_sel = SEG_KERNEL_DATA_HIGH << 3;
+
+#if 0
+	kernel_tss.ss0 = data_sel;
+	asm volatile ("ltr %%ax" :: "a" (SEG_KERNEL_TSS << 3) : "memory");
+	printf("new TSS stack segment installed\n");
+#endif
+	asm volatile (
+		"\tljmp %0,$1f\n"
+		"1:\n"
+		:: "i" (SEG_KERNEL_CODE_HIGH << 3));
+	asm volatile (
+		"\tmov %0, %%ds\n"
+		"\tmov %0, %%es\n"
+		"\tmov %0, %%fs\n"
+		"\tmov %0, %%gs\n"
+		"\tmov %0, %%ss\n"
+		:: "r" (data_sel)
 		: "memory");
 }

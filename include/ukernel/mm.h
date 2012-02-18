@@ -15,6 +15,9 @@
 
 #define PAGE_ALIGN __attribute__((aligned(4096)))
 
+#define KERNEL_SEG_SIZE (256u * 1024u * 1024u)
+#define KERNEL_SEG_START (~KERNEL_SEG_SIZE + 1)
+
 
 /* represents a hardware page. */
 struct page

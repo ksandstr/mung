@@ -12,13 +12,8 @@
 
 #include "multiboot.h"
 
-/* leave uppermost 128k unused
- *
- * FIXME: that doesn't work. probably a segmentation issue. the lower heap top
- * works just fine though.
- */
-//#define HEAP_TOP 0xfffe0000
-#define HEAP_TOP 0x80000000u
+/* leave uppermost 4k unused for esoteric reasons. */
+#define HEAP_TOP (KERNEL_SEG_SIZE - 4096)
 
 #define N_FIRST_PAGES (2 * 1024 * 1024 / PAGE_SIZE)
 

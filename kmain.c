@@ -219,6 +219,14 @@ void put_supervisor_page(intptr_t addr, uint32_t page_id)
 		pages = pg->vm_addr;
 		for(int i = 0; i < 1024; i++) pages[i] = 0;
 		*dir = (pdir_t)(pg->id << 12) | PDIR_PRESENT | PDIR_RW;
+
+		/* reflect directory allocation in the kernel's high segment */
+		if(addr < KERNEL_SEG_SIZE) {
+			printf("reflecting directory for 0x%x to 0x%x\n",
+				(unsigned)addr, (unsigned)addr + KERNEL_SEG_START);
+			pdir_t *high = &kernel_pdirs[(addr + KERNEL_SEG_START) >> 22];
+			*high = *dir;
+		}
 	} else {
 		struct page *dir_page = find_page_by_id(*dir >> PAGE_BITS);
 		if(dir_page == NULL) panic("directory page not found!");
@@ -230,6 +238,9 @@ void put_supervisor_page(intptr_t addr, uint32_t page_id)
 
 	/* valid since the 80486. */
 	__asm__ volatile("invlpg %0"::"m" (*(char *)addr): "memory");
+	if(addr < KERNEL_SEG_SIZE) {
+		__asm__ volatile("invlpg %0"::"m" (*(char *)(addr + KERNEL_SEG_START)): "memory");
+	}
 
 	if(alloc_next) {
 		next_dir_page = get_kern_page();
@@ -280,7 +291,7 @@ static void init_kernel_tss(struct tss *t)
 	stk &= ~15ul;
 
 	*t = (struct tss){
-		.ss0 = 2 * 8,
+		.ss0 = SEG_KERNEL_DATA << 3,
 		.esp0 = stk,
 		.iopb_offset = sizeof(struct tss),
 	};
@@ -312,7 +323,7 @@ static void set_int_gate(
 }
 
 
-static void setup_idt(void)
+static void setup_idt(int code_seg)
 {
 	extern void isr_top(void);
 	extern void isr14_top(void);
@@ -324,17 +335,11 @@ static void setup_idt(void)
 		ints[i] = (struct idt_entry){ /* all zero */ };
 	}
 
-	/* division by zero */
-	set_int_gate(ints, 0, &isr_top, SEG_KERNEL_CODE << 3);
-
-	/* pagefaults */
-	set_int_gate(ints, 14, &isr14_top, SEG_KERNEL_CODE << 3);
-
-	/* the timer interrupt */
-	set_int_gate(ints, 0x20, &isr_irq0_top, SEG_KERNEL_CODE << 3);
-
-	/* the keyboard interrupt */
-	set_int_gate(ints, 0x21, &isr_irq1_top, SEG_KERNEL_CODE << 3);
+	int code_sel = code_seg << 3;		/* always go to ring 0. */
+	set_int_gate(ints, 0, &isr_top, code_sel);		/* div by zero */
+	set_int_gate(ints, 14, &isr14_top, code_sel);	/* pagefault */
+	set_int_gate(ints, 0x20, &isr_irq0_top, code_sel);	/* IRQ0 (timer) */
+	set_int_gate(ints, 0x21, &isr_irq1_top, code_sel);	/* IRQ1 (keyboard) */
 
 	static struct {
 		unsigned short limit;
@@ -532,7 +537,7 @@ void kmain(void *mbd, unsigned int magic)
 #endif
 
 	setup_gdt();
-	setup_idt();
+	setup_idt(SEG_KERNEL_CODE);
 
 	/* map olde-timey PC interrupts 0-15 to 0x20 .. 0x2f inclusive */
 	printf("initializing PIC...\n");
@@ -600,6 +605,16 @@ void kmain(void *mbd, unsigned int magic)
 
 	printf("so far, the kernel reserves %d pages (%u KiB) of memory.\n",
 		list_length(&resv_page_list), list_length(&resv_page_list) * PAGE_SIZE / 1024);
+
+#if 1
+	printf("going high!\n");
+	irq_disable();
+	go_high();
+	printf("high! resetting interrupts.\n");
+	setup_idt(SEG_KERNEL_CODE_HIGH);
+	irq_enable();
+	printf("like, howl, cat!\n");
+#endif
 
 #if 0
 	static int zero;
