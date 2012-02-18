@@ -44,7 +44,7 @@ struct tss
 	uint16_t resv_9;
 	uint16_t ldtr;
 	uint16_t resv_10;
-	uint16_t resv_11;
+	uint16_t debug_trap;		/* low bit = T, 1-15 = reserved */
 	uint16_t iopb_offset;
 } __attribute__((packed));
 
