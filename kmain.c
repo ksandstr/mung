@@ -220,7 +220,7 @@ void put_supervisor_page(intptr_t addr, uint32_t page_id)
 		*dir = (pdir_t)(pg->id << 12) | PDIR_PRESENT | PDIR_RW;
 
 		/* reflect directory allocation in the kernel's high segment */
-		if(!is_kernel_high && addr < KERNEL_SEG_SIZE) {
+		if(unlikely(!is_kernel_high) && addr < KERNEL_SEG_SIZE) {
 			printf("reflecting directory for 0x%x to 0x%x\n",
 				(unsigned)addr, (unsigned)addr + KERNEL_SEG_START);
 			pdir_t *high = &kernel_pdirs[(addr + KERNEL_SEG_START) >> 22];
@@ -235,10 +235,10 @@ void put_supervisor_page(intptr_t addr, uint32_t page_id)
 	int poffs = (l_addr >> 12) & 0x3ff;
 	pages[poffs] = (page_id << PAGE_BITS) | PT_PRESENT | PT_RW;
 
-	/* valid since the 80486. */
-	__asm__ volatile("invlpg %0"::"m" (*(char *)l_addr): "memory");
-	if(!is_kernel_high && addr < KERNEL_SEG_SIZE) {
-		__asm__ volatile("invlpg %0"::"m" (*(char *)(addr + KERNEL_SEG_START)): "memory");
+	x86_invalidate_page(l_addr);
+	if(unlikely(!is_kernel_high) && addr < KERNEL_SEG_SIZE) {
+		/* invalidate the reflected page as well. */
+		x86_invalidate_page(addr + KERNEL_SEG_START);
 	}
 
 	if(alloc_next) {
@@ -414,15 +414,8 @@ void isr14_bottom(struct x86_exregs *regs)
 		printf("unable to handle. halting.\n");
 		asm("cli; hlt");
 	}
-#if 1
-	/* valid since the 80486. */
-	__asm__ volatile("invlpg %0"::"m" (*(char *)fault_addr): "memory");
-#else
-	__asm__ __volatile__(
-		"\tmovl %%cr3, %%eax\n"
-		"\tmovl %%eax, %%cr3\n"
-		::: "eax", "memory");
-#endif
+
+	x86_invalidate_page(fault_addr);
 }
 
 
