@@ -8,9 +8,10 @@
 
 #include <stdint.h>
 
+#include <ukernel/tss.h>
 #include <ukernel/ioport.h>
 #include <ukernel/gdt.h>
-#include <ukernel/tss.h>
+#include <ukernel/idt.h>
 
 
 static inline void x86_flush_tlbs(void) {

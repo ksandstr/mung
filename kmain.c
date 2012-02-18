@@ -20,14 +20,6 @@
 typedef uint32_t pdir_t;
 typedef uint32_t page_t;
 
-struct idt_entry {
-	unsigned short offset_1;
-	unsigned short selector;
-	unsigned char zero_0;
-	unsigned char type_attr;
-	unsigned short offset_2;
-} __attribute__((packed));
-
 
 /* courtesy of L4Ka::pistachio */
 struct x86_exregs {
@@ -71,12 +63,6 @@ struct x86_exregs {
 #define PT_ACCESSED (1 << 5)
 #define PT_DIRTY (1 << 6)
 #define PT_GLOBAL (1 << 7)
-
-/* IDT type attr bits */
-#define IDT_PRESENT (1 << 7)
-#define IDT_PRIVILEGE ((1 << 6) | (1 << 5))
-#define IDT_STORAGE (1 << 4)
-#define IDT_GATE_TYPE 0x0f
 
 
 /* keyboard variables. these are just for testing the PIC setup, and will be
@@ -304,66 +290,6 @@ static inline void irq_disable(void) {
 
 static inline void irq_enable(void) {
 	asm volatile ("sti" ::: "memory");
-}
-
-
-static void set_int_gate(
-	struct idt_entry *ints,
-	int vector,
-	void (*tophalf)(void),
-	int selector)
-{
-	ints[vector] = (struct idt_entry){
-		.offset_1 = (uintptr_t)tophalf & 0xffff,
-		.offset_2 = (uintptr_t)tophalf >> 16,
-		.selector = selector,
-		.type_attr = IDT_PRESENT | 0xe,		/* 32-bit interrupt gate */
-	};
-}
-
-
-#define FAST_IRQ_GATE(ints, sel, num) \
-	do { \
-		extern void isr_irq##num##_top(void); \
-		set_int_gate((ints), 0x20 + (num), &isr_irq##num##_top, (sel)); \
-	} while(false)
-
-#define IRQ_GATE(ints, sel, num) \
-	do { \
-		extern void isr_irq##num##_top(void); \
-		set_int_gate((ints), 0x20 + (num), &isr_irq##num##_top, (sel)); \
-	} while(false)
-
-#define EXN_GATE(ints, sel, num, name) \
-	do { \
-		extern void isr_exn_##name##_top(void); \
-		set_int_gate((ints), (num), &isr_exn_##name##_top, (sel)); \
-	} while(false)
-
-
-static void setup_idt(int code_seg)
-{
-	static struct idt_entry ints[256];
-	for(int i=0; i < 256; i++) {
-		ints[i] = (struct idt_entry){ /* all zero */ };
-	}
-
-	int code_sel = code_seg << 3;
-	EXN_GATE(ints, code_sel, 0, de);	/* divide error */
-	EXN_GATE(ints, code_sel, 13, gp);	/* general protection */
-	EXN_GATE(ints, code_sel, 14, pf);	/* pagefault */
-
-	FAST_IRQ_GATE(ints, code_sel, 0);	/* IRQ0 (timer) */
-	IRQ_GATE(ints, code_sel, 1);		/* IRQ1 (keyboard) */
-
-	struct {
-		uint16_t limit;
-		uint32_t base;
-	} __attribute__((packed)) idt_desc = {
-		.limit = sizeof(ints),
-		.base = KERNEL_TO_LINEAR((uintptr_t)&ints[0]),
-	};
-	__asm__ __volatile__("\tlidt %0\n":: "m" (idt_desc));
 }
 
 
