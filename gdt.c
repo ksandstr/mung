@@ -148,11 +148,7 @@ void go_high(void)
 
 	const int data_sel = SEG_KERNEL_DATA_HIGH << 3;
 
-#if 0
 	kernel_tss.ss0 = data_sel;
-	asm volatile ("ltr %%ax" :: "a" (SEG_KERNEL_TSS << 3) : "memory");
-	printf("new TSS stack segment installed\n");
-#endif
 	asm volatile (
 		"\tljmp %0,$1f\n"
 		"1:\n"
