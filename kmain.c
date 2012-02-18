@@ -7,9 +7,7 @@
 #include <ccan/list/list.h>
 
 #include <ukernel/mm.h>
-#include <ukernel/ioport.h>
-#include <ukernel/gdt.h>
-#include <ukernel/tss.h>
+#include <ukernel/x86.h>
 #include <ukernel/interrupt.h>
 #include <ukernel/16550.h>
 #include <ukernel/timer.h>
@@ -205,8 +203,9 @@ static struct page *find_page_by_id(uint32_t id)
 
 void put_supervisor_page(intptr_t addr, uint32_t page_id)
 {
-//	printf("%s: addr 0x%x, page_id %u\n", __func__, (unsigned)addr, page_id);
-	pdir_t *dir = &kernel_pdirs[addr >> 22];
+	intptr_t l_addr = is_kernel_high ? addr + KERNEL_SEG_START : addr;
+
+	pdir_t *dir = &kernel_pdirs[l_addr >> 22];
 	page_t *pages;
 	bool alloc_next = false;
 	if(unlikely(!CHECK_FLAG(*dir, PDIR_PRESENT))) {
@@ -221,7 +220,7 @@ void put_supervisor_page(intptr_t addr, uint32_t page_id)
 		*dir = (pdir_t)(pg->id << 12) | PDIR_PRESENT | PDIR_RW;
 
 		/* reflect directory allocation in the kernel's high segment */
-		if(addr < KERNEL_SEG_SIZE) {
+		if(!is_kernel_high && addr < KERNEL_SEG_SIZE) {
 			printf("reflecting directory for 0x%x to 0x%x\n",
 				(unsigned)addr, (unsigned)addr + KERNEL_SEG_START);
 			pdir_t *high = &kernel_pdirs[(addr + KERNEL_SEG_START) >> 22];
@@ -233,12 +232,12 @@ void put_supervisor_page(intptr_t addr, uint32_t page_id)
 		pages = dir_page->vm_addr;
 	}
 
-	int poffs = (addr >> 12) & 0x3ff;
+	int poffs = (l_addr >> 12) & 0x3ff;
 	pages[poffs] = (page_id << PAGE_BITS) | PT_PRESENT | PT_RW;
 
 	/* valid since the 80486. */
-	__asm__ volatile("invlpg %0"::"m" (*(char *)addr): "memory");
-	if(addr < KERNEL_SEG_SIZE) {
+	__asm__ volatile("invlpg %0"::"m" (*(char *)l_addr): "memory");
+	if(!is_kernel_high && addr < KERNEL_SEG_SIZE) {
 		__asm__ volatile("invlpg %0"::"m" (*(char *)(addr + KERNEL_SEG_START)): "memory");
 	}
 
@@ -534,6 +533,7 @@ void kmain(void *mbd, unsigned int magic)
 	/* also, output some stuff to the serial port. */
 	printf("hello, world! mbd is at 0x%x\n", (unsigned)mbd);
 
+	asm volatile ("lldt %%ax" :: "a" (0));
 	init_kernel_tss(&kernel_tss);
 
 	/* initialize interrupt-related data structures with the I bit cleared. */
@@ -616,17 +616,24 @@ void kmain(void *mbd, unsigned int magic)
 	printf("so far, the kernel reserves %d pages (%u KiB) of memory.\n",
 		list_length(&resv_page_list), list_length(&resv_page_list) * PAGE_SIZE / 1024);
 
-#if 1
-	printf("going high!\n");
+	/* move the kernel to a high linear address, and change its segments so
+	 * that it sees itself at a low address.
+	 */
 	irq_disable();
+
 	go_high();
-	printf("high! resetting GDT...\n");
 	setup_gdt();
-	printf("and interrupts...\n");
 	setup_idt(SEG_KERNEL_CODE_HIGH);
+
+	/* then unmap the low space. */
+	int last_resv_dir = (resv_end + (1 << 22) - 1) >> 22;
+	assert(kernel_pdirs[last_resv_dir + 1] == 0);
+	for(int i=0; i <= last_resv_dir; i++) {
+		kernel_pdirs[i] = 0;
+	}
+	x86_flush_tlbs();
+
 	irq_enable();
-	printf("like, howl, cat!\n");
-#endif
 
 #if 0
 	static int zero;
