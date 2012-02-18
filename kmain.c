@@ -322,25 +322,39 @@ static void set_int_gate(
 }
 
 
+#define FAST_IRQ_GATE(ints, sel, num) \
+	do { \
+		extern void isr_irq##num##_top(void); \
+		set_int_gate((ints), 0x20 + (num), &isr_irq##num##_top, (sel)); \
+	} while(false)
+
+#define IRQ_GATE(ints, sel, num) \
+	do { \
+		extern void isr_irq##num##_top(void); \
+		set_int_gate((ints), 0x20 + (num), &isr_irq##num##_top, (sel)); \
+	} while(false)
+
+#define EXN_GATE(ints, sel, num, name) \
+	do { \
+		extern void isr_exn_##name##_top(void); \
+		set_int_gate((ints), (num), &isr_exn_##name##_top, (sel)); \
+	} while(false)
+
+
 static void setup_idt(int code_seg)
 {
-	extern void isr_top(void);
-	extern void isr13_top(void);
-	extern void isr14_top(void);
-	extern void isr_irq0_top(void);
-	extern void isr_irq1_top(void);
-
 	static struct idt_entry ints[256];
 	for(int i=0; i < 256; i++) {
 		ints[i] = (struct idt_entry){ /* all zero */ };
 	}
 
-	int code_sel = code_seg << 3;		/* always go to ring 0. */
-	set_int_gate(ints, 0, &isr_top, code_sel);		/* div by zero */
-	set_int_gate(ints, 13, &isr13_top, code_sel);	/* general protection */
-	set_int_gate(ints, 14, &isr14_top, code_sel);	/* pagefault */
-	set_int_gate(ints, 0x20, &isr_irq0_top, code_sel);	/* IRQ0 (timer) */
-	set_int_gate(ints, 0x21, &isr_irq1_top, code_sel);	/* IRQ1 (keyboard) */
+	int code_sel = code_seg << 3;
+	EXN_GATE(ints, code_sel, 0, de);	/* divide error */
+	EXN_GATE(ints, code_sel, 13, gp);	/* general protection */
+	EXN_GATE(ints, code_sel, 14, pf);	/* pagefault */
+
+	FAST_IRQ_GATE(ints, code_sel, 0);	/* IRQ0 (timer) */
+	IRQ_GATE(ints, code_sel, 1);		/* IRQ1 (keyboard) */
 
 	struct {
 		uint16_t limit;
@@ -353,17 +367,15 @@ static void setup_idt(int code_seg)
 }
 
 
-void isr_bottom()
+void isr_exn_de_bottom(struct x86_exregs *regs)
 {
-	unsigned char *videoram = (unsigned char *)0xb8000;
-	videoram[0] = 'A';
-	videoram[1] = 0x07;		/* light grey (7) on black (0). */
-
-	asm("cli; hlt");
+	printf("#DE(0x%x) at eip 0x%x, esp 0x%x\n", regs->error,
+		regs->eip, regs->esp);
+	panic("#DE");
 }
 
 
-void isr13_bottom(struct x86_exregs *regs)
+void isr_exn_gp_bottom(struct x86_exregs *regs)
 {
 	printf("#GP(0x%x) at eip 0x%x, esp 0x%x\n", regs->error,
 		regs->eip, regs->esp);
@@ -371,7 +383,7 @@ void isr13_bottom(struct x86_exregs *regs)
 }
 
 
-void isr14_bottom(struct x86_exregs *regs)
+void isr_exn_pf_bottom(struct x86_exregs *regs)
 {
 	uint32_t fault_addr;
 	__asm__ __volatile__("\tmovl %%cr2, %0\n" : "=r" (fault_addr)
@@ -434,18 +446,25 @@ static void pump_keyboard(void)
 }
 
 
-/* the timer interrupt. */
-void isr_irq0_bottom(struct x86_exregs *frame)
+void isr_irq_bottom(int vecn)
 {
-	timer_count++;
-	pic_send_eoi(0);
+	int irq = vecn - 0x20;
+	assert(irq >= 0 && irq <= 15);
+	if(irq == 1) {
+		pump_keyboard();
+		pic_send_eoi(1);
+	} else {
+		printf("got unexpected interrupt 0x%x\n", (unsigned)irq);
+		pic_send_eoi(irq);
+	}
 }
 
 
-void isr_irq1_bottom(struct x86_exregs *frame)
+/* the timer interrupt. */
+void isr_irq0_bottom(void)
 {
-	pump_keyboard();
-	pic_send_eoi(1);
+	timer_count++;
+	pic_send_eoi(0);
 }
 
 
