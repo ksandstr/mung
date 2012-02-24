@@ -1,6 +1,7 @@
 
-	/* ISR_IRQ produces IRQ interrupt handlers that call a set bottom
-	 * half.
+	/* ISR_IRQ produces IRQ interrupt handlers that call a common bottom
+	 * half while pushing $vecn as the "reason" field in the parameter
+	 * <struct x86_exregs *>.
 	 */
 
 	.macro ISR_IRQ vecn, name
@@ -9,7 +10,10 @@
 	.align 16,0
 isr_\name\()_top:
 	pushal
+	pushl %ds
+	pushl %es
 	pushl $\vecn
+	pushl %esp
 	jmp isr_irq_common
 	.endm
 
@@ -21,7 +25,9 @@ isr_\name\()_top:
 	.align 16,0
 isr_irq_common:
 	call isr_irq_bottom
-	addl $4, %esp
+	addl $8, %esp
+	popl %es
+	popl %ds
 	popal
 	iret
 

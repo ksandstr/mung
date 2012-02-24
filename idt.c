@@ -47,6 +47,9 @@ void setup_idt(int code_seg)
 		ints[i] = (struct idt_entry){ /* all zero */ };
 	}
 
+	/* TODO: null out exceptions that aren't in use, also interrupts that are
+	 * likewise
+	 */
 	int code_sel = code_seg << 3;
 	EXN_GATE(ints, code_sel, 0, de);	/* divide error */
 	EXN_GATE(ints, code_sel, 13, gp);	/* general protection */
