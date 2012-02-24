@@ -461,40 +461,11 @@ void malloc_panic(void) {
 }
 
 
-void kmain(void *mbd, unsigned int magic)
+static void crawl_multiboot_info(
+	struct multiboot_info *mbi,
+	intptr_t *resv_start_p,
+	intptr_t *resv_end_p)
 {
-	if(magic != 0x2BADB002) {
-		/* hang! */
-		return;
-	}
-
-	/* also, output some stuff to the serial port. */
-	printf("hello, world! mbd is at 0x%x\n", (unsigned)mbd);
-
-	asm volatile ("lldt %%ax" :: "a" (0));
-	init_kernel_tss(&kernel_tss);
-
-	/* initialize interrupt-related data structures with the I bit cleared. */
-	irq_disable();
-
-#if 0
-	printf("dumping gdt...\n");
-	struct gdt_desc gd;
-	asm volatile ("sgdt %0" : "=m" (gd));
-	dump_gdt(&gd);
-#endif
-
-	setup_gdt();
-	setup_idt(SEG_KERNEL_CODE);
-
-	/* map olde-timey PC interrupts 0-15 to 0x20 .. 0x2f inclusive */
-	printf("initializing PIC...\n");
-	initialize_pics(0x20, 0x28);
-	pic_set_mask(0xff, 0xff);	/* mask them all off for now. */
-
-	irq_enable();
-
-	struct multiboot_info *mbi = mbd;
 	printf("flags 0x%x\n", mbi->flags);
 	if(CHECK_FLAG(mbi->flags, MULTIBOOT_INFO_MEMORY)) {
 		printf("mem_lower 0x%x, mem_upper 0x%x\n", mbi->mem_lower,
@@ -509,7 +480,6 @@ void kmain(void *mbd, unsigned int magic)
 	}
 
 	bool found_mem = false;
-	intptr_t resv_start = 0, resv_end = 0;
 	if(CHECK_FLAG(mbi->flags, MULTIBOOT_INFO_MEM_MAP)) {
 		printf("multiboot memory map (0x%x, length 0x%x):\n",
 			mbi->mmap_addr, mbi->mmap_length);
@@ -528,13 +498,52 @@ void kmain(void *mbd, unsigned int magic)
 				&& mm->addr <= ~0u)
 			{
 				found_mem = true;
-				init_kernel_heap(mm, &resv_start, &resv_end);
+				init_kernel_heap(mm, resv_start_p, resv_end_p);
 			}
 		}
 	}
 	if(!found_mem) {
 		panic("didn't find any memory in multiboot spec!");
 	}
+}
+
+
+void kmain(void *mbd, unsigned int magic)
+{
+	if(magic != 0x2BADB002) {
+		/* hang! */
+		return;
+	}
+
+	/* also, output some stuff to the serial port. */
+	printf("hello, world! mbd is at 0x%x\n", (unsigned)mbd);
+
+	struct multiboot_info *mbi = mbd;
+	intptr_t resv_start = 0, resv_end = 0;
+	crawl_multiboot_info(mbd, &resv_start, &resv_end);
+
+	/* initialize interrupt-related data structures with the I bit cleared. */
+	irq_disable();
+
+	asm volatile ("lldt %%ax" :: "a" (0));
+	init_kernel_tss(&kernel_tss);
+
+#if 0
+	printf("dumping gdt...\n");
+	struct gdt_desc gd;
+	asm volatile ("sgdt %0" : "=m" (gd));
+	dump_gdt(&gd);
+#endif
+
+	setup_gdt();
+	setup_idt(SEG_KERNEL_CODE);
+
+	/* map olde-timey PC interrupts 0-15 to 0x20 .. 0x2f inclusive */
+	printf("initializing PIC...\n");
+	initialize_pics(0x20, 0x28);
+	pic_set_mask(0xff, 0xff);	/* mask them all off for now. */
+
+	irq_enable();
 
 	printf("setting up paging (id maps between 0x%x and 0x%x)...\n",
 		(unsigned)resv_start, (unsigned)resv_end);
