@@ -93,6 +93,9 @@ void init_kernel_heap(
 }
 
 
+/* FIXME: don't return pages with a physical address below 0x100000, as these
+ * are special on the x86 (video memory, etc)
+ */
 struct page *get_kern_page(void)
 {
 	assert(!list_empty(&k_free_pages));

@@ -342,8 +342,8 @@ void isr_exn_pf_bottom(struct x86_exregs *regs)
 			/* allocate. */
 			struct page *pg = get_kern_page();
 			pages[p] = (pg->id << PAGE_BITS) | PT_PRESENT | PT_RW;
-			printf("allocated physical page 0x%x for fault in kernel memory\n",
-				(unsigned)pg->id << PAGE_BITS);
+			printf("allocated physical page 0x%x for fault in kernel memory at 0x%x\n",
+				(unsigned)pg->id << PAGE_BITS, fault_addr);
 		}
 	} else {
 		printf("pf (%s, %s, %s) @ 0x%x (eip 0x%x)\n",
