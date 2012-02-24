@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <assert.h>
 #include <ccan/alignof/alignof.h>
+#include <ccan/likely/likely.h>
 #include <ccan/list/list.h>
 
 #include <ukernel/mm.h>
@@ -108,9 +109,13 @@ struct thread *create_thread(
 	void (*function)(void *),
 	void *parameter)
 {
+	if(unlikely(thread_slab == NULL)) {
+		panic("create_thread() called before init_threading()");
+	}
+
 	struct thread *t = NULL;
 	if(list_empty(&dead_thread_list)) {
-		struct thread *t = kmem_cache_alloc(thread_slab);
+		t = kmem_cache_alloc(thread_slab);
 		t->stack_page = get_kern_page();
 	} else {
 		t = container_of(dead_thread_list.n.next, struct thread, link);
