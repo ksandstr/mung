@@ -5,6 +5,8 @@
 #include <stdlib.h>
 #include <stdint.h>
 
+#include <ccan/compiler/compiler.h>
+
 
 /* from slab.c, in imitation of Linux */
 
@@ -21,7 +23,8 @@ extern struct kmem_cache *kmem_cache_create(
 
 extern void kmem_cache_destroy(struct kmem_cache *cache);
 
-extern void *kmem_cache_alloc(struct kmem_cache *cache);
+extern void *kmem_cache_alloc(struct kmem_cache *cache)
+	__attribute__((malloc));
 extern void *kmem_cache_zalloc(struct kmem_cache *cache);
 extern void kmem_cache_free(struct kmem_cache *cache, void *ptr);
 
