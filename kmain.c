@@ -17,10 +17,6 @@
 #include "multiboot.h"
 
 
-typedef uint32_t pdir_t;
-typedef uint32_t page_t;
-
-
 /* courtesy of L4Ka::pistachio */
 struct x86_exregs {
 	uint32_t reason;
@@ -42,27 +38,6 @@ struct x86_exregs {
 	uint32_t esp;
 	uint32_t ss;
 };
-
-
-/* x86 page directory flags */
-#define PDIR_PRESENT (1 << 0)
-#define PDIR_RW (1 << 1)
-#define PDIR_USER (1 << 2)
-#define PDIR_WRITETHROUGH (1 << 3)
-#define PDIR_CACHEDISABLE (1 << 4)
-#define PDIR_ACCESSED (1 << 5)
-#define PDIR_LARGE (1 << 6)
-#define PDIR_IGNORED (1 << 7)
-
-/* x86 page table flags */
-#define PT_PRESENT (1 << 0)
-#define PT_RW (1 << 1)
-#define PT_USER (1 << 2)
-#define PT_WRITETHROUGH (1 << 3)
-#define PT_CACHEDISABLE (1 << 4)
-#define PT_ACCESSED (1 << 5)
-#define PT_DIRTY (1 << 6)
-#define PT_GLOBAL (1 << 7)
 
 
 /* keyboard variables. these are just for testing the PIC setup, and will be
