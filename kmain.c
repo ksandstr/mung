@@ -7,6 +7,7 @@
 #include <ccan/list/list.h>
 
 #include <ukernel/mm.h>
+#include <ukernel/space.h>
 #include <ukernel/x86.h>
 #include <ukernel/interrupt.h>
 #include <ukernel/16550.h>
@@ -69,7 +70,6 @@ struct x86_exregs {
 
 struct tss kernel_tss;
 
-static pdir_t *kernel_pdirs = NULL;
 static struct list_head resv_page_list = LIST_HEAD_INIT(resv_page_list);
 static struct page *next_dir_page = NULL;
 
@@ -167,8 +167,11 @@ static struct page *find_page_by_id(uint32_t id)
 
 void put_supervisor_page(intptr_t addr, uint32_t page_id)
 {
+	assert(kernel_space != NULL);
+
 	intptr_t l_addr = is_kernel_high ? addr + KERNEL_SEG_START : addr;
 
+	pdir_t *kernel_pdirs = kernel_space->pdirs->vm_addr;
 	pdir_t *dir = &kernel_pdirs[l_addr >> 22];
 	page_t *pages;
 	bool alloc_next = false;
@@ -214,12 +217,7 @@ void put_supervisor_page(intptr_t addr, uint32_t page_id)
 
 static void setup_paging(intptr_t id_start, intptr_t id_end)
 {
-	/* allocate the page directory table for the supervisor address space. */
-	struct page *kspace_pg = get_kern_page();
-	kernel_pdirs = kspace_pg->vm_addr;
-	list_add(&resv_page_list, &kspace_pg->link);
-	/* all present bits are turned off. */
-	for(int i=0; i < 1024; i++) kernel_pdirs[i] = 0;
+	assert(kernel_space != NULL);
 
 	next_dir_page = get_kern_page();
 	list_add(&resv_page_list, &next_dir_page->link);
@@ -240,7 +238,7 @@ static void setup_paging(intptr_t id_start, intptr_t id_end)
 		"\torl $0x80000000, %%eax\n"
 		"\tmovl %%eax, %%cr0\n"
 		:
-		: "a" (kernel_pdirs)
+		: "a" (kernel_space->pdirs->vm_addr)
 		: "memory");
 }
 
@@ -301,6 +299,7 @@ void isr_exn_pf_bottom(struct x86_exregs *regs)
 
 	/* set up an identity mapping if it's in the first 4 MiB. */
 	int dir = fault_addr >> 22, p = (fault_addr >> 12) & 0x3ff;
+	pdir_t *kernel_pdirs = kernel_space->pdirs->vm_addr;
 	page_t *pages = (page_t *)(kernel_pdirs[dir] & ~0xfff);
 	if(pages == NULL) {
 		/* TODO: track this page: it is used for kernel-space page tables. */
@@ -601,6 +600,8 @@ void kmain(void *mbd, unsigned int magic)
 
 	printf("setting up paging (id maps between 0x%x and 0x%x)...\n",
 		(unsigned)resv_start, (unsigned)resv_end);
+	struct list_head ksp_resv = LIST_HEAD_INIT(ksp_resv);
+	init_spaces(&ksp_resv);
 	setup_paging(resv_start, resv_end);
 	printf("adding identity maps for MBI memory...\n");
 	/* NOTE: this is a big hack: generally the MBI info fits in less than 4k
@@ -613,6 +614,9 @@ void kmain(void *mbd, unsigned int magic)
 		printf("adding MultiBoot memory...\n");
 		add_mbi_memory(mbi, resv_start & ~PAGE_MASK, resv_end | PAGE_MASK);
 	}
+
+	space_add_resv_pages(kernel_space, &ksp_resv);
+	list_head_init(&ksp_resv);
 
 	printf("so far, the kernel reserves %d pages (%u KiB) of memory.\n",
 		list_length(&resv_page_list), list_length(&resv_page_list) * PAGE_SIZE / 1024);
@@ -628,6 +632,7 @@ void kmain(void *mbd, unsigned int magic)
 
 	/* then unmap the low space. */
 	int last_resv_dir = (resv_end + (1 << 22) - 1) >> 22;
+	pdir_t *kernel_pdirs = kernel_space->pdirs->vm_addr;
 	assert(kernel_pdirs[last_resv_dir + 1] == 0);
 	for(int i=0; i <= last_resv_dir; i++) {
 		kernel_pdirs[i] = 0;
