@@ -1,6 +1,7 @@
 
+CCAN_DIR=~/src/ccan
 CFLAGS=-O2 -Wall -march=native -std=gnu99 -I include -I include/fake_clib \
-	-I ~/src/ccan \
+	-I $(CCAN_DIR) \
 	-fno-builtin -nostdlib
 
 
@@ -22,7 +23,8 @@ tags: $(wildcard *.[ch])
 
 image.bin: linker.ld loader.o isr.o kmain.o printf.o fake_stdio.o string.o \
 		dlmalloc.o heap.o slab.o pic.o timer.o thread.o context.o \
-		gdt.o idt.o
+		gdt.o idt.o \
+		ccan-htable.o
 	@echo "  LD $@"
 	@ld -T linker.ld -o $@ $(filter %.o,$^)
 
@@ -32,6 +34,12 @@ image.bin: linker.ld loader.o isr.o kmain.o printf.o fake_stdio.o string.o \
 	@$(CC) -m32 -c -o $@ $< $(CFLAGS) -nostartfiles -nodefaultlibs -MMD
 	@test -d .deps || mkdir -p .deps
 	@mv $(<:.c=.d) .deps/
+
+
+# build CCAN sources as though they were in the kernel tree.
+ccan-%.o ::
+	@echo "  CC $@ <ccan>"
+	@$(CC) -m32 -c -o $@ $(CCAN_DIR)/ccan/$*/$*.c $(CFLAGS) -nostartfiles -nodefaultlibs
 
 
 %.o: %-32.S
