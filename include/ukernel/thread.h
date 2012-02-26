@@ -8,6 +8,17 @@
 #include <ukernel/mm.h>
 
 
+typedef uint32_t thread_id;
+
+#define TID_VERSION_BITS 14
+#define TID_VERSION_MASK ((1 << TID_VERSION_BITS) - 1)
+#define THREAD_ID(num, version) ((num) << TID_VERSION_BITS | ((version) & TID_VERSION_MASK))
+#define TID_THREADNUM(tid) ((tid) >> TID_VERSION_BITS)
+#define TID_VERSION(tid) ((tid) & TID_VERSION_MASK)
+
+
+struct space;
+
 /* swap_context() is the soft yield. it re-/stores only those registers
  * that're preserved over a SysV x86 function call.
  */
@@ -28,10 +39,14 @@ enum thread_state {
 
 struct thread
 {
-	struct list_node link;
-	struct page *stack_page;
+	struct list_node link;		/* in the appropriate queue (sleep, ready) */
+	thread_id id;				/* full TID */
 	enum thread_state status;
-	int id;
+
+	struct space *space;
+	struct list_node space_link;
+
+	struct page *stack_page;
 
 	struct x86_context ctx;
 };
@@ -40,8 +55,9 @@ struct thread
 extern struct thread *current_thread;
 
 
-extern struct thread *init_threading(void);
+extern struct thread *init_threading(thread_id boot_tid);
 extern struct thread *create_thread(
+	thread_id tid,
 	void (*function)(void *),
 	void *parameter);
 
@@ -50,6 +66,13 @@ extern void yield(struct thread *to);
 static inline struct thread *get_current_thread(void) {
 	return current_thread;
 }
+
+extern void thread_set_space(struct thread *t, struct space *sp);
+/* finds by thread ID, ignores version. */
+extern struct thread *thread_find(thread_id tid);
+
+/* for htable */
+extern size_t hash_thread_by_id(const void *threadptr, void *dataptr);
 
 
 /* defined in context-32.S etc. */

@@ -12,6 +12,7 @@
 #include <ukernel/mm.h>
 #include <ukernel/slab.h>
 #include <ukernel/misc.h>
+#include <ukernel/thread.h>
 #include <ukernel/space.h>
 
 
@@ -82,6 +83,15 @@ void space_free(struct space *sp)
 	list_del_from(&space_list, &sp->link);
 
 	kmem_cache_free(space_slab, sp);
+}
+
+
+void space_add_thread(struct space *sp, struct thread *t)
+{
+	assert(t->space == NULL);
+
+	list_add(&sp->threads, &t->space_link);
+	t->space = sp;
 }
 
 

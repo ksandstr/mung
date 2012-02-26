@@ -10,10 +10,12 @@
 #include <ukernel/mm.h>
 
 
+struct thread;
+
 struct space
 {
 	struct list_node link;		/* in the global space list */
-	struct list_head threads;
+	struct list_head threads;	/* <struct thread> via space_link */
 
 	struct htable ptab_pages;	/* <struct page *>, by page.id */
 
@@ -27,6 +29,7 @@ extern struct space *kernel_space;
 
 extern struct space *space_new(void);
 extern void space_free(struct space *sp);
+extern void space_add_thread(struct space *sp, struct thread *t);
 
 /* pages reserved before htable_add() can be used, are added to the list.
  * later kmain() calls space_add_resv_pages().

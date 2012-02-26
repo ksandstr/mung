@@ -291,6 +291,12 @@ void isr_exn_pf_bottom(struct x86_exregs *regs)
 	__asm__ __volatile__("\tmovl %%cr2, %0\n" : "=r" (fault_addr)
 		:: "memory");
 
+	printf("pf (%s, %s, %s) @ 0x%x (eip 0x%x)\n",
+		CHECK_FLAG(regs->error, 4) ? "user" : "supervisor",
+		CHECK_FLAG(regs->error, 2) ? "write" : "read",
+		CHECK_FLAG(regs->error, 1) ? "protection" : "notpresent",
+		fault_addr, regs->eip);
+
 #if 0
 	unsigned char *videoram = (unsigned char *)0xb8000;
 	videoram[0] = 'Z';
@@ -320,12 +326,6 @@ void isr_exn_pf_bottom(struct x86_exregs *regs)
 				(unsigned)pg->id << PAGE_BITS, fault_addr);
 		}
 	} else {
-		printf("pf (%s, %s, %s) @ 0x%x (eip 0x%x)\n",
-			CHECK_FLAG(regs->error, 4) ? "user" : "supervisor",
-			CHECK_FLAG(regs->error, 2) ? "write" : "read",
-			CHECK_FLAG(regs->error, 1) ? "protection" : "notpresent",
-			fault_addr, regs->eip);
-
 		printf("unable to handle. halting.\n");
 		asm("cli; hlt");
 	}
@@ -489,7 +489,9 @@ static void test_thread(void *ptr)
 
 static void thread_test(void)
 {
-	struct thread *other = create_thread(&test_thread, "hello, thread!");
+	struct thread *other = create_thread(THREAD_ID(18, 1),
+		&test_thread, "hello, thread!");
+	space_add_thread(kernel_space, other);
 	printf("other thread created. switching...\n");
 	yield(other);
 	printf("back in old thread. boinking yield...\n");
@@ -665,7 +667,8 @@ void kmain(void *mbd, unsigned int magic)
 	setup_timer_ch0();
 	pic_clear_mask(0x01, 0x00);
 
-	init_threading();
+	struct thread *first_thread = init_threading(THREAD_ID(17, 1));
+	space_add_thread(kernel_space, first_thread);
 	thread_test();
 
 	printf("kmain() entering halt-sleep.\n");
