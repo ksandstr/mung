@@ -114,6 +114,14 @@ void setup_gdt(void)
 		KERNEL_SEG_SIZE >> PAGE_BITS,
 		DESC_A_PRESENT | DESC_A_RW | DESC_A_SYSTEM, DESC_F_SZ | DESC_F_GR);
 
+	/* user space. */
+	gdt_array[SEG_USER_CODE] = GDT_ENTRY(0, 0xfffff,
+		DESC_A_PRESENT | DESC_A_RW | DESC_A_PRIV_MASK | DESC_A_SYSTEM | DESC_A_EX,
+		DESC_F_SZ | DESC_F_GR);
+	gdt_array[SEG_USER_DATA] = GDT_ENTRY(0, 0xfffff,
+		DESC_A_PRESENT | DESC_A_RW | DESC_A_PRIV_MASK | DESC_A_SYSTEM,
+		DESC_F_SZ | DESC_F_GR);
+
 	struct gdt_desc gd = {
 		.limit = sizeof(gdt_array) - 1,
 		.base = KERNEL_TO_LINEAR((intptr_t)gdt_array),

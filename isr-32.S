@@ -57,8 +57,19 @@ isr_\name\()_top:
 	.type isr_exn_\name\()_top, @function
 	.align 16,0
 isr_exn_\name\()_top:
+	# NOTE: what is this rigamarole necessary for? apparently pushal
+	# references a segment other than SS, which triple-faults the CPU. this
+	# seems to avoid it by loading the other data segments with
+	# SEG_KERNEL_DATA_HIGH .
+	pushl %eax
+	movl $(7 << 3), %eax
+	movl %eax, %ds
+	movl %eax, %es
+	movl %eax, %fs
+	movl %eax, %gs
+	popl %eax
 	pushal
-	pushl %ds
+	pushl %ds		# no need to save these, really
 	pushl %es
 	pushl $\vecn
 	pushl %esp

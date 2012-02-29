@@ -77,7 +77,7 @@ static void end_thread(void)
 }
 
 
-void yield(struct thread *to)
+bool schedule(void)
 {
 	struct thread *self = get_current_thread();
 	assert(self->status == TS_RUNNING);
@@ -91,15 +91,49 @@ void yield(struct thread *to)
 			break;
 		}
 	}
-	if(found) {
-		self->status = TS_READY;
-		next->status = TS_RUNNING;
-		current_thread = next;
-		swap_context(&self->ctx, &next->ctx);
+	if(!found) return false;
 
-		assert(current_thread == self);
-		assert(self->status == TS_RUNNING);
+	assert(self->space != NULL);
+	assert(next->space != NULL);
+
+	self->status = TS_READY;
+	next->status = TS_RUNNING;
+	current_thread = next;
+	printf("%c-%c: %d:%d -> %d:%d\n",
+		self->space == kernel_space ? 'K' : 'U',
+		next->space == kernel_space ? 'K' : 'U',
+		TID_THREADNUM(self->id), TID_VERSION(self->id),
+		TID_THREADNUM(next->id), TID_VERSION(next->id));
+	if(self->space != next->space) {
+		if(unlikely(self->space == kernel_space)) {
+			/* switch from kernel initial space */
+			asm volatile ("movl %0, %%cr3"
+				:: "a" (next->space->pdirs->id << 12)
+				: "memory");
+			swap_to_ring3(&self->ctx, &next->ctx);	/* go go goblin balls! */
+		} else {
+			/* from one userspace process to another */
+			panic("WORP");
+		}
+	} else {
+		/* intra-space switch. */
+		if(self->space == kernel_space) {
+			swap_context(&self->ctx, &next->ctx);
+		} else {
+			panic("WNAR");
+		}
 	}
+
+	assert(current_thread == self);
+	assert(self->status == TS_RUNNING);
+
+	return true;
+}
+
+
+void yield(struct thread *t)
+{
+	schedule();
 }
 
 
@@ -111,41 +145,55 @@ static void thread_wrapper(void (*function)(void *), void *parameter)
 }
 
 
-struct thread *create_thread(
-	thread_id tid,
-	void (*function)(void *),
-	void *parameter)
+struct thread *thread_new(thread_id tid)
 {
-	assert((tid & TID_VERSION_MASK) != 0);
-	/* ThreadControl semantics are handled by caller. */
 	assert(thread_find(tid) == NULL);
-
 	if(unlikely(thread_slab == NULL)) {
-		panic("create_thread() called before init_threading()");
+		panic("thread_new() called before init_threading()");
 	}
 
-	struct thread *t = NULL;
+	struct thread *t;
 	if(list_empty(&dead_thread_list)) {
 		t = kmem_cache_alloc(thread_slab);
 		t->stack_page = get_kern_page();
 	} else {
 		t = container_of(dead_thread_list.n.next, struct thread, link);
 		list_del_from(&dead_thread_list, &t->link);
-
-		/* TODO: could dispose other threads here. */
 	}
-	t->id = tid;
-	t->status = TS_READY;
+	*t = (struct thread){ .id = tid, .status = TS_STOPPED };
 
+	list_add(&thread_list, &t->link);
+	htable_add(&thread_hash, int_hash(TID_THREADNUM(t->id)), t);
+
+	return t;
+}
+
+
+struct thread *create_kthread(
+	thread_id tid,
+	void (*function)(void *),
+	void *parameter)
+{
+	assert((tid & TID_VERSION_MASK) != 0);
+
+	struct thread *t = thread_new(tid);
+	if(t->stack_page == NULL) {
+		/* TODO: account for this somehow? */
+		t->stack_page = get_kern_page();
+	} else {
+		/* TODO: make t->stack_page->vm_addr valid */
+	}
+
+	/* switching into kernel threads ignores EIP (ctx.regs[8]) in favour of
+	 * the ones saved on stack.
+	 */
 	void **stk_top = t->stack_page->vm_addr + PAGE_SIZE - 16;
 	stk_top[0] = &thread_wrapper;
 	stk_top[1] = (void *)0xdeadbeef;
 	stk_top[2] = function;
 	stk_top[3] = parameter;
 	t->ctx.regs[7] = (uintptr_t)stk_top;
-
-	list_add(&thread_list, &t->link);
-	htable_add(&thread_hash, int_hash(TID_THREADNUM(t->id)), t);
+	t->status = TS_READY;
 
 	return t;
 }
@@ -158,6 +206,23 @@ void thread_set_space(struct thread *t, struct space *sp)
 		t->space = NULL;
 	}
 	space_add_thread(sp, t);
+}
+
+
+void thread_set_spip(struct thread *t, uintptr_t sp, uintptr_t ip)
+{
+	assert(!IS_KERNEL_THREAD(t));
+	assert(t->status != TS_RUNNING);
+
+	t->ctx.regs[7] = sp;
+	t->ctx.regs[8] = ip;
+}
+
+
+void thread_start(struct thread *t)
+{
+	t->status = TS_READY;
+	list_add(&thread_list, &t->link);
 }
 
 

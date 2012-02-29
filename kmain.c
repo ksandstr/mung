@@ -487,9 +487,9 @@ static void test_thread(void *ptr)
 }
 
 
-static void thread_test(void)
+void thread_test(void)
 {
-	struct thread *other = create_thread(THREAD_ID(18, 1),
+	struct thread *other = create_kthread(THREAD_ID(18, 1),
 		&test_thread, "hello, thread!");
 	space_add_thread(kernel_space, other);
 	printf("other thread created. switching...\n");
@@ -497,6 +497,16 @@ static void thread_test(void)
 	printf("back in old thread. boinking yield...\n");
 	for(int i=0; i < 8; i++) yield(NULL);
 	printf("thread_test() ends.\n");
+}
+
+
+void space_test(void)
+{
+	struct thread *t = thread_new(THREAD_ID(128, 1));
+	struct space *sp = space_new();
+	thread_set_space(t, sp);
+	thread_set_spip(t, 0xcafeb00b, 0xc0def000);
+	thread_start(t);
 }
 
 
@@ -671,8 +681,12 @@ void kmain(void *mbd, unsigned int magic)
 	space_add_thread(kernel_space, first_thread);
 	thread_test();
 
-	printf("kmain() entering halt-sleep.\n");
+	space_test();
+
+	printf("kmain() entering halt-schedule loop.\n");
 	while(true) {
-		asm volatile ("hlt");
+		if(!schedule()) {
+			asm volatile ("hlt");
+		}
 	}
 }

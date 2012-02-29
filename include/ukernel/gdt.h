@@ -18,7 +18,11 @@ extern bool is_kernel_high;
 /* descriptor indexes loaded by setup_gdt(). */
 
 enum kernel_seg_ix {
-	SEG_KERNEL_CODE = 1,	/* 4 GiB, linear, code, ring0 */
+	/* hardcoded for context-32.S's benefit */
+	SEG_USER_CODE = 1,
+	SEG_USER_DATA = 2,
+
+	SEG_KERNEL_CODE,	/* 4 GiB, linear, code, ring0 */
 	SEG_KERNEL_DATA,	/* 4 GiB, linear, data, ring0 */
 	SEG_KERNEL_TSS,		/* TSS, refers to "kernel_tss" */
 
