@@ -29,8 +29,39 @@ typedef union {
 	} __attribute__((packed)) X;
 } L4_Fpage_t;
 
-
 #define L4_Nilpage ((L4_Fpage_t){ .raw = 0 })
+
+
+typedef union {
+	L4_Word_t raw;
+	struct {
+		unsigned version:14;
+		unsigned thread_no:18;
+	} __attribute__((packed)) X;
+} L4_GthreadId_t;
+
+typedef union {
+	L4_Word_t raw;
+	struct {
+		unsigned zeros:6;
+		unsigned local_id:26;
+	} __attribute__((packed)) X;
+} L4_LthreadId_t;
+
+typedef union {
+	L4_Word_t raw;
+	L4_GthreadId_t global;
+	L4_LthreadId_t local;
+} L4_ThreadId_t;
+
+#define L4_nilthread ((L4_ThreadId_t){ .raw = 0 })
+#define L4_anythread ((L4_ThreadId_t){ .raw = ~0UL })
+#define L4_anylocalthread ((L4_ThreadId_t){ .raw = ~0UL << 6 })
+
+
+static inline bool L4_IsNilThread(L4_ThreadId_t tid) {
+	return tid.raw == 0;
+}
 
 
 static inline bool L4_IsNilFpage(L4_Fpage_t fp) {
