@@ -87,7 +87,6 @@ void space_free(struct space *sp)
 		p != NULL;
 		p = htable_next(&sp->ptab_pages, &it))
 	{
-		htable_delval(&sp->ptab_pages, &it);
 		free_kern_page(p);
 	}
 	assert(sp->ptab_pages.elems == 0);
