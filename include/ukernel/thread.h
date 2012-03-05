@@ -30,8 +30,8 @@ struct space;
  */
 struct x86_context
 {
-	/* eax, ebx, ecx, edx, esi, edi, ebp, esp, eip (user only) */
-	uint32_t regs[9];
+	/* eax, ebx, ecx, edx, esi, edi, ebp, esp, eip, eflags */
+	uint32_t regs[10];
 	/* TODO: others? */
 } __attribute__((packed));
 

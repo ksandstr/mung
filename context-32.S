@@ -13,6 +13,8 @@ swap_context:
 	movl %edi, 20(%eax)
 	movl %esi, 16(%eax)
 	movl %esp, 28(%eax)
+	pushf
+	popl 36(%eax)
 
 	movl 8(%esp), %eax
 	movl 24(%eax), %ebp
@@ -20,6 +22,7 @@ swap_context:
 	movl 20(%eax), %edi
 	movl 16(%eax), %esi
 	movl 28(%eax), %esp
+	/* no need to restore flags over swap_context() */
 	xorl %eax, %eax
 
 	/* bombs away! */
@@ -37,6 +40,8 @@ swap_to_ring3:
 	movl %edi, 20(%eax)
 	movl %esi, 16(%eax)
 	movl %esp, 28(%eax)
+	pushf
+	popl 36(%eax)
 	# ... segments, too?
 
 	movl 8(%esp), %eax	# the userspace context
@@ -48,7 +53,7 @@ swap_to_ring3:
 	movl 24(%eax), %ebp
 	pushl $((USER_DATA_SEG << 3) + 0x3)	# stack segment, ring 3
 	pushl 28(%eax)		# sp
-	pushf
+	pushl 36(%eax)		# eflags
 	pushl $((USER_CODE_SEG << 3) + 0x3)	# code segment, ring 3
 	pushl 32(%eax)		# ip
 	pushl (%eax)		# eax (temporary)
