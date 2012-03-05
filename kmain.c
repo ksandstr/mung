@@ -6,6 +6,9 @@
 #include <ccan/compiler/compiler.h>
 #include <ccan/list/list.h>
 
+#include <l4/types.h>
+#include <l4/vregs.h>
+
 #include <ukernel/mm.h>
 #include <ukernel/space.h>
 #include <ukernel/x86.h>
@@ -481,8 +484,10 @@ void space_test(void)
 {
 	struct thread *t = thread_new(THREAD_ID(128, 1));
 	struct space *sp = space_new();
+	space_set_utcb_area(sp, L4_FpageLog2(0xd0000000, 13));
 	thread_set_space(t, sp);
 	thread_set_spip(t, 0xcafeb00b, 0xc0def000);
+	thread_set_utcb(t, L4_Address(sp->utcb_area));
 	thread_start(t);
 }
 

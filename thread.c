@@ -7,7 +7,10 @@
 #include <ccan/likely/likely.h>
 #include <ccan/list/list.h>
 #include <ccan/htable/htable.h>
+#include <ccan/compiler/compiler.h>
 
+#include <l4/types.h>
+#include <ukernel/x86.h>
 #include <ukernel/mm.h>
 #include <ukernel/slab.h>
 #include <ukernel/misc.h>
@@ -160,7 +163,7 @@ struct thread *thread_new(thread_id tid)
 		t = container_of(dead_thread_list.n.next, struct thread, link);
 		list_del_from(&dead_thread_list, &t->link);
 	}
-	*t = (struct thread){ .id = tid, .status = TS_STOPPED };
+	*t = (struct thread){ .id = tid, .status = TS_STOPPED, .utcb_pos = -1 };
 
 	list_add(&thread_list, &t->link);
 	htable_add(&thread_hash, int_hash(TID_THREADNUM(t->id)), t);
@@ -219,10 +222,58 @@ void thread_set_spip(struct thread *t, uintptr_t sp, uintptr_t ip)
 }
 
 
+void thread_set_utcb(struct thread *t, L4_Word_t start)
+{
+	assert(t->space != NULL);
+	assert(!L4_IsNilFpage(t->space->utcb_area));
+	assert((start & (UTCB_SIZE - 1)) == 0);
+
+	struct space *sp = t->space;
+	int new_pos = (start - L4_Address(sp->utcb_area)) / UTCB_SIZE;
+	assert(new_pos < NUM_UTCB_PAGES(sp->utcb_area));
+	if(unlikely(sp->utcb_pages == NULL)) {
+		sp->utcb_pages = calloc(sizeof(struct page *),
+			NUM_UTCB_PAGES(sp->utcb_area));
+	}
+
+	/* (could call a space_ensure_utcb() function or something, but why.) */
+	int page = new_pos / UTCB_PER_PAGE;
+	if(sp->utcb_pages[page] == NULL) {
+		struct page *p = get_kern_page();
+		sp->utcb_pages[page] = p;
+		/* TODO: list "p" somewhere? */
+	}
+	if(new_pos != t->utcb_pos) {
+		int offset = new_pos - (page * UTCB_PER_PAGE);
+		assert(sp->utcb_pages[page]->vm_addr != NULL);
+		void *pos = sp->utcb_pages[page]->vm_addr + offset * UTCB_SIZE;
+		memset(pos, 0, UTCB_SIZE);
+	}
+
+	t->utcb_pos = new_pos;
+}
+
+
 void thread_start(struct thread *t)
 {
 	t->status = TS_READY;
 	list_add(&thread_list, &t->link);
+}
+
+
+void *thread_get_utcb(struct thread *t)
+{
+	assert(t->space != NULL);
+	assert(t->utcb_pos >= 0);
+	assert(t->utcb_pos < NUM_UTCB_PAGES(t->space->utcb_area));
+
+	int page_ix = t->utcb_pos / UTCB_PER_PAGE,
+		offset = t->utcb_pos & (UTCB_PER_PAGE - 1);
+	struct page *p = t->space->utcb_pages[page_ix];
+	if(unlikely(p->vm_addr == NULL)) {
+		panic("UTCB page not mapped in kernel?? HALP");
+	}
+	return p->vm_addr + offset * UTCB_SIZE;
 }
 
 

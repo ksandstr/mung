@@ -9,6 +9,7 @@
 #include <ccan/alignof/alignof.h>
 #include <ccan/compiler/compiler.h>
 
+#include <l4/types.h>
 #include <ukernel/mm.h>
 #include <ukernel/slab.h>
 #include <ukernel/misc.h>
@@ -32,6 +33,10 @@ static size_t hash_page_by_id(const void *page_ptr, void *priv)
 
 static void space_init(struct space *sp, struct list_head *resv_list)
 {
+	sp->kip_area = L4_Nilpage;
+	sp->utcb_area = L4_Nilpage;
+	sp->utcb_pages = NULL;
+
 	list_head_init(&sp->threads);
 	htable_init(&sp->ptab_pages, &hash_page_by_id, NULL);
 
@@ -69,6 +74,14 @@ void space_free(struct space *sp)
 {
 	assert(list_empty(&sp->threads));
 
+	if(sp->utcb_pages != NULL) {
+		for(int i=0; i < NUM_UTCB_PAGES(sp->utcb_area); i++) {
+			if(sp->utcb_pages[i] == NULL) continue;
+			free_kern_page(sp->utcb_pages[i]);
+		}
+		free(sp->utcb_pages);
+	}
+
 	struct htable_iter it;
 	for(struct page *p = htable_first(&sp->ptab_pages, &it);
 		p != NULL;
@@ -92,6 +105,28 @@ void space_add_thread(struct space *sp, struct thread *t)
 
 	list_add(&sp->threads, &t->space_link);
 	t->space = sp;
+}
+
+
+/* the UTCB setting part of SpaceControl. */
+int space_set_utcb_area(struct space *sp, L4_Fpage_t area)
+{
+	assert(list_empty(&sp->threads));
+
+	/* TODO: check overlap with KIP */
+	if(L4_Size(area) < UTCB_SIZE) return 6;
+
+	if(sp->utcb_pages != NULL) {
+		for(int i=0; i < NUM_UTCB_PAGES(sp->utcb_area); i++) {
+			free_kern_page(sp->utcb_pages[i]);
+		}
+		free(sp->utcb_pages);
+		sp->utcb_pages = NULL;
+	}
+
+	sp->utcb_area = area;
+
+	return 0;
 }
 
 

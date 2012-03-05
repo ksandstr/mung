@@ -5,7 +5,9 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <ccan/list/list.h>
+#include <ccan/compiler/compiler.h>
 
+#include <l4/types.h>
 #include <ukernel/mm.h>
 
 
@@ -50,6 +52,7 @@ struct thread
 
 	struct space *space;
 	struct list_node space_link;
+	int utcb_pos;				/* offset in space's UTCB region */
 
 	struct page *stack_page;
 
@@ -80,13 +83,18 @@ extern void thread_set_space(struct thread *t, struct space *sp);
 /* finds by thread ID, ignores version. */
 extern struct thread *thread_find(thread_id tid);
 
+
 /* thread of tid's threadnum must not exist already. caller handles
  * ThreadControl semantics.
  */
 extern struct thread *thread_new(thread_id tid);
 
-extern void thread_set_spip(struct thread *t, uintptr_t sp, uintptr_t ip);
+extern void thread_set_spip(struct thread *t, L4_Word_t sp, L4_Word_t ip);
+extern void thread_set_utcb(struct thread *t, L4_Word_t start);
 extern void thread_start(struct thread *t);
+
+/* complicated accessors */
+extern void *thread_get_utcb(struct thread *t);
 
 
 /* for htable */
