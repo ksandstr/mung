@@ -60,9 +60,6 @@ struct thread
 };
 
 
-extern struct thread *current_thread;
-
-
 extern struct thread *init_threading(thread_id boot_tid);
 extern struct thread *create_kthread(
 	thread_id tid,
@@ -75,9 +72,7 @@ extern void yield(struct thread *to);
 /* returns false when no thread was activated. */
 extern bool schedule(void);
 
-static inline struct thread *get_current_thread(void) {
-	return current_thread;
-}
+extern struct thread *get_current_thread(void);
 
 extern void thread_set_space(struct thread *t, struct space *sp);
 /* finds by thread ID, ignores version. */

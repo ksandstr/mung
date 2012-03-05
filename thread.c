@@ -18,7 +18,7 @@
 #include <ukernel/thread.h>
 
 
-struct thread *current_thread = NULL;
+static struct thread *current_thread = NULL;
 
 static struct kmem_cache *thread_slab = NULL;
 static struct htable thread_hash = HTABLE_INITIALIZER(thread_hash,
@@ -274,6 +274,11 @@ void *thread_get_utcb(struct thread *t)
 		panic("UTCB page not mapped in kernel?? HALP");
 	}
 	return p->vm_addr + offset * UTCB_SIZE;
+}
+
+
+struct thread *get_current_thread(void) {
+	return current_thread;
 }
 
 
