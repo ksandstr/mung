@@ -265,24 +265,8 @@ void isr_exn_gp_bottom(struct x86_exregs *regs)
 }
 
 
-void isr_exn_pf_bottom(struct x86_exregs *regs)
+static void handle_kernel_pf(struct x86_exregs *regs, uint32_t fault_addr)
 {
-	uint32_t fault_addr;
-	__asm__ __volatile__("\tmovl %%cr2, %0\n" : "=r" (fault_addr)
-		:: "memory");
-
-	printf("pf (%s, %s, %s) @ 0x%x (eip 0x%x)\n",
-		CHECK_FLAG(regs->error, 4) ? "user" : "supervisor",
-		CHECK_FLAG(regs->error, 2) ? "write" : "read",
-		CHECK_FLAG(regs->error, 1) ? "protection" : "notpresent",
-		fault_addr, regs->eip);
-
-#if 0
-	unsigned char *videoram = (unsigned char *)0xb8000;
-	videoram[0] = 'Z';
-	videoram[1] = 0x07;		/* light grey (7) on black (0). */
-#endif
-
 	/* set up an identity mapping if it's in the first 4 MiB. */
 	int dir = fault_addr >> 22, p = (fault_addr >> 12) & 0x3ff;
 	pdir_t *kernel_pdirs = kernel_space->pdirs->vm_addr;
@@ -311,6 +295,58 @@ void isr_exn_pf_bottom(struct x86_exregs *regs)
 	}
 
 	x86_invalidate_page(fault_addr);
+}
+
+
+void isr_exn_pf_bottom(struct x86_exregs *regs)
+{
+	uint32_t fault_addr;
+	__asm__ __volatile__("\tmovl %%cr2, %0\n" : "=r" (fault_addr)
+		:: "memory");
+
+	struct thread *current = get_current_thread();
+	printf("pf (%s, %s, %s) @ 0x%x (eip 0x%x) in thread %d:%d\n",
+		CHECK_FLAG(regs->error, 4) ? "user" : "supervisor",
+		CHECK_FLAG(regs->error, 2) ? "write" : "read",
+		CHECK_FLAG(regs->error, 1) ? "protection" : "notpresent",
+		fault_addr, regs->eip,
+		TID_THREADNUM(current->id), TID_VERSION(current->id));
+
+	if(unlikely(current->space == kernel_space)) {
+		printf("%s: kernel fault:\n", __func__);
+		printf("\teax 0x%x, ebx 0x%x, ecx 0x%x, edx 0x%x\n",
+			regs->eax, regs->ebx, regs->ecx, regs->edx);
+		printf("\tedi 0x%x, esi 0x%x, ebp 0x%x, esp 0x%x\n",
+			regs->edi, regs->esi, regs->ebp, regs->esp);
+		printf("\teip 0x%x\n", regs->eip);
+		panic("FOO");
+		handle_kernel_pf(regs, fault_addr);
+	} else {
+		void *utcb = thread_get_utcb(current);
+		L4_ThreadId_t pager_id = { .raw = L4_VREG(utcb, L4_TCR_PAGER) };
+		struct thread *pager = !L4_IsNilThread(pager_id) ? thread_find(pager_id.raw) : NULL;
+		if(unlikely(pager == NULL)) {
+			printf("thread has no pager, stopping it\n");
+			current->status = TS_STOPPED;
+			thread_save_exregs(current, regs);
+			return_to_scheduler(regs);
+		} else {
+			/* TODO: do a blocking IPC from the current thread to the pager.
+			 * if the IPC succeeds immediately, schedule the pager; otherwise,
+			 * save current thread and stay in wait.
+			 */
+#if 0
+			void *pu = thread_get_utcb(pager);
+			L4_VREG(pu, L4_TCR_MR(0)) = ((-2) & 0xfff) << 20		/* label */
+				| (CHECK_FLAG(regs->error, 2) ? 0x2 : 0x4) << 16	/* access */
+				| 2;		/* "u" for msgtag */
+			L4_VREG(pu, L4_TCR_MR(1)) = fault_addr;
+			L4_VREG(pu, L4_TCR_MR(2)) = regs->eip;
+#else
+			panic("unhandled case");
+#endif
+		}
+	}
 }
 
 

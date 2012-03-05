@@ -69,8 +69,20 @@ extern struct thread *create_kthread(
 /* NOTE: doesn't yield */
 extern void yield(struct thread *to);
 
-/* returns false when no thread was activated. */
+/* switches away from a kernel thread.
+ * returns false when no thread was activated.
+ */
 extern bool schedule(void);
+
+/* alters the x86 exception frame to return to the scheduler rather than
+ * userspace or a kernel thread.
+ */
+struct x86_exregs;
+extern void return_to_scheduler(struct x86_exregs *regs);
+
+extern void thread_save_exregs(
+	struct thread *t,
+	const struct x86_exregs *regs);
 
 extern struct thread *get_current_thread(void);
 
@@ -105,5 +117,7 @@ extern void swap_context(
 extern void swap_to_ring3(
 	struct x86_context *store,
 	const struct x86_context *load);
+
+extern NORETURN void iret_to_scheduler(const struct x86_context *sched_ctx);
 
 #endif

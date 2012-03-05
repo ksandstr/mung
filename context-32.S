@@ -1,6 +1,9 @@
 
+	# FIXME: make these track the ones in <ukernel/gdt.h>
 	.equ USER_CODE_SEG, 1
 	.equ USER_DATA_SEG, 2
+	.equ KERNEL_HIGH_CODE_SEG, 6
+	.equ KERNEL_HIGH_DATA_SEG, 7
 
 	.global swap_context
 	.type swap_context, @function
@@ -13,6 +16,8 @@ swap_context:
 	movl %edi, 20(%eax)
 	movl %esi, 16(%eax)
 	movl %esp, 28(%eax)
+	movl (%esp), %ebx
+	movl %ebx, 32(%eax)
 	pushf
 	popl 36(%eax)
 
@@ -40,6 +45,8 @@ swap_to_ring3:
 	movl %edi, 20(%eax)
 	movl %esi, 16(%eax)
 	movl %esp, 28(%eax)
+	movl (%esp), %ebx	# return address
+	movl %ebx, 32(%eax)
 	pushf
 	popl 36(%eax)
 	# ... segments, too?
@@ -63,4 +70,34 @@ swap_to_ring3:
 	movl %eax, %fs
 	movl %eax, %gs
 	popl %eax
+	iret
+
+
+/* NORETURN void iret_to_scheduler(const struct x86_context *sched_ctx) */
+	.global iret_to_scheduler
+	.type iret_to_scheduler, @function
+
+	.align 16,0
+iret_to_scheduler:
+	movl 4(%esp), %eax
+	# switch to the scheduler's stack.
+	movl 28(%eax), %esp
+	addl $4, %esp		# pop return address from swap_to_ring3()
+	# restore scheduler frame
+	movl 4(%eax), %ebx
+	movl 8(%eax), %ecx
+	movl 12(%eax), %edx
+	movl 16(%eax), %esi
+	movl 20(%eax), %edi
+	movl 24(%eax), %ebp
+	# prepare intra-PL iret stack
+	pushl 36(%eax)		# eflags
+	pushl $(KERNEL_HIGH_CODE_SEG << 3)
+	pushl 32(%eax)
+	# we can overwrite eax as swap_to_ring3() returns void.
+	movl $(KERNEL_HIGH_DATA_SEG << 3), %eax
+	movl %eax, %ds
+	movl %eax, %es
+	movl %eax, %fs
+	movl %eax, %gs
 	iret

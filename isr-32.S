@@ -46,7 +46,7 @@ isr_\name\()_top:
 	iret
 	.endm
 
-	ISR_IRQ_FAST 0x20, irq0		# the timer needs speed.
+	ISR_IRQ_FAST 0x20, irq0		# the timer gets speed, reqd or not.
 
 
 	/* ISR_EXN produces exception interrupt handlers. these have individual

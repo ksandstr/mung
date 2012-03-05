@@ -18,7 +18,8 @@
 #include <ukernel/thread.h>
 
 
-static struct thread *current_thread = NULL;
+static struct thread *volatile current_thread = NULL;
+static struct thread *volatile scheduler_thread = NULL;
 
 static struct kmem_cache *thread_slab = NULL;
 static struct htable thread_hash = HTABLE_INITIALIZER(thread_hash,
@@ -80,33 +81,42 @@ static void end_thread(void)
 }
 
 
+static struct thread *schedule_next_thread(struct thread *current)
+{
+	/* well, that's simple. */
+	struct thread *next = NULL;
+	list_for_each(&thread_list, next, link) {
+		if(next->status == TS_READY) return next;
+	}
+
+	return NULL;
+}
+
+
 bool schedule(void)
 {
 	struct thread *self = get_current_thread();
 	assert(self->status == TS_RUNNING);
+	assert(self->space == kernel_space);
 
 	/* find next ready thread. */
-	struct thread *next = NULL;
-	bool found = false;
-	list_for_each(&thread_list, next, link) {
-		if(next->status == TS_READY) {
-			found = true;
-			break;
-		}
-	}
-	if(!found) return false;
+	struct thread *next = schedule_next_thread(self);
+	assert(next != self);	/* due to TS_RUNNING */
+	if(next == NULL) return false;
 
-	assert(self->space != NULL);
-	assert(next->space != NULL);
-
-	self->status = TS_READY;
-	next->status = TS_RUNNING;
-	current_thread = next;
-	printf("%c-%c: %d:%d -> %d:%d\n",
+	printf("%s: %c-%c: %d:%d -> %d:%d\n", __func__,
 		self->space == kernel_space ? 'K' : 'U',
 		next->space == kernel_space ? 'K' : 'U',
 		TID_THREADNUM(self->id), TID_VERSION(self->id),
 		TID_THREADNUM(next->id), TID_VERSION(next->id));
+
+	assert(self->space != NULL);
+	assert(next->space != NULL);
+
+	scheduler_thread = self;
+	self->status = TS_READY;
+	next->status = TS_RUNNING;
+	current_thread = next;
 	if(self->space != next->space) {
 		if(unlikely(self->space == kernel_space)) {
 			/* switch from kernel initial space */
@@ -127,6 +137,9 @@ bool schedule(void)
 		}
 	}
 
+	printf("%s: returned to %d:%d\n", __func__,
+		TID_THREADNUM(current_thread->id), TID_VERSION(current_thread->id));
+
 	assert(current_thread == self);
 	assert(self->status == TS_RUNNING);
 
@@ -134,9 +147,56 @@ bool schedule(void)
 }
 
 
+void return_to_scheduler(struct x86_exregs *regs)
+{
+	struct thread *self = get_current_thread(),
+		*next = scheduler_thread;
+	assert(scheduler_thread != NULL);
+	assert(self != scheduler_thread);
+
+	printf("%s: %c-%c: %d:%d -> %d:%d\n", __func__,
+		self->space == kernel_space ? 'K' : 'U',
+		next->space == kernel_space ? 'K' : 'U',
+		TID_THREADNUM(self->id), TID_VERSION(self->id),
+		TID_THREADNUM(next->id), TID_VERSION(next->id));
+
+	assert(self->status != TS_RUNNING);
+	assert(next->status != TS_RUNNING);
+	next->status = TS_RUNNING;
+	current_thread = next;
+
+#if 0
+	printf("%s: returning to scheduler (kernel ip 0x%x, sp 0x%x)\n",
+		__func__, next->ctx.regs[8], next->ctx.regs[7]);
+#endif
+
+	assert((next->ctx.regs[9] & (1 << 14)) == 0);
+	iret_to_scheduler(&next->ctx);
+}
+
+
 void yield(struct thread *t)
 {
 	schedule();
+}
+
+
+void thread_save_exregs(
+	struct thread *t,
+	const struct x86_exregs *regs)
+{
+	assert(t->status != TS_RUNNING);
+
+	t->ctx.regs[0] = regs->eax;
+	t->ctx.regs[1] = regs->ebx;
+	t->ctx.regs[2] = regs->ecx;
+	t->ctx.regs[3] = regs->edx;
+	t->ctx.regs[4] = regs->esi;
+	t->ctx.regs[5] = regs->edi;
+	t->ctx.regs[6] = regs->ebp;
+	t->ctx.regs[7] = regs->esp;
+	t->ctx.regs[8] = regs->eip;
+	t->ctx.regs[9] = regs->eflags;
 }
 
 
