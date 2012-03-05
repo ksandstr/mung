@@ -27,7 +27,7 @@ static struct list_head thread_list = LIST_HEAD_INIT(thread_list),
 	dead_thread_list = LIST_HEAD_INIT(dead_thread_list);
 
 
-struct thread *init_threading(thread_id boot_tid)
+COLD struct thread *init_threading(thread_id boot_tid)
 {
 	assert(thread_slab == NULL);
 	thread_slab = kmem_cache_create("thread_slab", sizeof(struct thread),
@@ -37,7 +37,7 @@ struct thread *init_threading(thread_id boot_tid)
 	boot->stack_page = NULL;
 	boot->id = boot_tid;
 	boot->status = TS_RUNNING;
-	list_add(&thread_list, &boot->link);
+	list_add_tail(&thread_list, &boot->link);
 	htable_add(&thread_hash, int_hash(TID_THREADNUM(boot->id)), boot);
 
 	current_thread = boot;
