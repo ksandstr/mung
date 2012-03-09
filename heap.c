@@ -7,13 +7,14 @@
 #include <ccan/container_of/container_of.h>
 #include <ccan/alignof/alignof.h>
 
-#include <ukernel/mm.h>
 #include <ukernel/slab.h>
+#include <ukernel/thread.h>
+#include <ukernel/space.h>
+#include <ukernel/mm.h>
 
 #include "multiboot.h"
 
-/* leave uppermost 4k unused for esoteric reasons. */
-#define HEAP_TOP (KERNEL_SEG_SIZE - 4096)
+
 
 #define N_FIRST_PAGES (2 * 1024 * 1024 / PAGE_SIZE)
 
@@ -22,7 +23,7 @@ static struct list_head k_free_pages = LIST_HEAD_INIT(k_free_pages),
 	k_heap_pages = LIST_HEAD_INIT(k_heap_pages);
 static struct kmem_cache *mm_page_cache = NULL;
 
-static intptr_t heap_pos = HEAP_TOP;
+static intptr_t heap_pos = KERNEL_HEAP_TOP;
 
 
 void *sbrk(intptr_t increment)

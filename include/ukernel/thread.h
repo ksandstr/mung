@@ -22,6 +22,11 @@ typedef uint32_t thread_id;
 /* (requires inclusion of <ukernel/space.h>) */
 #define IS_KERNEL_THREAD(thread) ((thread)->space == kernel_space)
 
+/* let's leave this at 128. interrupts also get UTCBs as interrupt IPCs are
+ * done that way.
+ */
+#define NUM_KERNEL_THREADS 128
+
 
 struct space;
 

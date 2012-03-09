@@ -18,6 +18,10 @@
 #define KERNEL_SEG_SIZE (256u * 1024u * 1024u)
 #define KERNEL_SEG_START (~KERNEL_SEG_SIZE + 1)
 
+#define RESV_UTCB_SIZE ((NUM_KERNEL_THREADS * UTCB_SIZE + PAGE_SIZE - 1) & ~PAGE_MASK)
+/* leaving uppermost 4k unused for esoteric reasons. */
+#define KERNEL_HEAP_TOP (KERNEL_SEG_SIZE - 4096 - RESV_UTCB_SIZE)
+
 
 typedef uint32_t pdir_t;
 typedef uint32_t page_t;
