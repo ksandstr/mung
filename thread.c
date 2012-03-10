@@ -51,40 +51,6 @@ COLD struct thread *init_threading(thread_id boot_tid)
 }
 
 
-static void end_thread(void)
-{
-	/* must find a thread to exit to. if none is available, sleep on interrupt
-	 * until that changes.
-	 */
-	bool found = false;
-	struct thread *next = NULL, *self = get_current_thread();
-	printf("%s: thread %d:%d terminating\n", __func__, TID_THREADNUM(self->id),
-		TID_VERSION(self->id));
-	do {
-		list_for_each(&thread_list, next, link) {
-			if(next->status == TS_READY) {
-				found = true;
-				break;
-			}
-		}
-		if(!found) {
-			/* assuming an interrupt can make threads runnable again. */
-			asm volatile ("hlt");
-		}
-	} while(!found);
-
-	list_del_from(&thread_list, &self->link);
-	htable_del(&thread_hash, int_hash(TID_THREADNUM(self->id)), self);
-	list_add(&dead_thread_list, &self->link);
-	self->status = TS_DEAD;
-	next->status = TS_RUNNING;
-	current_thread = next;
-	swap_context(&self->ctx, &next->ctx);
-
-	panic("swap_context() in end_thread() returned???");
-}
-
-
 static struct thread *schedule_next_thread(struct thread *current)
 {
 	/* well, that's simple. */
@@ -97,11 +63,31 @@ static struct thread *schedule_next_thread(struct thread *current)
 }
 
 
+static void end_thread(void)
+{
+	struct thread *self = get_current_thread();
+	printf("%s: thread %d:%d terminating\n", __func__, TID_THREADNUM(self->id),
+		TID_VERSION(self->id));
+
+	list_del_from(&thread_list, &self->link);
+	htable_del(&thread_hash, int_hash(TID_THREADNUM(self->id)), self);
+	list_add(&dead_thread_list, &self->link);
+	self->status = TS_DEAD;
+	schedule();
+
+	/* schedule() won't return to this thread due to it having been moved to
+	 * dead_thread_list.
+	 */
+
+	panic("swap_context() in end_thread() returned???");
+}
+
+
 bool schedule(void)
 {
 	struct thread *self = get_current_thread();
 	assert(self->status == TS_RUNNING || self->status == TS_RECV_WAIT
-		|| self->status == TS_SEND_WAIT);
+		|| self->status == TS_SEND_WAIT || self->status == TS_DEAD);
 	assert(self->space == kernel_space);
 
 	/* find next ready thread. */
