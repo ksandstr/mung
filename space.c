@@ -149,6 +149,21 @@ COLD void init_spaces(struct list_head *resv_list)
 		memset(pg->vm_addr, 0, PAGE_SIZE);
 	}
 
+	/* UTCB pages */
+	kernel_space->utcb_area = L4_Fpage(KERNEL_HEAP_TOP,
+		UTCB_SIZE * NUM_KERNEL_THREADS);
+	static struct page *kernel_utcb_pages[(UTCB_SIZE * NUM_KERNEL_THREADS + PAGE_SIZE - 1)
+		/ PAGE_SIZE];
+	int n_utcb_pages = sizeof(kernel_utcb_pages) / sizeof(kernel_utcb_pages[0]);
+	kernel_space->utcb_pages = kernel_utcb_pages;
+	for(int i=0; i < n_utcb_pages; i++) {
+		struct page *pg = get_kern_page();
+		/* TODO: map the pages to actually appear at the UTCB area? */
+		kernel_space->utcb_pages[i] = pg;
+		list_add(resv_list, &pg->link);
+		memset(pg->vm_addr, 0, PAGE_SIZE);
+	}
+
 	/* module inits */
 	space_slab = kmem_cache_create("space_slab", sizeof(struct space),
 		ALIGNOF(struct space), 0, NULL, NULL);

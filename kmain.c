@@ -15,6 +15,7 @@
 #include <ukernel/interrupt.h>
 #include <ukernel/16550.h>
 #include <ukernel/timer.h>
+#include <ukernel/ipc.h>
 #include <ukernel/thread.h>
 #include <ukernel/misc.h>
 
@@ -322,29 +323,23 @@ void isr_exn_pf_bottom(struct x86_exregs *regs)
 		panic("FOO");
 		handle_kernel_pf(regs, fault_addr);
 	} else {
+		thread_save_exregs(current, regs);
 		void *utcb = thread_get_utcb(current);
 		L4_ThreadId_t pager_id = { .raw = L4_VREG(utcb, L4_TCR_PAGER) };
 		struct thread *pager = !L4_IsNilThread(pager_id) ? thread_find(pager_id.raw) : NULL;
 		if(unlikely(pager == NULL)) {
 			printf("thread has no pager, stopping it\n");
 			current->status = TS_STOPPED;
-			thread_save_exregs(current, regs);
 			return_to_scheduler(regs);
 		} else {
-			/* TODO: do a blocking IPC from the current thread to the pager.
-			 * if the IPC succeeds immediately, schedule the pager; otherwise,
-			 * save current thread and stay in wait.
-			 */
-#if 0
-			void *pu = thread_get_utcb(pager);
-			L4_VREG(pu, L4_TCR_MR(0)) = ((-2) & 0xfff) << 20		/* label */
+			save_ipc_regs(current, 3, 1);
+			L4_VREG(utcb, L4_TCR_BR(0)) = L4_CompleteAddressSpace.raw;
+			L4_VREG(utcb, L4_TCR_MR(0)) = ((-2) & 0xfff) << 20		/* label */
 				| (CHECK_FLAG(regs->error, 2) ? 0x2 : 0x4) << 16	/* access */
 				| 2;		/* "u" for msgtag */
-			L4_VREG(pu, L4_TCR_MR(1)) = fault_addr;
-			L4_VREG(pu, L4_TCR_MR(2)) = regs->eip;
-#else
-			panic("unhandled case");
-#endif
+			L4_VREG(utcb, L4_TCR_MR(1)) = fault_addr;
+			L4_VREG(utcb, L4_TCR_MR(2)) = regs->eip;
+			return_to_ipc(regs, pager);
 		}
 	}
 }
@@ -505,9 +500,7 @@ static void test_thread(void *ptr)
 
 void thread_test(void)
 {
-	struct thread *other = create_kthread(THREAD_ID(18, 1),
-		&test_thread, "hello, thread!");
-	space_add_thread(kernel_space, other);
+	struct thread *other = create_kthread(&test_thread, "hello, thread!");
 	printf("other thread created. switching...\n");
 	yield(other);
 	printf("back in old thread. boinking yield...\n");
@@ -516,14 +509,35 @@ void thread_test(void)
 }
 
 
+static void pager_thread(void *parameter)
+{
+	printf("pager thread started.\n");
+	for(;;) {
+		struct thread *from = NULL;
+		kipc_recv(&from);
+		if(from == NULL) {
+			printf("%s: spurious ipc wakeup\n", __func__);
+			continue;
+		}
+
+		printf("%s: wakeup from %d:%d\n", __func__,
+			TID_THREADNUM(from->id), TID_VERSION(from->id));
+	}
+}
+
+
 void space_test(void)
 {
+	struct thread *pager = create_kthread(&pager_thread, NULL);
+
 	struct thread *t = thread_new(THREAD_ID(128, 1));
 	struct space *sp = space_new();
 	space_set_utcb_area(sp, L4_FpageLog2(0xd0000000, 13));
 	thread_set_space(t, sp);
-	thread_set_spip(t, 0xcafeb00b, 0xc0def000);
 	thread_set_utcb(t, L4_Address(sp->utcb_area));
+	void *u_base = thread_get_utcb(t);
+	L4_VREG(u_base, L4_TCR_PAGER) = pager->id;
+	thread_set_spip(t, 0xcafeb00b, 0xc0def000);
 	thread_start(t);
 }
 
@@ -684,6 +698,8 @@ void kmain(void *mbd, unsigned int magic)
 	foo[3] = '\0';
 	printf("string at 0x%x should say `qwe': `%s'\n", (unsigned)foo, foo);
 	free(foo);
+
+	init_ipc();
 
 	printf("enabling keyboard & keyboard interrupt\n");
 	outb(KBD_CMD_REG, KBD_CMD_WRITECMD);

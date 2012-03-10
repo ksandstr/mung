@@ -46,13 +46,15 @@ enum thread_state {
 	TS_RUNNING,
 	TS_READY,
 	TS_DEAD,
+	TS_SEND_WAIT,
+	TS_RECV_WAIT,
 };
 
 
 struct thread
 {
 	struct list_node link;		/* in the appropriate queue (sleep, ready) */
-	thread_id id;				/* full TID */
+	thread_id id, partner;
 	enum thread_state status;
 
 	struct space *space;
@@ -62,12 +64,18 @@ struct thread
 	struct page *stack_page;
 
 	struct x86_context ctx;
+
+	/* saved IPC registers. restored by a cold path in return_to_ipc(). at
+	 * most 13 (acceptor, 12 MRs for exception message) for x86.
+	 * (would be 21 for amd64.)
+	 */
+	uint8_t saved_mrs, saved_brs;
+	L4_Word_t saved_regs[13];
 };
 
 
 extern struct thread *init_threading(thread_id boot_tid);
 extern struct thread *create_kthread(
-	thread_id tid,
 	void (*function)(void *),
 	void *parameter);
 
@@ -83,7 +91,14 @@ extern bool schedule(void);
  * userspace or a kernel thread.
  */
 struct x86_exregs;
-extern void return_to_scheduler(struct x86_exregs *regs);
+extern NORETURN void return_to_scheduler(struct x86_exregs *regs);
+/* same, but invokes send-and-wait ipc first and if successful, schedules the
+ * target. source is the current thread.
+ */
+extern NORETURN void return_to_ipc(
+	struct x86_exregs *regs,
+	struct thread *target);
+
 
 extern void thread_save_exregs(
 	struct thread *t,
@@ -104,6 +119,8 @@ extern struct thread *thread_new(thread_id tid);
 extern void thread_set_spip(struct thread *t, L4_Word_t sp, L4_Word_t ip);
 extern void thread_set_utcb(struct thread *t, L4_Word_t start);
 extern void thread_start(struct thread *t);
+
+extern void save_ipc_regs(struct thread *t, int mrs, int brs);
 
 /* complicated accessors */
 extern void *thread_get_utcb(struct thread *t);

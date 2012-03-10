@@ -10,9 +10,11 @@
 #include <ccan/compiler/compiler.h>
 
 #include <l4/types.h>
+#include <l4/vregs.h>
 #include <ukernel/x86.h>
 #include <ukernel/mm.h>
 #include <ukernel/slab.h>
+#include <ukernel/ipc.h>
 #include <ukernel/misc.h>
 #include <ukernel/space.h>
 #include <ukernel/thread.h>
@@ -26,6 +28,8 @@ static struct htable thread_hash = HTABLE_INITIALIZER(thread_hash,
 	hash_thread_by_id, NULL);
 static struct list_head thread_list = LIST_HEAD_INIT(thread_list),
 	dead_thread_list = LIST_HEAD_INIT(dead_thread_list);
+
+static int next_kthread_num = 24;
 
 
 COLD struct thread *init_threading(thread_id boot_tid)
@@ -96,7 +100,8 @@ static struct thread *schedule_next_thread(struct thread *current)
 bool schedule(void)
 {
 	struct thread *self = get_current_thread();
-	assert(self->status == TS_RUNNING);
+	assert(self->status == TS_RUNNING || self->status == TS_RECV_WAIT
+		|| self->status == TS_SEND_WAIT);
 	assert(self->space == kernel_space);
 
 	/* find next ready thread. */
@@ -175,6 +180,18 @@ void return_to_scheduler(struct x86_exregs *regs)
 }
 
 
+void return_to_ipc(struct x86_exregs *regs, struct thread *target)
+{
+	ipc_simple(target);
+
+	/* schedule the target next. */
+	list_del_from(&thread_list, &target->link);
+	list_add(&thread_list, &target->link);
+
+	return_to_scheduler(regs);
+}
+
+
 void yield(struct thread *t)
 {
 	schedule();
@@ -185,8 +202,6 @@ void thread_save_exregs(
 	struct thread *t,
 	const struct x86_exregs *regs)
 {
-	assert(t->status != TS_RUNNING);
-
 	t->ctx.regs[0] = regs->eax;
 	t->ctx.regs[1] = regs->ebx;
 	t->ctx.regs[2] = regs->ecx;
@@ -197,6 +212,22 @@ void thread_save_exregs(
 	t->ctx.regs[7] = regs->esp;
 	t->ctx.regs[8] = regs->eip;
 	t->ctx.regs[9] = regs->eflags;
+}
+
+
+void save_ipc_regs(struct thread *t, int mrs, int brs)
+{
+	assert(t->saved_mrs == 0 && t->saved_brs == 0);
+	assert(mrs >= 1 && brs >= 0);
+	assert(mrs + brs < sizeof(t->saved_regs) / sizeof(t->saved_regs[0]));
+
+	t->saved_mrs = mrs;
+	t->saved_brs = brs;
+	void *utcb = thread_get_utcb(t);
+	memcpy(t->saved_regs, &L4_VREG(utcb, L4_TCR_MR(0)),
+		sizeof(L4_Word_t) * mrs);
+	memcpy(&t->saved_regs[mrs], &L4_VREG(utcb, L4_TCR_BR(0)),
+		sizeof(L4_Word_t) * brs);
 }
 
 
@@ -223,7 +254,12 @@ struct thread *thread_new(thread_id tid)
 		t = container_of(dead_thread_list.n.next, struct thread, link);
 		list_del_from(&dead_thread_list, &t->link);
 	}
-	*t = (struct thread){ .id = tid, .status = TS_STOPPED, .utcb_pos = -1 };
+	*t = (struct thread){
+		.id = tid,
+		.partner = L4_nilthread.raw,
+		.status = TS_STOPPED,
+		.utcb_pos = -1,
+	};
 
 	list_add(&thread_list, &t->link);
 	htable_add(&thread_hash, int_hash(TID_THREADNUM(t->id)), t);
@@ -233,19 +269,23 @@ struct thread *thread_new(thread_id tid)
 
 
 struct thread *create_kthread(
-	thread_id tid,
 	void (*function)(void *),
 	void *parameter)
 {
-	assert((tid & TID_VERSION_MASK) != 0);
+	L4_ThreadId_t tid = { .raw = THREAD_ID(next_kthread_num++, 1) };
+	assert(TID_THREADNUM(tid.raw) < NUM_KERNEL_THREADS);
 
-	struct thread *t = thread_new(tid);
+	struct thread *t = thread_new(tid.raw);
 	if(t->stack_page == NULL) {
 		/* TODO: account for this somehow? */
 		t->stack_page = get_kern_page();
 	} else {
 		/* TODO: make t->stack_page->vm_addr valid */
+		panic("arrrrrgggghhhh!");
 	}
+	space_add_thread(kernel_space, t);
+	thread_set_utcb(t, L4_Address(kernel_space->utcb_area)
+		+ TID_THREADNUM(tid.raw) * UTCB_SIZE);
 
 	/* switching into kernel threads ignores EIP (ctx.regs[8]) in favour of
 	 * the ones saved on stack.
@@ -290,7 +330,6 @@ void thread_set_utcb(struct thread *t, L4_Word_t start)
 
 	struct space *sp = t->space;
 	int new_pos = (start - L4_Address(sp->utcb_area)) / UTCB_SIZE;
-	assert(new_pos < NUM_UTCB_PAGES(sp->utcb_area));
 	if(unlikely(sp->utcb_pages == NULL)) {
 		sp->utcb_pages = calloc(sizeof(struct page *),
 			NUM_UTCB_PAGES(sp->utcb_area));
@@ -298,6 +337,7 @@ void thread_set_utcb(struct thread *t, L4_Word_t start)
 
 	/* (could call a space_ensure_utcb() function or something, but why.) */
 	int page = new_pos / UTCB_PER_PAGE;
+	assert(page < NUM_UTCB_PAGES(sp->utcb_area));
 	if(sp->utcb_pages[page] == NULL) {
 		struct page *p = get_kern_page();
 		sp->utcb_pages[page] = p;

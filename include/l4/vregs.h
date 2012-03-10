@@ -14,6 +14,7 @@
 
 #define L4_TCR_PAGER (-12)
 #define L4_TCR_MR(n) (n)
+#define L4_TCR_BR(n) (-(n) - 16)
 
 
 #endif
