@@ -52,8 +52,6 @@ void ipc_simple(struct thread *dest)
 {
 	struct thread *current = get_current_thread();
 
-	current->partner = dest->id;
-
 	/* fastpath switching to a recv-waiting thread to optimize for
 	 * "call" IPC.
 	 */
@@ -70,7 +68,6 @@ void ipc_simple(struct thread *dest)
 		do_ipc_transfer(current, dest);
 
 		dest->status = TS_READY;
-		dest->partner = L4_nilthread.raw;
 		current->status = TS_RECV_WAIT;
 	}
 }
@@ -98,7 +95,6 @@ void kipc_recv(struct thread **from_p)
 
 	if(unlikely(from == NULL)) {
 		current->status = TS_RECV_WAIT;
-		current->partner = L4_nilthread.raw;
 		schedule();
 	} else {
 		/* active receive */

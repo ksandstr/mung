@@ -256,7 +256,6 @@ struct thread *thread_new(thread_id tid)
 	}
 	*t = (struct thread){
 		.id = tid,
-		.partner = L4_nilthread.raw,
 		.status = TS_STOPPED,
 		.utcb_pos = -1,
 	};

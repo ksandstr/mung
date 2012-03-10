@@ -54,7 +54,7 @@ enum thread_state {
 struct thread
 {
 	struct list_node link;		/* in the appropriate queue (sleep, ready) */
-	thread_id id, partner;
+	thread_id id;
 	enum thread_state status;
 
 	struct space *space;
