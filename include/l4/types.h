@@ -95,4 +95,70 @@ static inline L4_Word_t L4_SizeLog2(L4_Fpage_t fp) {
 }
 
 
+/* time. derived from L4Ka::Pistachio. */
+
+typedef union {
+	L4_Word16_t	raw;
+	struct {
+		L4_Word16_t m:10;
+		L4_Word16_t e:5;
+		L4_Word16_t a:1;
+	} period;
+	struct {
+		L4_Word16_t m:10;
+		L4_Word16_t c:1;
+		L4_Word16_t e:4;
+		L4_Word16_t a:1;
+	} point;
+} L4_Time_t;
+
+#define L4_Never ((L4_Time_t){ .raw = 0 })
+#define L4_ZeroTime ((L4_Time_t){ .period : { .e = 1 } })
+
+
+static inline L4_Time_t L4_TimePeriod(L4_Word64_t microseconds)
+{
+#   define __L4_SET_TIMEPERIOD(exp, man) \
+	do { time.period.m = man; time.period.e = exp; } while (0)
+#   define __L4_TRY_EXPONENT(N) \
+	else if (microseconds < (1UL << N)) \
+	    __L4_SET_TIMEPERIOD (N - 10, microseconds >> (N - 10))
+
+    L4_Time_t time;
+    time.raw = 0;
+
+    if (__builtin_constant_p (microseconds)) {
+	if (0) {}
+	__L4_TRY_EXPONENT (10); __L4_TRY_EXPONENT (11);
+	__L4_TRY_EXPONENT (12); __L4_TRY_EXPONENT (13);
+	__L4_TRY_EXPONENT (14); __L4_TRY_EXPONENT (15);
+	__L4_TRY_EXPONENT (16); __L4_TRY_EXPONENT (17);
+	__L4_TRY_EXPONENT (18); __L4_TRY_EXPONENT (19);
+	__L4_TRY_EXPONENT (20); __L4_TRY_EXPONENT (21);
+	__L4_TRY_EXPONENT (22); __L4_TRY_EXPONENT (23);
+	__L4_TRY_EXPONENT (24); __L4_TRY_EXPONENT (25);
+	__L4_TRY_EXPONENT (26); __L4_TRY_EXPONENT (27);
+	__L4_TRY_EXPONENT (28); __L4_TRY_EXPONENT (29);
+	__L4_TRY_EXPONENT (30); __L4_TRY_EXPONENT (31);
+	else
+	    return L4_Never;
+    } else {
+	L4_Word_t l4_exp = 0;
+	L4_Word_t man = microseconds;
+	while (man >= (1 << 10)) {
+	    man >>= 1;
+	    l4_exp++;
+	}
+	if (l4_exp <= 31)
+	    __L4_SET_TIMEPERIOD (l4_exp, man);
+	else
+	    return L4_Never;
+    }
+
+    return time;
+#   undef __L4_TRY_EXPONENT
+#   undef __L4_SET_TIMEPERIOD
+}
+
+
 #endif
