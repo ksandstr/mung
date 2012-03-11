@@ -52,6 +52,58 @@ static void do_ipc_transfer(
 }
 
 
+bool ipc_send_half(struct thread *self)
+{
+	assert(!L4_IsNilThread(self->ipc_to));
+	assert(self->ipc_to.raw != L4_anylocalthread.raw
+		&& self->ipc_to.raw != L4_anythread.raw);
+
+	struct thread *dest = thread_find(self->ipc_to.raw);
+	if(unlikely(dest == NULL)) {
+		/* FIXME: produce an IPC error instead */
+		panic("dest thread not found in ipc_send_half()");
+	}
+
+	/* TODO: override TS_R_RECV when peer's ipc_from == self->id . */
+	if(likely(dest->status == TS_RECV_WAIT)) {
+		/* active send */
+		printf("%s: active send to %d:%d\n", __func__,
+			TID_THREADNUM(dest->id), TID_VERSION(dest->id));
+
+		do_ipc_transfer(self, dest);
+
+		if(L4_IsNilThread(self->ipc_from)) {
+			assert(self->status == TS_RUNNING);
+			return true;
+		} else {
+			/* try active receive, just in case. */
+			if(ipc_recv_half(self)) {
+				assert(self->status == TS_RUNNING);
+				return true;
+			} else {
+				assert(self->status == TS_RECV_WAIT);
+				return false;
+			}
+		}
+	} else {
+		/* passive send */
+		printf("%s: passive send from %d:%d\n", __func__,
+			TID_THREADNUM(self->id), TID_VERSION(self->id));
+		struct ipc_wait *w = kmem_cache_alloc(ipc_wait_slab);
+		w->dest_tid = self->ipc_to;
+		w->thread = self;
+		htable_add(&sendwait_hash, int_hash(w->dest_tid.raw), w);
+
+		self->status = TS_SEND_WAIT;
+
+		return false;
+	}
+}
+
+
+/* simple IPC is used by e.g. pagefaults and exceptions, simple messages
+ * produced by kernel features.
+ */
 void ipc_simple(struct thread *dest)
 {
 	struct thread *current = get_current_thread();
@@ -61,24 +113,7 @@ void ipc_simple(struct thread *dest)
 	current->send_timeout = L4_Never;
 	current->recv_timeout = L4_Never;
 
-	/* fastpath switching to a recv-waiting thread to optimize for
-	 * "call" IPC.
-	 */
-	if(unlikely(dest->status != TS_RECV_WAIT)) {
-		/* passive send. */
-		struct ipc_wait *w = kmem_cache_alloc(ipc_wait_slab);
-		w->dest_tid.raw = dest->id;
-		w->thread = current;
-		htable_add(&sendwait_hash, int_hash(w->dest_tid.raw), w);
-
-		current->status = TS_SEND_WAIT;
-	} else {
-		/* active send. */
-		do_ipc_transfer(current, dest);
-
-		dest->status = TS_READY;
-		current->status = TS_RECV_WAIT;
-	}
+	ipc_send_half(current);
 }
 
 

@@ -19,8 +19,11 @@ extern void ipc_simple(struct thread *dest);
 /* receive IPC in kernel thread. switches out until then. */
 extern L4_MsgTag_t kipc_recv(struct thread **from_p);
 
-/* returns true when active receive succeeded, false when not. */
+/* returns true when active receive or send succeeded, false when not.
+ * the value affects scheduling which is determined by the caller.
+ */
 extern bool ipc_recv_half(struct thread *receiver);
+extern bool ipc_send_half(struct thread *sender);
 
 
 #endif
