@@ -113,7 +113,7 @@ typedef union {
 } L4_Time_t;
 
 #define L4_Never ((L4_Time_t){ .raw = 0 })
-#define L4_ZeroTime ((L4_Time_t){ .period : { .e = 1 } })
+#define L4_ZeroTime ((L4_Time_t){ .period = { .e = 1 } })
 
 
 static inline L4_Time_t L4_TimePeriod(L4_Word64_t microseconds)
