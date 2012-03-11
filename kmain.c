@@ -517,6 +517,7 @@ static void pager_thread(void *parameter)
 		kipc_recv(&from);
 		if(from == NULL) {
 			printf("%s: spurious ipc wakeup\n", __func__);
+			panic("argh!");
 			continue;
 		}
 
@@ -719,6 +720,7 @@ void kmain(void *mbd, unsigned int magic)
 
 	printf("kmain() entering halt-schedule loop.\n");
 	while(true) {
+		first_thread->status = TS_READY;
 		if(!schedule()) {
 			asm volatile ("hlt");
 		}

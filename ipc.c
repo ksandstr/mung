@@ -1,5 +1,7 @@
 
+#include <stdbool.h>
 #include <stdlib.h>
+#include <stdio.h>
 
 #include <ccan/likely/likely.h>
 #include <ccan/compiler/compiler.h>
@@ -7,7 +9,9 @@
 #include <ccan/htable/htable.h>
 
 #include <l4/types.h>
+#include <l4/message.h>
 #include <l4/vregs.h>
+#include <l4/ipc.h>
 
 #include <ukernel/misc.h>
 #include <ukernel/slab.h>
@@ -20,7 +24,7 @@
  */
 struct ipc_wait
 {
-	L4_ThreadId_t dest_tid;
+	L4_ThreadId_t dest_tid;		/* copied for rehash */
 	struct thread *thread;
 };
 
@@ -52,6 +56,11 @@ void ipc_simple(struct thread *dest)
 {
 	struct thread *current = get_current_thread();
 
+	current->ipc_to.raw = dest->id;
+	current->ipc_from.raw = dest->id;
+	current->send_timeout = L4_Never;
+	current->recv_timeout = L4_Never;
+
 	/* fastpath switching to a recv-waiting thread to optimize for
 	 * "call" IPC.
 	 */
@@ -73,39 +82,88 @@ void ipc_simple(struct thread *dest)
 }
 
 
+/* TODO: timeouts (i.e. on zerotime, go to TS_READY instead of any
+ * TS_*_WAIT)
+ */
+bool ipc_recv_half(struct thread *self)
+{
+	/* find sender. */
+	struct thread *from = NULL;
+	size_t hash = int_hash(self->id);
+	if(self->ipc_from.raw != L4_anylocalthread.raw) {
+		struct htable_iter it;
+		for(struct ipc_wait *w = htable_firstval(&sendwait_hash, &it, hash);
+			w != NULL;
+			w = htable_nextval(&sendwait_hash, &it, hash))
+		{
+			if(w->dest_tid.raw == self->id
+				&& (self->ipc_from.raw == L4_anythread.raw
+					|| self->ipc_from.raw == w->thread->id))
+			{
+				from = w->thread;
+				htable_delval(&sendwait_hash, &it);
+				kmem_cache_free(ipc_wait_slab, w);
+				break;
+			}
+		}
+	} else {
+		/* TODO: handle those, also */
+		panic("anylocalthread not handled");
+	}
+
+	if(from == NULL) {
+		printf("%s: passive receive in %d:%d\n", __func__,
+			TID_THREADNUM(self->id), TID_VERSION(self->id));
+		self->status = TS_RECV_WAIT;
+		return false;
+	} else {
+		/* active receive */
+		printf("%s: active receive from %d:%d\n", __func__,
+			TID_THREADNUM(from->id), TID_VERSION(from->id));
+		assert(from->status == TS_SEND_WAIT);
+
+		do_ipc_transfer(from, self);
+
+		self->status = TS_READY;
+		self->ipc_from.raw = from->id;
+		from->status = L4_IsNilThread(from->ipc_from) ? TS_READY : TS_R_RECV;
+
+		return true;
+	}
+}
+
+
 /* receive in a kernel context. */
-void kipc_recv(struct thread **from_p)
+L4_MsgTag_t kipc_recv(struct thread **from_p)
 {
 	struct thread *current = get_current_thread();
 
-	struct htable_iter it;
-	size_t hash = int_hash(current->id);
-	struct thread *from = NULL;
-	for(struct ipc_wait *w = htable_firstval(&sendwait_hash, &it, hash);
-		w != NULL;
-		w = htable_nextval(&sendwait_hash, &it, hash))
-	{
-		if(w->dest_tid.raw == current->id) {
-			from = w->thread;
-			htable_delval(&sendwait_hash, &it);
-			kmem_cache_free(ipc_wait_slab, w);
-			break;
-		}
-	}
+	current->ipc_from = L4_anythread;
+	current->ipc_to = L4_nilthread;
+	current->send_timeout = L4_ZeroTime;
+	current->recv_timeout = L4_Never;
 
-	if(unlikely(from == NULL)) {
-		current->status = TS_RECV_WAIT;
+	if(!ipc_recv_half(current)) {
+		/* passive receive */
+		assert(current->status == TS_RECV_WAIT);
 		schedule();
-	} else {
-		/* active receive */
-		*from_p = from;
-		assert(from->status == TS_SEND_WAIT);
-
-		do_ipc_transfer(from, current);
-
-		/* FIXME */
-		from->status = /* has_recv_phase(from) ? TS_RECV_WAIT : */ TS_READY;
 	}
+
+	void *utcb = thread_get_utcb(current);
+	L4_MsgTag_t tag = { .raw = L4_VREG(utcb, L4_TCR_MR(0)) };
+	if(L4_IpcSucceeded(tag)) {
+		struct thread *from = thread_find(current->ipc_from.raw);
+		if(from == NULL) {
+			panic("kipc_recv: unknown sender thread id");
+		}
+		if(from_p != NULL) *from_p = from;
+	} else if(from_p != NULL) {
+		*from_p = NULL;
+	}
+
+	assert(current->status == TS_READY || current->status == TS_RUNNING);
+
+	return tag;
 }
 
 

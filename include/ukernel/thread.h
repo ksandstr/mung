@@ -44,10 +44,13 @@ struct x86_context
 enum thread_state {
 	TS_STOPPED,
 	TS_RUNNING,
-	TS_READY,
 	TS_DEAD,
 	TS_SEND_WAIT,
 	TS_RECV_WAIT,
+
+	/* ready threads. */
+	TS_READY,		/* ready to execute in user or kernel */
+	TS_R_RECV,		/* ready to do IPC receive side in kernel */
 };
 
 
@@ -56,6 +59,9 @@ struct thread
 	struct list_node link;		/* in the appropriate queue (sleep, ready) */
 	thread_id id;
 	enum thread_state status;
+	L4_Time_t send_timeout, recv_timeout;
+	/* "from" is altered on receive. */
+	L4_ThreadId_t ipc_from, ipc_to;
 
 	struct space *space;
 	struct list_node space_link;

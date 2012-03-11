@@ -20,8 +20,11 @@
 #include <ukernel/thread.h>
 
 
+#define IS_READY(st) ((st) == TS_READY || (st) == TS_R_RECV)
+
+
 static struct thread *volatile current_thread = NULL;
-static struct thread *volatile scheduler_thread = NULL;
+static struct thread *scheduler_thread = NULL;
 
 static struct kmem_cache *thread_slab = NULL;
 static struct htable thread_hash = HTABLE_INITIALIZER(thread_hash,
@@ -46,6 +49,7 @@ COLD struct thread *init_threading(thread_id boot_tid)
 	htable_add(&thread_hash, int_hash(TID_THREADNUM(boot->id)), boot);
 
 	current_thread = boot;
+	scheduler_thread = boot;
 
 	return boot;
 }
@@ -56,7 +60,7 @@ static struct thread *schedule_next_thread(struct thread *current)
 	/* well, that's simple. */
 	struct thread *next = NULL;
 	list_for_each(&thread_list, next, link) {
-		if(next->status == TS_READY) return next;
+		if(next != current && IS_READY(next->status)) return next;
 	}
 
 	return NULL;
@@ -86,14 +90,22 @@ static void end_thread(void)
 bool schedule(void)
 {
 	struct thread *self = get_current_thread();
-	assert(self->status == TS_RUNNING || self->status == TS_RECV_WAIT
-		|| self->status == TS_SEND_WAIT || self->status == TS_DEAD);
 	assert(self->space == kernel_space);
+	assert(self->status != TS_RUNNING);
 
 	/* find next ready thread. */
 	struct thread *next = schedule_next_thread(self);
-	assert(next != self);	/* due to TS_RUNNING */
+	assert(next != self);		/* by schedule_next_thread() def */
 	if(next == NULL) return false;
+
+	if(next->status == TS_R_RECV) {
+		assert(!IS_KERNEL_THREAD(next));
+		if(!ipc_recv_half(next)) {
+			/* try again (passive receive) */
+			assert(next->status == TS_RECV_WAIT);
+			return schedule();
+		}
+	}
 
 	printf("%s: %c-%c: %d:%d -> %d:%d\n", __func__,
 		self->space == kernel_space ? 'K' : 'U',
@@ -104,8 +116,6 @@ bool schedule(void)
 	assert(self->space != NULL);
 	assert(next->space != NULL);
 
-	scheduler_thread = self;
-	self->status = TS_READY;
 	next->status = TS_RUNNING;
 	current_thread = next;
 	if(self->space != next->space) {
@@ -180,6 +190,7 @@ void return_to_ipc(struct x86_exregs *regs, struct thread *target)
 
 void yield(struct thread *t)
 {
+	get_current_thread()->status = TS_READY;
 	schedule();
 }
 
