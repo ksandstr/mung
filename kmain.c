@@ -7,6 +7,8 @@
 #include <ccan/list/list.h>
 
 #include <l4/types.h>
+#include <l4/ipc.h>
+#include <l4/message.h>
 #include <l4/vregs.h>
 
 #include <ukernel/mm.h>
@@ -513,26 +515,31 @@ static void pager_thread(void *parameter)
 {
 	printf("pager thread started.\n");
 	for(;;) {
-		struct thread *from = NULL;
-		kipc_recv(&from);
-		if(from == NULL) {
-			printf("%s: spurious ipc wakeup\n", __func__);
-			panic("argh!");
+		L4_ThreadId_t from = L4_anythread;
+		L4_MsgTag_t tag = kipc(L4_nilthread, &from,
+			L4_Timeouts(L4_Never, L4_Never));
+		if(L4_IpcFailed(tag)) {
+			printf("pager ipc failed (no ec yet)\n");
 			continue;
 		}
 
-		void *utcb = thread_get_utcb(get_current_thread());
-		L4_MsgTag_t tag = { .raw = L4_VREG(utcb, L4_TCR_MR(0)) };
-		if((tag.X.label & 0xfff0) == 0xffe0) {
-			L4_Word_t fault_addr = L4_VREG(utcb, L4_TCR_MR(1)),
-				fault_ip = L4_VREG(utcb, L4_TCR_MR(2));
-			printf("%s: pagefault from %d:%d at 0x%x (ip 0x%x)\n",
-				__func__, TID_THREADNUM(from->id), TID_VERSION(from->id),
-				fault_addr, fault_ip);
-		} else {
-			printf("%s: unknown IPC label 0x%x from %d:%d\n",
-				__func__, tag.X.label, TID_THREADNUM(from->id),
-				TID_VERSION(from->id));
+		for(;;) {
+			void *utcb = thread_get_utcb(get_current_thread());
+			if((tag.X.label & 0xfff0) == 0xffe0) {
+				L4_Word_t fault_addr = L4_VREG(utcb, L4_TCR_MR(1)),
+					fault_ip = L4_VREG(utcb, L4_TCR_MR(2));
+				printf("%s: pagefault from %d:%d at 0x%x (ip 0x%x)\n",
+					__func__, TID_THREADNUM(from.raw), TID_VERSION(from.raw),
+					fault_addr, fault_ip);
+
+				/* TODO: compose a reply here... */
+				break;
+			} else {
+				printf("%s: unknown IPC label 0x%x from %d:%d\n",
+					__func__, tag.X.label, TID_THREADNUM(from.raw),
+					TID_VERSION(from.raw));
+				break;
+			}
 		}
 	}
 }

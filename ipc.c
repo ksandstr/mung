@@ -168,35 +168,41 @@ bool ipc_recv_half(struct thread *self)
 }
 
 
-/* receive in a kernel context. */
-L4_MsgTag_t kipc_recv(struct thread **from_p)
+/* IPC in a kernel thread. */
+L4_MsgTag_t kipc(
+	L4_ThreadId_t to,
+	L4_ThreadId_t *from_p,
+	L4_Word_t timeouts)
 {
 	struct thread *current = get_current_thread();
-
-	current->ipc_from = L4_anythread;
-	current->ipc_to = L4_nilthread;
-	current->send_timeout = L4_ZeroTime;
-	current->recv_timeout = L4_Never;
-
-	if(!ipc_recv_half(current)) {
-		/* passive receive */
-		assert(current->status == TS_RECV_WAIT);
-		schedule();
-	}
-
 	void *utcb = thread_get_utcb(current);
-	L4_MsgTag_t tag = { .raw = L4_VREG(utcb, L4_TCR_MR(0)) };
-	if(L4_IpcSucceeded(tag)) {
-		struct thread *from = thread_find(current->ipc_from.raw);
-		if(from == NULL) {
-			panic("kipc_recv: unknown sender thread id");
-		}
-		if(from_p != NULL) *from_p = from;
-	} else if(from_p != NULL) {
-		*from_p = NULL;
+
+	current->ipc_from = *from_p;
+	current->ipc_to = to;
+	current->send_timeout.raw = timeouts >> 16;
+	current->recv_timeout.raw = timeouts & 0xffff;
+
+	L4_MsgTag_t tag = { .raw = 0 };		/* "no error" */
+	if(likely(!L4_IsNilThread(to)) && !ipc_send_half(current)) {
+		/* passive send. */
+		assert(current->status == TS_SEND_WAIT);
+		schedule();
+		tag.raw = L4_VREG(utcb, L4_TCR_MR(0));
+		if(unlikely(L4_IpcFailed(tag))) return tag;
 	}
 
-	assert(current->status == TS_READY || current->status == TS_RUNNING);
+	if(likely(!L4_IsNilThread(current->ipc_from))) {
+		if(!ipc_recv_half(current)) {
+			/* passive receive.
+			 *
+			 * TODO: implement switching right into the other thread.
+			 */
+			assert(current->status == TS_RECV_WAIT);
+			schedule();
+		}
+		tag.raw = L4_VREG(utcb, L4_TCR_MR(0));
+		*from_p = current->ipc_from;
+	}
 
 	return tag;
 }

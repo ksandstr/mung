@@ -3,6 +3,7 @@
 
 #include <stdbool.h>
 
+#include <l4/types.h>
 #include <l4/message.h>
 
 
@@ -16,8 +17,10 @@ extern void init_ipc(void);
  */
 extern void ipc_simple(struct thread *dest);
 
-/* receive IPC in kernel thread. switches out until then. */
-extern L4_MsgTag_t kipc_recv(struct thread **from_p);
+extern L4_MsgTag_t kipc(
+	L4_ThreadId_t to,
+	L4_ThreadId_t *from_p,
+	L4_Word_t timeouts);
 
 /* returns true when active receive or send succeeded, false when not.
  * the value affects scheduling which is determined by the caller.
