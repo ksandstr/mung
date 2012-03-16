@@ -99,6 +99,7 @@ static inline struct page * rb_insert_page_cache(struct inode * inode,
 #define SEEN_KERNEL_RBTREE_H
 
 #include <stdint.h>
+#include <ccan/container_of/container_of.h>
 
 #ifndef __KERNEL__
 #define __KERNEL__
