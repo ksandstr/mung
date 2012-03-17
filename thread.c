@@ -96,7 +96,11 @@ bool schedule(void)
 	/* find next ready thread. */
 	struct thread *next = schedule_next_thread(self);
 	assert(next != self);		/* by schedule_next_thread() def */
-	if(next == NULL) return false;
+	if(unlikely(next == NULL)) {
+		assert(scheduler_thread == NULL
+			|| scheduler_thread == self);
+		return false;
+	}
 
 	if(next->status == TS_R_RECV) {
 		assert(!IS_KERNEL_THREAD(next));
@@ -137,9 +141,6 @@ bool schedule(void)
 			panic("WNAR");
 		}
 	}
-
-	printf("%s: returned to %d:%d\n", __func__,
-		TID_THREADNUM(current_thread->id), TID_VERSION(current_thread->id));
 
 	assert(current_thread == self);
 	assert(self->status == TS_RUNNING);
