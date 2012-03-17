@@ -1,6 +1,7 @@
 
 #include <stdbool.h>
 #include <stdlib.h>
+#include <string.h>
 #include <stdio.h>
 
 #include <ccan/likely/likely.h>
@@ -53,6 +54,21 @@ static void do_ipc_transfer(
 }
 
 
+static void restore_saved_regs(struct thread *t)
+{
+	/* most IPC is not for page faults or exceptions. */
+	if(likely(t->saved_mrs == 0 && t->saved_brs == 0)) return;
+
+	void *utcb = thread_get_utcb(t);
+	memcpy(&L4_VREG(utcb, L4_TCR_MR(0)), t->saved_regs,
+		sizeof(L4_Word_t) * (int)t->saved_mrs);
+	memcpy(&L4_VREG(utcb, L4_TCR_BR(0)), &t->saved_regs[t->saved_mrs],
+		sizeof(L4_Word_t) * (int)t->saved_brs);
+	t->saved_mrs = 0;
+	t->saved_brs = 0;
+}
+
+
 bool ipc_send_half(struct thread *self)
 {
 	assert(!L4_IsNilThread(self->ipc_to));
@@ -72,6 +88,7 @@ bool ipc_send_half(struct thread *self)
 			TID_THREADNUM(dest->id), TID_VERSION(dest->id));
 
 		do_ipc_transfer(self, dest);
+		restore_saved_regs(dest);
 
 		if(L4_IsNilThread(self->ipc_from)) {
 			assert(self->status == TS_RUNNING);
@@ -169,6 +186,7 @@ bool ipc_recv_half(struct thread *self)
 			/* userspace threads operate via a state machine. */
 			from->status = L4_IsNilThread(from->ipc_from) ? TS_READY : TS_R_RECV;
 		}
+		restore_saved_regs(self);
 
 		return true;
 	}
