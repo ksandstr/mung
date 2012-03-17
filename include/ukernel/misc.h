@@ -11,6 +11,9 @@
 
 #define PURE __attribute__((pure))
 
+#define MIN(t, a, b) ({ t __a = (a), __b = (b); __a < __b ? (t)__a : (t)__b; })
+#define MAX(t, a, b) ({ t __a = (a), __b = (b); __a > __b ? (t)__a : (t)__b; })
+
 
 extern void NORETURN panic(const char *message);
 
