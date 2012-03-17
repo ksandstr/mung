@@ -9,6 +9,8 @@
 
 #define CHECK_FLAG(mask, bit) (((mask) & (bit)) != 0)
 
+#define PURE __attribute__((pure))
+
 
 extern void NORETURN panic(const char *message);
 
