@@ -325,6 +325,17 @@ void isr_exn_pf_bottom(struct x86_exregs *regs)
 		panic("FOO");
 		handle_kernel_pf(regs, fault_addr);
 	} else {
+#if 1
+		static uintptr_t last_fault = ~0;
+		static int repeat_count = 0;
+		if(last_fault == fault_addr && ++repeat_count == 3) {
+			panic("faulted many times on the same address");
+		} else if(last_fault != fault_addr) {
+			last_fault = fault_addr;
+			repeat_count = 0;
+		}
+#endif
+
 		thread_save_exregs(current, regs);
 		void *utcb = thread_get_utcb(current);
 		L4_ThreadId_t pager_id = { .raw = L4_VREG(utcb, L4_TCR_PAGER) };
