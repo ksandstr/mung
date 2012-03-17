@@ -5,6 +5,7 @@
 #define __L4__TYPES_H__
 
 #include <stdint.h>
+#include <stdbool.h>
 
 
 /* hardcoded for ia32. bitfields not properly endianized. */
