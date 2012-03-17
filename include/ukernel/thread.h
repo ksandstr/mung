@@ -9,6 +9,7 @@
 
 #include <l4/types.h>
 #include <ukernel/mm.h>
+#include <ukernel/misc.h>
 
 
 typedef uint32_t thread_id;
@@ -129,7 +130,7 @@ extern void thread_start(struct thread *t);
 extern void save_ipc_regs(struct thread *t, int mrs, int brs);
 
 /* complicated accessors */
-extern void *thread_get_utcb(struct thread *t);
+extern PURE void *thread_get_utcb(struct thread *t);
 
 
 /* for htable */
