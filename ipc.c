@@ -35,21 +35,74 @@ static struct kmem_cache *ipc_wait_slab = NULL;
 static struct htable sendwait_hash;
 
 
+static void do_typed_transfer(
+	struct thread *source,
+	const void *s_base,
+	struct thread *dest,
+	void *d_base,
+	L4_MsgTag_t tag)
+{
+	int pos = tag.X.u + 1, last = tag.X.u + tag.X.t;
+	bool cont = true;
+	while(cont) {
+		L4_Word_t w0 = L4_VREG(s_base, pos);
+		cont = (w0 & 1) != 0;
+		switch(w0 & 0xe) {
+			case 0x8: {
+				if(unlikely(pos + 1 > last)) goto too_short;
+				L4_MapItem_t m = {
+					.raw = { w0, L4_VREG(s_base, pos + 1) },
+				};
+				printf("would map 0x%x[0x%x], sndbase 0x%x\n",
+					L4_Address(m.X.snd_fpage), L4_Size(m.X.snd_fpage),
+					L4_MapItemSndBase(m));
+				m.X.snd_fpage.X.b = 0;
+				/* TODO: change .X.rwx to reflect the actual access bits
+				 * given
+				 */
+				L4_VREG(d_base, pos) = m.raw[0];
+				L4_VREG(d_base, pos + 1) = m.raw[1];
+				pos += 2;
+				break;
+			}
+			case 0xa:
+				panic("can't handle grantitems yet");
+				break;
+			case 0xc:
+				panic("ctrlxferitems not supported");
+				break;
+			case 0xe:
+				/* FIXME: return an IPC error instead */
+				panic("reserved map type");
+				break;
+			default:
+				panic("can't handle string transfers yet");
+				break;
+		}
+	}
+
+	return;
+
+too_short:
+	panic("not enough typed message words");
+}
+
+
 static void do_ipc_transfer(
 	struct thread *source,
 	struct thread *dest)
 {
 	const void *s_base = thread_get_utcb(source);
 	void *d_base = thread_get_utcb(dest);
-	L4_Word_t tag = L4_VREG(s_base, L4_TCR_MR(0));
-	L4_VREG(d_base, L4_TCR_MR(0)) = tag;
-	int u = tag & 0x3f, t = (tag >> 6) & 0x3f;
-	for(int i=0; i < u; i++) {
+	L4_MsgTag_t tag = { .raw = L4_VREG(s_base, L4_TCR_MR(0)) };
+	L4_VREG(d_base, L4_TCR_MR(0)) = tag.raw;
+	for(int i=0; i < tag.X.u; i++) {
 		int reg = L4_TCR_MR(i + 1);
 		L4_VREG(d_base, reg) = L4_VREG(s_base, reg);
 	}
-	if(t > 0) {
-		panic("do_ipc_transfer: can't handle typed words");
+
+	if(tag.X.t > 0) {
+		do_typed_transfer(source, s_base, dest, d_base, tag);
 	}
 }
 
