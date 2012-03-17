@@ -142,6 +142,7 @@ bool ipc_send_half(struct thread *self)
 			TID_THREADNUM(self->id), TID_VERSION(self->id));
 
 		do_ipc_transfer(self, dest);
+		dest->status = TS_READY;
 		restore_saved_regs(dest);
 
 		if(L4_IsNilThread(self->ipc_from)) {
@@ -270,7 +271,7 @@ L4_MsgTag_t kipc(
 		assert(current->status == TS_SEND_WAIT);
 		schedule();
 		tag.raw = L4_VREG(utcb, L4_TCR_MR(0));
-		if(unlikely(L4_IpcFailed(tag))) return tag;
+		if(L4_IpcFailed(tag)) return tag;
 	}
 
 	if(likely(!L4_IsNilThread(current->ipc_from))) {
