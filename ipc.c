@@ -16,6 +16,7 @@
 #include <ukernel/misc.h>
 #include <ukernel/slab.h>
 #include <ukernel/thread.h>
+#include <ukernel/space.h>
 #include <ukernel/ipc.h>
 
 
@@ -161,7 +162,13 @@ bool ipc_recv_half(struct thread *self)
 
 		self->status = TS_READY;
 		self->ipc_from.raw = from->id;
-		from->status = L4_IsNilThread(from->ipc_from) ? TS_READY : TS_R_RECV;
+		if(unlikely(IS_KERNEL_THREAD(from))) {
+			/* kernel threads do the send/receive phases as control flow. */
+			from->status = TS_READY;
+		} else {
+			/* userspace threads operate via a state machine. */
+			from->status = L4_IsNilThread(from->ipc_from) ? TS_READY : TS_R_RECV;
+		}
 
 		return true;
 	}
