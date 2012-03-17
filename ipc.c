@@ -137,8 +137,9 @@ bool ipc_send_half(struct thread *self)
 	/* TODO: override TS_R_RECV when peer's ipc_from == self->id . */
 	if(likely(dest->status == TS_RECV_WAIT)) {
 		/* active send */
-		printf("%s: active send to %d:%d\n", __func__,
-			TID_THREADNUM(dest->id), TID_VERSION(dest->id));
+		printf("%s: active send to %d:%d (from %d:%d)\n", __func__,
+			TID_THREADNUM(dest->id), TID_VERSION(dest->id),
+			TID_THREADNUM(self->id), TID_VERSION(self->id));
 
 		do_ipc_transfer(self, dest);
 		restore_saved_regs(dest);
@@ -158,7 +159,8 @@ bool ipc_send_half(struct thread *self)
 		}
 	} else {
 		/* passive send */
-		printf("%s: passive send from %d:%d\n", __func__,
+		printf("%s: passive send to %d:%d (from %d:%d)\n", __func__,
+			TID_THREADNUM(dest->id), TID_VERSION(dest->id),
 			TID_THREADNUM(self->id), TID_VERSION(self->id));
 		struct ipc_wait *w = kmem_cache_alloc(ipc_wait_slab);
 		w->dest_tid = self->ipc_to;
@@ -218,14 +220,16 @@ bool ipc_recv_half(struct thread *self)
 	}
 
 	if(from == NULL) {
-		printf("%s: passive receive in %d:%d\n", __func__,
-			TID_THREADNUM(self->id), TID_VERSION(self->id));
+		printf("%s: passive receive to %d:%d (waiting on %d:%d)\n", __func__,
+			TID_THREADNUM(self->id), TID_VERSION(self->id),
+			TID_THREADNUM(self->ipc_from.raw), TID_VERSION(self->ipc_from.raw));
 		self->status = TS_RECV_WAIT;
 		return false;
 	} else {
 		/* active receive */
-		printf("%s: active receive from %d:%d\n", __func__,
-			TID_THREADNUM(from->id), TID_VERSION(from->id));
+		printf("%s: active receive from %d:%d (to %d:%d)\n", __func__,
+			TID_THREADNUM(from->id), TID_VERSION(from->id),
+			TID_THREADNUM(self->id), TID_VERSION(self->id));
 		assert(from->status == TS_SEND_WAIT);
 
 		do_ipc_transfer(from, self);
