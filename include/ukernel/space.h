@@ -9,6 +9,7 @@
 
 #include <ukernel/thread.h>
 #include <ukernel/mm.h>
+#include <ukernel/mapdb.h>
 
 
 struct thread;
@@ -26,6 +27,7 @@ struct space
 	L4_Fpage_t kip_area;
 
 	struct htable ptab_pages;	/* <struct page *>, by page.id */
+	struct map_db mapdb;
 
 	/* x86 specific bits */
 	struct page *pdirs;
@@ -37,6 +39,10 @@ struct space
 #define NUM_UTCB_PAGES(fpage) (L4_Size((fpage)) / UTCB_SIZE)
 
 
+/* kernel_space->mapdb contains mappings for all non-reserved memory seen by
+ * the kernel. these mappings are subsequently granted to sigma0 during the
+ * boot process as initial memory.
+ */
 extern struct space *kernel_space;
 
 
@@ -45,6 +51,24 @@ extern void space_free(struct space *sp);
 extern void space_add_thread(struct space *sp, struct thread *t);
 /* (returns SpaceControl error, or 0 on success.) */
 extern int space_set_utcb_area(struct space *sp, L4_Fpage_t area);
+
+/* use 0 to erase a page. */
+extern void space_put_page(
+	struct space *sp,
+	uintptr_t addr,
+	uint32_t page_id,
+	int access);
+
+/* stubbed out interface for architectures (non-x86, non-amd64) that don't
+ * have an INVLPG equivalent. a sequence of calls to space_put_page(), or
+ * others that alter the page tables, should be terminated with
+ * space_commit(). it may also end up doing something in a multiprocessor
+ * environment.
+ */
+static inline void space_commit(struct space *sp) {
+	/* emptiness */
+}
+
 
 /* pages reserved before htable_add() can be used, are added to the list.
  * later kmain() calls space_add_resv_pages().

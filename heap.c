@@ -60,6 +60,19 @@ void add_boot_pages(intptr_t start, intptr_t end)
 		p->vm_addr = NULL;
 		list_add(&k_free_pages, &p->link);
 	}
+
+	uint32_t id_chunk[256];
+	int pos = 0;
+	while(pos < npages) {
+		int seg = MIN(int, 256, npages - pos);
+		for(int i=0; i < seg; i++) {
+			id_chunk[i] = (start >> PAGE_BITS) + pos + i;
+		}
+		mapdb_init_range(&kernel_space->mapdb,
+			start + pos * PAGE_SIZE, id_chunk, seg);
+		pos += seg;
+	}
+
 	printf("%s: added %d pages.\n", __func__, npages);
 }
 

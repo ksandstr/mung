@@ -14,6 +14,7 @@
 #include <ukernel/slab.h>
 #include <ukernel/misc.h>
 #include <ukernel/thread.h>
+#include <ukernel/mapdb.h>
 #include <ukernel/space.h>
 
 
@@ -65,6 +66,7 @@ struct space *space_new(void)
 
 	struct space *sp = kmem_cache_alloc(space_slab);
 	space_init(sp, NULL);
+	mapdb_init(&sp->mapdb, sp);
 
 	return sp;
 }
@@ -73,6 +75,8 @@ struct space *space_new(void)
 void space_free(struct space *sp)
 {
 	assert(list_empty(&sp->threads));
+
+	mapdb_destroy(&sp->mapdb);
 
 	if(sp->utcb_pages != NULL) {
 		for(int i=0; i < NUM_UTCB_PAGES(sp->utcb_area); i++) {
@@ -129,8 +133,19 @@ int space_set_utcb_area(struct space *sp, L4_Fpage_t area)
 }
 
 
+void space_put_page(
+	struct space *sp,
+	uintptr_t addr,
+	uint32_t page_id,
+	int access)
+{
+	/* TODO */
+}
+
+
 /* NOTE: this runs in the pre-heap environment. so htable ops aren't
  * available; instead the pages end up in the list given as parameter.
+ * likewise kernel_space->mapdb is left uninitialized.
  */
 COLD void init_spaces(struct list_head *resv_list)
 {

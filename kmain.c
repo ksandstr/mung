@@ -19,6 +19,7 @@
 #include <ukernel/timer.h>
 #include <ukernel/ipc.h>
 #include <ukernel/thread.h>
+#include <ukernel/mapdb.h>
 #include <ukernel/misc.h>
 
 #include "multiboot.h"
@@ -336,23 +337,31 @@ void isr_exn_pf_bottom(struct x86_exregs *regs)
 		}
 #endif
 
-		thread_save_exregs(current, regs);
-		void *utcb = thread_get_utcb(current);
-		L4_ThreadId_t pager_id = { .raw = L4_VREG(utcb, L4_TCR_PAGER) };
-		struct thread *pager = !L4_IsNilThread(pager_id) ? thread_find(pager_id.raw) : NULL;
-		if(unlikely(pager == NULL)) {
-			printf("thread has no pager, stopping it\n");
-			current->status = TS_STOPPED;
-			return_to_scheduler(regs);
+		const struct map_entry *e = mapdb_probe(&current->space->mapdb,
+			fault_addr);
+		if(e != NULL) {
+			space_put_page(current->space, fault_addr & ~PAGE_MASK,
+				e->page_id, e->flags & 0x7);
+			space_commit(current->space);
 		} else {
-			save_ipc_regs(current, 3, 1);
-			L4_VREG(utcb, L4_TCR_BR(0)) = L4_CompleteAddressSpace.raw;
-			L4_VREG(utcb, L4_TCR_MR(0)) = ((-2) & 0xfff) << 20		/* label */
-				| (CHECK_FLAG(regs->error, 2) ? 0x2 : 0x4) << 16	/* access */
-				| 2;		/* "u" for msgtag */
-			L4_VREG(utcb, L4_TCR_MR(1)) = fault_addr;
-			L4_VREG(utcb, L4_TCR_MR(2)) = regs->eip;
-			return_to_ipc(regs, pager);
+			thread_save_exregs(current, regs);
+			void *utcb = thread_get_utcb(current);
+			L4_ThreadId_t pager_id = { .raw = L4_VREG(utcb, L4_TCR_PAGER) };
+			struct thread *pager = !L4_IsNilThread(pager_id) ? thread_find(pager_id.raw) : NULL;
+			if(unlikely(pager == NULL)) {
+				printf("thread has no pager, stopping it\n");
+				current->status = TS_STOPPED;
+				return_to_scheduler(regs);
+			} else {
+				save_ipc_regs(current, 3, 1);
+				L4_VREG(utcb, L4_TCR_BR(0)) = L4_CompleteAddressSpace.raw;
+				L4_VREG(utcb, L4_TCR_MR(0)) = ((-2) & 0xfff) << 20		/* label */
+					| (CHECK_FLAG(regs->error, 2) ? 0x2 : 0x4) << 16	/* access */
+					| 2;		/* "u" for msgtag */
+				L4_VREG(utcb, L4_TCR_MR(1)) = fault_addr;
+				L4_VREG(utcb, L4_TCR_MR(2)) = regs->eip;
+				return_to_ipc(regs, pager);
+			}
 		}
 	}
 }
@@ -700,6 +709,8 @@ void kmain(void *mbd, unsigned int magic)
 	 */
 	put_supervisor_page((intptr_t)mbi & ~PAGE_MASK, (intptr_t)mbi >> PAGE_BITS);
 
+	/* (see comment for init_spaces().) */
+	mapdb_init(&kernel_space->mapdb, kernel_space);
 	if(CHECK_FLAG(mbi->flags, MULTIBOOT_INFO_MEM_MAP)) {
 		printf("adding MultiBoot memory...\n");
 		add_mbi_memory(mbi, resv_start & ~PAGE_MASK, resv_end | PAGE_MASK);
@@ -745,6 +756,7 @@ void kmain(void *mbd, unsigned int magic)
 	printf("string at 0x%x should say `qwe': `%s'\n", (unsigned)foo, foo);
 	free(foo);
 
+	init_mapdb();
 	init_ipc();
 
 	printf("enabling keyboard & keyboard interrupt\n");

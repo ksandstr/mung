@@ -23,7 +23,7 @@ tags: $(wildcard *.[ch])
 
 image.bin: linker.ld loader.o isr.o kmain.o printf.o fake_stdio.o string.o \
 		dlmalloc.o heap.o slab.o pic.o timer.o thread.o context.o \
-		gdt.o idt.o hash.o space.o ipc.o \
+		gdt.o idt.o hash.o space.o ipc.o mapdb.o \
 		ccan-htable.o rbtree.o
 	@echo "  LD $@"
 	@ld -T linker.ld -o $@ $(filter %.o,$^)
