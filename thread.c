@@ -370,7 +370,10 @@ void *thread_get_utcb(struct thread *t)
 	if(unlikely(p->vm_addr == NULL)) {
 		panic("UTCB page not mapped in kernel?? HALP");
 	}
-	return p->vm_addr + offset * UTCB_SIZE;
+	/* the UTCB pointer starts with the kernel-defined MR0 slot, and has at
+	 * least 200 bytes available at negative offsets.
+	 */
+	return p->vm_addr + offset * UTCB_SIZE + 256;
 }
 
 
