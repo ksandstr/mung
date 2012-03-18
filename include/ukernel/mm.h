@@ -74,8 +74,8 @@ extern uintptr_t reserve_heap_page(void);
  */
 extern void init_kernel_heap(
 	const struct multiboot_mmap_entry *mm,
-	intptr_t *resv_start,
-	intptr_t *resv_end);
+	uintptr_t *resv_start,
+	uintptr_t *resv_end);
 
 extern void add_boot_pages(intptr_t start, intptr_t end);
 

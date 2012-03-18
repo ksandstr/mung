@@ -629,9 +629,11 @@ void malloc_panic(void) {
  */
 static void crawl_multiboot_info(
 	struct multiboot_info *mbi,
-	intptr_t *resv_start_p,
-	intptr_t *resv_end_p)
+	uintptr_t *resv_start_p,
+	uintptr_t *resv_end_p)
 {
+	uintptr_t r_start = ~0ul, r_end = 0;
+
 	printf("flags 0x%x\n", mbi->flags);
 	if(CHECK_FLAG(mbi->flags, MULTIBOOT_INFO_MEMORY)) {
 		printf("mem_lower 0x%x, mem_upper 0x%x\n", mbi->mem_lower,
@@ -651,6 +653,8 @@ static void crawl_multiboot_info(
 			bm->end = m_base[i].mod_end;
 			strncpy(bm->cmdline, (const char *)m_base[i].cmdline,
 				sizeof(bm->cmdline));
+			r_start = MIN(uintptr_t, bm->start, r_start);
+			r_end = MAX(uintptr_t, bm->end - 1, r_end);
 		}
 	}
 
@@ -673,13 +677,16 @@ static void crawl_multiboot_info(
 				&& mm->addr <= ~0u)
 			{
 				found_mem = true;
-				init_kernel_heap(mm, resv_start_p, resv_end_p);
+				init_kernel_heap(mm, &r_start, &r_end);
 			}
 		}
 	}
 	if(!found_mem) {
 		panic("didn't find any memory in multiboot spec!");
 	}
+
+	*resv_start_p = MIN(uintptr_t, *resv_start_p, r_start);
+	*resv_end_p = MAX(uintptr_t, *resv_end_p, r_end);
 }
 
 
@@ -694,7 +701,7 @@ void kmain(void *mbd, unsigned int magic)
 	printf("hello, world! mbd is at 0x%x\n", (unsigned)mbd);
 
 	struct multiboot_info *mbi = mbd;
-	intptr_t resv_start = 0, resv_end = 0;
+	uintptr_t resv_start = ~0ul, resv_end = 0;
 	crawl_multiboot_info(mbd, &resv_start, &resv_end);
 
 	/* initialize interrupt-related data structures with the I bit cleared. */

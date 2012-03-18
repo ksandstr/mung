@@ -83,11 +83,11 @@ void add_boot_pages(intptr_t start, intptr_t end)
  */
 void init_kernel_heap(
 	const struct multiboot_mmap_entry *mm,
-	intptr_t *resv_start,
-	intptr_t *resv_end)
+	uintptr_t *resv_start,
+	uintptr_t *resv_end)
 {
-	extern intptr_t _start, _end;
-	intptr_t next_addr = ((intptr_t)&_end + PAGE_SIZE - 1) & ~PAGE_MASK;
+	extern char _start, _end;
+	uintptr_t next_addr = ((uintptr_t)&_end + PAGE_SIZE - 1) & ~PAGE_MASK;
 
 	/* first, take a static 2 MiB for early kernel memory that's allocated per
 	 * page.
@@ -103,8 +103,8 @@ void init_kernel_heap(
 	/* initialize page slab & return. */
 	mm_page_cache = kmem_cache_create("mm_page_cache", sizeof(struct page),
 		ALIGNOF(struct page), 0, NULL, NULL);
-	*resv_start = (intptr_t)&_start;
-	*resv_end = next_addr - 1;	/* (inclusive.) */
+	*resv_start = MIN(uintptr_t, (uintptr_t)&_start, *resv_start);
+	*resv_end = MAX(uintptr_t, next_addr - 1, *resv_end);	/* (inclusive.) */
 }
 
 
