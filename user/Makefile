@@ -15,7 +15,7 @@ distclean:
 	@rm -rf .deps
 
 
-sigma0: sigma0.ld sigma0.o
+sigma0: sigma0.ld crt0.o sigma0.o
 	@echo "  LD $@"
 	@$(LD) $(LDFLAGS) -T sigma0.ld $(filter %.o,$^) $(LIBS) -o $@
 
