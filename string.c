@@ -23,6 +23,7 @@
 #include <string.h>
 #include <stdlib.h>
 #include <stdint.h>
+#include <assert.h>
 
 
 void *memcpy(void *dst, const void *src, size_t len)
@@ -164,6 +165,15 @@ char *strchr(const char *s, int c)
 {
 	while(*s != '\0' && *s != c) s++;
 	return *s == '\0' ? NULL : (char *)s;
+}
+
+
+char *strrchr(const char *s, int c)
+{
+	const char *t = s + strlen(s);
+	while(*t != c && t != s) t--;
+	assert(t == s || *t == c);
+	return t != s ? (char *)t : NULL;
 }
 
 
