@@ -108,9 +108,6 @@ void init_kernel_heap(
 }
 
 
-/* FIXME: don't return pages with a physical address below 0x100000, as these
- * are special on the x86 (video memory, etc)
- */
 struct page *get_kern_page(void)
 {
 	assert(!list_empty(&k_free_pages));
@@ -119,8 +116,20 @@ struct page *get_kern_page(void)
 	 * put_supervisor_page()'s not finding the page directory for the vm heap.
 	 * [... more recently though, .next seems to work just as well.])
 	 */
-	struct page *p = container_of(k_free_pages.n.prev, struct page, link);
-	list_del(&p->link);
+	struct page *p;
+	do {
+		p = container_of(k_free_pages.n.prev, struct page, link);
+		list_del(&p->link);
+		/* don't return pages with a physical address below 0x100000, as these
+		 * are special on the x86 (video memory, etc)
+		 */
+		if(p->id < (0x100000 >> PAGE_BITS)) {
+			/* FIXME: stick these in a reserved list. maybe. */
+			printf("%s: NOTE: skipping page id %u (physaddr 0x%x)\n",
+				__func__, p->id, (uintptr_t)p->id << PAGE_BITS);
+			p = NULL;
+		}
+	} while(p == NULL);
 	if(p->vm_addr == NULL) {
 		/* map it in. */
 		intptr_t addr = reserve_heap_page();
