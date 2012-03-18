@@ -531,6 +531,9 @@ MAX_RELEASE_CHECK_RATE   default: 4095 unless not HAVE_MMAP
 #define LACKS_UNISTD_H
 #define LACKS_SYS_PARAM_H
 #define HAVE_MMAP 0
+#define MORECORE_CANNOT_TRIM 1
+#define NO_MALLOC_STATS 1
+#define DEFAULT_GRANULARITY (128 * 1024)
 
 extern void malloc_panic(void);
 #define ABORT malloc_panic()
