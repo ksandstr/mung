@@ -52,6 +52,15 @@
 #define KBD_KBF_PCCOMPAT	0x80	/* PC compat crap, must be 0 */
 
 
+#define MAX_BOOT_MODULES 8	/* FIXME: build a kickstart program instead */
+
+
+struct boot_module {
+	uintptr_t start, end;	/* occupies [start, end) */
+	char cmdline[248];
+} __attribute__((packed));
+
+
 struct tss kernel_tss;
 
 static struct list_head resv_page_list = LIST_HEAD_INIT(resv_page_list);
@@ -63,6 +72,9 @@ static void *irq_stack[16];
 
 /* should only be read with interrupts disabled! */
 static uint64_t timer_count = 0;
+
+static struct boot_module boot_mods[MAX_BOOT_MODULES];
+static int num_boot_mods = 0;
 
 
 /* rudimentary serial port output from µiX */
@@ -608,6 +620,13 @@ void malloc_panic(void) {
 }
 
 
+/* go over multiboot detail & make copies, because multiboot info will be lost
+ * when paging is enabled.
+ *
+ * TODO: this should be moved into a kickstart program, which would massage
+ * the relevant multiboot info into a L4.X2 generic bootinfo page allocated so
+ * as to never overlap the microkernel, sigma0, or any other boot module.
+ */
 static void crawl_multiboot_info(
 	struct multiboot_info *mbi,
 	intptr_t *resv_start_p,
@@ -624,6 +643,15 @@ static void crawl_multiboot_info(
 	if(CHECK_FLAG(mbi->flags, MULTIBOOT_INFO_MODS)) {
 		printf("mods_count %u, mods_addr 0x%x\n", mbi->mods_count,
 			mbi->mods_addr);
+		multiboot_module_t *m_base = (multiboot_module_t *)mbi->mods_addr;
+		num_boot_mods = mbi->mods_count;
+		for(int i=0; i < mbi->mods_count; i++) {
+			struct boot_module *bm = &boot_mods[i];
+			bm->start = m_base[i].mod_start;
+			bm->end = m_base[i].mod_end;
+			strncpy(bm->cmdline, (const char *)m_base[i].cmdline,
+				sizeof(bm->cmdline));
+		}
 	}
 
 	bool found_mem = false;
@@ -721,6 +749,18 @@ void kmain(void *mbd, unsigned int magic)
 		printf("adding MultiBoot memory...\n");
 		add_mbi_memory(mbi, resv_start & ~PAGE_MASK, resv_end | PAGE_MASK);
 	}
+	struct boot_module *mod_sigma0 = NULL;
+	for(int i=0; i < num_boot_mods; i++) {
+		printf("boot module: [0x%x .. 0x%x], cmdline = `%s'\n",
+			boot_mods[i].start, boot_mods[i].end, boot_mods[i].cmdline);
+		char *name = strrchr(boot_mods[i].cmdline, '/');
+		if(name == NULL) name = boot_mods[i].cmdline; else name++;
+		if(strcmp(name, "sigma0") == 0) {
+			mod_sigma0 = &boot_mods[i];
+			break;
+		}
+	}
+	if(mod_sigma0 == NULL) panic("didn't find sigma0!");
 
 	space_add_resv_pages(kernel_space, &ksp_resv);
 	list_head_init(&ksp_resv);
