@@ -744,11 +744,22 @@ void kmain(void *mbd, unsigned int magic)
 
 	irq_enable();
 
+	/* per-module inits & init-time testing */
+	init_mapdb();
+	init_ipc();
+
+	struct thread *first_thread = init_threading(THREAD_ID(17, 1));
+	space_add_thread(kernel_space, first_thread);
+	thread_test();
+
+	space_test();
+
 #if 0
 	static int zero;
 	printf("divide by zero: %d\n", 777 / zero);
 #endif
 
+#if 0
 	printf("performing malloc test...\n");
 	char *foo = malloc(64);
 	foo[0] = 'q';
@@ -757,9 +768,7 @@ void kmain(void *mbd, unsigned int magic)
 	foo[3] = '\0';
 	printf("string at 0x%x should say `qwe': `%s'\n", (unsigned)foo, foo);
 	free(foo);
-
-	init_mapdb();
-	init_ipc();
+#endif
 
 	printf("enabling keyboard & keyboard interrupt\n");
 	outb(KBD_CMD_REG, KBD_CMD_WRITECMD);
@@ -770,12 +779,6 @@ void kmain(void *mbd, unsigned int magic)
 	printf("enabling timer interrupt\n");
 	setup_timer_ch0();
 	pic_clear_mask(0x01, 0x00);
-
-	struct thread *first_thread = init_threading(THREAD_ID(17, 1));
-	space_add_thread(kernel_space, first_thread);
-	thread_test();
-
-	space_test();
 
 	printf("kmain() entering halt-schedule loop.\n");
 	while(true) {
