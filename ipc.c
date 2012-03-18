@@ -43,10 +43,8 @@ static void do_typed_transfer(
 	L4_MsgTag_t tag)
 {
 	int pos = tag.X.u + 1, last = tag.X.u + tag.X.t;
-	bool cont = true;
-	while(cont) {
+	while(pos <= last) {
 		L4_Word_t w0 = L4_VREG(s_base, pos);
-		cont = (w0 & 1) != 0;
 		switch(w0 & 0xe) {
 			case 0x8: {
 				if(unlikely(pos + 1 > last)) goto too_short;
@@ -56,10 +54,11 @@ static void do_typed_transfer(
 				printf("would map 0x%x[0x%x], sndbase 0x%x\n",
 					L4_Address(m.X.snd_fpage), L4_Size(m.X.snd_fpage),
 					L4_MapItemSndBase(m));
-				m.X.snd_fpage.X.b = 0;
 				/* TODO: change .X.rwx to reflect the actual access bits
 				 * given
 				 */
+				m.X.snd_fpage.X.b = 0;
+				m.X.C = (pos + 2 <= last);
 				L4_VREG(d_base, pos) = m.raw[0];
 				L4_VREG(d_base, pos + 1) = m.raw[1];
 				pos += 2;
