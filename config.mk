@@ -11,5 +11,10 @@ CFLAGS=-O2 -Wall -march=native -std=gnu99 -I include -I include/fake_clib \
 	@mv $(<:.c=.d) .deps/
 
 
+%.o: %-32.S
+	@echo "  AS $@"
+	@as --32 -o $@ $<
+
+
 .deps:
 	@mkdir -p .deps

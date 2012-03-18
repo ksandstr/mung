@@ -35,11 +35,6 @@ ccan-%.o ::
 	@$(CC) -m32 -c -o $@ $(CCAN_DIR)/ccan/$*/$*.c $(CFLAGS) -nostartfiles -nodefaultlibs
 
 
-%.o: %-32.S
-	@echo "  AS $@"
-	@as --32 -o $@ $<
-
-
 dlmalloc.o: CFLAGS += -Wno-unused-variable
 
 
