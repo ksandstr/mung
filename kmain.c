@@ -138,10 +138,7 @@ void __assert_failure(
 static int __attribute__((pure)) list_length(struct list_head *list)
 {
 	int count = 0;
-	for(struct list_node *n = resv_page_list.n.next;
-		n != &resv_page_list.n;
-		n = n->next)
-	{
+	for(struct list_node *n = list->n.next; n != &list->n; n = n->next) {
 		count++;
 	}
 	return count;
