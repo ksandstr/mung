@@ -70,7 +70,7 @@ void add_boot_pages(intptr_t start, intptr_t end)
 			id_chunk[i] = (start >> PAGE_BITS) + pos + i;
 		}
 		mapdb_init_range(&kernel_space->mapdb,
-			start + pos * PAGE_SIZE, id_chunk, seg);
+			start + pos * PAGE_SIZE, id_chunk, seg, 0x7);
 		pos += seg;
 	}
 

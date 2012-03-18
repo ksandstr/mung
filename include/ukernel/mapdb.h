@@ -80,6 +80,7 @@ extern void mapdb_init_range(
 	struct map_db *ptr,
 	uintptr_t start_addr,
 	const uint32_t *page_ids,
-	unsigned int num_pages);
+	unsigned int num_pages,
+	int entry_flags);
 
 #endif

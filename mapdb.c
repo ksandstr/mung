@@ -137,7 +137,8 @@ COLD void mapdb_init_range(
 	struct map_db *db,
 	uintptr_t start_addr,
 	const uint32_t *page_ids,
-	unsigned int num_pages)
+	unsigned int num_pages,
+	int entry_flags)
 {
 	uintptr_t g_first = GROUP_ADDR(start_addr),
 		g_last = GROUP_ADDR(start_addr + num_pages * PAGE_SIZE - 1);
@@ -170,6 +171,7 @@ COLD void mapdb_init_range(
 			assert(e->page_id == 0);
 			*e = (struct map_entry){
 				.page_id = page_ids[j + id_offset],
+				.flags = entry_flags,
 			};
 #ifndef NDEBUG
 			done++;
