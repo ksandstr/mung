@@ -29,12 +29,13 @@ static uintptr_t heap_pos = KERNEL_HEAP_TOP;
 void *sbrk(intptr_t increment)
 {
 	if(increment > 0) {
-		int n_pages = (increment + PAGE_SIZE - 1) >> PAGE_BITS;
+		uintptr_t n_pages = ((uintptr_t)increment + PAGE_SIZE - 1) >> PAGE_BITS;
 		heap_pos -= n_pages << PAGE_BITS;
-		for(int i=0; i < n_pages; i++) {
+		const uintptr_t start_pos = heap_pos;
+		for(uintptr_t i=0; i < n_pages; i++) {
 			struct page *pg = get_kern_page();
 			list_add(&k_heap_pages, &pg->link);
-			put_supervisor_page(heap_pos + i * PAGE_SIZE, pg->id);
+			put_supervisor_page(start_pos + i * PAGE_SIZE, pg->id);
 		}
 	}
 	return (void *)heap_pos;
