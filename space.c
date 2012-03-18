@@ -1,8 +1,10 @@
 
+#include <stdio.h>
 #include <stdint.h>
 #include <stdbool.h>
 #include <string.h>
 #include <assert.h>
+
 #include <ccan/likely/likely.h>
 #include <ccan/list/list.h>
 #include <ccan/htable/htable.h>
@@ -139,6 +141,7 @@ void space_put_page(
 	uint32_t page_id,
 	int access)
 {
+	printf("%s: would put page %u at address 0x%x\n", __func__, page_id, addr);
 	/* TODO */
 }
 

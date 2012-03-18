@@ -45,6 +45,11 @@ struct space
  */
 extern struct space *kernel_space;
 
+/* sigma0, however, is completely normal except that its pager provides
+ * idempotent grants from the special kernel space.
+ */
+extern struct space *sigma0_space;
+
 
 extern struct space *space_new(void);
 extern void space_free(struct space *sp);

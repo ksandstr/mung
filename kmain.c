@@ -23,6 +23,7 @@
 #include <ukernel/misc.h>
 
 #include "multiboot.h"
+#include "elf.h"
 
 
 /* keyboard variables. these are just for testing the PIC setup, and will be
@@ -62,6 +63,7 @@ struct boot_module {
 
 
 struct tss kernel_tss;
+struct space *sigma0_space = NULL;
 
 static struct list_head resv_page_list = LIST_HEAD_INIT(resv_page_list);
 static struct page *next_dir_page = NULL;
@@ -596,18 +598,61 @@ static void pager_thread(void *parameter)
 }
 
 
-void space_test(void)
+static void spawn_sigma0(const struct boot_module *mod_s0)
 {
-	struct thread *pager = create_kthread(&pager_thread, NULL);
-
-	struct thread *t = thread_new(THREAD_ID(128, 1));
+	/* sigma0 shouldn't really have a pager, but this avoids a special case in
+	 * the fault handler and thus is quite OK.
+	 */
+	struct thread *pager = create_kthread(&pager_thread, NULL),
+		*t = thread_new(THREAD_ID(128, 1));
 	struct space *sp = space_new();
+	sigma0_space = sp;
 	space_set_utcb_area(sp, L4_FpageLog2(0xd0000000, 13));
 	thread_set_space(t, sp);
 	thread_set_utcb(t, L4_Address(sp->utcb_area));
 	void *u_base = thread_get_utcb(t);
 	L4_VREG(u_base, L4_TCR_PAGER) = pager->id;
-	thread_set_spip(t, 0xcafeb00b, 0xc0def000);
+
+	/* map sigma0's own pages. they don't need to have a particular physical
+	 * address. sigma0 will _provide_ idempotent mappings to the root task,
+	 * but this doesn't require it to receive idempotent mappings itself.
+	 */
+	const void *elf = (const void *)mod_s0->start;
+	const Elf32_Ehdr *eh = (const Elf32_Ehdr *)elf;
+	uintptr_t phoff = eh->e_phoff;
+	for(int i=0; i < eh->e_phnum; i++, phoff += eh->e_phentsize) {
+		const Elf32_Phdr *ph = elf + phoff;
+		if(ph->p_type != PT_LOAD) continue;
+
+		int num_pages = (ph->p_memsz + PAGE_SIZE - 1) >> PAGE_BITS;
+		uint32_t *ids = malloc(sizeof(uint32_t) * num_pages);
+		for(int j=0; j < num_pages; j++) {
+			/* FIXME: add these pages to a "system reserved" list. */
+			struct page *pg = get_kern_page(0);
+			ids[j] = pg->id;
+			int copysize = MIN(int, PAGE_SIZE, ph->p_filesz - PAGE_SIZE * j);
+			assert(copysize >= 0);
+			memcpy(pg->vm_addr, elf + ph->p_offset + PAGE_SIZE * j, copysize);
+			if(copysize < PAGE_SIZE) {
+				memset(pg->vm_addr + copysize, 0, PAGE_SIZE - copysize);
+			}
+			/* FIXME: release the address space; use a unmap_kern_page()
+			 * or some such.
+			 */
+			put_supervisor_page((uintptr_t)pg->vm_addr, 0);
+		}
+		mapdb_init_range(&sigma0_space->mapdb, ph->p_vaddr,
+			ids, num_pages, 0x7);
+		free(ids);
+
+#if 0
+		printf("%s: added %d pages to mapdb [0x%x .. 0x%x]\n",
+			__func__, num_pages, ph->p_vaddr,
+			ph->p_vaddr + PAGE_SIZE * num_pages - 1);
+#endif
+	}
+
+	thread_set_spip(t, 0xdeadbeef, eh->e_entry);
 	thread_start(t);
 }
 
@@ -800,7 +845,7 @@ void kmain(void *mbd, unsigned int magic)
 	space_add_thread(kernel_space, first_thread);
 	thread_test();
 
-	space_test();
+	spawn_sigma0(mod_sigma0);
 
 #if 0
 	static int zero;
