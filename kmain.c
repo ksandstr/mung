@@ -149,7 +149,7 @@ static struct page *find_page_by_id(uint32_t id)
 }
 
 
-void put_supervisor_page(intptr_t addr, uint32_t page_id)
+void put_supervisor_page(uintptr_t addr, uint32_t page_id)
 {
 	assert(kernel_space != NULL);
 

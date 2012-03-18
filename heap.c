@@ -23,7 +23,7 @@ static struct list_head k_free_pages = LIST_HEAD_INIT(k_free_pages),
 	k_heap_pages = LIST_HEAD_INIT(k_heap_pages);
 static struct kmem_cache *mm_page_cache = NULL;
 
-static intptr_t heap_pos = KERNEL_HEAP_TOP;
+static uintptr_t heap_pos = KERNEL_HEAP_TOP;
 
 
 void *sbrk(intptr_t increment)
@@ -42,7 +42,7 @@ void *sbrk(intptr_t increment)
 
 
 /* reserves address space in the sbrk()-style heap. */
-intptr_t reserve_heap_page(void)
+uintptr_t reserve_heap_page(void)
 {
 	heap_pos -= PAGE_SIZE;
 	return heap_pos;

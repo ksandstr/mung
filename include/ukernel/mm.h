@@ -63,7 +63,7 @@ struct page
 
 extern void add_supervisor_pages(intptr_t heap_pos, int num_pages);
 
-extern intptr_t reserve_heap_page(void);
+extern uintptr_t reserve_heap_page(void);
 
 
 /* kernel heap initialization. init_kernel_heap() is called with the
@@ -82,7 +82,7 @@ extern void add_boot_pages(intptr_t start, intptr_t end);
 
 /* supervisor page table access from kmain.c */
 
-extern void put_supervisor_page(intptr_t addr, uint32_t page_id);
+extern void put_supervisor_page(uintptr_t addr, uint32_t page_id);
 
 
 /* from heap.c, a page-grain allocator.
