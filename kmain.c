@@ -196,7 +196,7 @@ void put_supervisor_page(uintptr_t addr, uint32_t page_id)
 	}
 
 	if(alloc_next) {
-		next_dir_page = get_kern_page();
+		next_dir_page = get_kern_page(0);
 		list_add(&resv_page_list, &next_dir_page->link);
 	}
 }
@@ -206,7 +206,7 @@ static void setup_paging(intptr_t id_start, intptr_t id_end)
 {
 	assert(kernel_space != NULL);
 
-	next_dir_page = get_kern_page();
+	next_dir_page = get_kern_page(0);
 	list_add(&resv_page_list, &next_dir_page->link);
 
 	/* identitymap between id_start and id_end inclusive */
@@ -280,7 +280,7 @@ static void handle_kernel_pf(struct x86_exregs *regs, uint32_t fault_addr)
 	page_t *pages = (page_t *)(kernel_pdirs[dir] & ~0xfff);
 	if(pages == NULL) {
 		/* TODO: track this page: it is used for kernel-space page tables. */
-		struct page *pg = get_kern_page();
+		struct page *pg = get_kern_page(0);
 		pages = pg->vm_addr;
 		for(int i=0; i < 1024; i++) pages[i] = 0;
 		kernel_pdirs[dir] = (pdir_t)(pg->id << PAGE_BITS) | PDIR_PRESENT | PDIR_RW;
@@ -291,7 +291,7 @@ static void handle_kernel_pf(struct x86_exregs *regs, uint32_t fault_addr)
 	} else if((fault_addr & 0xf0000000) == 0xf0000000) {
 		if(!CHECK_FLAG(pages[p], PT_PRESENT)) {
 			/* allocate. */
-			struct page *pg = get_kern_page();
+			struct page *pg = get_kern_page(0);
 			pages[p] = (pg->id << PAGE_BITS) | PT_PRESENT | PT_RW;
 			printf("allocated physical page 0x%x for fault in kernel memory at 0x%x\n",
 				(unsigned)pg->id << PAGE_BITS, fault_addr);
@@ -541,7 +541,7 @@ static void pager_thread(void *parameter)
 {
 	printf("pager thread started.\n");
 
-	struct page *zpage = get_kern_page();
+	struct page *zpage = get_kern_page(0);
 	memset(zpage->vm_addr, 0, PAGE_SIZE);
 
 	for(;;) {
@@ -696,7 +696,7 @@ void kmain(void *mbd, unsigned int magic)
 	for(int i=0; i < 16; i++) {
 		irq_pending[i] = 0;
 
-		struct page *p = get_kern_page();
+		struct page *p = get_kern_page(0);
 		/* TODO: record it as reserved */
 		irq_stack[i] = p->vm_addr;
 	}

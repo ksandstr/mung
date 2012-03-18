@@ -86,10 +86,13 @@ extern void put_supervisor_page(uintptr_t addr, uint32_t page_id);
 
 
 /* from heap.c, a page-grain allocator.
- * works during early boot already, backs the slab allocator.
+ * works during early boot already, backs the slab allocator and sbrk()
+ * mechanisms.
+ *
+ * when vm_addr is 0, get_kern_page() uses reserve_heap_page() to select an
+ * address.
  */
-
-extern struct page *get_kern_page(void);
+extern struct page *get_kern_page(uintptr_t vm_addr);
 extern void free_kern_page(struct page *p);
 
 #endif

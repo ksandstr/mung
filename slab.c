@@ -104,7 +104,7 @@ void *kmem_cache_alloc(struct kmem_cache *cache)
 			slab = container_of(cache->free_list.n.next, struct slab, link);
 			list_del(cache->free_list.n.next);
 		} else {
-			struct page *kpage = get_kern_page();
+			struct page *kpage = get_kern_page(0);
 			slab = kpage->vm_addr;
 			slab->mm_page = kpage;
 		}

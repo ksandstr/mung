@@ -247,7 +247,7 @@ struct thread *thread_new(thread_id tid)
 	struct thread *t;
 	if(list_empty(&dead_thread_list)) {
 		t = kmem_cache_alloc(thread_slab);
-		t->stack_page = get_kern_page();
+		t->stack_page = get_kern_page(0);
 	} else {
 		t = container_of(dead_thread_list.n.next, struct thread, link);
 		list_del_from(&dead_thread_list, &t->link);
@@ -275,7 +275,7 @@ struct thread *create_kthread(
 	struct thread *t = thread_new(tid.raw);
 	if(t->stack_page == NULL) {
 		/* TODO: account for this somehow? */
-		t->stack_page = get_kern_page();
+		t->stack_page = get_kern_page(0);
 	} else {
 		/* TODO: make t->stack_page->vm_addr valid */
 		panic("arrrrrgggghhhh!");
@@ -336,7 +336,7 @@ void thread_set_utcb(struct thread *t, L4_Word_t start)
 	int page = new_pos / UTCB_PER_PAGE;
 	assert(page < NUM_UTCB_PAGES(sp->utcb_area));
 	if(sp->utcb_pages[page] == NULL) {
-		struct page *p = get_kern_page();
+		struct page *p = get_kern_page(0);
 		sp->utcb_pages[page] = p;
 		/* TODO: list "p" somewhere? */
 	}

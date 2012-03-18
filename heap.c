@@ -33,9 +33,9 @@ void *sbrk(intptr_t increment)
 		heap_pos -= n_pages << PAGE_BITS;
 		const uintptr_t start_pos = heap_pos;
 		for(uintptr_t i=0; i < n_pages; i++) {
-			struct page *pg = get_kern_page();
+			struct page *pg = get_kern_page(start_pos + i * PAGE_SIZE);
+			assert((uintptr_t)pg->vm_addr == start_pos + i * PAGE_SIZE);
 			list_add(&k_heap_pages, &pg->link);
-			put_supervisor_page(start_pos + i * PAGE_SIZE, pg->id);
 		}
 	}
 	return (void *)heap_pos;
@@ -108,8 +108,9 @@ void init_kernel_heap(
 }
 
 
-struct page *get_kern_page(void)
+struct page *get_kern_page(uintptr_t vm_addr)
 {
+	assert((vm_addr & PAGE_MASK) == 0);
 	assert(!list_empty(&k_free_pages));
 	/* (get from tail of list, as that's where the idempotent heap is during
 	 * early boot. otherwise there is a chance of endless recursion through
@@ -130,12 +131,29 @@ struct page *get_kern_page(void)
 			p = NULL;
 		}
 	} while(p == NULL);
-	if(p->vm_addr == NULL) {
-		/* map it in. */
-		intptr_t addr = reserve_heap_page();
-		put_supervisor_page(addr, p->id);
-		p->vm_addr = (void *)addr;
+
+	if(vm_addr == 0) {
+		if(p->vm_addr == NULL) {
+			/* map it in at some address. */
+			vm_addr = reserve_heap_page();
+			put_supervisor_page(vm_addr, p->id);
+			p->vm_addr = (void *)vm_addr;
+		} else {
+			vm_addr = (uintptr_t)p->vm_addr;
+		}
+	} else {
+		if(p->vm_addr != NULL) {
+			/* remove the heap reservation. */
+			put_supervisor_page((uintptr_t)p->vm_addr, 0);
+			/* TODO: call a release_heap_page() or some such */
+			p->vm_addr = NULL;
+		}
+
+		/* FIXME: check that there isn't already a page at vm_addr */
+		put_supervisor_page(vm_addr, p->id);
+		p->vm_addr = (void *)vm_addr;
 	}
+
 	return p;
 }
 

@@ -41,7 +41,7 @@ static void space_init(struct space *sp, struct list_head *resv_list)
 	list_head_init(&sp->threads);
 	htable_init(&sp->ptab_pages, &hash_page_by_id, NULL);
 
-	sp->pdirs = get_kern_page();
+	sp->pdirs = get_kern_page(0);
 	if(unlikely(resv_list != NULL)) list_add(resv_list, &sp->pdirs->link);
 	else htable_add(&sp->ptab_pages, int_hash(sp->pdirs->id), sp->pdirs);
 	pdir_t *dirs = sp->pdirs->vm_addr;
@@ -158,7 +158,7 @@ COLD void init_spaces(struct list_head *resv_list)
 	 */
 	pdir_t *pdirs = kernel_space->pdirs->vm_addr;
 	for(int i = KERNEL_SEG_START >> 22; i < 1024; i++) {
-		struct page *pg = get_kern_page();
+		struct page *pg = get_kern_page(0);
 		pdirs[i] = pg->id << 12 | PDIR_PRESENT | PDIR_RW;
 		list_add(resv_list, &pg->link);
 		memset(pg->vm_addr, 0, PAGE_SIZE);
@@ -172,7 +172,7 @@ COLD void init_spaces(struct list_head *resv_list)
 	int n_utcb_pages = sizeof(kernel_utcb_pages) / sizeof(kernel_utcb_pages[0]);
 	kernel_space->utcb_pages = kernel_utcb_pages;
 	for(int i=0; i < n_utcb_pages; i++) {
-		struct page *pg = get_kern_page();
+		struct page *pg = get_kern_page(0);
 		/* TODO: map the pages to actually appear at the UTCB area? */
 		kernel_space->utcb_pages[i] = pg;
 		list_add(resv_list, &pg->link);
