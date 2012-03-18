@@ -183,7 +183,11 @@ void put_supervisor_page(uintptr_t addr, uint32_t page_id)
 	}
 
 	int poffs = (l_addr >> 12) & 0x3ff;
-	pages[poffs] = (page_id << PAGE_BITS) | PT_PRESENT | PT_RW;
+	if(page_id == 0) {
+		pages[poffs] = 0;
+	} else {
+		pages[poffs] = (page_id << PAGE_BITS) | PT_PRESENT | PT_RW;
+	}
 
 	x86_invalidate_page(l_addr);
 	if(unlikely(!is_kernel_high) && addr < KERNEL_SEG_SIZE) {
