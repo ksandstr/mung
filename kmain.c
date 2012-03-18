@@ -153,8 +153,7 @@ void put_supervisor_page(intptr_t addr, uint32_t page_id)
 {
 	assert(kernel_space != NULL);
 
-	intptr_t l_addr = is_kernel_high ? addr + KERNEL_SEG_START : addr;
-
+	uintptr_t l_addr = is_kernel_high ? addr + KERNEL_SEG_START : addr;
 	pdir_t *kernel_pdirs = kernel_space->pdirs->vm_addr;
 	pdir_t *dir = &kernel_pdirs[l_addr >> 22];
 	page_t *pages;
