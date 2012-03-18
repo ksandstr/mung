@@ -330,7 +330,10 @@ void isr_exn_pf_bottom(struct x86_exregs *regs)
 		static uintptr_t last_fault = ~0;
 		static int repeat_count = 0;
 		if(last_fault == fault_addr && ++repeat_count == 3) {
-			panic("faulted many times on the same address");
+			printf("faulted many times on the same address\n");
+			thread_save_exregs(current, regs);
+			current->status = TS_STOPPED;
+			return_to_scheduler(regs);
 		} else if(last_fault != fault_addr) {
 			last_fault = fault_addr;
 			repeat_count = 0;
