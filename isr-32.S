@@ -90,5 +90,6 @@ isr_exn_\name\()_top:
 	.endm
 
 	ISR_EXN 0, de, 0	# divide error
+	ISR_EXN 6, ud, 0	# invalid opcode
 	ISR_EXN 13, gp		# general protection
 	ISR_EXN 14, pf		# pagefault

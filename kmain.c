@@ -275,6 +275,44 @@ void isr_exn_de_bottom(struct x86_exregs *regs)
 }
 
 
+void isr_exn_ud_bottom(struct x86_exregs *regs)
+{
+	/* see if it's a LOCK NOP. (this is why the "syscall" is so slow.) */
+
+	/* NOTE: could extend the kernel data segment to the full address space,
+	 * and wrap the user-space pointer. that'd remove the farting around with
+	 * the mapping database, page tables, and supervisor space.
+	 */
+	struct thread *current = get_current_thread();
+	struct space *sp = current->space;
+	const struct map_entry *e = mapdb_probe(&sp->mapdb,
+		regs->eip & ~PAGE_MASK);
+	if(e == NULL) panic("no map_entry for #UD eip? what.");
+	uintptr_t heap_addr = reserve_heap_page();
+	put_supervisor_page(heap_addr, e->page_id);
+	int offset = regs->eip & PAGE_MASK;
+	const uint8_t *mem = (void *)heap_addr;
+	if(mem[offset] == 0xf0 && mem[offset + 1] == 0x90) {
+		/* it is L4_KernelInterface().
+		 * FIXME: proper values
+		 */
+		regs->eip += 2;
+		regs->eax = 0xdeadbeef;	/* FIXME: kip address */
+		regs->ecx = 0;			/* API VERSION */
+		regs->edx = 0;			/* API FLAGS */
+		regs->esi = 0xCAFEB00B;	/* KERNEL ID */
+	} else {
+		printf("#UD at eip 0x%x, esp 0x%x\n", regs->eip, regs->esp);
+		/* TODO: pop an "invalid opcode" exception. */
+		current->status = TS_STOPPED;
+		return_to_scheduler(regs);
+	}
+
+	put_supervisor_page(heap_addr, 0);
+	/* TODO: release heap_addr */
+}
+
+
 void isr_exn_gp_bottom(struct x86_exregs *regs)
 {
 	printf("#GP(0x%x) at eip 0x%x, esp 0x%x\n", regs->error,
