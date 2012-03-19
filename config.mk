@@ -1,5 +1,7 @@
+
 CCAN_DIR=~/src/ccan
-CFLAGS=-O2 -Wall -march=native -std=gnu99 -I include -I include/fake_clib \
+CFLAGS=-O2 -Wall -march=native -std=gnu99 \
+	-I $(CFGDIR)/include -I $(CFGDIR)/include/fake_clib \
 	-I $(CCAN_DIR) \
 	-fno-builtin -nostdlib
 

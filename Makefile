@@ -1,4 +1,5 @@
 
+export CFGDIR:=$(abspath .)
 include config.mk
 
 
