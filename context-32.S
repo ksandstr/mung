@@ -1,4 +1,3 @@
-#define IN_ASM_SOURCE
 #include <ukernel/gdt.h>
 
 	.global swap_context
