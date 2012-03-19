@@ -279,7 +279,7 @@ void isr_exn_gp_bottom(struct x86_exregs *regs)
 {
 	printf("#GP(0x%x) at eip 0x%x, esp 0x%x\n", regs->error,
 		regs->eip, regs->esp);
-	asm("cli; hlt");
+	panic("#GP");
 }
 
 
