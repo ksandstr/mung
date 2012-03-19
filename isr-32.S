@@ -1,4 +1,8 @@
 
+#define IN_ASM_SOURCE
+#include <ukernel/gdt.h>
+
+
 	/* ISR_IRQ produces IRQ interrupt handlers that call a common bottom
 	 * half while pushing $vecn as the "reason" field in the parameter
 	 * <struct x86_exregs *>.
@@ -49,6 +53,8 @@ isr_\name\()_top:
 	ISR_IRQ_FAST 0x20, irq0		# the timer gets speed, reqd or not.
 
 
+	.equ USER_DATA_SEL, (SEG_USER_DATA << 3 + 3)
+
 	/* ISR_EXN produces exception interrupt handlers. these have individual
 	 * bottom halves on the C side.
 	 */
@@ -57,20 +63,20 @@ isr_\name\()_top:
 	.type isr_exn_\name\()_top, @function
 	.align 16,0
 isr_exn_\name\()_top:
-	# NOTE: what is this rigamarole necessary for? apparently pushal
-	# references data segments, which has the effect of triple-faulting the
-	# CPU. load data segments with SEG_KERNEL_DATA_HIGH to avoid this.
+	# what is this rigamarole necessary for? apparently pushal references
+	# data segments (rather than the stack segment replaced by the
+	# interrupt trap), which has the effect of triple-faulting the CPU.
+	# load data segments redundantly to avoid this.
 	pushl %eax
-	movl $(7 << 3), %eax
+	movl $(SEG_KERNEL_DATA_HIGH << 3), %eax
 	movl %eax, %ds
 	movl %eax, %es
 	movl %eax, %fs
 	movl %eax, %gs
 	popl %eax
 	pushal
-	# TODO: define segdesc indexes in header, use here.
-	pushl $(2 << 3 + 3)	# ds
-	pushl $(2 << 3 + 3)	# es
+	pushl $USER_DATA_SEL	# ds
+	pushl $USER_DATA_SEL	# es
 	pushl $\vecn
 	pushl %esp
 	call isr_exn_\name\()_bottom

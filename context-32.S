@@ -1,9 +1,5 @@
-
-	# FIXME: make these track the ones in <ukernel/gdt.h>
-	.equ USER_CODE_SEG, 1
-	.equ USER_DATA_SEG, 2
-	.equ KERNEL_HIGH_CODE_SEG, 6
-	.equ KERNEL_HIGH_DATA_SEG, 7
+#define IN_ASM_SOURCE
+#include <ukernel/gdt.h>
 
 	.global swap_context
 	.type swap_context, @function
@@ -37,6 +33,9 @@ swap_context:
 	.global swap_to_ring3
 	.type swap_to_ring3, @function
 
+	.equ USER_DATA_SEL, (SEG_USER_DATA << 3 + 0x3)
+	.equ USER_CODE_SEL, (SEG_USER_CODE << 3 + 0x3)
+
 	.align 16,0
 swap_to_ring3:
 	movl 4(%esp), %eax	# the kernelspace (function call) context
@@ -58,13 +57,13 @@ swap_to_ring3:
 	movl 16(%eax), %esi
 	movl 20(%eax), %edi
 	movl 24(%eax), %ebp
-	pushl $((USER_DATA_SEG << 3) + 0x3)	# stack segment, ring 3
+	pushl $USER_DATA_SEL	# stack segment, ring 3
 	pushl 28(%eax)		# sp
 	pushl 36(%eax)		# eflags
-	pushl $((USER_CODE_SEG << 3) + 0x3)	# code segment, ring 3
+	pushl $USER_CODE_SEL	# code segment, ring 3
 	pushl 32(%eax)		# ip
 	pushl (%eax)		# eax (temporary)
-	movl $((USER_DATA_SEG << 3) + 0x3), %eax
+	movl $USER_DATA_SEL, %eax
 	movl %eax, %ds
 	movl %eax, %es
 	movl %eax, %fs
@@ -76,6 +75,9 @@ swap_to_ring3:
 /* NORETURN void iret_to_scheduler(const struct x86_context *sched_ctx) */
 	.global iret_to_scheduler
 	.type iret_to_scheduler, @function
+
+	.equ KERNEL_CODE_SEL, (SEG_KERNEL_CODE_HIGH << 3)
+	.equ KERNEL_DATA_SEL, (SEG_KERNEL_DATA_HIGH << 3)
 
 	.align 16,0
 iret_to_scheduler:
@@ -92,10 +94,10 @@ iret_to_scheduler:
 	movl 24(%eax), %ebp
 	# prepare intra-PL iret stack
 	pushl 36(%eax)		# eflags
-	pushl $(KERNEL_HIGH_CODE_SEG << 3)
+	pushl $KERNEL_CODE_SEL
 	pushl 32(%eax)
 	# we can overwrite eax as swap_to_ring3() returns void.
-	movl $(KERNEL_HIGH_DATA_SEG << 3), %eax
+	movl $KERNEL_DATA_SEL, %eax
 	movl %eax, %ds
 	movl %eax, %es
 	movl %eax, %fs
