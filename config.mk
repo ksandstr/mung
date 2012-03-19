@@ -13,7 +13,7 @@ CFLAGS=-O2 -Wall -march=native -std=gnu99 -I include -I include/fake_clib \
 
 %.o: %-32.S
 	@echo "  AS $@"
-	@as --32 -o $@ $<
+	@gcc -m32 -c -o $@ $< $(CFLAGS)
 
 
 .deps:
