@@ -13,6 +13,7 @@
 
 #include <l4/types.h>
 #include <ukernel/mm.h>
+#include <ukernel/x86.h>
 #include <ukernel/slab.h>
 #include <ukernel/misc.h>
 #include <ukernel/thread.h>
@@ -135,14 +136,48 @@ int space_set_utcb_area(struct space *sp, L4_Fpage_t area)
 }
 
 
+/* get-cmp function for struct space's ptab_pages */
+static bool cmp_page_id_to_key(const void *cand, void *key) {
+	const struct page *pg = cand;
+	return pg->id == *(uint32_t *)key;
+}
+
+
 void space_put_page(
 	struct space *sp,
 	uintptr_t addr,
 	uint32_t page_id,
 	int access)
 {
-	printf("%s: would put page %u at address 0x%x\n", __func__, page_id, addr);
-	/* TODO */
+	assert(addr < KERNEL_SEG_START);
+
+	int dir_ix = addr >> 22, ptab_ix = (addr >> 12) & 0x3ff;
+	assert(sp->pdirs->vm_addr != NULL);
+	uint32_t *pdir_mem = sp->pdirs->vm_addr;
+	struct page *ptab_page;
+	if(unlikely(!CHECK_FLAG(pdir_mem[dir_ix], PDIR_PRESENT))) {
+		ptab_page = get_kern_page(0);
+		/* TODO: prefill it? */
+		memset(ptab_page->vm_addr, 0, PAGE_SIZE);
+		pdir_mem[dir_ix] = ptab_page->id << 12 | PDIR_PRESENT | PDIR_USER
+			| PDIR_RW;
+		htable_add(&sp->ptab_pages, int_hash(ptab_page->id), ptab_page);
+	} else {
+		uint32_t pt_id = pdir_mem[dir_ix] >> 12;
+		ptab_page = htable_get(&sp->ptab_pages, int_hash(pt_id),
+			&cmp_page_id_to_key, &pt_id);
+		assert(ptab_page != NULL);
+	}
+	assert(ptab_page->vm_addr != NULL);
+
+	uint32_t *ptab_mem = ptab_page->vm_addr;
+	bool invalidate = CHECK_FLAG(ptab_mem[ptab_ix], PT_PRESENT);
+	ptab_mem[ptab_ix] = page_id << 12 | PT_PRESENT | PT_USER
+		| (CHECK_FLAG(access, 0x2) ? PT_RW : 0);
+	if(invalidate) {
+		/* TODO: skip this if _sp_'s page table is not currently loaded */
+		x86_invalidate_page(addr);
+	}
 }
 
 
