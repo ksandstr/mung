@@ -58,9 +58,8 @@ isr_\name\()_top:
 	.align 16,0
 isr_exn_\name\()_top:
 	# NOTE: what is this rigamarole necessary for? apparently pushal
-	# references a segment other than SS, which triple-faults the CPU. this
-	# seems to avoid it by loading the other data segments with
-	# SEG_KERNEL_DATA_HIGH .
+	# references data segments, which has the effect of triple-faulting the
+	# CPU. load data segments with SEG_KERNEL_DATA_HIGH to avoid this.
 	pushl %eax
 	movl $(7 << 3), %eax
 	movl %eax, %ds
@@ -69,8 +68,9 @@ isr_exn_\name\()_top:
 	movl %eax, %gs
 	popl %eax
 	pushal
-	pushl %ds		# no need to save these, really
-	pushl %es
+	# TODO: define segdesc indexes in header, use here.
+	pushl $(2 << 3 + 3)	# ds
+	pushl $(2 << 3 + 3)	# es
 	pushl $\vecn
 	pushl %esp
 	call isr_exn_\name\()_bottom
