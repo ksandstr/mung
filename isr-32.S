@@ -56,7 +56,7 @@ isr_\name\()_top:
 	/* ISR_EXN produces exception interrupt handlers. these have individual
 	 * bottom halves on the C side.
 	 */
-	.macro ISR_EXN vecn, name
+	.macro ISR_EXN vecn, name, ecval
 	.global isr_exn_\name\()_top
 	.type isr_exn_\name\()_top, @function
 	.align 16,0
@@ -65,6 +65,9 @@ isr_exn_\name\()_top:
 	# data segments (rather than the stack segment replaced by the
 	# interrupt trap), which has the effect of triple-faulting the CPU.
 	# load data segments redundantly to avoid this.
+.ifnb \ecval
+	pushl $\ecval
+.endif
 	pushl %eax
 	movl $(SEG_KERNEL_DATA_HIGH << 3), %eax
 	movl %eax, %ds
@@ -86,6 +89,6 @@ isr_exn_\name\()_top:
 	iret
 	.endm
 
-	ISR_EXN 0, de		# divide error
+	ISR_EXN 0, de, 0	# divide error
 	ISR_EXN 13, gp		# general protection
 	ISR_EXN 14, pf		# pagefault
