@@ -300,7 +300,10 @@ void isr_exn_ud_bottom(struct x86_exregs *regs)
 		regs->eax = 0xdeadbeef;	/* FIXME: kip address */
 		regs->ecx = 0;			/* API VERSION */
 		regs->edx = 0;			/* API FLAGS */
-		regs->esi = 0xCAFEB00B;	/* KERNEL ID */
+		/* id = 23 (because 2 + 3 = 5); subid = 17
+		 * FIXME: get proper values at some point.
+		 */
+		regs->esi = (23 << 24) | (17 << 16);	/* KERNEL ID */
 	} else {
 		printf("#UD at eip 0x%x, esp 0x%x\n", regs->eip, regs->esp);
 		/* TODO: pop an "invalid opcode" exception. */
