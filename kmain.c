@@ -343,39 +343,6 @@ void isr_exn_gp_bottom(struct x86_exregs *regs)
 }
 
 
-static void handle_kernel_pf(struct x86_exregs *regs, uint32_t fault_addr)
-{
-	/* set up an identity mapping if it's in the first 4 MiB. */
-	int dir = fault_addr >> 22, p = (fault_addr >> 12) & 0x3ff;
-	pdir_t *kernel_pdirs = kernel_space->pdirs->vm_addr;
-	page_t *pages = (page_t *)(kernel_pdirs[dir] & ~0xfff);
-	if(pages == NULL) {
-		/* TODO: track this page: it is used for kernel-space page tables. */
-		struct page *pg = get_kern_page(0);
-		pages = pg->vm_addr;
-		for(int i=0; i < 1024; i++) pages[i] = 0;
-		kernel_pdirs[dir] = (pdir_t)(pg->id << PAGE_BITS) | PDIR_PRESENT | PDIR_RW;
-	}
-	if(fault_addr < 4 * 1024 * 1024) {
-		/* idempotent mappings of low physical RAM (ugly) */
-		pages[p] = (p << 12) | PT_PRESENT | PT_RW;
-	} else if((fault_addr & 0xf0000000) == 0xf0000000) {
-		if(!CHECK_FLAG(pages[p], PT_PRESENT)) {
-			/* allocate. */
-			struct page *pg = get_kern_page(0);
-			pages[p] = (pg->id << PAGE_BITS) | PT_PRESENT | PT_RW;
-			printf("allocated physical page 0x%x for fault in kernel memory at 0x%x\n",
-				(unsigned)pg->id << PAGE_BITS, fault_addr);
-		}
-	} else {
-		printf("unable to handle. halting.\n");
-		asm("cli; hlt");
-	}
-
-	x86_invalidate_page(fault_addr);
-}
-
-
 void isr_exn_pf_bottom(struct x86_exregs *regs)
 {
 	uint32_t fault_addr;
@@ -383,12 +350,14 @@ void isr_exn_pf_bottom(struct x86_exregs *regs)
 		:: "memory");
 
 	struct thread *current = get_current_thread();
+#if 0
 	printf("pf (%s, %s, %s) @ 0x%x (eip 0x%x) in thread %d:%d\n",
 		CHECK_FLAG(regs->error, 4) ? "user" : "supervisor",
 		CHECK_FLAG(regs->error, 2) ? "write" : "read",
 		CHECK_FLAG(regs->error, 1) ? "protection" : "notpresent",
 		fault_addr, regs->eip,
 		TID_THREADNUM(current->id), TID_VERSION(current->id));
+#endif
 
 	if(unlikely(current->space == kernel_space)) {
 		printf("%s: kernel fault:\n", __func__);
@@ -397,10 +366,8 @@ void isr_exn_pf_bottom(struct x86_exregs *regs)
 		printf("\tedi 0x%x, esi 0x%x, ebp 0x%x, esp 0x%x\n",
 			regs->edi, regs->esi, regs->ebp, regs->esp);
 		printf("\teip 0x%x\n", regs->eip);
-		panic("FOO");
-		handle_kernel_pf(regs, fault_addr);
 	} else {
-#if 1
+#if 0
 		static uintptr_t last_fault = ~0;
 		static int repeat_count = 0;
 		if(last_fault == fault_addr && ++repeat_count == 3) {
@@ -426,7 +393,8 @@ void isr_exn_pf_bottom(struct x86_exregs *regs)
 			L4_ThreadId_t pager_id = { .raw = L4_VREG(utcb, L4_TCR_PAGER) };
 			struct thread *pager = !L4_IsNilThread(pager_id) ? thread_find(pager_id.raw) : NULL;
 			if(unlikely(pager == NULL)) {
-				printf("thread has no pager, stopping it\n");
+				printf("thread %d:%d has no pager, stopping it\n",
+					TID_THREADNUM(current->id), TID_VERSION(current->id));
 				current->status = TS_STOPPED;
 				return_to_scheduler(regs);
 			} else {
