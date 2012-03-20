@@ -14,14 +14,24 @@ void *L4_KernelInterface(
 }
 
 
+L4_Word64_t L4_SystemClock(void *kip)
+{
+	L4_Word_t low, high;
+	asm volatile (
+		"call *%2"
+		: "=a" (low), "=d" (high)
+		: "r" (kip + *(L4_Word_t *)(kip + 0xf0))
+		: "ecx", "esi", "edi");
+	return (L4_Word64_t)high << 32 | low;
+}
+
+
 int main(void)
 {
 	L4_Word_t apiver, apiflags, kernelid;
 	void *kip = L4_KernelInterface(&apiver, &apiflags, &kernelid);
 
-	*(char *)(kip - 0x1000) = '*';	/* pagefault at a definite spot */
+	/* L4_Word64_t now = */ L4_SystemClock(kip);
 
-	/* this causes a huge ugly page fault. */
-	char *ptr = (char *)0xb0a7face;
-	*ptr = '@';
+	*(char *)(kip - 0x1000) = '*';	/* pagefault at a definite spot */
 }

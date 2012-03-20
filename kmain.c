@@ -64,6 +64,7 @@ struct boot_module {
 
 struct tss kernel_tss;
 struct space *sigma0_space = NULL;
+struct page *kip_page = NULL;
 
 static struct list_head resv_page_list = LIST_HEAD_INIT(resv_page_list);
 static struct page *next_dir_page = NULL;
@@ -297,9 +298,11 @@ void isr_exn_ud_bottom(struct x86_exregs *regs)
 		 * FIXME: proper values
 		 */
 		regs->eip += 2;
-		regs->eax = 0xdeadbeef;	/* FIXME: kip address */
-		regs->ecx = 0;			/* API VERSION */
-		regs->edx = 0;			/* API FLAGS */
+		regs->eax = L4_Address(current->space->kip_area);
+		/* TODO: replace these with proper KIP accessors */
+		const void *kip_mem = kip_page->vm_addr;
+		regs->ecx = *(L4_Word_t *)(kip_mem + 0x04);		/* API VERSION */
+		regs->edx = *(L4_Word_t *)(kip_mem + 0x08);		/* API FLAGS */
 		/* id = 23 (because 2 + 3 = 5); subid = 17
 		 * FIXME: get proper values at some point.
 		 */
@@ -316,11 +319,30 @@ void isr_exn_ud_bottom(struct x86_exregs *regs)
 }
 
 
+/* when this is invoked directly, via isr-32.S, the syscall came from within
+ * the microkernel. when it is called by isr_exn_gp_bottom(), the call comes
+ * from userspace.
+ */
+void isr_exn_basic_sc_bottom(struct x86_exregs *regs)
+{
+	struct thread *current = get_current_thread();
+	printf("basic syscall %d (caller stopped)\n", regs->eax);
+	current->status = TS_STOPPED;
+	return_to_scheduler(regs);
+}
+
+
 void isr_exn_gp_bottom(struct x86_exregs *regs)
 {
-	printf("#GP(0x%x) at eip 0x%x, esp 0x%x\n", regs->error,
-		regs->eip, regs->esp);
-	panic("#GP");
+	if(likely(regs->error >> 3 == 0x8f)) {
+		isr_exn_basic_sc_bottom(regs);
+	} else {
+		printf("#GP(0x%x) at eip 0x%x, esp 0x%x\n", regs->error,
+			regs->eip, regs->esp);
+
+		get_current_thread()->status = TS_STOPPED;
+		return_to_scheduler(regs);
+	}
 }
 
 
@@ -641,7 +663,8 @@ static void spawn_sigma0(const struct boot_module *mod_s0)
 		*t = thread_new(THREAD_ID(128, 1));
 	struct space *sp = space_new();
 	sigma0_space = sp;
-	space_set_utcb_area(sp, L4_FpageLog2(0xd0000000, 13));
+	space_set_utcb_area(sp, L4_FpageLog2(0x50000, 13));
+	space_set_kip_area(sp, L4_FpageLog2(0x10000, 12));
 	thread_set_space(t, sp);
 	thread_set_utcb(t, L4_Address(sp->utcb_area));
 	void *u_base = thread_get_utcb(t);
@@ -847,6 +870,11 @@ void kmain(void *mbd, unsigned int magic)
 
 	space_add_resv_pages(kernel_space, &ksp_resv);
 	list_head_init(&ksp_resv);
+
+	kip_page = get_kern_page(0);
+	list_add(&resv_page_list, &kip_page->link);
+	make_kip(kip_page->vm_addr);
+	printf("KIP on page id %d\n", kip_page->id);
 
 	printf("so far, the kernel reserves %d pages (%u KiB) of memory.\n",
 		list_length(&resv_page_list), list_length(&resv_page_list) * PAGE_SIZE / 1024);

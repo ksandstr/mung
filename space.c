@@ -136,6 +136,21 @@ int space_set_utcb_area(struct space *sp, L4_Fpage_t area)
 }
 
 
+int space_set_kip_area(struct space *sp, L4_Fpage_t area)
+{
+	/* FIXME: change these to error returns */
+	assert(L4_IsNilFpage(sp->kip_area));
+	assert(L4_Address(area) < KERNEL_SEG_START);
+	assert(L4_Address(area) + L4_Size(area) < KERNEL_SEG_START);
+	assert(L4_Size(area) >= PAGE_SIZE);
+
+	sp->kip_area = area;
+	space_put_page(sp, L4_Address(sp->kip_area), kip_page->id, 0x5);
+
+	return 0;
+}
+
+
 /* get-cmp function for struct space's ptab_pages */
 static bool cmp_page_id_to_key(const void *cand, void *key) {
 	const struct page *pg = cand;
