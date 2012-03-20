@@ -13,8 +13,8 @@
 /* names of TCRs and VRs in an UTCB segment, tied to word offsets. */
 
 #define L4_TCR_PAGER (-12)
+#define L4_TCR_MYGLOBALID (-15)
 #define L4_TCR_MR(n) (n)
 #define L4_TCR_BR(n) (-(n) - 16)
-
 
 #endif

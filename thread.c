@@ -338,7 +338,7 @@ void thread_set_utcb(struct thread *t, L4_Word_t start)
 	}
 
 	int new_pos = (start - L4_Address(sp->utcb_area)) / UTCB_SIZE;
-	if(unlikely(sp->utcb_pages == NULL)) {
+	if(sp->utcb_pages == NULL) {
 		sp->utcb_pages = calloc(sizeof(struct page *),
 			NUM_UTCB_PAGES(sp->utcb_area));
 	}
@@ -361,13 +361,14 @@ void thread_set_utcb(struct thread *t, L4_Word_t start)
 		assert(sp->utcb_pages[page]->vm_addr != NULL);
 		void *utcb_mem = sp->utcb_pages[page]->vm_addr + offset * UTCB_SIZE;
 		memset(utcb_mem, 0, UTCB_SIZE);
-		*(L4_Word_t *)(utcb_mem + 256) = start + 256;
+		L4_VREG(utcb_mem + 256, L4_TCR_MYGLOBALID) = t->id;
+		*(L4_Word_t *)(utcb_mem + 256 - 4) = start + 256;
 	}
 
 	t->utcb_pos = new_pos;
 	assert(start == L4_Address(sp->utcb_area) + UTCB_SIZE * t->utcb_pos);
 	if(likely(sp != kernel_space)) {
-		t->utcb_ptr_seg = reserve_gdt_ptr_seg(start + 256);
+		t->utcb_ptr_seg = reserve_gdt_ptr_seg(start + 256 - 4);
 	}
 }
 
