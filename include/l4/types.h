@@ -30,6 +30,15 @@ typedef union {
 	} __attribute__((packed)) X;
 } L4_Fpage_t;
 
+/* from L4Ka::Pistachio */
+#define L4_Readable		(0x04)
+#define L4_Writable		(0x02)
+#define L4_eXecutable		(0x01)
+#define L4_FullyAccessible	(0x07)
+#define L4_ReadWriteOnly	(0x06)
+#define L4_ReadeXecOnly		(0x05)
+#define L4_NoAccess		(0x00)
+
 #define L4_Nilpage ((L4_Fpage_t){ .raw = 0 })
 #define L4_CompleteAddressSpace ((L4_Fpage_t){ .X.s = 1 })
 
