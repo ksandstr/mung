@@ -73,7 +73,6 @@ isr_exn_\name\()_top:
 	movl %eax, %ds
 	movl %eax, %es
 	movl %eax, %fs
-	movl %eax, %gs
 	popl %eax
 	pushal
 	pushl $USER_DATA_SEL	# ds
