@@ -20,6 +20,7 @@ struct page;
 /* from kmain.c */
 extern struct page *kip_page;
 extern void NORETURN panic(const char *message);
+extern uint64_t read_global_timer(void);
 
 /* from hash.c */
 extern uint32_t int_hash(uint32_t key);
