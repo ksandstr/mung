@@ -1,10 +1,12 @@
 
 /* compose a 32-bit little-endian kernel interface page. */
 
+#include <stdint.h>
 #include <string.h>
 
 #include <l4/types.h>
 #include <ukernel/mm.h>
+#include <ukernel/syscall.h>
 
 
 /* let's use interrupt 0x8f, for now.
@@ -47,20 +49,20 @@ void make_kip(void *mem)
 
 	/* syscall stubs. */
 	static const struct {
-		int sc_num;
-		int offset;
+		uint16_t sc_num;
+		uint16_t offset;
 	} syscalls[] = {
-		{ 1, 0xe0 },	/* ipc */
-		{ 2, 0xe4 },	/* lipc */
-		{ 3, 0xe8 },	/* unmap */
-		{ 4, 0xec },	/* exchangeregisters */
-		{ 5, 0xf0 },	/* systemclock */
-		{ 6, 0xf4 },	/* threadswitch */
-		{ 7, 0xf8 },	/* schedule */
-		{ 8, 0xd0 },	/* spacecontrol */
-		{ 9, 0xd4 },	/* threadcontrol */
-		{ 10, 0xd8 },	/* processorcontrol */
-		{ 11, 0xdc },	/* memorycontrol */
+		{ SC_IPC, 0xe0 },
+		{ SC_LIPC, 0xe4 },
+		{ SC_UNMAP, 0xe8 },
+		{ SC_EXCHANGEREGISTERS, 0xec },
+		{ SC_SYSTEMCLOCK, 0xf0 },
+		{ SC_THREADSWITCH, 0xf4 },
+		{ SC_SCHEDULE, 0xf8 },
+		{ SC_SPACECONTROL, 0xd0 },
+		{ SC_THREADCONTROL, 0xd4 },
+		{ SC_PROCESSORCONTROL, 0xd8 },
+		{ SC_MEMORYCONTROL, 0xdc },
 	};
 	const int num_syscalls = sizeof(syscalls) / sizeof(syscalls[0]);
 	int kip_pos = 0x100;
