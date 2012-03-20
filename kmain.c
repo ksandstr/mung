@@ -593,9 +593,6 @@ static void pager_thread(void *parameter)
 {
 	printf("pager thread started.\n");
 
-	struct page *zpage = get_kern_page(0);
-	memset(zpage->vm_addr, 0, PAGE_SIZE);
-
 	for(;;) {
 		L4_ThreadId_t from = L4_anythread;
 		L4_MsgTag_t tag = kipc(L4_nilthread, &from,
@@ -616,14 +613,10 @@ static void pager_thread(void *parameter)
 					__func__, TID_THREADNUM(from.raw), TID_VERSION(from.raw),
 					fault_addr, fault_ip);
 
-				L4_VREG(utcb, L4_TCR_MR(0)) = ((L4_MsgTag_t){
-					.X = { .t = 2 } }).raw;
-				/* TODO: map something reasonable in, instead. */
-				L4_MapItem_t map = L4_MapItem(
-					L4_FpageLog2(zpage->id << PAGE_BITS, PAGE_BITS),
-					fault_addr & ~PAGE_MASK);
-				L4_VREG(utcb, L4_TCR_MR(1)) = map.raw[0];
-				L4_VREG(utcb, L4_TCR_MR(2)) = map.raw[1];
+				/* ... sigma0 should never produce pagefaults, so we'll just
+				 * leave it hanging.
+				 */
+				break;
 			} else {
 				printf("%s: unknown IPC label 0x%x from %d:%d\n",
 					__func__, tag.X.label, TID_THREADNUM(from.raw),
