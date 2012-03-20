@@ -20,6 +20,7 @@
 #include <ukernel/ipc.h>
 #include <ukernel/thread.h>
 #include <ukernel/mapdb.h>
+#include <ukernel/syscall.h>
 #include <ukernel/misc.h>
 
 #include "multiboot.h"
@@ -258,16 +259,6 @@ static void init_kernel_tss(struct tss *t)
 }
 
 
-static inline void irq_disable(void) {
-	asm volatile ("cli" ::: "memory");
-}
-
-
-static inline void irq_enable(void) {
-	asm volatile ("sti" ::: "memory");
-}
-
-
 void isr_exn_de_bottom(struct x86_exregs *regs)
 {
 	printf("#DE(0x%x) at eip 0x%x, esp 0x%x\n", regs->error,
@@ -321,10 +312,24 @@ void isr_exn_ud_bottom(struct x86_exregs *regs)
 
 void isr_exn_basic_sc_bottom(struct x86_exregs *regs)
 {
-	struct thread *current = get_current_thread();
-	printf("basic syscall %d (caller stopped)\n", regs->eax);
-	current->status = TS_STOPPED;
-	return_to_scheduler(regs);
+	switch(regs->eax) {
+		case SC_SYSTEMCLOCK:
+			x86_irq_disable();
+			regs->eax = (uint32_t)timer_count;
+			regs->edx = (uint32_t)(timer_count >> 32);
+			x86_irq_enable();
+			printf("basic_sc: systemclock hi 0x%x, lo 0x%x\n",
+				regs->edx, regs->eax);
+			break;
+
+		default: {
+			struct thread *current = get_current_thread();
+			printf("unimplemented basic syscall %d (caller stopped)\n",
+				regs->eax);
+			current->status = TS_STOPPED;
+			return_to_scheduler(regs);
+		}
+	}
 }
 
 
@@ -469,9 +474,9 @@ static void isr_irq_bottom_wrap(void *parameter)
 {
 	volatile struct x86_exregs *regs = parameter;
 	const int irq = regs->reason - 0x20;
-	irq_enable();
+	x86_irq_enable();
 	isr_irq_bottom_soft(irq);
-	irq_disable();
+	x86_irq_disable();
 	if(unlikely(irq_pending[irq] > 1)) {
 		irq_pending[irq] = 1;
 		isr_irq_bottom_wrap(parameter);
@@ -796,7 +801,7 @@ void kmain(void *mbd, unsigned int magic)
 	crawl_multiboot_info(mbd, &resv_start, &resv_end);
 
 	/* initialize interrupt-related data structures with the I bit cleared. */
-	irq_disable();
+	x86_irq_disable();
 
 	asm volatile ("lldt %%ax" :: "a" (0));
 	init_kernel_tss(&kernel_tss);
@@ -827,7 +832,7 @@ void kmain(void *mbd, unsigned int magic)
 		irq_stack[i] = p->vm_addr;
 	}
 
-	irq_enable();
+	x86_irq_enable();
 
 	printf("setting up paging (id maps between 0x%x and 0x%x)...\n",
 		(unsigned)resv_start, (unsigned)resv_end);
@@ -874,7 +879,7 @@ void kmain(void *mbd, unsigned int magic)
 	/* move the kernel to a high linear address, and change its segments so
 	 * that it sees itself at a low address.
 	 */
-	irq_disable();
+	x86_irq_disable();
 
 	go_high();
 	setup_gdt();
@@ -889,7 +894,7 @@ void kmain(void *mbd, unsigned int magic)
 	}
 	x86_flush_tlbs();
 
-	irq_enable();
+	x86_irq_enable();
 
 	/* per-module inits & init-time testing */
 	init_mapdb();

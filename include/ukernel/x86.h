@@ -86,4 +86,14 @@ static inline uint32_t x86_get_eflags(void) {
 }
 
 
+static inline void x86_irq_disable(void) {
+	asm volatile ("cli" ::: "memory");
+}
+
+
+static inline void x86_irq_enable(void) {
+	asm volatile ("sti" ::: "memory");
+}
+
+
 #endif
