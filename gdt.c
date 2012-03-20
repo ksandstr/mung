@@ -5,10 +5,14 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <assert.h>
+#include <ccan/compiler/compiler.h>
+#include <ccan/alignof/alignof.h>
+#include <ccan/htable/htable.h>
 
 #include <ukernel/mm.h>
 #include <ukernel/tss.h>
 #include <ukernel/misc.h>
+#include <ukernel/slab.h>
 #include <ukernel/gdt.h>
 
 
@@ -27,6 +31,18 @@ struct gdt_desc {
 	uint16_t limit;
 	uint32_t base;
 } __attribute__((packed));
+
+
+/* GDT reservations (for gs:0 access to the UTCB pointer). */
+struct gdt_resv
+{
+	uintptr_t l_addr;
+	int gdt_slot;
+	int use_count;
+};
+
+
+#define NUM_GDT_ENTRIES 1024	/* max 8191 */
 
 
 /* type fields for code/data */
@@ -56,10 +72,18 @@ struct gdt_desc {
 	})
 
 
+static size_t rehash_gdt_resv_addr(const void *elem, void *priv);
+
+
 bool is_kernel_high = false;
 
+static struct gdt_entry gdt_array[NUM_GDT_ENTRIES] PAGE_ALIGN;
+static struct kmem_cache *gdt_resv_slab = NULL;
+static struct htable gdt_addr_hash = HTABLE_INITIALIZER(
+	gdt_addr_hash, &rehash_gdt_resv_addr, NULL);
 
-void dump_gdt(struct gdt_desc *gd)
+
+COLD void dump_gdt(struct gdt_desc *gd)
 {
 	printf("gdt_desc: base 0x%x, limit %u\n", gd->base, gd->limit);
 	void *base = (void *)(gd->base < KERNEL_SEG_START ? gd->base : gd->base - KERNEL_SEG_START);
@@ -84,12 +108,11 @@ void dump_gdt(struct gdt_desc *gd)
 
 
 /* create a nice, friendly global descriptor table. */
-void setup_gdt(void)
+COLD void setup_gdt(void)
 {
 	assert(sizeof(struct gdt_entry) == 8);
 
-	static struct gdt_entry gdt_array[N_KERNEL_SEGS] PAGE_ALIGN;
-	for(int i=0; i < N_KERNEL_SEGS; i++) {
+	for(int i=0; i < NUM_GDT_ENTRIES; i++) {
 		gdt_array[i] = (struct gdt_entry){ };
 	}
 
@@ -151,7 +174,7 @@ void setup_gdt(void)
 }
 
 
-void go_high(void)
+COLD void go_high(void)
 {
 	printf("%s: kernel seg at [0x%x .. 0x%x], length 0x%x (%d MiB)\n",
 		__func__, KERNEL_SEG_START, KERNEL_SEG_START + KERNEL_SEG_SIZE - 1,
@@ -174,4 +197,82 @@ void go_high(void)
 		: "memory");
 
 	is_kernel_high = true;		/* the muthafuckin' d-a-e */
+}
+
+
+COLD void init_gdt_resv(void)
+{
+	assert(gdt_resv_slab == NULL);
+
+	gdt_resv_slab = kmem_cache_create("gdt_resv_slab",
+		sizeof(struct gdt_resv), ALIGNOF(struct gdt_resv),
+		0, NULL, NULL);
+}
+
+
+static size_t rehash_gdt_resv_addr(const void *elem, void *priv) {
+	const struct gdt_resv *resv = elem;
+	return int_hash(resv->l_addr);
+}
+
+
+static bool cmp_gdt_resv_addr(const void *cand, void *key) {
+	const struct gdt_resv *r = cand;
+	return r->l_addr == *(uintptr_t *)key;
+}
+
+
+int reserve_gdt_ptr_seg(uintptr_t l_addr)
+{
+	size_t hashval = int_hash(l_addr);
+	struct gdt_resv *r = htable_get(&gdt_addr_hash, hashval,
+		&cmp_gdt_resv_addr, &l_addr);
+	if(r == NULL) {
+		r = kmem_cache_alloc(gdt_resv_slab);
+		r->l_addr = l_addr;
+		/* FIXME: use something prettier than a linear search that usually
+		 * fails.
+		 */
+		r->gdt_slot = 0;
+		for(int i=N_KERNEL_SEGS; i < NUM_GDT_ENTRIES; i++) {
+			if(gdt_array[i].flags_limit1 == 0) {
+				r->gdt_slot = i;
+				break;
+			}
+		}
+		if(r->gdt_slot == 0) {
+			panic("ran out of GDT slots!");
+		}
+		r->use_count = 0;
+
+		printf("allocated GDT slot %d for linear 0x%x\n", r->gdt_slot,
+			r->l_addr);
+		gdt_array[r->gdt_slot] = GDT_ENTRY(r->l_addr, 4,
+			DESC_A_PRESENT | DESC_A_PRIV_MASK | DESC_A_SYSTEM,
+			DESC_F_SZ);
+		assert(gdt_array[r->gdt_slot].flags_limit1 != 0);
+
+		htable_add(&gdt_addr_hash, hashval, r);
+	}
+	assert(r->l_addr == l_addr);
+
+	r->use_count++;
+	return r->gdt_slot;
+}
+
+
+void release_gdt_ptr_seg(uintptr_t l_addr, int slot)
+{
+	size_t hashval = int_hash(l_addr);
+	struct gdt_resv *r = htable_get(&gdt_addr_hash, hashval,
+		&cmp_gdt_resv_addr, &l_addr);
+	assert(r != NULL);
+	assert(r->gdt_slot == slot);
+	assert(r->l_addr == l_addr);
+
+	if(--r->use_count == 0) {
+		htable_del(&gdt_addr_hash, hashval, r);
+		gdt_array[r->gdt_slot] = (struct gdt_entry){ };
+		kmem_cache_free(gdt_resv_slab, r);
+	}
 }

@@ -49,6 +49,10 @@ swap_to_ring3:
 	popl 36(%eax)
 	# ... segments, too?
 
+	# %gs
+	movl 12(%esp), %eax
+	movl %eax, %gs
+
 	movl 8(%esp), %eax	# the userspace context
 	movl 4(%eax), %ebx
 	movl 8(%eax), %ecx
@@ -66,7 +70,6 @@ swap_to_ring3:
 	movl %eax, %ds
 	movl %eax, %es
 	movl %eax, %fs
-	movl %eax, %gs
 	popl %eax
 	iret
 

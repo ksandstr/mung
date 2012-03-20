@@ -32,6 +32,16 @@ extern void setup_gdt(void);
 /* called after setup_paging() */
 extern void go_high(void);
 
+/* the GDT slot reservation mechanism. initialized in kmain(). reserves
+ * segment descriptors for the %gs:0 access to UTCBs, and shares them between
+ * address spaces where possible.
+ */
+extern void init_gdt_resv(void);
+
+extern int reserve_gdt_ptr_seg(uintptr_t l_addr);
+extern void release_gdt_ptr_seg(uintptr_t l_addr, int slot);
+
+
 #endif
 
 #endif

@@ -621,6 +621,7 @@ void kmain(void *mbd, unsigned int magic)
 	x86_irq_enable();
 
 	/* per-module inits & init-time testing */
+	init_gdt_resv();
 	init_mapdb();
 	init_ipc();
 

@@ -67,6 +67,7 @@ struct thread
 	struct space *space;
 	struct list_node space_link;
 	int utcb_pos;				/* offset in space's UTCB region */
+	int utcb_ptr_seg;			/* segment descriptor index for %gs */
 
 	struct page *stack_page;
 
@@ -145,7 +146,8 @@ extern void swap_context(
 
 extern void swap_to_ring3(
 	struct x86_context *store,
-	const struct x86_context *load);
+	const struct x86_context *load,
+	int gs_selector);
 
 extern NORETURN void iret_to_scheduler(const struct x86_context *sched_ctx);
 

@@ -17,6 +17,7 @@
 #include <ukernel/ipc.h>
 #include <ukernel/misc.h>
 #include <ukernel/space.h>
+#include <ukernel/gdt.h>
 #include <ukernel/thread.h>
 
 
@@ -41,7 +42,7 @@ COLD struct thread *init_threading(thread_id boot_tid)
 	thread_slab = kmem_cache_create("thread_slab", sizeof(struct thread),
 		ALIGNOF(struct thread), 0, NULL, NULL);
 
-	struct thread *boot = kmem_cache_alloc(thread_slab);
+	struct thread *boot = kmem_cache_zalloc(thread_slab);
 	boot->stack_page = NULL;
 	boot->id = boot_tid;
 	boot->status = TS_RUNNING;
@@ -128,7 +129,10 @@ bool schedule(void)
 			asm volatile ("movl %0, %%cr3"
 				:: "a" (next->space->pdirs->id << 12)
 				: "memory");
-			swap_to_ring3(&self->ctx, &next->ctx);	/* go go goblin balls! */
+			/* go go goblin balls! */
+			assert(next->utcb_ptr_seg != 0);
+			printf("using gs segment %d\n", next->utcb_ptr_seg);
+			swap_to_ring3(&self->ctx, &next->ctx, next->utcb_ptr_seg << 3 | 3);
 		} else {
 			/* from one userspace process to another */
 			panic("WORP");
@@ -326,6 +330,13 @@ void thread_set_utcb(struct thread *t, L4_Word_t start)
 	assert((start & (UTCB_SIZE - 1)) == 0);
 
 	struct space *sp = t->space;
+
+	if(t->utcb_ptr_seg != 0) {
+		release_gdt_ptr_seg(L4_Address(sp->utcb_area)
+			+ t->utcb_pos * UTCB_SIZE + 256, t->utcb_ptr_seg);
+		t->utcb_ptr_seg = 0;
+	}
+
 	int new_pos = (start - L4_Address(sp->utcb_area)) / UTCB_SIZE;
 	if(unlikely(sp->utcb_pages == NULL)) {
 		sp->utcb_pages = calloc(sizeof(struct page *),
@@ -339,15 +350,25 @@ void thread_set_utcb(struct thread *t, L4_Word_t start)
 		struct page *p = get_kern_page(0);
 		sp->utcb_pages[page] = p;
 		/* TODO: list "p" somewhere? */
+		if(likely(sp != kernel_space)) {
+			space_put_page(sp, L4_Address(sp->utcb_area) + page * PAGE_SIZE,
+				sp->utcb_pages[page]->id, L4_ReadWriteOnly);
+			space_commit(sp);
+		}
 	}
 	if(new_pos != t->utcb_pos) {
 		int offset = new_pos - (page * UTCB_PER_PAGE);
 		assert(sp->utcb_pages[page]->vm_addr != NULL);
-		void *pos = sp->utcb_pages[page]->vm_addr + offset * UTCB_SIZE;
-		memset(pos, 0, UTCB_SIZE);
+		void *utcb_mem = sp->utcb_pages[page]->vm_addr + offset * UTCB_SIZE;
+		memset(utcb_mem, 0, UTCB_SIZE);
+		*(L4_Word_t *)(utcb_mem + 256) = start + 256;
 	}
 
 	t->utcb_pos = new_pos;
+	assert(start == L4_Address(sp->utcb_area) + UTCB_SIZE * t->utcb_pos);
+	if(likely(sp != kernel_space)) {
+		t->utcb_ptr_seg = reserve_gdt_ptr_seg(start + 256);
+	}
 }
 
 
