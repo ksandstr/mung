@@ -56,6 +56,8 @@ void setup_idt(int code_seg)
 	EXN_GATE(ints, code_sel, 13, gp);	/* general protection */
 	EXN_GATE(ints, code_sel, 14, pf);	/* pagefault */
 	EXN_GATE(ints, code_sel, 0x8f, basic_sc);	/* basic syscall */
+	/* (permit access to basic_sc to ring 3.) */
+	ints[0x8f].type_attr |= 3 << 5;
 
 	FAST_IRQ_GATE(ints, code_sel, 0);	/* IRQ0 (timer) */
 	IRQ_GATE(ints, code_sel, 1);		/* IRQ1 (keyboard) */

@@ -319,10 +319,6 @@ void isr_exn_ud_bottom(struct x86_exregs *regs)
 }
 
 
-/* when this is invoked directly, via isr-32.S, the syscall came from within
- * the microkernel. when it is called by isr_exn_gp_bottom(), the call comes
- * from userspace.
- */
 void isr_exn_basic_sc_bottom(struct x86_exregs *regs)
 {
 	struct thread *current = get_current_thread();
@@ -334,15 +330,11 @@ void isr_exn_basic_sc_bottom(struct x86_exregs *regs)
 
 void isr_exn_gp_bottom(struct x86_exregs *regs)
 {
-	if(likely(regs->error >> 3 == 0x8f)) {
-		isr_exn_basic_sc_bottom(regs);
-	} else {
-		printf("#GP(0x%x) at eip 0x%x, esp 0x%x\n", regs->error,
-			regs->eip, regs->esp);
+	printf("#GP(0x%x) at eip 0x%x, esp 0x%x\n", regs->error,
+		regs->eip, regs->esp);
 
-		get_current_thread()->status = TS_STOPPED;
-		return_to_scheduler(regs);
-	}
+	get_current_thread()->status = TS_STOPPED;
+	return_to_scheduler(regs);
 }
 
 
