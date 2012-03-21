@@ -18,7 +18,7 @@ static void make_syscall_stub(void *start, int *len_p, int sc_num)
 {
 	int p = 0;
 	uint8_t *mem = start;
-	mem[p++] = 0xb8;	/* MOV EAX, imm32 */
+	mem[p++] = 0xbb;	/* MOV EBX, imm32 */
 	*(uint32_t *)&mem[p] = sc_num; p += 4;
 	mem[p++] = 0xcd;	/* INT */
 	mem[p++] = 0x8f;

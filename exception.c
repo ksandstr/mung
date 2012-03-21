@@ -64,9 +64,10 @@ void isr_exn_ud_bottom(struct x86_exregs *regs)
 }
 
 
+/* basically the slowest possible syscall wrappers. */
 void isr_exn_basic_sc_bottom(struct x86_exregs *regs)
 {
-	switch(regs->eax) {
+	switch(regs->ebx) {
 		case SC_SYSTEMCLOCK: {
 			uint64_t timer = read_global_timer();
 			regs->eax = (uint32_t)timer;
