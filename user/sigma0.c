@@ -94,12 +94,18 @@ int main(void)
 		.X.label = 0x2369, .X.u = 1 }).raw;
 	L4_VREG(utcb, L4_TCR_MR(1)) = 0xdeadbeef;
 	L4_ThreadId_t dummy;
-	L4_MsgTag_t tag = L4_Ipc(kip, L4_Pager(), L4_nilthread, 0, &dummy);
+	int pf_off = 0;
+	L4_MsgTag_t tag = L4_Ipc(kip, L4_Pager(), L4_Pager(),
+		L4_Timeouts(L4_Never, L4_Never), &dummy);
 	if(L4_IpcFailed(tag)) {
 		*(char *)(0xd0000000 ^ L4_Pager().raw) = '#';
+	} else {
+		pf_off = 0x234;
 	}
 
 	/* L4_Word64_t now = */ L4_SystemClock(kip);
 
-	*(char *)(kip - 0x1000) = '*';	/* pagefault at a definite spot */
+	*(char *)(kip - 0x1000 - pf_off) = '*';	/* pagefault at a definite spot */
+
+	return 0;
 }

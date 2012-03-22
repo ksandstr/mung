@@ -381,6 +381,12 @@ static void pager_thread(void *parameter)
 				 * leave it hanging.
 				 */
 				break;
+			} else if(tag.X.label == 0x2369) {
+				/* respond, to test out ReplyWait. */
+				printf("%s: got test message, mr1 is %#x\n", __func__,
+					L4_VREG(utcb, L4_TCR_MR(1)));
+				L4_VREG(utcb, L4_TCR_MR(0)) = ((L4_MsgTag_t){ .X.u = 1 }).raw;
+				L4_VREG(utcb, L4_TCR_MR(1)) = 0xc0def00d;
 			} else {
 				printf("%s: unknown IPC label 0x%x from %d:%d\n",
 					__func__, tag.X.label, TID_THREADNUM(from.raw),
