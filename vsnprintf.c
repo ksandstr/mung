@@ -77,7 +77,11 @@ int vsnprintf(char *str, size_t size, const char *fmt, va_list arg_list)
 		if(fmt[++i] == '\0') goto error;
 
 		/* modifiers */
-		bool is_alternate = false, is_short = false;
+		/* (could track is_short also, but those are coerced to larger
+		 * integers by the varargs mechanism.)
+		 */
+		// bool is_short = false;
+		bool is_alternate = false;
 		char pad_char = ' ';
 		int field_width = 1, is_len = 0;
 
@@ -89,7 +93,7 @@ int vsnprintf(char *str, size_t size, const char *fmt, va_list arg_list)
 				case 'h':
 					/* forbid "short long long" conversions */
 					if(is_len > 0) goto error;
-					is_short = true;
+					// is_short = true;
 					break;
 				case '#': is_alternate = true; break;
 				case '0': pad_char = '0'; break;
