@@ -3,7 +3,7 @@ CCAN_DIR=~/src/ccan
 CFLAGS=-O2 -Wall -march=native -std=gnu99 \
 	-I $(CFGDIR)/include -I $(CFGDIR)/include/fake_clib \
 	-I $(CCAN_DIR) \
-	-fno-builtin -nostdlib
+	-fno-builtin -nostdlib #-DCCAN_LIST_DEBUG
 
 
 %.o: %.c

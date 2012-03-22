@@ -123,6 +123,11 @@ void NORETURN panic(const char *message)
 }
 
 
+void abort(void) {
+	panic("abort(3) called");
+}
+
+
 void __assert_failure(
 	const char *condition,
 	const char *file,
