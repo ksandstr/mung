@@ -68,12 +68,14 @@ static struct thread *schedule_next_thread(struct thread *current)
 }
 
 
-static void end_thread(void)
+static NORETURN void end_kthread(void)
 {
 	struct thread *self = get_current_thread();
-	printf("%s: thread %d:%d terminating\n", __func__, TID_THREADNUM(self->id),
+	printf("%s: kthread %d:%d terminating\n", __func__, TID_THREADNUM(self->id),
 		TID_VERSION(self->id));
 
+	assert(self->space == kernel_space);
+	list_del_from(&self->space->threads, &self->space_link);
 	list_del_from(&thread_list, &self->link);
 	htable_del(&thread_hash, int_hash(TID_THREADNUM(self->id)), self);
 	list_add(&dead_thread_list, &self->link);
@@ -84,7 +86,7 @@ static void end_thread(void)
 	 * dead_thread_list.
 	 */
 
-	panic("swap_context() in end_thread() returned???");
+	panic("swap_context() in end_kthread() returned???");
 }
 
 
@@ -236,8 +238,7 @@ void save_ipc_regs(struct thread *t, int mrs, int brs)
 static void thread_wrapper(void (*function)(void *), void *parameter)
 {
 	(*function)(parameter);
-	end_thread();
-	for(;;) yield(NULL);
+	end_kthread();
 }
 
 
