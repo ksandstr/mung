@@ -374,10 +374,8 @@ void thread_set_utcb(struct thread *t, L4_Word_t start)
 }
 
 
-void thread_start(struct thread *t)
-{
+void thread_start(struct thread *t) {
 	t->status = TS_READY;
-	list_add(&thread_list, &t->link);
 }
 
 
