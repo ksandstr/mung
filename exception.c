@@ -110,63 +110,60 @@ void isr_exn_pf_bottom(struct x86_exregs *regs)
 		:: "memory");
 
 	struct thread *current = get_current_thread();
+
+	if(unlikely(!CHECK_FLAG(regs->error, 4))
+		&& fault_addr >= KERNEL_SEG_START)
+	{
+		printf("KERNEL #PF (%s, %s, %s) @ 0x%x (eip 0x%x); current thread %d:%d\n",
+			CHECK_FLAG(regs->error, 4) ? "user" : "super",
+			CHECK_FLAG(regs->error, 2) ? "write" : "read",
+			CHECK_FLAG(regs->error, 1) ? "access" : "presence",
+			fault_addr, regs->eip,
+			TID_THREADNUM(current->id), TID_VERSION(current->id));
+		panic("KERNEL #PF");
+	}
+
+
 #if 0
-	printf("pf (%s, %s, %s) @ 0x%x (eip 0x%x) in thread %d:%d\n",
-		CHECK_FLAG(regs->error, 4) ? "user" : "supervisor",
-		CHECK_FLAG(regs->error, 2) ? "write" : "read",
-		CHECK_FLAG(regs->error, 1) ? "protection" : "notpresent",
-		fault_addr, regs->eip,
-		TID_THREADNUM(current->id), TID_VERSION(current->id));
+	static uintptr_t last_fault = ~0;
+	static int repeat_count = 0;
+	if(last_fault == fault_addr && ++repeat_count == 3) {
+		printf("faulted many times on the same address\n");
+		thread_save_exregs(current, regs);
+		current->status = TS_STOPPED;
+		return_to_scheduler(regs);
+	} else if(last_fault != fault_addr) {
+		last_fault = fault_addr;
+		repeat_count = 0;
+	}
 #endif
 
-	if(unlikely(current->space == kernel_space)) {
-		printf("%s: kernel fault:\n", __func__);
-		printf("\teax 0x%x, ebx 0x%x, ecx 0x%x, edx 0x%x\n",
-			regs->eax, regs->ebx, regs->ecx, regs->edx);
-		printf("\tedi 0x%x, esi 0x%x, ebp 0x%x, esp 0x%x\n",
-			regs->edi, regs->esi, regs->ebp, regs->esp);
-		printf("\teip 0x%x\n", regs->eip);
+	const struct map_entry *e = mapdb_probe(&current->space->mapdb,
+		fault_addr);
+	if(e != NULL) {
+		space_put_page(current->space, fault_addr & ~PAGE_MASK,
+			e->page_id, e->flags & 0x7);
+		space_commit(current->space);
 	} else {
-#if 0
-		static uintptr_t last_fault = ~0;
-		static int repeat_count = 0;
-		if(last_fault == fault_addr && ++repeat_count == 3) {
-			printf("faulted many times on the same address\n");
-			thread_save_exregs(current, regs);
+		thread_save_exregs(current, regs);
+		void *utcb = thread_get_utcb(current);
+		L4_ThreadId_t pager_id = { .raw = L4_VREG(utcb, L4_TCR_PAGER) };
+		struct thread *pager = likely(!L4_IsNilThread(pager_id))
+			? thread_find(pager_id.raw) : NULL;
+		if(unlikely(pager == NULL)) {
+			printf("thread %d:%d has no pager, stopping it\n",
+				TID_THREADNUM(current->id), TID_VERSION(current->id));
 			current->status = TS_STOPPED;
 			return_to_scheduler(regs);
-		} else if(last_fault != fault_addr) {
-			last_fault = fault_addr;
-			repeat_count = 0;
-		}
-#endif
-
-		const struct map_entry *e = mapdb_probe(&current->space->mapdb,
-			fault_addr);
-		if(e != NULL) {
-			space_put_page(current->space, fault_addr & ~PAGE_MASK,
-				e->page_id, e->flags & 0x7);
-			space_commit(current->space);
 		} else {
-			thread_save_exregs(current, regs);
-			void *utcb = thread_get_utcb(current);
-			L4_ThreadId_t pager_id = { .raw = L4_VREG(utcb, L4_TCR_PAGER) };
-			struct thread *pager = !L4_IsNilThread(pager_id) ? thread_find(pager_id.raw) : NULL;
-			if(unlikely(pager == NULL)) {
-				printf("thread %d:%d has no pager, stopping it\n",
-					TID_THREADNUM(current->id), TID_VERSION(current->id));
-				current->status = TS_STOPPED;
-				return_to_scheduler(regs);
-			} else {
-				save_ipc_regs(current, 3, 1);
-				L4_VREG(utcb, L4_TCR_BR(0)) = L4_CompleteAddressSpace.raw;
-				L4_VREG(utcb, L4_TCR_MR(0)) = ((-2) & 0xfff) << 20		/* label */
-					| (CHECK_FLAG(regs->error, 2) ? 0x2 : 0x4) << 16	/* access */
-					| 2;		/* "u" for msgtag */
-				L4_VREG(utcb, L4_TCR_MR(1)) = fault_addr;
-				L4_VREG(utcb, L4_TCR_MR(2)) = regs->eip;
-				return_to_ipc(regs, pager);
-			}
+			save_ipc_regs(current, 3, 1);
+			L4_VREG(utcb, L4_TCR_BR(0)) = L4_CompleteAddressSpace.raw;
+			L4_VREG(utcb, L4_TCR_MR(0)) = ((-2) & 0xfff) << 20		/* label */
+				| (CHECK_FLAG(regs->error, 2) ? 0x2 : 0x4) << 16	/* access */
+				| 2;		/* "u" for msgtag */
+			L4_VREG(utcb, L4_TCR_MR(1)) = fault_addr;
+			L4_VREG(utcb, L4_TCR_MR(2)) = regs->eip;
+			return_to_ipc(regs, pager);
 		}
 	}
 }
