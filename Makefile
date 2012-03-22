@@ -22,13 +22,15 @@ tags: $(wildcard *.[ch])
 	@ctags -R .
 
 
-image.bin: linker.ld loader.o isr.o kmain.o printf.o fake_stdio.o string.o \
+# TODO: remove the GCC-ism for compatiblity with clang. (ha ha ha ha ha ha)
+image.bin: linker.ld loader.o isr.o kmain.o fake_stdio.o string.o \
 		dlmalloc.o heap.o slab.o pic.o timer.o thread.o context.o \
 		gdt.o idt.o exception.o irq.o space.o ipc.o mapdb.o kip.o \
 		ccan-htable.o ccan-list.o rbtree.o hash.o vsnprintf.o \
 		strlcat.o strlcpy.o
 	@echo "  LD $@"
-	@ld -T linker.ld -o $@ $(filter %.o,$^)
+	@ld -T linker.ld -o $@ $(filter %.o,$^) \
+		$(shell gcc $(CFLAGS) -print-libgcc-file-name)
 
 
 # build CCAN sources as though they were in the kernel tree.
