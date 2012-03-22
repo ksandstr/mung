@@ -133,7 +133,6 @@ bool schedule(void)
 				: "memory");
 			/* go go goblin balls! */
 			assert(next->utcb_ptr_seg != 0);
-			printf("using gs segment %d\n", next->utcb_ptr_seg);
 			swap_to_ring3(&self->ctx, &next->ctx, next->utcb_ptr_seg << 3 | 3);
 		} else {
 			/* from one userspace process to another */
