@@ -71,7 +71,7 @@ static struct page *next_dir_page = NULL;
 
 uint8_t syscall_stack[4096] PAGE_ALIGN;
 
-volatile uint64_t global_timer_count = 0;
+uint64_t *global_timer_count = NULL;
 
 static struct boot_module boot_mods[MAX_BOOT_MODULES];
 static int num_boot_mods = 0;
@@ -173,7 +173,7 @@ static struct page *find_page_by_id(uint32_t id)
 uint64_t read_global_timer(void)
 {
 	x86_irq_disable();
-	uint64_t value = global_timer_count;
+	uint64_t value = *global_timer_count;
 	x86_irq_enable();
 	return value;
 }
@@ -383,8 +383,8 @@ static void pager_thread(void *parameter)
 				break;
 			} else if(tag.X.label == 0x2369) {
 				/* respond, to test out ReplyWait. */
-				printf("%s: got test message, mr1 is %#x\n", __func__,
-					L4_VREG(utcb, L4_TCR_MR(1)));
+				printf("%s: got test message at %llu, mr1 is %#x\n", __func__,
+					read_global_timer(), L4_VREG(utcb, L4_TCR_MR(1)));
 				L4_VREG(utcb, L4_TCR_MR(0)) = ((L4_MsgTag_t){ .X.u = 1 }).raw;
 				L4_VREG(utcb, L4_TCR_MR(1)) = 0xc0def00d;
 			} else {
@@ -613,6 +613,8 @@ void kmain(void *mbd, unsigned int magic)
 	kip_page = get_kern_page(0);
 	list_add(&resv_page_list, &kip_page->link);
 	make_kip(kip_page->vm_addr);
+	global_timer_count = kip_page->vm_addr + PAGE_SIZE - sizeof(uint64_t);
+	*global_timer_count = 0;
 	printf("KIP on page id %d\n", kip_page->id);
 
 	printf("so far, the kernel reserves %d pages (%u KiB) of memory.\n",

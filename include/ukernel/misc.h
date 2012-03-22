@@ -23,7 +23,7 @@ struct page;
 extern struct page *kip_page;
 extern uint8_t syscall_stack[];
 /* should only be read with interrupts disabled! */
-extern volatile uint64_t global_timer_count;
+extern uint64_t *global_timer_count;
 
 extern void NORETURN panic(const char *message);
 extern uint64_t read_global_timer(void);

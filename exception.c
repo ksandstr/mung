@@ -73,15 +73,6 @@ void isr_exn_basic_sc_bottom(struct x86_exregs *regs)
 			ipc_syscall(regs);
 			break;
 
-		case SC_SYSTEMCLOCK: {
-			uint64_t timer = read_global_timer();
-			regs->eax = (uint32_t)timer;
-			regs->edx = (uint32_t)(timer >> 32);
-			printf("basic_sc: systemclock hi 0x%x, lo 0x%x\n",
-				regs->edx, regs->eax);
-			break;
-		}
-
 		default: {
 			struct thread *current = get_current_thread();
 			printf("unimplemented basic syscall %d (caller stopped)\n",

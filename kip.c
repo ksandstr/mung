@@ -27,6 +27,39 @@ static void make_syscall_stub(void *start, int *len_p, int sc_num)
 }
 
 
+/* extra clever thing where the syscall stub never enters the kernel.
+ * instead, the clock tick is stored in the last 8 bytes of the KIP.
+ */
+static void make_systemclock_stub(void *start, int *len_p)
+{
+	int p = 0;
+	uint8_t *mem = start;
+	mem[p++] = 0xe8;			/* CALL rel32 */
+	*(uint32_t *)&mem[p] = 6;	/* past the next instructions */
+	p += 4;
+	mem[p++] = 0x8b;			/* MOV edx, [eax + 4] */
+	mem[p++] = 0x50;
+	mem[p++] = 0x04;
+	mem[p++] = 0x8b;			/* MOV eax, [eax] */
+	mem[p++] = 0x00;
+	mem[p++] = 0xc3;			/* RET */
+
+	/* the "read & massage EIP" sequence */
+	mem[p++] = 0x8b;			/* MOV eax, [esp] */
+	mem[p++] = 0x04;
+	mem[p++] = 0x24;
+	mem[p++] = 0x0d;			/* OR eax, 0xfff */
+	*(uint32_t *)&mem[p] = 0xfffU;
+	p += 4;
+	mem[p++] = 0x83;			/* AND eax, ~7 */
+	mem[p++] = 0xe0;
+	mem[p++] = 0xf8;
+	mem[p++] = 0xc3;			/* RET */
+
+	*len_p = p;
+}
+
+
 void make_kip(void *mem)
 {
 	memset(mem, 0, PAGE_SIZE);
@@ -52,11 +85,16 @@ void make_kip(void *mem)
 		uint16_t sc_num;
 		uint16_t offset;
 	} syscalls[] = {
+		/* not included:
+		 * SC_SYSTEMCLOCK, implemented as a soft syscall
+		 *
+		 * (TODO: SC_EXCHANGEREGISTERS, SC_MEMORYCONTROL; have interrupts of
+		 * their very own.)
+		 */
 		{ SC_IPC, 0xe0 },
 		{ SC_LIPC, 0xe4 },
 		{ SC_UNMAP, 0xe8 },
 		{ SC_EXCHANGEREGISTERS, 0xec },
-		{ SC_SYSTEMCLOCK, 0xf0 },
 		{ SC_THREADSWITCH, 0xf4 },
 		{ SC_SCHEDULE, 0xf8 },
 		{ SC_SPACECONTROL, 0xd0 },
@@ -72,6 +110,11 @@ void make_kip(void *mem)
 		*(L4_Word_t *)(mem + syscalls[i].offset) = kip_pos;
 		kip_pos += (len + 3) & ~3;
 	}
+	/* slightly more special ones. */
+	int len = 0;
+	make_systemclock_stub(mem + kip_pos, &len);
+	*(L4_Word_t *)(mem + 0xf0) = kip_pos;
+	kip_pos += (len + 3) & ~3;
 
 	void *memdesc_base = mem + kip_pos;
 	/* TODO: add # of memory descriptors in the lower 16 bits */

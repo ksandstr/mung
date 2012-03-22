@@ -99,7 +99,7 @@ void isr_irq_bottom(struct x86_exregs *regs)
 /* the timer interrupt. runs with interrupts disabled by design. */
 void isr_irq0_bottom(void)
 {
-	global_timer_count++;
+	(*global_timer_count)++;
 	pic_send_eoi(0);
 }
 

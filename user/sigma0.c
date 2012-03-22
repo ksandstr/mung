@@ -84,28 +84,30 @@ L4_Word_t L4_ErrorCode(void) {
 }
 
 
+static L4_Word_t send_test(void *kip, L4_Word_t payload)
+{
+	void *utcb = __L4_Get_UtcbAddress();
+	L4_VREG(utcb, L4_TCR_MR(0)) = ((L4_MsgTag_t){
+		.X.label = 0x2369, .X.u = 1 }).raw;
+	L4_VREG(utcb, L4_TCR_MR(1)) = payload;
+	L4_ThreadId_t dummy;
+	L4_MsgTag_t tag = L4_Ipc(kip, L4_Pager(), L4_Pager(),
+		L4_Timeouts(L4_Never, L4_Never), &dummy);
+	if(L4_IpcFailed(tag)) return 0; else return L4_VREG(utcb, L4_TCR_MR(1));
+}
+
+
 int main(void)
 {
 	L4_Word_t apiver, apiflags, kernelid;
 	void *kip = L4_KernelInterface(&apiver, &apiflags, &kernelid);
 
-	void *utcb = __L4_Get_UtcbAddress();
-	L4_VREG(utcb, L4_TCR_MR(0)) = ((L4_MsgTag_t){
-		.X.label = 0x2369, .X.u = 1 }).raw;
-	L4_VREG(utcb, L4_TCR_MR(1)) = 0xdeadbeef;
-	L4_ThreadId_t dummy;
-	int pf_off = 0;
-	L4_MsgTag_t tag = L4_Ipc(kip, L4_Pager(), L4_Pager(),
-		L4_Timeouts(L4_Never, L4_Never), &dummy);
-	if(L4_IpcFailed(tag)) {
-		*(char *)(0xd0000000 ^ L4_Pager().raw) = '#';
-	} else {
-		pf_off = 0x234;
-	}
+	send_test(kip, 0xdeadbeef);
+	send_test(kip, L4_SystemClock(kip));
 
 	/* L4_Word64_t now = */ L4_SystemClock(kip);
 
-	*(char *)(kip - 0x1000 - pf_off) = '*';	/* pagefault at a definite spot */
+	*(char *)(kip - 0x1000) = '*';	/* pagefault at a definite spot */
 
 	return 0;
 }
