@@ -9,6 +9,7 @@
 #include <ukernel/x86.h>
 #include <ukernel/thread.h>
 #include <ukernel/space.h>
+#include <ukernel/ipc.h>
 #include <ukernel/syscall.h>
 #include <ukernel/misc.h>
 
@@ -68,17 +69,16 @@ void isr_exn_ud_bottom(struct x86_exregs *regs)
 void isr_exn_basic_sc_bottom(struct x86_exregs *regs)
 {
 	switch(regs->ebx) {
+		case SC_IPC:
+			ipc_syscall(regs);
+			break;
+
 		case SC_SYSTEMCLOCK: {
 			uint64_t timer = read_global_timer();
 			regs->eax = (uint32_t)timer;
 			regs->edx = (uint32_t)(timer >> 32);
 			printf("basic_sc: systemclock hi 0x%x, lo 0x%x\n",
 				regs->edx, regs->eax);
-#if 1
-			struct thread *current = get_current_thread();
-			void *utcb = thread_get_utcb(current);
-			printf("... MR1 is 0x%x\n", L4_VREG(utcb, L4_TCR_MR(1)));
-#endif
 			break;
 		}
 

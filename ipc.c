@@ -35,6 +35,16 @@ static struct kmem_cache *ipc_wait_slab = NULL;
 static struct htable sendwait_hash;
 
 
+static inline void set_ipc_error(void *utcb, L4_Word_t ec)
+{
+	L4_VREG(utcb, L4_TCR_ERRORCODE) = ec;
+	L4_VREG(utcb, L4_TCR_MR(0)) = ((L4_MsgTag_t){
+		.X.flags = 0x8 }).raw;
+	L4_VREG(utcb, L4_TCR_MR(1)) = 0;
+	L4_VREG(utcb, L4_TCR_MR(2)) = 0;
+}
+
+
 static void do_typed_transfer(
 	struct thread *source,
 	const void *s_base,
@@ -121,6 +131,10 @@ static void restore_saved_regs(struct thread *t)
 }
 
 
+/* NOTE: this function doesn't account for timeouts. if the send phase doesn't
+ * immediately succeed, status changes to TS_SEND_WAIT if the thread should
+ * sleep, and something else on error.
+ */
 bool ipc_send_half(struct thread *self)
 {
 	assert(!L4_IsNilThread(self->ipc_to));
@@ -129,8 +143,8 @@ bool ipc_send_half(struct thread *self)
 
 	struct thread *dest = thread_find(self->ipc_to.raw);
 	if(unlikely(dest == NULL)) {
-		/* FIXME: produce an IPC error instead */
-		panic("dest thread not found in ipc_send_half()");
+		set_ipc_error(thread_get_utcb(self), 2 << 1 | 0);
+		return false;
 	}
 
 	/* TODO: override TS_R_RECV when peer's ipc_from == self->id . */
@@ -190,9 +204,6 @@ void ipc_simple(struct thread *dest)
 }
 
 
-/* TODO: timeouts (i.e. on zerotime, go to TS_READY instead of any
- * TS_*_WAIT)
- */
 bool ipc_recv_half(struct thread *self)
 {
 	/* find sender. */
@@ -266,27 +277,104 @@ L4_MsgTag_t kipc(
 
 	L4_MsgTag_t tag = { .raw = 0 };		/* "no error" */
 	if(likely(!L4_IsNilThread(to)) && !ipc_send_half(current)) {
-		/* passive send. */
-		assert(current->status == TS_SEND_WAIT);
-		schedule();
+		if(current->status == TS_SEND_WAIT) {
+			/* passive send. */
+			schedule();
+		}
 		tag.raw = L4_VREG(utcb, L4_TCR_MR(0));
-		if(L4_IpcFailed(tag)) return tag;
+		if(L4_IpcFailed(tag)) {
+			assert(current->status == TS_RUNNING);
+			return tag;
+		}
 	}
 
 	if(likely(!L4_IsNilThread(current->ipc_from))) {
 		if(!ipc_recv_half(current)) {
-			/* passive receive.
-			 *
-			 * TODO: implement switching right into the other thread.
-			 */
-			assert(current->status == TS_RECV_WAIT);
-			schedule();
+			if(current->status == TS_RECV_WAIT) {
+				/* passive receive.
+				 *
+				 * TODO: implement switching right into the other thread.
+				 */
+				schedule();
+			}
 		}
 		tag.raw = L4_VREG(utcb, L4_TCR_MR(0));
-		*from_p = current->ipc_from;
+		if(likely(L4_IpcSucceeded(tag))) *from_p = current->ipc_from;
 	}
 
 	return tag;
+}
+
+
+static void ipc(struct thread *current, void *utcb)
+{
+	if(likely(!L4_IsNilThread(current->ipc_to))
+		&& !ipc_send_half(current))
+	{
+		/* there was a send-half, and it didn't complete yet. */
+		if(current->status == TS_SEND_WAIT) {
+			if(current->send_timeout.raw == L4_ZeroTime.raw) {
+				/* send-phase timeout.
+				 * TODO: grab the good defs from µiX, use them here.
+				 */
+				set_ipc_error(utcb, (1 << 1) | 0);
+				current->status = TS_RUNNING;
+			}
+		}
+	} else if(likely(!L4_IsNilThread(current->ipc_from))
+		&& !ipc_recv_half(current)
+		&& current->status == TS_RECV_WAIT)
+	{
+		/* there was no send-half, or it succeeded immediately, and the
+		 * receive-half did not cause an error or complete.
+		 */
+		if(current->recv_timeout.raw == L4_ZeroTime.raw) {
+			set_ipc_error(utcb, (1 << 1) | 1);
+			current->status = TS_RUNNING;
+		}
+	}
+}
+
+
+static void set_ipc_return(
+	struct x86_exregs *regs,
+	struct thread *current,
+	void *utcb)
+{
+	regs->eax = current->ipc_from.raw;
+	regs->esi = L4_VREG(utcb, L4_TCR_MR(0));
+	regs->ebx = L4_VREG(utcb, L4_TCR_MR(1));
+	regs->ebp = L4_VREG(utcb, L4_TCR_MR(2));
+}
+
+
+void ipc_syscall(struct x86_exregs *regs)
+{
+	struct thread *current = get_current_thread();
+	current->ipc_to.raw = regs->eax;
+	current->ipc_from.raw = regs->edx;
+	L4_Word_t timeouts = regs->ecx;
+	current->send_timeout.raw = timeouts >> 16;
+	current->recv_timeout.raw = timeouts & 0xffff;
+
+	// L4_Word_t utcb_addr = regs->edi;
+	/* TODO: could translate "utcb_addr" into a user-space pointer,
+	 * verify that it points to the current thread's UTCB, and if not,
+	 * do this slower thing.
+	 */
+	void *utcb = thread_get_utcb(current);
+	L4_VREG(utcb, L4_TCR_MR(0)) = regs->esi;
+
+	ipc(current, utcb);
+	if(current->status == TS_SEND_WAIT || current->status == TS_RECV_WAIT) {
+		thread_save_exregs(current, regs);
+		/* TODO: schedule the partner thread */
+		return_to_scheduler(regs);
+	} else {
+		/* return from IPC at once. */
+		assert(current->status == TS_RUNNING);
+		set_ipc_return(regs, current, utcb);
+	}
 }
 
 
