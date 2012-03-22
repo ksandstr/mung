@@ -80,13 +80,11 @@ extern int ffsl(long int __l) __attribute__((__const__));
 #endif /* IN_LIB_IMPL */
 
 
-#if 0
 /* these are very much NON-STANDARD. they're defined in lib/strlcpy.c and
  * lib/strlcat.c, respectively.
  */
 extern size_t strlcpy(char *dst, const char *src, size_t siz);
 extern size_t strlcat(char *dst, const char *src, size_t siz);
-#endif
 
 
 #endif
