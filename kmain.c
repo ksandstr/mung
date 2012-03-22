@@ -123,8 +123,15 @@ void NORETURN panic(const char *message)
 }
 
 
-void abort(void) {
-	panic("abort(3) called");
+void abort(void)
+{
+	/* NOTE: this may crap out if the stack is fucked. the net effect is the
+	 * same.
+	 */
+	printf("abort(3) called from 0x%x via 0x%x\n",
+		(unsigned)__builtin_return_address(0),
+		(unsigned)__builtin_return_address(1));
+	panic("aborted");
 }
 
 
