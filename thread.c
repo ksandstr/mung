@@ -54,46 +54,6 @@ COLD struct thread *init_threading(thread_id boot_tid)
 }
 
 
-void return_to_scheduler(struct x86_exregs *regs)
-{
-	struct thread *self = get_current_thread(),
-		*next = scheduler_thread;
-	assert(scheduler_thread != NULL);
-	assert(self != scheduler_thread);
-
-	printf("%s: %c-%c: %d:%d -> %d:%d\n", __func__,
-		self->space == kernel_space ? 'K' : 'U',
-		next->space == kernel_space ? 'K' : 'U',
-		TID_THREADNUM(self->id), TID_VERSION(self->id),
-		TID_THREADNUM(next->id), TID_VERSION(next->id));
-
-	assert(self->status != TS_RUNNING);
-	assert(next->status != TS_RUNNING);
-	next->status = TS_RUNNING;
-	current_thread = next;
-
-#if 0
-	printf("%s: returning to scheduler (kernel ip 0x%x, sp 0x%x)\n",
-		__func__, next->ctx.regs[8], next->ctx.regs[7]);
-#endif
-
-	assert((next->ctx.regs[9] & (1 << 14)) == 0);
-	iret_to_scheduler(&next->ctx);
-}
-
-
-void return_to_ipc(struct x86_exregs *regs, struct thread *target)
-{
-	ipc_simple(target);
-
-	/* schedule the target next. */
-	list_del_from(&thread_list, &target->link);
-	list_add(&thread_list, &target->link);
-
-	return_to_scheduler(regs);
-}
-
-
 void yield(struct thread *t)
 {
 	get_current_thread()->status = TS_READY;
