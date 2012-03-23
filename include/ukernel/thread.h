@@ -22,6 +22,7 @@ typedef uint32_t thread_id;
 
 /* (requires inclusion of <ukernel/space.h>) */
 #define IS_KERNEL_THREAD(thread) ((thread)->space == kernel_space)
+#define IS_READY(st) ((st) == TS_READY || (st) == TS_R_RECV)
 
 /* let's leave this at 128. interrupts also get UTCBs as interrupt IPCs are
  * done that way.
@@ -90,11 +91,6 @@ extern struct thread *create_kthread(
 /* NOTE: doesn't yield */
 extern void yield(struct thread *to);
 
-/* switches away from a kernel thread.
- * returns false when no thread was activated.
- */
-extern bool schedule(void);
-
 /* alters the x86 exception frame to return to the scheduler rather than
  * userspace or a kernel thread.
  */
@@ -136,6 +132,17 @@ extern PURE void *thread_get_utcb(struct thread *t);
 
 /* for htable */
 extern size_t hash_thread_by_id(const void *threadptr, void *dataptr);
+
+
+/* defined in sched.c */
+extern struct thread *current_thread, *scheduler_thread;
+
+/* switches away from a kernel thread.
+ * returns false when no thread was activated.
+ */
+extern bool schedule(void);
+
+extern NORETURN void end_kthread(void);
 
 
 /* defined in context-32.S etc. */
