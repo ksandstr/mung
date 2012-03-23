@@ -70,6 +70,7 @@ void isr_exn_basic_sc_bottom(struct x86_exregs *regs)
 {
 	switch(regs->ebx) {
 		case SC_IPC:
+		case SC_LIPC:		/* TODO: special implementation of LIPC */
 			ipc_syscall(regs);
 			break;
 
@@ -81,6 +82,21 @@ void isr_exn_basic_sc_bottom(struct x86_exregs *regs)
 			return_to_scheduler(regs);
 		}
 	}
+}
+
+
+void isr_exn_exregs_sc_bottom(struct x86_exregs *regs)
+{
+	printf("%s: ExchangeRegisters called\n", __func__);
+	regs->eax = sys_exregs((L4_ThreadId_t)regs->eax, &regs->ecx,
+		&regs->edx, &regs->esi, &regs->edi, &regs->ebx,
+		(L4_ThreadId_t *)&regs->ebp);
+}
+
+
+void isr_exn_memctl_sc_bottom(struct x86_exregs *regs)
+{
+	printf("%s: MemoryControl called\n", __func__);
 }
 
 

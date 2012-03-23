@@ -27,6 +27,16 @@ static void make_syscall_stub(void *start, int *len_p, int sc_num)
 }
 
 
+static void make_int_sc_stub(uint8_t *mem, int *len_p, int interrupt)
+{
+	int p = 0;
+	mem[p++] = 0xcd;	/* INT imm8 */
+	mem[p++] = (unsigned)interrupt;
+	mem[p++] = 0xc3;	/* RET */
+	*len_p = p;
+}
+
+
 /* extra clever thing where the syscall stub never enters the kernel.
  * instead, the clock tick is stored in the last 8 bytes of the KIP.
  */
@@ -86,21 +96,18 @@ void make_kip(void *mem)
 		uint16_t offset;
 	} syscalls[] = {
 		/* not included:
-		 * SC_SYSTEMCLOCK, implemented as a soft syscall
-		 *
-		 * (TODO: SC_EXCHANGEREGISTERS, SC_MEMORYCONTROL; have interrupts of
-		 * their very own.)
+		 * SC_SYSTEMCLOCK, implemented as a soft syscall.
+		 * SC_EXCHANGEREGISTERS, SC_MEMORYCONTROL; have interrupts of their
+		 * very own.
 		 */
 		{ SC_IPC, 0xe0 },
 		{ SC_LIPC, 0xe4 },
 		{ SC_UNMAP, 0xe8 },
-		{ SC_EXCHANGEREGISTERS, 0xec },
 		{ SC_THREADSWITCH, 0xf4 },
 		{ SC_SCHEDULE, 0xf8 },
 		{ SC_SPACECONTROL, 0xd0 },
 		{ SC_THREADCONTROL, 0xd4 },
 		{ SC_PROCESSORCONTROL, 0xd8 },
-		{ SC_MEMORYCONTROL, 0xdc },
 	};
 	const int num_syscalls = sizeof(syscalls) / sizeof(syscalls[0]);
 	int kip_pos = 0x100;
@@ -112,8 +119,17 @@ void make_kip(void *mem)
 	}
 	/* slightly more special ones. */
 	int len = 0;
+	/* SystemClock (pure vsyscall) */
 	make_systemclock_stub(mem + kip_pos, &len);
 	*(L4_Word_t *)(mem + 0xf0) = kip_pos;
+	kip_pos += (len + 3) & ~3;
+	/* MemoryControl */
+	make_int_sc_stub(mem + kip_pos, &len, 0x8e);
+	*(L4_Word_t *)(mem + 0xdc) = kip_pos;
+	kip_pos += (len + 3) & ~3;
+	/* ExchangeRegisters */
+	make_int_sc_stub(mem + kip_pos, &len, 0x8d);
+	*(L4_Word_t *)(mem + 0xec) = kip_pos;
 	kip_pos += (len + 3) & ~3;
 
 	void *memdesc_base = mem + kip_pos;

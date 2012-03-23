@@ -92,4 +92,6 @@ isr_exn_\name\()_top:
 	ISR_EXN 6, ud, 0	# invalid opcode
 	ISR_EXN 13, gp		# general protection
 	ISR_EXN 14, pf		# pagefault
+	ISR_EXN 0x8d, exregs_sc, 0	# ExchangeRegisters
+	ISR_EXN 0x8e, memctl_sc, 0	# MemoryControl
 	ISR_EXN 0x8f, basic_sc, 0	# basic syscall

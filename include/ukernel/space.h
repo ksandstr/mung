@@ -57,6 +57,9 @@ extern void space_add_thread(struct space *sp, struct thread *t);
 /* (these both return SpaceControl error, or 0 on success.) */
 extern int space_set_utcb_area(struct space *sp, L4_Fpage_t area);
 extern int space_set_kip_area(struct space *sp, L4_Fpage_t area);
+extern struct thread *space_find_local_thread(
+	struct space *sp,
+	L4_LthreadId_t ltid);
 
 /* use 0 to erase a page. */
 extern void space_put_page(

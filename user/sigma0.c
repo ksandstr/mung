@@ -31,6 +31,33 @@ L4_Word64_t L4_SystemClock(void *kip)
 }
 
 
+#if 0
+L4_ThreadId_t L4_ExchangeRegisters(
+	void *kip,
+	L4_ThreadId_t dest,
+	L4_Word_t *control_p,
+	L4_Word_t *sp_p, L4_Word_t *ip_p, L4_Word_t *flags_p,
+	L4_Word_t *udh_p,
+	L4_ThreadId_t *pager_p)
+{
+	/* TODO: lift this from Pistachio. shit sucks. */
+	L4_ThreadId_t result;
+	asm volatile (
+		"\tpushl %[scvec]\n"
+		"\tmovl %[pager], %%ebp\n"
+		"\tcall *(%%esp)\n"
+		"\tmovl %%ebp, %[pager]\n"
+		: [pager] "=m" (*pager_p),
+		  "=a" (result.raw), "=c" (*control_p), "=d" (*sp_p),
+		  "=S" (*ip_p), "=D" (*flags_p), "=b" (*udh_p)
+		: [scvec] "r" (kip + *(L4_Word_t *)(kip + 0xec))
+		: "ebp", "memory");
+
+	return result;
+}
+#endif
+
+
 CONST_FUNCTION void *__L4_Get_UtcbAddress(void) {
 	void *ptr;
 	asm volatile (
@@ -70,6 +97,22 @@ L4_MsgTag_t L4_Ipc(
 		: "ebp");
 	return tag;
 }
+
+
+#if 0
+L4_ThreadId_t L4_MyGlobalId(void) {
+	void *utcb = __L4_Get_UtcbAddress();
+	return (L4_ThreadId_t){ .raw = L4_VREG(utcb, L4_TCR_MYGLOBALID) };
+}
+
+
+L4_ThreadId_t L4_MyLocalId(void *kip) {
+	L4_Word_t dummy = 0;
+	L4_ThreadId_t t_dummy = L4_nilthread;
+	return L4_ExchangeRegisters(kip, L4_MyGlobalId(),
+		&dummy, &dummy, &dummy, &dummy, &dummy, &t_dummy);
+}
+#endif
 
 
 L4_ThreadId_t L4_Pager(void) {

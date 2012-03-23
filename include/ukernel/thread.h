@@ -115,6 +115,14 @@ extern void thread_set_space(struct thread *t, struct space *sp);
 extern struct thread *thread_find(thread_id tid);
 
 
+extern L4_Word_t sys_exregs(
+	L4_ThreadId_t dest,
+	L4_Word_t *control_p,
+	L4_Word_t *sp_p, L4_Word_t *ip_p, L4_Word_t *flags_p,
+	L4_Word_t *udh_p,
+	L4_ThreadId_t *pager_p);
+
+
 /* thread of tid's threadnum must not exist already. caller handles
  * ThreadControl semantics.
  */

@@ -151,6 +151,27 @@ int space_set_kip_area(struct space *sp, L4_Fpage_t area)
 }
 
 
+struct thread *space_find_local_thread(
+	struct space *sp,
+	L4_LthreadId_t ltid)
+{
+	assert(ltid.X.zeros == 0);
+
+	if(ltid.raw >= L4_Address(sp->utcb_area)
+		&& ltid.raw < L4_Address(sp->utcb_area) + L4_Size(sp->utcb_area))
+	{
+		L4_Word_t off = ltid.raw - L4_Address(sp->utcb_area) - 256;
+		int ix = off / UTCB_SIZE;
+		struct thread *t;
+		list_for_each(&sp->threads, t, space_link) {
+			if(t->utcb_pos == ix) return t;
+		}
+	}
+
+	return NULL;
+}
+
+
 /* get-cmp function for struct space's ptab_pages */
 static bool cmp_page_id_to_key(const void *cand, void *key) {
 	const struct page *pg = cand;
