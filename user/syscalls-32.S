@@ -54,10 +54,10 @@ __L4__syscall_setup:
 	jmp 2f
 1:	movzwl 4(%esi, %ecx, 1), %ebx	# ebx = offset index in kip
 	movl %eax, %edx
-	addl (%eax, %ebx, 1), %edx	# edx = syscall address
-	movb $0xe9, (%edi)		# JMP rel32
-	subl %edi, %edx			# ... i.e. abs - stub - 5
 	subl $5, %edx
+	movb $0xe9, (%edi)		# JMP rel32
+	addl (%eax, %ebx, 1), %edx	# edx = syscall address - 5
+	subl %edi, %edx			# ... i.e. abs - stub - 5
 	movl %edx, 1(%edi)
 	addl $6, %ecx
 2:	movl (%esi, %ecx, 1), %edi	# edi = stub address
