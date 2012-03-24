@@ -381,6 +381,17 @@ static void pager_thread(void *parameter)
 				 * leave it hanging.
 				 */
 				break;
+			} else if(tag.X.label == 0x5370) {
+				/* sigma0's con_putstr() protocol. */
+				char buf[257];
+				for(int i=0; i < tag.X.u; i++) {
+					*(L4_Word_t *)&buf[i * 4] = L4_VREG(utcb,
+						L4_TCR_MR(i + 1));
+				}
+				buf[tag.X.u * 4] = '\0';
+				int len = strlen(buf);
+				while(len > 0 && buf[len - 1] == '\n') buf[--len] = '\0';
+				printf("[sigma0]: %s\n", buf);
 			} else if(tag.X.label == 0x2369) {
 				/* respond, to test out ReplyWait. */
 				printf("%s: got test message at %llu, mr1 is %#x\n", __func__,

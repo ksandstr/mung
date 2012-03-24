@@ -1,10 +1,35 @@
 
+#include <stdio.h>
+#include <stdlib.h>
+#include <stdarg.h>
 #include <ccan/compiler/compiler.h>
 
 #include <l4/types.h>
 #include <l4/ipc.h>
 #include <l4/vregs.h>
 #include <l4/syscall.h>
+
+
+static void con_putstr(const char *str, size_t len);
+
+
+int vprintf(const char *fmt, va_list al)
+{
+	char buffer[256];
+	int n = vsnprintf(buffer, sizeof(buffer), fmt, al);
+	if(n > 0) con_putstr(buffer, n);
+	return n;
+}
+
+
+int printf(const char *format, ...)
+{
+	va_list al;
+	va_start(al, format);
+	int n = vprintf(format, al);
+	va_end(al);
+	return n;
+}
 
 
 #if 0
@@ -48,8 +73,43 @@ static L4_Word_t send_test(L4_Word_t payload)
 }
 
 
+static void con_putstr(const char *str, size_t len)
+{
+	void *utcb = __L4_Get_UtcbAddress();
+	L4_VREG(utcb, L4_TCR_MR(0)) = ((L4_MsgTag_t){
+		.X.label = 0x5370, /* "pS" */
+		.X.u = (len + 3) / 4,
+	}).raw;
+	for(int i=0; i * 4 < len; i++) {
+		L4_VREG(utcb, L4_TCR_MR(i + 1)) = *(L4_Word_t *)&str[i * 4];
+	}
+	L4_ThreadId_t dummy;
+	L4_Ipc(L4_Pager(), L4_Pager(), L4_Timeouts(L4_Never, L4_Never), &dummy);
+}
+
+
+void *malloc(size_t size) {
+	printf("malloc() in sigma0 is a stub\n");
+	return NULL;
+}
+
+
+void __assert_failure(
+	const char *condition,
+	const char *file,
+	unsigned int line,
+	const char *function)
+{
+	printf("assert(%s) failed in `%s' (%s:%u)\n", condition, function,
+		file, line);
+	for(;;) { /* spin */ }
+}
+
+
 int main(void)
 {
+	printf("hello, world!\n");
+
 	L4_Word_t apiver, apiflags, kernelid;
 	void *kip = L4_KernelInterface(&apiver, &apiflags, &kernelid);
 
