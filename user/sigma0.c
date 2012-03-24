@@ -19,14 +19,12 @@ void *L4_KernelInterface(
 }
 
 
-L4_Word64_t L4_SystemClock(void *kip)
+L4_Word64_t L4_SystemClock(void)
 {
 	L4_Word_t low, high;
 	asm volatile (
-		"call *%2"
-		: "=a" (low), "=d" (high)
-		: "r" (kip + *(L4_Word_t *)(kip + 0xf0))
-		: "ecx", "esi", "edi");
+		"\tcall __L4_SystemClock\n"
+		: "=a" (low), "=d" (high));
 	return (L4_Word64_t)high << 32 | low;
 }
 
@@ -68,7 +66,6 @@ CONST_FUNCTION void *__L4_Get_UtcbAddress(void) {
 
 
 L4_MsgTag_t L4_Ipc(
-	void *kip,
 	L4_ThreadId_t to,
 	L4_ThreadId_t fromspec,
 	L4_Word_t timeouts,
@@ -77,23 +74,12 @@ L4_MsgTag_t L4_Ipc(
 	void *utcb = __L4_Get_UtcbAddress();
 	L4_MsgTag_t tag;
 	asm volatile (
-		"\tcall *%[scvec]\n"
+		"\tcall __L4_Ipc\n"
 		"\tmovl %%ebp, %[mr2_out]\n"
-#if 0
-		"\tmovl %%eax, %[from_out]\n"
-		"\tmovl %%esi, %[mr0_out]\n"
-		"\tmovl %%ebx, %[mr1_out]\n"
-		: [from_out] "=r" (*from_p),
-		  [mr0_out] "=r" (tag.raw),
-		  [mr1_out] "=m" (L4_VREG(utcb, L4_TCR_MR(1))),
-		  [mr2_out] "=m" (L4_VREG(utcb, L4_TCR_MR(2)))
-#else
 		: "=a" (*from_p), "=S" (tag.raw), "=b" (L4_VREG(utcb, L4_TCR_MR(1))),
 		  [mr2_out] "=m" (L4_VREG(utcb, L4_TCR_MR(2)))
-#endif
 		: "a" (to.raw), "c" (timeouts), "d" (fromspec.raw),
-		  "S" (L4_VREG(utcb, L4_TCR_MR(0))), "D" (utcb),
-		  [scvec] "r" (kip + *(L4_Word_t *)(kip + 0xe0))
+		  "S" (L4_VREG(utcb, L4_TCR_MR(0))), "D" (utcb)
 		: "ebp");
 	return tag;
 }
@@ -127,14 +113,14 @@ L4_Word_t L4_ErrorCode(void) {
 }
 
 
-static L4_Word_t send_test(void *kip, L4_Word_t payload)
+static L4_Word_t send_test(L4_Word_t payload)
 {
 	void *utcb = __L4_Get_UtcbAddress();
 	L4_VREG(utcb, L4_TCR_MR(0)) = ((L4_MsgTag_t){
 		.X.label = 0x2369, .X.u = 1 }).raw;
 	L4_VREG(utcb, L4_TCR_MR(1)) = payload;
 	L4_ThreadId_t dummy;
-	L4_MsgTag_t tag = L4_Ipc(kip, L4_Pager(), L4_Pager(),
+	L4_MsgTag_t tag = L4_Ipc(L4_Pager(), L4_Pager(),
 		L4_Timeouts(L4_Never, L4_Never), &dummy);
 	if(L4_IpcFailed(tag)) return 0; else return L4_VREG(utcb, L4_TCR_MR(1));
 }
@@ -145,10 +131,10 @@ int main(void)
 	L4_Word_t apiver, apiflags, kernelid;
 	void *kip = L4_KernelInterface(&apiver, &apiflags, &kernelid);
 
-	send_test(kip, 0xdeadbeef);
-	send_test(kip, L4_SystemClock(kip));
+	send_test(0xdeadbeef);
+	send_test(L4_SystemClock());
 
-	/* L4_Word64_t now = */ L4_SystemClock(kip);
+	/* L4_Word64_t now = */ L4_SystemClock();
 
 	*(char *)(kip - 0x1000) = '*';	/* pagefault at a definite spot */
 
