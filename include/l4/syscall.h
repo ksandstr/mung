@@ -33,7 +33,7 @@ static inline void *L4_KernelInterface(
 	L4_Word_t *kernelid)
 {
 	L4_Word_t baseaddr;
-	asm volatile (
+	__asm__ __volatile__ (
 		"lock; nop"
 		: "=a" (baseaddr), "=c" (*apiver), "=d" (*apiflags), "=S" (*kernelid));
 	return (void *)baseaddr;
@@ -45,7 +45,7 @@ static inline L4_Clock_t L4_SystemClock(void)
 	extern _C_ void __L4_SystemClock(void);
 
 	L4_Clock_t result;
-	asm volatile (
+	__asm__ __volatile__ (
 		"\tcall *%%ecx\n"
 		: "=A" (result.raw)
 		: "c" (__L4_SystemClock)
@@ -65,7 +65,7 @@ L4_ThreadId_t L4_ExchangeRegisters(
 {
 	/* TODO: lift this from Pistachio. shit sucks. */
 	L4_ThreadId_t result;
-	asm volatile (
+	__asm__ __volatile__ (
 		"\tpushl %[scvec]\n"
 		"\tmovl %[pager], %%ebp\n"
 		"\tcall *(%%esp)\n"
@@ -92,7 +92,7 @@ static inline L4_MsgTag_t L4_Ipc(
 #ifdef __pic__
 #error "PIC support not quite here yet."
 #else
-	asm volatile (
+	__asm__ __volatile__ (
 		__L4_SAVE_REGS
 		"\tcall __L4_Ipc\n"
 		"\tmovl %%ebp, %[mr2_out]\n"
