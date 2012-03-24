@@ -50,10 +50,9 @@ __L4__syscall_setup:
 3:	lock
 	nop
 	xorl %ecx, %ecx
-	xorl %ebx, %ebx
 	lea __L4__syscall_table, %esi
 	jmp 2f
-1:	movw 4(%esi, %ecx, 1), %bx	# ebx = offset index in kip
+1:	movzwl 4(%esi, %ecx, 1), %ebx	# ebx = offset index in kip
 	movl %eax, %edx
 	addl (%eax, %ebx, 1), %edx	# edx = syscall address
 	movb $0xe9, (%edi)		# JMP rel32
