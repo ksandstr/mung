@@ -81,15 +81,6 @@ L4_ThreadId_t L4_ExchangeRegisters(
 #endif
 
 
-static inline CONST_FUNCTION void *__L4_Get_UtcbAddress(void) {
-	void *ptr;
-	asm volatile (
-		"\tmovl %%gs:0, %0\n"
-		: "=r" (ptr));
-	return ptr;
-}
-
-
 static inline L4_MsgTag_t L4_Ipc(
 	L4_ThreadId_t to,
 	L4_ThreadId_t fromspec,

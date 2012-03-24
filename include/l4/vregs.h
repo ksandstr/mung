@@ -4,7 +4,17 @@
 #ifndef __L4__VREGS_H__
 #define __L4__VREGS_H__
 
+#include <ccan/compiler/compiler.h>
 #include <l4/types.h>
+
+
+static inline CONST_FUNCTION void *__L4_Get_UtcbAddress(void) {
+	void *ptr;
+	asm volatile (
+		"\tmovl %%gs:0, %0\n"
+		: "=r" (ptr));
+	return ptr;
+}
 
 
 #define L4_VREG(base, pos) (((L4_Word_t *)(base))[(pos)])
