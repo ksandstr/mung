@@ -171,4 +171,15 @@ static inline L4_Time_t L4_TimePeriod(L4_Word64_t microseconds)
 }
 
 
+/* Clock, via L4Ka::Pistachio. */
+
+typedef union {
+	L4_Word64_t raw;
+	struct {
+		L4_Word32_t low;
+		L4_Word32_t high;
+	} __attribute__((packed)) X;
+} L4_Clock_t;
+
+
 #endif

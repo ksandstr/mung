@@ -4,85 +4,7 @@
 #include <l4/types.h>
 #include <l4/ipc.h>
 #include <l4/vregs.h>
-
-
-void *L4_KernelInterface(
-	L4_Word_t *apiver,
-	L4_Word_t *apiflags,
-	L4_Word_t *kernelid)
-{
-	L4_Word_t baseaddr;
-	asm volatile (
-		"lock; nop"
-		: "=a" (baseaddr), "=c" (*apiver), "=d" (*apiflags), "=S" (*kernelid));
-	return (void *)baseaddr;
-}
-
-
-L4_Word64_t L4_SystemClock(void)
-{
-	L4_Word_t low, high;
-	asm volatile (
-		"\tcall __L4_SystemClock\n"
-		: "=a" (low), "=d" (high));
-	return (L4_Word64_t)high << 32 | low;
-}
-
-
-#if 0
-L4_ThreadId_t L4_ExchangeRegisters(
-	void *kip,
-	L4_ThreadId_t dest,
-	L4_Word_t *control_p,
-	L4_Word_t *sp_p, L4_Word_t *ip_p, L4_Word_t *flags_p,
-	L4_Word_t *udh_p,
-	L4_ThreadId_t *pager_p)
-{
-	/* TODO: lift this from Pistachio. shit sucks. */
-	L4_ThreadId_t result;
-	asm volatile (
-		"\tpushl %[scvec]\n"
-		"\tmovl %[pager], %%ebp\n"
-		"\tcall *(%%esp)\n"
-		"\tmovl %%ebp, %[pager]\n"
-		: [pager] "=m" (*pager_p),
-		  "=a" (result.raw), "=c" (*control_p), "=d" (*sp_p),
-		  "=S" (*ip_p), "=D" (*flags_p), "=b" (*udh_p)
-		: [scvec] "r" (kip + *(L4_Word_t *)(kip + 0xec))
-		: "ebp", "memory");
-
-	return result;
-}
-#endif
-
-
-CONST_FUNCTION void *__L4_Get_UtcbAddress(void) {
-	void *ptr;
-	asm volatile (
-		"\tmovl %%gs:0, %0\n"
-		: "=r" (ptr));
-	return ptr;
-}
-
-
-L4_MsgTag_t L4_Ipc(
-	L4_ThreadId_t to,
-	L4_ThreadId_t fromspec,
-	L4_Word_t timeouts,
-	L4_ThreadId_t *from_p)
-{
-	void *utcb = __L4_Get_UtcbAddress();
-	L4_MsgTag_t tag;
-	asm volatile (
-		"\tcall __L4_Ipc\n"
-		"\tmovl %%ebp, %[mr2_out]\n"
-		: "=a" (*from_p), "=S" (tag.raw), "=b" (L4_VREG(utcb, L4_TCR_MR(1))),
-		  [mr2_out] "=m" (L4_VREG(utcb, L4_TCR_MR(2)))
-		: "a" (to.raw), "c" (timeouts), "d" (fromspec.raw),
-		  "S" (L4_VREG(utcb, L4_TCR_MR(0))), "D" (utcb)
-		: "ebp");
-	return tag;
-}
+#include <l4/syscall.h>
 
 
 #if 0
@@ -132,7 +54,7 @@ int main(void)
 	void *kip = L4_KernelInterface(&apiver, &apiflags, &kernelid);
 
 	send_test(0xdeadbeef);
-	send_test(L4_SystemClock());
+	send_test(L4_SystemClock().raw);
 
 	/* L4_Word64_t now = */ L4_SystemClock();
 
