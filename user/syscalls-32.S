@@ -1,9 +1,5 @@
 
 # syscall trampolines that set themselves up automagically.
-#
-# FIXME: theoretically not thread safe. however, since processes generally
-# start up with just a single thread, fixing this (e.g. with spinlocks) can
-# easily be left for another day.
 
 
 	.section .data.syscalls, "wax", @progbits
@@ -37,9 +33,21 @@ __L4_ProcessorControl:	call __L4__syscall_setup
 
 	.align 16,0
 __L4__syscall_setup:
-	subl $5, (%esp)			# return to the same stub
+	subl $5, (%esp)			/* return to the same stub */
 	pushal
-	lock
+/* are we here in state 0? if so, go to state 1 and proceed. */
+	xorl %eax, %eax
+	movl $1, %ecx
+	lock cmpxchgl %ecx, __L4__syscall_spinlock
+	je 3f
+/* if not, wait until state 2 (i.e. other CPU has finished). */
+4:	movl __L4__syscall_spinlock, %eax
+	cmpl $2, %eax
+	je 5f
+	pause
+	jmp 4b
+
+3:	lock
 	nop
 	xorl %ecx, %ecx
 	xorl %ebx, %ebx
@@ -56,7 +64,11 @@ __L4__syscall_setup:
 2:	movl (%esi, %ecx, 1), %edi	# edi = stub address
 	testl %edi, %edi
 	jne 1b
-	popal
+/* sync memory writes and indicate completion */
+	movl $1, %eax
+	movl $2, %ecx
+	lock cmpxchgl %ecx, __L4__syscall_spinlock
+5:	popal
 	ret
 
 
@@ -79,3 +91,6 @@ __L4__syscall_table:
 	ENTRY(ThreadControl, 0xd4)
 	ENTRY(ProcessorControl, 0xd8)
 	.long 0
+
+	.align 64,0
+__L4__syscall_spinlock:	.long 0
