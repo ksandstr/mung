@@ -54,31 +54,56 @@ static inline L4_Clock_t L4_SystemClock(void)
 }
 
 
-#if 0
-L4_ThreadId_t L4_ExchangeRegisters(
-	void *kip,
+static inline L4_ThreadId_t L4_ExchangeRegisters(
 	L4_ThreadId_t dest,
-	L4_Word_t *control_p,
-	L4_Word_t *sp_p, L4_Word_t *ip_p, L4_Word_t *flags_p,
-	L4_Word_t *udh_p,
-	L4_ThreadId_t *pager_p)
+	L4_Word_t control,
+	L4_Word_t sp, L4_Word_t ip,
+	L4_Word_t flags, L4_Word_t udh,
+	L4_ThreadId_t pager,
+	L4_Word_t *control_out,
+	L4_Word_t *sp_out, L4_Word_t *ip_out,
+	L4_Word_t *flags_out, L4_Word_t *udh_out,
+	L4_ThreadId_t *pager_out)
 {
-	/* TODO: lift this from Pistachio. shit sucks. */
+	extern _C_ void __L4_ExchangeRegisters(void);
+
+	/* mechanism via L4Ka::Pistachio, rewritten here. */
 	L4_ThreadId_t result;
+	struct {
+		L4_Word_t ebp, edi, ebx, esi;
+	} __attribute__((packed)) in = {
+		.ebp = pager.raw,
+		.ebx = udh,
+		.esi = ip,
+		.edi = flags,
+	};
 	__asm__ __volatile__ (
-		"\tpushl %[scvec]\n"
-		"\tmovl %[pager], %%ebp\n"
+		__L4_SAVE_REGS
+		"\tpushl %%esi\n"
+		"\tpushl %%edi\n"
+		"\tmovl (%%esi), %%ebp\n"
+		"\tmovl 4(%%esi), %%edi\n"
+		"\tmovl 8(%%esi), %%ebx\n"
+		"\tmovl 12(%%esi), %%esi\n"
 		"\tcall *(%%esp)\n"
-		"\tmovl %%ebp, %[pager]\n"
-		: [pager] "=m" (*pager_p),
-		  "=a" (result.raw), "=c" (*control_p), "=d" (*sp_p),
-		  "=S" (*ip_p), "=D" (*flags_p), "=b" (*udh_p)
-		: [scvec] "r" (kip + *(L4_Word_t *)(kip + 0xec))
-		: "ebp", "memory");
+		"\txchgl %%esi, 4(%%esp)\n"
+		"\tmovl %%edi, 4(%%esi)\n"
+		"\tmovl %%ebx, 8(%%esi)\n"
+		"\tmovl %%ebp, (%%esi)\n"
+		"\tpopl %%edi\n"
+		"\tpopl %%esi\n"
+		__L4_RESTORE_REGS
+		: "=a" (result), "=c" (*control_out), "=d" (*sp_out), "=S" (*ip_out)
+		: "a" (dest.raw), "c" (control), "d" (sp), "S" (&in),
+		  "D" (__L4_ExchangeRegisters)
+		: "memory", __L4_CLOBBER_REGS);
+
+	pager_out->raw = in.ebp;
+	*flags_out = in.edi;
+	*udh_out = in.ebx;
 
 	return result;
 }
-#endif
 
 
 static inline L4_MsgTag_t L4_Ipc(

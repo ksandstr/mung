@@ -74,6 +74,14 @@ static inline bool L4_IsNilThread(L4_ThreadId_t tid) {
 	return tid.raw == 0;
 }
 
+static inline bool L4_IsLocalId(L4_ThreadId_t tid) {
+	return tid.local.X.zeros == 0;
+}
+
+static inline bool L4_IsGlobalId(L4_ThreadId_t tid) {
+	return tid.local.X.zeros != 0;
+}
+
 
 static inline bool L4_IsNilFpage(L4_Fpage_t fp) {
 	return fp.raw == 0;

@@ -6,6 +6,7 @@
 
 #include <l4/types.h>
 #include <l4/ipc.h>
+#include <l4/thread.h>
 #include <l4/vregs.h>
 #include <l4/syscall.h>
 
@@ -30,22 +31,6 @@ int printf(const char *format, ...)
 	va_end(al);
 	return n;
 }
-
-
-#if 0
-L4_ThreadId_t L4_MyGlobalId(void) {
-	void *utcb = __L4_Get_UtcbAddress();
-	return (L4_ThreadId_t){ .raw = L4_VREG(utcb, L4_TCR_MYGLOBALID) };
-}
-
-
-L4_ThreadId_t L4_MyLocalId(void *kip) {
-	L4_Word_t dummy = 0;
-	L4_ThreadId_t t_dummy = L4_nilthread;
-	return L4_ExchangeRegisters(kip, L4_MyGlobalId(),
-		&dummy, &dummy, &dummy, &dummy, &dummy, &t_dummy);
-}
-#endif
 
 
 L4_ThreadId_t L4_Pager(void) {
@@ -106,6 +91,21 @@ void __assert_failure(
 }
 
 
+static void tid_test(void)
+{
+	printf("threadid test start.\n");
+
+	printf("\tL4_Myself() == %#x\n", (unsigned)L4_Myself().raw);
+	printf("\tL4_MyLocalId() == %#x\n", (unsigned)L4_MyLocalId().raw);
+	printf("\tL4_LocalIdOf(L4_MyGlobalId()) == %#x\n",
+		(unsigned)L4_LocalIdOf(L4_MyGlobalId()).raw);
+	printf("\tL4_GlobalIdOf(L4_MyLocalId()) == %#x\n",
+		(unsigned)L4_GlobalIdOf(L4_MyLocalId()).raw);
+
+	printf("threadid test ends.\n");
+}
+
+
 int main(void)
 {
 	printf("hello, world!\n");
@@ -115,6 +115,8 @@ int main(void)
 
 	send_test(0xdeadbeef);
 	send_test(L4_SystemClock().raw);
+
+	tid_test();
 
 	/* L4_Word64_t now = */ L4_SystemClock();
 
