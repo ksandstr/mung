@@ -10,7 +10,7 @@
 
 static inline CONST_FUNCTION void *__L4_Get_UtcbAddress(void) {
 	void *ptr;
-	asm volatile (
+	__asm__ (
 		"\tmovl %%gs:0, %0\n"
 		: "=r" (ptr));
 	return ptr;
