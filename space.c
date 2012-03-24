@@ -12,6 +12,7 @@
 #include <ccan/compiler/compiler.h>
 
 #include <l4/types.h>
+#include <l4/vregs.h>
 #include <ukernel/mm.h>
 #include <ukernel/x86.h>
 #include <ukernel/slab.h>
@@ -224,7 +225,26 @@ void space_put_page(
 
 void sys_unmap(struct x86_exregs *regs)
 {
-	printf("%s: called\n", __func__);
+	L4_Word_t control = regs->eax;
+	printf("%s: called. control %#x\n", __func__, (unsigned)control);
+
+	struct thread *current = get_current_thread();
+	void *utcb = thread_get_utcb(current);
+	if((control & 0x3f) > 0) L4_VREG(utcb, L4_TCR_MR(0)) = regs->esi;
+	for(int i=0; i <= (control & 0x3f); i++) {
+		L4_Fpage_t fp = { .raw = L4_VREG(utcb, L4_TCR_MR(i)) };
+		printf("  would %s %#x:%#x (%c%c%c) for thread %d:%d\n",
+			CHECK_FLAG(control, 0x40) ? "flush" : "unmap",
+			(unsigned)L4_Address(fp), (unsigned)L4_Size(fp),
+			CHECK_FLAG(L4_Rights(fp), L4_Readable) ? 'r' : '-',
+			CHECK_FLAG(L4_Rights(fp), L4_Writable) ? 'w' : '-',
+			CHECK_FLAG(L4_Rights(fp), L4_eXecutable) ? 'x' : '-',
+			TID_THREADNUM(current->id), TID_VERSION(current->id));
+		L4_Set_Rights(&fp, L4_NoAccess);
+		L4_VREG(utcb, L4_TCR_MR(i)) = fp.raw;
+	}
+
+	regs->esi = L4_VREG(utcb, L4_TCR_MR(0));
 }
 
 

@@ -42,6 +42,15 @@ typedef union {
 #define L4_Nilpage ((L4_Fpage_t){ .raw = 0 })
 #define L4_CompleteAddressSpace ((L4_Fpage_t){ .X.s = 1 })
 
+static inline L4_Word_t L4_Rights(L4_Fpage_t fp) {
+	return fp.X.rwx;
+}
+
+static inline L4_Fpage_t L4_Set_Rights(L4_Fpage_t *fp, L4_Word_t rwx) {
+	fp->X.rwx = rwx;
+	return *fp;
+}
+
 
 typedef union {
 	L4_Word_t raw;

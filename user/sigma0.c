@@ -10,6 +10,8 @@
 #include <l4/vregs.h>
 #include <l4/syscall.h>
 
+#define CHECK_FLAG(mask, bit) (((mask) & (bit)) != 0)
+
 
 static void con_putstr(const char *str, size_t len);
 
@@ -106,6 +108,39 @@ static void tid_test(void)
 }
 
 
+void unmap_test(void)
+{
+	printf("unmap test start.\n");
+
+	void *utcb = __L4_Get_UtcbAddress();
+	L4_Fpage_t pages[] = {
+		L4_FpageLog2(0xdeadbeef, 12),
+		L4_FpageLog2(0xcafebabe, 12),
+	};
+	const int n_pages = sizeof(pages) / sizeof(pages[0]);
+	for(int i=0; i < n_pages; i++) {
+		L4_Set_Rights(&pages[i], L4_FullyAccessible);
+		L4_VREG(utcb, L4_TCR_MR(i)) = pages[i].raw;
+	}
+	L4_Fpage_t out_pages[n_pages];
+	L4_Unmap(1);
+	for(int i=0; i < n_pages; i++) {
+		out_pages[i].raw = L4_VREG(utcb, L4_TCR_MR(i));
+	}
+
+	for(int i=0; i < n_pages; i++) {
+		L4_Fpage_t fp = out_pages[i];
+		printf("page %d: %#x:%#x, was %c%c%c\n", i,
+			(unsigned)L4_Address(fp), (unsigned)L4_Size(fp),
+			CHECK_FLAG(L4_Rights(fp), L4_Readable) ? 'r' : '-',
+			CHECK_FLAG(L4_Rights(fp), L4_Writable) ? 'w' : '-',
+			CHECK_FLAG(L4_Rights(fp), L4_eXecutable) ? 'x' : '-');
+	}
+
+	printf("unmap test ends.\n");
+}
+
+
 int main(void)
 {
 	printf("hello, world!\n");
@@ -117,6 +152,7 @@ int main(void)
 	send_test(L4_SystemClock().raw);
 
 	tid_test();
+	unmap_test();
 
 	/* L4_Word64_t now = */ L4_SystemClock();
 

@@ -130,4 +130,45 @@ static inline L4_MsgTag_t L4_Ipc(
 	return tag;
 }
 
+
+static inline L4_MsgTag_t L4_Lipc(
+	L4_ThreadId_t to,
+	L4_ThreadId_t fromspec,
+	L4_Word_t timeouts,
+	L4_ThreadId_t *from_p)
+{
+	void *utcb = __L4_Get_UtcbAddress();
+	L4_MsgTag_t tag;
+#ifdef __pic__
+#error "PIC support not quite here yet."
+#else
+	__asm__ __volatile__ (
+		__L4_SAVE_REGS
+		"\tcall __L4_Lipc\n"
+		"\tmovl %%ebp, %[mr2_out]\n"
+		__L4_RESTORE_REGS
+		: "=a" (*from_p), "=S" (tag.raw), "=b" (L4_VREG(utcb, L4_TCR_MR(1))),
+		  [mr2_out] "=m" (L4_VREG(utcb, L4_TCR_MR(2)))
+		: "a" (to.raw), "c" (timeouts), "d" (fromspec.raw),
+		  "S" (L4_VREG(utcb, L4_TCR_MR(0))), "D" (utcb));
+#endif
+	return tag;
+}
+
+
+static inline void L4_Unmap(L4_Word_t control)
+{
+	extern _C_ void __L4_Unmap(void);
+	void *utcb = __L4_Get_UtcbAddress();
+	__asm__ __volatile__ (
+		__L4_SAVE_REGS
+		"\tcall *%%ecx\n"
+		__L4_RESTORE_REGS
+		: "=S" (L4_VREG(utcb, L4_TCR_MR(0)))
+		: "S" (L4_VREG(utcb, L4_TCR_MR(0))), "D" (utcb),
+		  "a" (control), "c" (__L4_Unmap)
+		: "edx", __L4_CLOBBER_REGS);
+}
+
+
 #endif
