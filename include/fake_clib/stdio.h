@@ -15,10 +15,10 @@ struct fake_clib_file {
 typedef struct fake_clib_file FILE;
 
 
-extern void printf(const char *fmt, ...)
+extern int printf(const char *fmt, ...)
 	__attribute__((format(printf, 1, 2)));
 
-extern void fprintf(FILE *stream, const char *fmt, ...)
+extern int fprintf(FILE *stream, const char *fmt, ...)
 	__attribute__((format(printf, 2, 3)));
 
 extern int vsnprintf(

@@ -13,33 +13,36 @@ FILE *stdout = &stdout_file, *stderr = &stderr_file;
 extern void computchar(unsigned char ch);
 
 
-void vfprintf(FILE *stream, const char *fmt, va_list args)
+int vfprintf(FILE *stream, const char *fmt, va_list args)
 {
 	if(stream == stderr) {
 		printf("[ERR]: ");
 	}
 
 	char buffer[256];
-	vsnprintf(buffer, sizeof(buffer), fmt, args);
+	int n = vsnprintf(buffer, sizeof(buffer), fmt, args);
 	for(int i=0, len=strlen(buffer); i < len; i++) {
 		computchar(buffer[i]);
 	}
+	return n;
 }
 
 
-void fprintf(FILE *stream, const char *fmt, ...)
+int fprintf(FILE *stream, const char *fmt, ...)
 {
 	va_list al;
 	va_start(al, fmt);
-	vfprintf(stream, fmt, al);
+	int n = vfprintf(stream, fmt, al);
 	va_end(al);
+	return n;
 }
 
 
-void printf(const char *fmt, ...)
+int printf(const char *fmt, ...)
 {
 	va_list al;
 	va_start(al, fmt);
-	vfprintf(stdout, fmt, al);
+	int n = vfprintf(stdout, fmt, al);
 	va_end(al);
+	return n;
 }
