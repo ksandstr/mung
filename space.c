@@ -217,6 +217,23 @@ void space_put_page(
 }
 
 
+/* syscalls.
+ *
+ * TODO: divorce them from the x86_regs representation.
+ */
+
+void sys_unmap(struct x86_exregs *regs)
+{
+	printf("%s: called\n", __func__);
+}
+
+
+void sys_spacecontrol(struct x86_exregs *regs)
+{
+	printf("%s: called\n", __func__);
+}
+
+
 /* NOTE: this runs in the pre-heap environment. so htable ops aren't
  * available; instead the pages end up in the list given as parameter.
  * likewise kernel_space->mapdb is left uninitialized.

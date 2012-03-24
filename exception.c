@@ -11,6 +11,7 @@
 #include <ukernel/space.h>
 #include <ukernel/ipc.h>
 #include <ukernel/syscall.h>
+#include <ukernel/cpu.h>
 #include <ukernel/misc.h>
 
 
@@ -68,19 +69,26 @@ void isr_exn_ud_bottom(struct x86_exregs *regs)
 /* basically the slowest possible syscall wrappers. */
 void isr_exn_basic_sc_bottom(struct x86_exregs *regs)
 {
-	switch(regs->ebx) {
-		case SC_IPC:
-		case SC_LIPC:		/* TODO: special implementation of LIPC */
-			ipc_syscall(regs);
-			break;
+	static void (*const fn[])(struct x86_exregs *regs) = {
+		[SC_IPC] = &sys_ipc,
+		[SC_LIPC] = &sys_ipc,
+		[SC_UNMAP] = &sys_unmap,
+		[SC_THREADSWITCH] = &sys_threadswitch,
+		[SC_SCHEDULE] = &sys_schedule,
+		[SC_SPACECONTROL] = &sys_spacecontrol,
+		[SC_THREADCONTROL] = &sys_threadcontrol,
+		[SC_PROCESSORCONTROL] = &sys_processorcontrol,
+	};
 
-		default: {
-			struct thread *current = get_current_thread();
-			printf("unimplemented basic syscall %d (caller stopped)\n",
-				regs->eax);
-			current->status = TS_STOPPED;
-			return_to_scheduler(regs);
-		}
+	int sc_num = regs->ebx;
+	const int num_sc = sizeof(fn) / sizeof(fn[0]);
+	if(unlikely(sc_num >= num_sc) || unlikely(fn[sc_num] == NULL)) {
+		struct thread *current = get_current_thread();
+		printf("unknown basic syscall %d (caller stopped)\n", regs->eax);
+		current->status = TS_STOPPED;
+		return_to_scheduler(regs);
+	} else {
+		(*fn[sc_num])(regs);
 	}
 }
 

@@ -9,6 +9,7 @@
 
 #include <ukernel/thread.h>
 #include <ukernel/mm.h>
+#include <ukernel/x86.h>
 #include <ukernel/mapdb.h>
 
 
@@ -77,6 +78,9 @@ extern void space_put_page(
 static inline void space_commit(struct space *sp) {
 	/* emptiness */
 }
+
+extern void sys_unmap(struct x86_exregs *regs);
+extern void sys_spacecontrol(struct x86_exregs *regs);
 
 
 /* pages reserved before htable_add() can be used, are added to the list.

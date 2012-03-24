@@ -358,7 +358,7 @@ static void set_ipc_return(
 }
 
 
-void ipc_syscall(struct x86_exregs *regs)
+void sys_ipc(struct x86_exregs *regs)
 {
 	struct thread *current = get_current_thread();
 	current->ipc_to.raw = regs->eax;

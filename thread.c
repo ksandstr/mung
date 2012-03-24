@@ -279,6 +279,8 @@ size_t hash_thread_by_id(const void *ptr, void *dataptr) {
 }
 
 
+/* system calls */
+
 L4_Word_t sys_exregs(
 	L4_ThreadId_t dest,
 	L4_Word_t *control_p,
@@ -318,4 +320,22 @@ L4_Word_t sys_exregs(
 	}
 
 	return result.raw;
+}
+
+
+void sys_threadswitch(struct x86_exregs *regs)
+{
+	printf("%s: called\n", __func__);
+}
+
+
+void sys_schedule(struct x86_exregs *regs)
+{
+	printf("%s: called\n", __func__);
+}
+
+
+void sys_threadcontrol(struct x86_exregs *regs)
+{
+	printf("%s: called\n", __func__);
 }

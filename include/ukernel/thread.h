@@ -10,6 +10,7 @@
 #include <l4/types.h>
 #include <ukernel/mm.h>
 #include <ukernel/misc.h>
+#include <ukernel/x86.h>
 
 
 typedef uint32_t thread_id;
@@ -121,6 +122,10 @@ extern L4_Word_t sys_exregs(
 	L4_Word_t *sp_p, L4_Word_t *ip_p, L4_Word_t *flags_p,
 	L4_Word_t *udh_p,
 	L4_ThreadId_t *pager_p);
+
+extern void sys_threadswitch(struct x86_exregs *regs);
+extern void sys_schedule(struct x86_exregs *regs);
+extern void sys_threadcontrol(struct x86_exregs *regs);
 
 
 /* thread of tid's threadnum must not exist already. caller handles
