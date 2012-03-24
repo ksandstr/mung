@@ -87,7 +87,6 @@ void isr_exn_basic_sc_bottom(struct x86_exregs *regs)
 
 void isr_exn_exregs_sc_bottom(struct x86_exregs *regs)
 {
-	printf("%s: ExchangeRegisters called\n", __func__);
 	regs->eax = sys_exregs((L4_ThreadId_t)regs->eax, &regs->ecx,
 		&regs->edx, &regs->esi, &regs->edi, &regs->ebx,
 		(L4_ThreadId_t *)&regs->ebp);

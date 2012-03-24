@@ -21,6 +21,16 @@
 #include <ukernel/ipc.h>
 
 
+#define TRACE_VERBOSE 0		/* 1 for "active/passive send/receive" prints */
+
+
+#if TRACE_VERBOSE
+#define TRACE(fmt, ...) printf(fmt, __VA_ARGS__)
+#else
+#define TRACE(fmt, ...)
+#endif
+
+
 /* these are kept in sendwait_hash in a multiset way, i.e. use
  * htable_firstval() and so forth to scan.
  */
@@ -150,7 +160,7 @@ bool ipc_send_half(struct thread *self)
 	/* TODO: override TS_R_RECV when peer's ipc_from == self->id . */
 	if(likely(dest->status == TS_RECV_WAIT)) {
 		/* active send */
-		printf("%s: active send to %d:%d (from %d:%d)\n", __func__,
+		TRACE("%s: active send to %d:%d (from %d:%d)\n", __func__,
 			TID_THREADNUM(dest->id), TID_VERSION(dest->id),
 			TID_THREADNUM(self->id), TID_VERSION(self->id));
 
@@ -173,7 +183,7 @@ bool ipc_send_half(struct thread *self)
 		}
 	} else {
 		/* passive send */
-		printf("%s: passive send to %d:%d (from %d:%d)\n", __func__,
+		TRACE("%s: passive send to %d:%d (from %d:%d)\n", __func__,
 			TID_THREADNUM(dest->id), TID_VERSION(dest->id),
 			TID_THREADNUM(self->id), TID_VERSION(self->id));
 		struct ipc_wait *w = kmem_cache_alloc(ipc_wait_slab);
@@ -231,14 +241,14 @@ bool ipc_recv_half(struct thread *self)
 	}
 
 	if(from == NULL) {
-		printf("%s: passive receive to %d:%d (waiting on %d:%d)\n", __func__,
+		TRACE("%s: passive receive to %d:%d (waiting on %d:%d)\n", __func__,
 			TID_THREADNUM(self->id), TID_VERSION(self->id),
 			TID_THREADNUM(self->ipc_from.raw), TID_VERSION(self->ipc_from.raw));
 		self->status = TS_RECV_WAIT;
 		return false;
 	} else {
 		/* active receive */
-		printf("%s: active receive from %d:%d (to %d:%d)\n", __func__,
+		TRACE("%s: active receive from %d:%d (to %d:%d)\n", __func__,
 			TID_THREADNUM(from->id), TID_VERSION(from->id),
 			TID_THREADNUM(self->id), TID_VERSION(self->id));
 		assert(from->status == TS_SEND_WAIT);

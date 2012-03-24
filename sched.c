@@ -9,6 +9,16 @@
 #include <ukernel/thread.h>
 
 
+#define TRACE_VERBOSE 0		/* 1 for "[KU]-[KU]: %d:%d -> %d:%d" prints */
+
+
+#if TRACE_VERBOSE
+#define TRACE(fmt, ...) printf(fmt, __VA_ARGS__)
+#else
+#define TRACE(fmt, ...)
+#endif
+
+
 struct thread *current_thread = NULL;
 struct thread *scheduler_thread = NULL;
 
@@ -57,7 +67,7 @@ bool schedule(void)
 		}
 	}
 
-	printf("%s: %c-%c: %d:%d -> %d:%d\n", __func__,
+	TRACE("%s: %c-%c: %d:%d -> %d:%d\n", __func__,
 		self->space == kernel_space ? 'K' : 'U',
 		next->space == kernel_space ? 'K' : 'U',
 		TID_THREADNUM(self->id), TID_VERSION(self->id),
@@ -126,7 +136,7 @@ void return_to_scheduler(struct x86_exregs *regs)
 	assert(scheduler_thread != NULL);
 	assert(self != scheduler_thread);
 
-	printf("%s: %c-%c: %d:%d -> %d:%d\n", __func__,
+	TRACE("%s: %c-%c: %d:%d -> %d:%d\n", __func__,
 		self->space == kernel_space ? 'K' : 'U',
 		next->space == kernel_space ? 'K' : 'U',
 		TID_THREADNUM(self->id), TID_VERSION(self->id),
