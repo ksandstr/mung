@@ -29,7 +29,7 @@ tags: $(wildcard *.[ch])
 
 
 # TODO: remove the GCC-ism for compatiblity with clang. (ha ha ha ha ha ha)
-image.bin: linker.ld loader.o isr.o kmain.o fake_stdio.o kip.o cpu.o \
+image.bin: linker.ld loader.o isr.o kmain.o kip.o cpu.o \
 		dlmalloc.o heap.o pic.o timer.o thread.o context.o \
 		sched.o gdt.o idt.o exception.o irq.o space.o ipc.o mapdb.o \
 		ccan-htable.o ccan-list.o
