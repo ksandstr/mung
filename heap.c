@@ -162,3 +162,14 @@ void free_kern_page(struct page *page)
 {
 	list_add(&k_free_pages, &page->link);
 }
+
+
+/* interface for slab.c */
+struct page *kmem_alloc_new_page(void) {
+	return get_kern_page(0);
+}
+
+
+void kmem_free_page(struct page *p) {
+	free_kern_page(p);
+}

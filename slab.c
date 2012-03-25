@@ -104,7 +104,7 @@ void *kmem_cache_alloc(struct kmem_cache *cache)
 			slab = container_of(cache->free_list.n.next, struct slab, link);
 			list_del(cache->free_list.n.next);
 		} else {
-			struct page *kpage = get_kern_page(0);
+			struct page *kpage = kmem_alloc_new_page();
 			slab = kpage->vm_addr;
 			slab->mm_page = kpage;
 		}
@@ -180,7 +180,7 @@ int kmem_cache_shrink(struct kmem_cache *cache)
 	list_for_each_safe(&cache->free_list, slab, next, link) {
 		assert(slab->in_use == 0);
 		list_del_from(&cache->free_list, &slab->link);
-		free_kern_page(slab->mm_page);
+		kmem_free_page(slab->mm_page);
 		n_freed++;
 	}
 	assert(list_empty(&cache->free_list));

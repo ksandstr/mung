@@ -4,7 +4,6 @@
 
 #include <stdlib.h>
 #include <stdint.h>
-
 #include <ccan/compiler/compiler.h>
 
 
@@ -32,6 +31,14 @@ extern void kmem_cache_free(struct kmem_cache *cache, void *ptr);
 extern size_t kmem_cache_size(struct kmem_cache *cache);
 extern const char *kmem_cache_name(struct kmem_cache *cache);
 extern int kmem_cache_shrink(struct kmem_cache *cache);
+
+
+/* external API that must be implemented by users of slab.c . struct page is
+ * that defined in <ukernel/mm.h>, but not included here.
+ */
+struct page;
+extern struct page *kmem_alloc_new_page(void);
+extern void kmem_free_page(struct page *p);
 
 
 #endif
