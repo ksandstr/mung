@@ -258,4 +258,55 @@ static inline L4_Word_t L4_SpaceControl(
 }
 
 
+static inline L4_Word_t L4_ProcessorControl(
+	L4_Word_t ProcessorNo,
+	L4_Word_t InternalFrequency,
+	L4_Word_t ExternalFrequency,
+	L4_Word_t voltage)
+{
+	extern _C_ void __L4_ProcessorControl(void);
+	L4_Word_t result, dummy;
+	__asm__ __volatile__(
+		__L4_SAVE_REGS
+		"\tcall *%%edi\n"
+		__L4_RESTORE_REGS
+		: "=a" (result),
+		  "=c" (dummy), "=d" (dummy), "=S" (dummy), "=D" (dummy)
+		: "0" (ProcessorNo), "1" (InternalFrequency), "2" (ExternalFrequency),
+		  "3" (voltage), "D" (__L4_ProcessorControl)
+		: __L4_CLOBBER_REGS);
+
+	return result;
+}
+
+
+static inline L4_Word_t L4_MemoryControl(
+	L4_Word_t control,
+	const L4_Word_t *attributes)
+{
+	extern _C_ void __L4_MemoryControl(void);
+	void *utcb = __L4_Get_UtcbAddress();
+	L4_Word_t result, dummy;
+	__asm__ __volatile__ (
+		__L4_SAVE_REGS
+		"\tpushl %%edi\n"
+		"\tmovl	%[utcb], %%edi\n"
+		"\tmovl	12(%[attrs]), %%ebp\n"
+		"\tmovl	8(%[attrs]), %%ebx\n"
+		"\tmovl	4(%[attrs]), %%edx\n"
+		"\tmovl	(%[attrs]), %%ecx\n"
+		"\tcall	*(%%esp)\n"
+		"\tpopl	%%edi\n"
+		__L4_RESTORE_REGS
+		: "=a" (result),
+		  "=c" (dummy), "=d" (dummy), "=S" (dummy), "=D" (dummy)
+		: "0" (control), [attrs] "1" (attributes),
+		  "3" (L4_VREG(utcb, L4_TCR_MR(0))),
+		  [utcb] "m" (utcb), "D" (__L4_MemoryControl)
+		: __L4_CLOBBER_REGS);
+
+	return result;
+}
+
+
 #endif
