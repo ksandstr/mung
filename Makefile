@@ -3,19 +3,22 @@ export CFGDIR:=$(abspath .)
 include config.mk
 
 
-all: tags image.bin
+all: tags
+	+@make -C lib all
 	+@make -C user all
-
+	+@make image.bin
 
 clean:
 	@rm -f *.o
 	+@make -C user clean
+	+@make -C lib clean
 
 
 distclean: clean
 	@rm -f image.bin tags
 	@rm -rf .deps
 	+@make -C user distclean
+	+@make -C lib distclean
 
 
 tags: $(wildcard *.[ch])
@@ -23,13 +26,13 @@ tags: $(wildcard *.[ch])
 
 
 # TODO: remove the GCC-ism for compatiblity with clang. (ha ha ha ha ha ha)
-image.bin: linker.ld loader.o isr.o kmain.o fake_stdio.o string.o kip.o cpu.o \
-		dlmalloc.o heap.o slab.o pic.o timer.o thread.o context.o \
+image.bin: linker.ld loader.o isr.o kmain.o fake_stdio.o kip.o cpu.o \
+		dlmalloc.o heap.o pic.o timer.o thread.o context.o \
 		sched.o gdt.o idt.o exception.o irq.o space.o ipc.o mapdb.o \
-		ccan-htable.o ccan-list.o rbtree.o hash.o vsnprintf.o \
-		strlcat.o strlcpy.o
+		ccan-htable.o ccan-list.o
 	@echo "  LD $@"
 	@ld -T linker.ld -o $@ $(filter %.o,$^) \
+		-L lib -lukernel_util \
 		$(shell gcc $(CFLAGS) -print-libgcc-file-name)
 
 
