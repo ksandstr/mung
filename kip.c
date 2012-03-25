@@ -125,22 +125,22 @@ void make_kip(void *mem)
 		int len = 0;
 		make_syscall_stub(mem + kip_pos, &len, syscalls[i].sc_num);
 		*(L4_Word_t *)(mem + syscalls[i].offset) = kip_pos;
-		kip_pos += (len + 3) & ~3;
+		kip_pos += (len + 63) & ~63;
 	}
 	/* slightly more special ones. */
 	int len = 0;
 	/* SystemClock (pure vsyscall) */
 	make_systemclock_stub(mem + kip_pos, &len);
 	*(L4_Word_t *)(mem + 0xf0) = kip_pos;
-	kip_pos += (len + 3) & ~3;
+	kip_pos += (len + 63) & ~63;
 	/* MemoryControl */
 	make_int_sc_stub(mem + kip_pos, &len, 0x8e);
 	*(L4_Word_t *)(mem + 0xdc) = kip_pos;
-	kip_pos += (len + 3) & ~3;
+	kip_pos += (len + 63) & ~63;
 	/* ExchangeRegisters */
 	make_int_sc_stub(mem + kip_pos, &len, 0x8d);
 	*(L4_Word_t *)(mem + 0xec) = kip_pos;
-	kip_pos += (len + 3) & ~3;
+	kip_pos += (len + 63) & ~63;
 
 	void *memdesc_base = mem + kip_pos;
 	/* TODO: add # of memory descriptors in the lower 16 bits */
