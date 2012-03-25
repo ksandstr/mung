@@ -250,7 +250,24 @@ void sys_unmap(struct x86_exregs *regs)
 
 void sys_spacecontrol(struct x86_exregs *regs)
 {
-	printf("%s: called\n", __func__);
+	L4_Word_t control = regs->ecx, result, old_ctl;
+	L4_ThreadId_t spacespec = { .raw = regs->eax };
+	L4_Fpage_t kip_area = { .raw = regs->edx },
+		utcb_area = { .raw = regs->esi },
+		redirector = { .raw = regs->edi };
+
+	printf("%s: called; ctl %#x, spacespec %d:%d, kip_area %#x:%#x\n",
+		__func__, control,
+		TID_THREADNUM(spacespec.raw), TID_VERSION(spacespec.raw),
+		(unsigned)L4_Address(kip_area), (unsigned)L4_Size(kip_area));
+	printf("%s: ... utcb_area %#x:%#x, redirector %d:%d\n", __func__,
+		(unsigned)L4_Address(utcb_area), (unsigned)L4_Size(utcb_area),
+		TID_THREADNUM(redirector.raw), TID_VERSION(redirector.raw));
+	result = 0xdeadbeef;
+	old_ctl = 0x42424242;
+
+	regs->eax = result;
+	regs->ecx = old_ctl;
 }
 
 

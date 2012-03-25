@@ -232,4 +232,30 @@ static inline L4_Word_t L4_Schedule(
 }
 
 
+static inline L4_Word_t L4_SpaceControl(
+	L4_ThreadId_t spacespec,
+	L4_Word_t control,
+	L4_Fpage_t kip_area,
+	L4_Fpage_t utcb_area,
+	L4_ThreadId_t redirector,
+	L4_Word_t *ctl_out)
+{
+	extern _C_ void __L4_SpaceControl(void);
+	L4_Word_t result, dummy;
+	__asm__ __volatile__ (
+		__L4_SAVE_REGS
+		"\tmovl %%edi, %%ebx\n"
+		"\tmovl %[redir], %%edi\n"
+		"\tcall *%%ebx\n"
+		__L4_RESTORE_REGS
+		: "=a" (result), "=d" (dummy), "=c" (*ctl_out),
+		  "=S" (dummy), "=D" (dummy)
+		: "a" (spacespec.raw), "c" (control), "d" (kip_area.raw),
+		  "S" (utcb_area.raw), [redir] "m" (redirector.raw),
+		  "D" (__L4_SpaceControl)
+		: __L4_CLOBBER_REGS);
+	return result;
+}
+
+
 #endif

@@ -158,6 +158,20 @@ static void threadctl_test(void)
 }
 
 
+void spacectl_test(void)
+{
+	printf("spacecontrol test start.\n");
+
+	L4_Word_t old_ctl, result = L4_SpaceControl(L4_Myself(),
+		0xcafeb00b, L4_FpageLog2(0x10000, 12), L4_FpageLog2(0x11000, 15),
+		L4_nilthread, &old_ctl);
+	printf("spacecontrol result %#x, old_ctl %#x\n", (unsigned)result,
+		(unsigned)old_ctl);
+
+	printf("spacecontrol test ends.\n");
+}
+
+
 static void threadswitch_test(void)
 {
 	printf("threadswitch test start.\n");
@@ -192,6 +206,7 @@ int main(void)
 	threadctl_test();
 	threadswitch_test();
 	schedule_test();
+	spacectl_test();
 
 	/* L4_Word64_t now = */ L4_SystemClock();
 
