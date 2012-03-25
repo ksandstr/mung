@@ -196,4 +196,14 @@ static inline L4_Word_t L4_ThreadControl(
 }
 
 
+static inline void L4_ThreadSwitch(L4_ThreadId_t dest)
+{
+	extern _C_ void __L4_ThreadSwitch(void);
+	__asm__ __volatile__(
+		"\tcall *%%ecx\n"
+		:: "a" (dest.raw), "c" (__L4_ThreadSwitch)
+		: "memory", __L4_CLOBBER_REGS);
+}
+
+
 #endif

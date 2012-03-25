@@ -325,7 +325,9 @@ L4_Word_t sys_exregs(
 
 void sys_threadswitch(struct x86_exregs *regs)
 {
-	printf("%s: called\n", __func__);
+	L4_ThreadId_t target = { .raw = regs->eax };
+	printf("%s: called; target %d:%d\n", __func__,
+		TID_THREADNUM(target.raw), TID_VERSION(target.raw));
 }
 
 

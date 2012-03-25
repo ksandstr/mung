@@ -158,6 +158,14 @@ static void threadctl_test(void)
 }
 
 
+static void threadswitch_test(void)
+{
+	printf("threadswitch test start.\n");
+	L4_ThreadSwitch(L4_nilthread);
+	printf("threadswitch test end.\n");
+}
+
+
 int main(void)
 {
 	printf("hello, world!\n");
@@ -171,6 +179,7 @@ int main(void)
 	tid_test();
 	unmap_test();
 	threadctl_test();
+	threadswitch_test();
 
 	/* L4_Word64_t now = */ L4_SystemClock();
 
