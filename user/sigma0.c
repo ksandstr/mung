@@ -141,6 +141,23 @@ void unmap_test(void)
 }
 
 
+static void threadctl_test(void)
+{
+	printf("threadcontrol test start.\n");
+
+	/* thread creation. */
+	L4_ThreadId_t dest = { .global = { .X.version = 1, .X.thread_no = 129 } };
+	L4_Word_t result = L4_ThreadControl(dest, L4_Myself(), L4_nilthread,
+		L4_Pager(), __L4_Get_UtcbAddress() + 512);
+	printf("creating threadcontrol result %u\n", (unsigned)result);
+	if(result == 0) {
+		printf("error code %#x\n", L4_ErrorCode());
+	}
+
+	printf("threadcontrol test ends.\n");
+}
+
+
 int main(void)
 {
 	printf("hello, world!\n");
@@ -153,6 +170,7 @@ int main(void)
 
 	tid_test();
 	unmap_test();
+	threadctl_test();
 
 	/* L4_Word64_t now = */ L4_SystemClock();
 

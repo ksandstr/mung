@@ -171,4 +171,29 @@ static inline void L4_Unmap(L4_Word_t control)
 }
 
 
+static inline L4_Word_t L4_ThreadControl(
+	L4_ThreadId_t dest,
+	L4_ThreadId_t space,
+	L4_ThreadId_t scheduler,
+	L4_ThreadId_t pager,
+	void *utcb_location)
+{
+	extern _C_ void __L4_ThreadControl(void);
+	L4_Word_t result, dummy;
+	__asm__ __volatile__(
+		__L4_SAVE_REGS
+		"\tmovl %%edi, %%ebx\n"
+		"\tmovl %[utcbloc], %%edi\n"
+		"\tcall *%%ebx\n"
+		__L4_RESTORE_REGS
+		: "=a" (result),
+		  "=c" (dummy), "=d" (dummy), "=S" (dummy), "=D" (dummy)
+		: "a" (dest.raw), "c" (pager.raw), "d" (scheduler.raw),
+		  "S" (space.raw), "D" (__L4_ThreadControl),
+		  [utcbloc] "m" (utcb_location)
+		: __L4_CLOBBER_REGS);
+	return result;
+}
+
+
 #endif

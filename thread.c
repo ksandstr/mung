@@ -337,5 +337,22 @@ void sys_schedule(struct x86_exregs *regs)
 
 void sys_threadcontrol(struct x86_exregs *regs)
 {
-	printf("%s: called\n", __func__);
+	L4_ThreadId_t dest = { .raw = regs->eax },
+		pager = { .raw = regs->ecx },
+		scheduler = { .raw = regs->edx },
+		spacespec = { .raw = regs->esi };
+	L4_Word_t utcb_loc = regs->edi, result;
+
+	printf("%s: called; dest %d:%d, pager %d:%d, scheduler %d:%d, space %d:%d\n",
+		__func__,
+		TID_THREADNUM(dest.raw), TID_VERSION(dest.raw),
+		TID_THREADNUM(pager.raw), TID_VERSION(pager.raw),
+		TID_THREADNUM(scheduler.raw), TID_VERSION(scheduler.raw),
+		TID_THREADNUM(spacespec.raw), TID_VERSION(spacespec.raw));
+	printf("%s: utcb_loc %p\n", __func__, (void *)utcb_loc);
+	result = 0;
+	void *utcb = thread_get_utcb(get_current_thread());
+	L4_VREG(utcb, L4_TCR_ERRORCODE) = 1;	/* "no privilege" */
+
+	regs->eax = result;
 }
