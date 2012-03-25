@@ -6,11 +6,13 @@ include config.mk
 all: tags
 	+@make -C lib all
 	+@make -C user all
+	+@make -C mbiloader all
 	+@make image.bin
 
 clean:
 	@rm -f *.o
 	+@make -C user clean
+	+@make -C mbiloader clean
 	+@make -C lib clean
 
 
@@ -18,6 +20,7 @@ distclean: clean
 	@rm -f image.bin tags
 	@rm -rf .deps
 	+@make -C user distclean
+	+@make -C mbiloader distclean
 	+@make -C lib distclean
 
 
