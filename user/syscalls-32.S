@@ -31,6 +31,8 @@ __L4_ProcessorControl:	call __L4__syscall_setup
 
 
 
+	.section .text
+
 	.align 16,0
 __L4__syscall_setup:
 	subl $5, (%esp)			/* return to the same stub */
@@ -50,9 +52,8 @@ __L4__syscall_setup:
 3:	lock
 	nop
 	xorl %ecx, %ecx
-	lea __L4__syscall_table, %esi
 	jmp 2f
-1:	movzwl 4(%esi, %ecx, 1), %ebx	# ebx = offset index in kip
+1:	movzwl __L4__syscall_table+4(%ecx), %ebx	# ebx = offset index in kip
 	movl %eax, %edx
 	subl $5, %edx
 	movb $0xe9, (%edi)		# JMP rel32
@@ -60,7 +61,7 @@ __L4__syscall_setup:
 	subl %edi, %edx			# ... i.e. abs - stub - 5
 	movl %edx, 1(%edi)
 	addl $6, %ecx
-2:	movl (%esi, %ecx, 1), %edi	# edi = stub address
+2:	movl __L4__syscall_table(%ecx), %edi	# edi = stub address
 	testl %edi, %edi
 	jne 1b
 /* sync memory writes and indicate completion */
@@ -74,8 +75,6 @@ __L4__syscall_setup:
 #define ENTRY(name, index) \
 	.long __L4_##name; \
 	.word index;
-
-	.section .data.syscalltable, "", @progbits
 
 __L4__syscall_table:
 	ENTRY(SystemClock, 0xf0)
