@@ -333,7 +333,20 @@ void sys_threadswitch(struct x86_exregs *regs)
 
 void sys_schedule(struct x86_exregs *regs)
 {
-	printf("%s: called\n", __func__);
+	L4_ThreadId_t dest = { .raw = regs->eax };
+	L4_Word_t timectl = regs->edx, procctl = regs->esi, prioctl = regs->ecx,
+		preemptctl = regs->edi, result, old_timectl;
+
+	printf("%s: called; dest %d:%d, procctl %#x, prioctl %#x\n", __func__,
+		TID_THREADNUM(dest.raw), TID_VERSION(dest.raw), (unsigned)procctl,
+		(unsigned)prioctl);
+	printf("%s: ... timectl %#x, preemptctl %#x\n", __func__,
+		(unsigned)timectl, (unsigned)preemptctl);
+	old_timectl = 0;
+	result = 0;
+
+	regs->eax = result;
+	regs->edx = old_timectl;
 }
 
 

@@ -206,4 +206,30 @@ static inline void L4_ThreadSwitch(L4_ThreadId_t dest)
 }
 
 
+static inline L4_Word_t L4_Schedule(
+	L4_ThreadId_t dest,
+	L4_Word_t timectl,
+	L4_Word_t procctl,
+	L4_Word_t prioctl,
+	L4_Word_t preemptctl,
+	L4_Word_t *timectl_out)
+{
+	extern _C_ void __L4_Schedule(void);
+	L4_Word_t result, dummy;
+	__asm__ __volatile__ (
+		__L4_SAVE_REGS
+		"\tmovl %%edi, %%ebx\n"
+		"\tmovl %[preemptctl], %%edi\n"
+		"\tcall *%%ebx\n"
+		__L4_RESTORE_REGS
+		: "=a" (result), "=c" (dummy), "=d" (*timectl_out),
+		  "=S" (dummy), "=D" (dummy)
+		: "a" (dest.raw), "c" (prioctl), "d" (timectl),
+		  "S" (procctl), [preemptctl] "m" (preemptctl),
+		  "D" (__L4_Schedule)
+		: __L4_CLOBBER_REGS);
+	return result;
+}
+
+
 #endif
