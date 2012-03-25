@@ -81,14 +81,24 @@ void make_kip(void *mem)
 	L4_Word_t *kerndescptr_p = mem + 0xc,
 		*procdescptr_p = mem + 0xbc,
 		*memoryinfo_p = mem + 0x54;
-	*(L4_Word_t *)(mem + 0xa8) = 0; // UtcbInfo;
-	*(L4_Word_t *)(mem + 0xac) = 0; // kipareainfo;
-	*(L4_Word_t *)(mem + 0xb8) = 0; // bootinfo;
+	/* UtcbInfo: minimum area 4k (one page); size 512B; alignment 4k (page) */
+	*(L4_Word_t *)(mem + 0xa8) = 12 << 16 | 12 << 10 | 512;
+	*(L4_Word_t *)(mem + 0xac) = 12; /* kipareainfo (one page) */
+	/* BootInfo (0xb8) is left unaltered, per spec */
 
-	*(L4_Word_t *)(mem + 0xc0) = 0; // clockinfo;
-	*(L4_Word_t *)(mem + 0xc4) = 0; // threadinfo;
-	*(L4_Word_t *)(mem + 0xc8) = 0; // pageinfo;
-	*(L4_Word_t *)(mem + 0xcc) = 0; // processorinfo;
+	/* ClockInfo: 1 ms clock resolution, 1 ms scheduler resolution */
+	*(L4_Word_t *)(mem + 0xc0) =
+		(L4_Word_t)L4_TimePeriod(1000).raw << 16
+		| (L4_Word_t)L4_TimePeriod(1000).raw;
+	/* ThreadInfo: UserBase 128, SystemBase 16, full bits in threadno */
+	*(L4_Word_t *)(mem + 0xc4) = 128 << 20 | 16 << 8 | 18;
+	/* PageInfo: page-size mask for only 4k pages (for now);
+	 *           rw independent (execute implied by read).
+	 */
+	*(L4_Word_t *)(mem + 0xc8) =
+		(1 << 2) << 10 | (L4_Readable | L4_Writable);
+	/* ProcessorInfo: (FIXME) procdescsize 0, just the one processor */
+	*(L4_Word_t *)(mem + 0xcc) = 0 << 28 | 0;
 
 	/* syscall stubs. */
 	static const struct {
