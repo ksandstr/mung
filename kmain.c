@@ -385,8 +385,8 @@ static void pager_thread(void *parameter)
 				/* sigma0's con_putstr() protocol. */
 				char buf[257];
 				for(int i=0; i < tag.X.u; i++) {
-					*(L4_Word_t *)&buf[i * 4] = L4_VREG(utcb,
-						L4_TCR_MR(i + 1));
+					L4_Word_t val = L4_VREG(utcb, L4_TCR_MR(i + 1));
+					memcpy(&buf[i * 4], &val, sizeof(L4_Word_t));
 				}
 				buf[tag.X.u * 4] = '\0';
 				int len = strlen(buf);
