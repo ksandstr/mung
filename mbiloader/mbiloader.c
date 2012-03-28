@@ -255,7 +255,7 @@ int bootmain(multiboot_info_t *mbi, uint32_t magic)
 			else if(mme[i].addr < 640 * 1024) {
 				uintptr_t end = MIN(uintptr_t, mme[i].addr + mme[i].len,
 					640 * 1024);
-				mem_before_640k += end - mme[i].addr;
+				mem_before_640k += (end - mme[i].addr) / 1024;
 			}
 
 			if(mme[i].addr + mme[i].len > 0xffffffffull) {
