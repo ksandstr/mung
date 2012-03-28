@@ -22,10 +22,11 @@ distclean: clean
 	+@make -C user distclean
 	+@make -C mbiloader distclean
 	+@make -C lib distclean
+	@find . -name ".deps" -type d -print|xargs rm -rf
 
 
-tags: $(wildcard *.[ch])
-	@ctags -R .
+tags: $(shell find . -iname "*.[ch]" -print)
+	@ctags -R *
 
 
 # TODO: remove the GCC-ism for compatiblity with clang. (ha ha ha ha ha ha)
