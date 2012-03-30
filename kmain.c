@@ -514,6 +514,9 @@ static void crawl_multiboot_info(
 			r_start = MIN(uintptr_t, bm->start, r_start);
 			r_end = MAX(uintptr_t, bm->end - 1, r_end);
 		}
+		init_kernel_heap(m_base, mbi->mods_count, &r_start, &r_end);
+	} else {
+		init_kernel_heap(NULL, 0, &r_start, &r_end);
 	}
 
 	bool found_mem = false;
@@ -535,7 +538,6 @@ static void crawl_multiboot_info(
 				&& mm->addr <= ~0u)
 			{
 				found_mem = true;
-				init_kernel_heap(mm, &r_start, &r_end);
 			}
 		}
 	}

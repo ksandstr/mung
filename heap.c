@@ -82,22 +82,33 @@ void add_boot_pages(intptr_t start, intptr_t end)
  * page. indicates which range to identity map by *resv_start and *resv_end.
  */
 void init_kernel_heap(
-	const struct multiboot_mmap_entry *mm,
+	const multiboot_module_t *mods,
+	int mods_count,
 	uintptr_t *resv_start,
 	uintptr_t *resv_end)
 {
 	extern char _start, _end;
 	uintptr_t next_addr = ((uintptr_t)&_end + PAGE_SIZE - 1) & ~PAGE_MASK;
 
-	/* first, take a static 2 MiB for early kernel memory that's allocated per
-	 * page.
-	 */
+	/* take a bunch of pages for early slab allocation. */
 	static struct page first_pages[N_FIRST_PAGES];
-	for(int i=0; i < N_FIRST_PAGES; i++) {
-		first_pages[i].id = next_addr >> PAGE_BITS;
-		first_pages[i].vm_addr = (void *)next_addr;
-		next_addr += PAGE_SIZE;
-		list_add(&k_free_pages, &first_pages[i].link);
+	size_t got = 0;
+	while(got < N_FIRST_PAGES) {
+		/* check that "next_addr" isn't inside one of the boot modules. */
+		bool overlap = false;
+		for(int i=0; i < mods_count; i++) {
+			if(mods[i].mod_start <= got && mods[i].mod_end > got) {
+				overlap = true;
+				break;
+			}
+		}
+		if(!overlap) {
+			struct page *pg = &first_pages[got++];
+			pg->id = next_addr >> PAGE_BITS;
+			pg->vm_addr = (void *)next_addr;
+			list_add(&k_free_pages, &pg->link);
+			next_addr += PAGE_SIZE;
+		}
 	}
 
 	/* initialize page slab & return. */
