@@ -21,22 +21,8 @@
 #ifndef SEEN_INCLUDE_KERNEL_IOPORT_H
 #define SEEN_INCLUDE_KERNEL_IOPORT_H
 
-#if 0
 
-#include <kernel/types.h>
 #include <l4/types.h>
-#include <l4/arch.h>
-
-#else
-
-typedef unsigned char L4_Word8_t;
-typedef unsigned short L4_Word16_t;
-typedef unsigned int L4_Word32_t;
-typedef unsigned long long L4_Word64_t;
-
-typedef L4_Word32_t L4_Word_t;
-
-#endif
 
 typedef L4_Word16_t ioport_t;
 
