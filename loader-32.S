@@ -1,18 +1,4 @@
 
-
-# multiboot header
-	.set ALIGN, 1<<0
-	.set MEMINFO, 1<<1
-	.set FLAGS, ALIGN | MEMINFO
-	.set MAGIC, 0x1BADB002
-	.set CHECKSUM, -(MAGIC + FLAGS)
-
-	.align 4
-	.long MAGIC
-	.long FLAGS
-	.long CHECKSUM
-
-
 # loader program
 	.global loader
 	.global _start
@@ -24,7 +10,7 @@ loader:
 	pushl $0
 	popf
 
-	/* call kmain(mbi, magic) */
+	/* call kmain(*P, magic) */
 	pushl %eax
 	pushl %ebx
 	call kmain

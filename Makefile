@@ -7,7 +7,7 @@ all: tags
 	+@make -C lib all
 	+@make -C user all
 	+@make -C mbiloader all
-	+@make image.bin
+	+@make ia32-kernel
 
 clean:
 	@rm -f *.o
@@ -17,7 +17,7 @@ clean:
 
 
 distclean: clean
-	@rm -f image.bin tags
+	@rm -f ia32-kernel tags
 	@rm -rf .deps
 	+@make -C user distclean
 	+@make -C mbiloader distclean
@@ -30,7 +30,7 @@ tags: $(shell find . -iname "*.[ch]" -print)
 
 
 # TODO: remove the GCC-ism for compatiblity with clang. (ha ha ha ha ha ha)
-image.bin: linker.ld loader.o isr.o kmain.o kip.o cpu.o \
+ia32-kernel: linker.ld loader.o isr.o kmain.o kip.o cpu.o \
 		dlmalloc.o heap.o pic.o timer.o thread.o context.o \
 		sched.o gdt.o idt.o exception.o irq.o space.o ipc.o mapdb.o \
 		ccan-htable.o ccan-list.o

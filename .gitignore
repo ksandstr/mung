@@ -1,6 +1,9 @@
+# outputs
+ia32-kernel
+tags
+
+# detritus
 .*.sw[opn]
 *~
 *.o
-*.bin
-tags
 .deps
