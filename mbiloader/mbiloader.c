@@ -5,6 +5,10 @@
 #include <string.h>
 #include <assert.h>
 
+#include <l4/types.h>
+#include <l4/kcp.h>
+#include <l4/kip.h>
+
 #include <ukernel/x86.h>
 #include <ukernel/16550.h>
 #include <ukernel/mm.h>
@@ -14,7 +18,9 @@
 #include "elf.h"
 
 
+/* TODO: add dynamic memory allocation? */
 #define MAX_BOOT_MODS 32
+#define MAX_MMAP_ENTS 32
 
 
 struct boot_module
@@ -101,13 +107,17 @@ void *malloc(size_t size) {
 }
 
 
-/* construct a 32-bit kernel configuration page. */
+/* construct a 32-bit kernel configuration page.
+ * TODO: handle kdebug also.
+ */
 static void fill_kcp(
 	uint8_t *kcp_base,
 	struct boot_module *kernel_mod,
 	struct boot_module *s0_mod,
 	struct boot_module *s1_mod,
-	struct boot_module *roottask_mod)
+	struct boot_module *roottask_mod,
+	int mmap_count,
+	const struct multiboot_mmap_entry *mm)
 {
 	memset(kcp_base, 0, PAGE_SIZE);
 
@@ -141,13 +151,61 @@ static void fill_kcp(
 	*(L4_Word_t *)&kcp_base[0x4c] = roottask_mod != &null_mod
 		? (roottask_mod->load_end | PAGE_MASK) : 0;
 
-	*(L4_Word_t *)&kcp_base[0x54] = 0;		/* MemoryInfo */
 	*(L4_Word_t *)&kcp_base[0x58] = 0;		/* kdebug.config0 */
 	*(L4_Word_t *)&kcp_base[0x5c] = 0;		/* kdebug.config1 */
 
 	*(L4_Word_t *)&kcp_base[0xb8] = 0;		/* BootInfo */
 
-	/* TODO: memory descriptors */
+	/* memory descriptors. the bootloader passes just conventional and
+	 * reserved memory.
+	 */
+	const int md_pos = 0x100;
+	L4_MemoryDesc_t *mdbuf = (L4_MemoryDesc_t *)&kcp_base[md_pos];
+	int p = 0;
+	/* the x86 virtual address space. */
+	mdbuf[p++] = (L4_MemoryDesc_t){
+		.x.type = L4_ConventionalMemoryType, .x.v = 1,
+		.x.low = 0, .x.high = ~0ul >> 10,
+	};
+	for(int i=0; i < mmap_count; i++) {
+		if(mm[i].type != MULTIBOOT_MEMORY_AVAILABLE) {
+			/* bootloader specific, pass type as seen */
+			mdbuf[p++] = (L4_MemoryDesc_t){
+				.x.type = L4_BootLoaderSpecificMemoryType,
+				.x.t = mm[i].type, .x.v = 0,
+				.x.low = mm[i].addr >> 10,
+				.x.high = (mm[i].addr + mm[i].len - 1) >> 10,
+			};
+		} else {
+			/* available memory. pass as conventional. */
+			mdbuf[p++] = (L4_MemoryDesc_t){
+				.x.type = L4_ConventionalMemoryType, .x.v = 0,
+				.x.low = mm[i].addr >> 10,
+				.x.high = (mm[i].addr + mm[i].len - 1) >> 10,
+			};
+		}
+	}
+	/* dedicate memory for the idempotently mapped kernel/root servers */
+	struct boot_module *bms[] = {
+		s0_mod, s1_mod, roottask_mod, kernel_mod
+	};
+	for(int i=0; i < sizeof(bms) / sizeof(bms[0]); i++) {
+		struct boot_module *m = bms[i];
+		if(m != NULL && m->end > 0) {
+			printf("dedicating %#x .. %#x for boot module %d\n",
+				m->load_start, m->load_end, i);
+			mdbuf[p++] = (L4_MemoryDesc_t){
+				.x.type = L4_DedicatedMemoryType, .x.v = 0,
+				.x.low = m->load_start >> 10, .x.high = m->load_end >> 10,
+			};
+		}
+	}
+
+	/* TODO: reserve non-loaded boot module memory also! */
+
+	/* MemoryInfo */
+	assert(offsetof(L4_KernelConfigurationPage_t, MemoryInfo) == 0x54);
+	*(L4_Word_t *)&kcp_base[0x54] = md_pos << 16 | p;
 }
 
 
@@ -244,12 +302,23 @@ int bootmain(multiboot_info_t *mbi, uint32_t magic)
 	/* find top of physical memory. */
 	uintptr_t ram_top = 0;
 	size_t mem_before_640k = 0, mem_after_1m = 0;
+	int mmap_count = 0;
+	struct multiboot_mmap_entry mmap_ents[MAX_MMAP_ENTS];
 	if(CHECK_FLAG(mbi->flags, MULTIBOOT_INFO_MEM_MAP)) {
 		printf("mmap_length %#x, mmap_addr %#x\n", mbi->mmap_length,
 			mbi->mmap_addr);
+		mmap_count = mbi->mmap_length / sizeof(struct multiboot_mmap_entry);
+		/* copy them off. */
+		memcpy(mmap_ents, (void *)mbi->mmap_addr,
+			mmap_count * sizeof(struct multiboot_mmap_entry));
 		struct multiboot_mmap_entry *mme = (void *)mbi->mmap_addr;
-		for(int i=0; i < mbi->mmap_length / sizeof(*mme); i++) {
-			if(mme[i].type == MULTIBOOT_MEMORY_RESERVED) continue;
+		for(int i=0; i < mmap_count; i++) {
+			printf("  %s: addr 0x%x, len 0x%x (%d MiB)\n",
+				mme[i].type == MULTIBOOT_MEMORY_AVAILABLE
+					? "available" : "reserved",
+				(unsigned)mme[i].addr, (unsigned)mme[i].len,
+				(int)(mme[i].len / (1024 * 1024)));
+			if(mme[i].type != MULTIBOOT_MEMORY_AVAILABLE) continue;
 
 			if(mme[i].addr >= 0x100000) mem_after_1m += mme[i].len / 1024;
 			else if(mme[i].addr < 640 * 1024) {
@@ -266,7 +335,15 @@ int bootmain(multiboot_info_t *mbi, uint32_t magic)
 		}
 		printf("MBI ram_top is %#lx\n", (unsigned long)ram_top);
 	} else {
-		panic("no multiboot memory-map info!");
+		printf("no multiboot memory-map info!");
+	}
+
+	/* get parameters for "*P". fall back to the conservative sum from
+	 * before.
+	 */
+	if(CHECK_FLAG(mbi->flags, MULTIBOOT_INFO_MEMORY)) {
+		mem_before_640k = mbi->mem_lower;
+		mem_after_1m = mbi->mem_upper;
 	}
 
 	/* scan boot modules, noting their load-ranges. */
@@ -337,7 +414,8 @@ int bootmain(multiboot_info_t *mbi, uint32_t magic)
 
 	void *kcp_base = (void *)heap_start;
 	heap_start += PAGE_SIZE;
-	fill_kcp(kcp_base, kernel_mod, s0_mod, s1_mod, roottask_mod);
+	fill_kcp(kcp_base, kernel_mod, s0_mod, s1_mod, roottask_mod,
+		mmap_count, mmap_ents);
 
 	/* the x86 boot parameter "*P"; we'll recycle some unspecified KCP fields
 	 * for this.
