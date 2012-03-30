@@ -444,64 +444,6 @@ void malloc_panic(void) {
 }
 
 
-static void crawl_kcp_memdescs(
-	void *kcp_base,
-	uintptr_t *resv_start_p,
-	uintptr_t *resv_end_p)
-{
-	uintptr_t r_start = ~0ul, r_end = 0;
-
-	L4_Word_t meminfo = *(L4_Word_t *)(kcp_base + 0x54),
-		*md_base = kcp_base + (meminfo >> 16);
-	int md_count = (meminfo & 0xffff);
-	printf("KCP has %d memdescs (%d bytes)\n", md_count,
-		md_count * sizeof(L4_Word_t) * 2);
-	/* (TODO: enforce a maximum size for the memdesc array.) */
-	bool found_mem = false;
-	for(int i=0; i < md_count; i++) {
-		L4_Word_t low = md_base[i*2 + 0], high = md_base[i * 2 + 1];
-		int type = low & 0xf; //, t = (low >> 4) & 0xf;
-		bool virtual = CHECK_FLAG(low, 0x200);
-		low &= ~0x3ff;
-		high &= ~0x3ff;
-		size_t size = (high - low + 1) / 1024;
-		if(!virtual && type == 1 && size >= 4 * 1024) {
-			/* conventional physical memory (the good shit) */
-			printf("... item %d is %lu KiB of physical memory [%#x .. %#x]\n",
-				i, (unsigned long)size, low, high);
-			found_mem = true;
-		}
-		/* TODO: examine other types. add reserved sections for multiboot
-		 * modules. and so forth
-		 */
-	}
-
-#if 0
-	if(CHECK_FLAG(mbi->flags, MULTIBOOT_INFO_MODS)) {
-		printf("mods_count %u, mods_addr 0x%x\n", mbi->mods_count,
-			mbi->mods_addr);
-		multiboot_module_t *m_base = (multiboot_module_t *)mbi->mods_addr;
-		num_boot_mods = mbi->mods_count;
-		for(int i=0; i < mbi->mods_count; i++) {
-			struct boot_module *bm = &boot_mods[i];
-			bm->start = m_base[i].mod_start;
-			bm->end = m_base[i].mod_end;
-			strncpy(bm->cmdline, (const char *)m_base[i].cmdline,
-				sizeof(bm->cmdline));
-			r_start = MIN(uintptr_t, bm->start, r_start);
-			r_end = MAX(uintptr_t, bm->end - 1, r_end);
-		}
-		init_kernel_heap(m_base, mbi->mods_count, &r_start, &r_end);
-	} else {
-		init_kernel_heap(NULL, 0, &r_start, &r_end);
-	}
-#endif
-
-	*resv_start_p = MIN(uintptr_t, *resv_start_p, r_start);
-	*resv_end_p = MAX(uintptr_t, *resv_end_p, r_end);
-}
-
-
 static void *find_kcp(size_t mem_after_1m)
 {
 	void *ptr = (void *)0x100000;
@@ -543,11 +485,6 @@ void kmain(void *bigp, unsigned int magic)
 
 	uintptr_t resv_start = ~0ul, resv_end = 0;
 	init_kernel_heap(kcp_base, &resv_start, &resv_end);
-
-	/* FIXME: replace crawl_kcp_memdescs() with a find_reserved_memory()
-	 * instead
-	 */
-	crawl_kcp_memdescs(kcp_base, &resv_start, &resv_end);
 
 	/* initialize interrupt-related data structures with the I bit cleared. */
 	x86_irq_disable();
