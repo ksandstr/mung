@@ -519,6 +519,7 @@ static void crawl_multiboot_info(
 		init_kernel_heap(NULL, 0, &r_start, &r_end);
 	}
 
+#if 0
 	bool found_mem = false;
 	if(CHECK_FLAG(mbi->flags, MULTIBOOT_INFO_MEM_MAP)) {
 		printf("multiboot memory map (0x%x, length 0x%x):\n",
@@ -544,6 +545,7 @@ static void crawl_multiboot_info(
 	if(!found_mem) {
 		panic("didn't find any memory in multiboot spec!");
 	}
+#endif
 
 	*resv_start_p = MIN(uintptr_t, *resv_start_p, r_start);
 	*resv_end_p = MAX(uintptr_t, *resv_end_p, r_end);

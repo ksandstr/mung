@@ -73,8 +73,6 @@ void add_boot_pages(intptr_t start, intptr_t end)
 			start + pos * PAGE_SIZE, id_chunk, seg, 0x7);
 		pos += seg;
 	}
-
-	printf("%s: added %d pages.\n", __func__, npages);
 }
 
 
@@ -90,7 +88,6 @@ void init_kernel_heap(
 	extern char _start, _end;
 	uintptr_t next_addr = ((uintptr_t)&_end + PAGE_SIZE - 1) & ~PAGE_MASK;
 
-	/* take a bunch of pages for early slab allocation. */
 	static struct page first_pages[N_FIRST_PAGES];
 	size_t got = 0;
 	while(got < N_FIRST_PAGES) {
