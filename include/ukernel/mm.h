@@ -6,8 +6,6 @@
 #include <stdint.h>
 #include <ccan/list/list.h>
 
-#include "multiboot.h"
-
 
 #define PAGE_SIZE 4096
 #define PAGE_BITS 12
@@ -66,14 +64,11 @@ extern void add_supervisor_pages(intptr_t heap_pos, int num_pages);
 extern uintptr_t reserve_heap_page(void);
 
 
-/* kernel heap initialization. init_kernel_heap() is called with the
- * lowest-address multiboot memory segment that covers the kernel program
- * binary; the caller then identity-maps all memory between resv_start and
- * resv_end inclusive, enables paging, and adds the rest of the available
- * memory using add_boot_pages() .
+/* kernel heap initialization. the caller must identitymap between *resv_start
+ * and *resv_end when it enables paging.
  */
 extern void init_kernel_heap(
-	const struct multiboot_mmap_entry *mm,
+	void *kcp_base,
 	uintptr_t *resv_start,
 	uintptr_t *resv_end);
 

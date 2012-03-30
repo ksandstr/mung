@@ -7,12 +7,14 @@
 #include <ccan/container_of/container_of.h>
 #include <ccan/alignof/alignof.h>
 
+#include <l4/types.h>
+#include <l4/kcp.h>
+#include <l4/kip.h>
+
 #include <ukernel/slab.h>
 #include <ukernel/thread.h>
 #include <ukernel/space.h>
 #include <ukernel/mm.h>
-
-#include "multiboot.h"
 
 
 
@@ -78,27 +80,79 @@ void add_boot_pages(intptr_t start, intptr_t end)
 }
 
 
+static COLD bool page_is_available(
+	const L4_KernelConfigurationPage_t *kcp,
+	L4_Word_t addr)
+{
+	assert(offsetof(L4_KernelConfigurationPage_t, MemoryInfo) == 0x54);
+	L4_MemoryDesc_t *mds = (void *)kcp + kcp->MemoryInfo.MemDescPtr;
+	int md_count = kcp->MemoryInfo.n;
+	bool virt_ok = false, conv_ok = false, reserved = false;
+//	printf("%s: address %#x (%d memorydescs)...\n", __func__, addr, md_count);
+	for(int i=0; i < md_count; i++) {
+		L4_Word_t low = L4_MemoryDescLow(&mds[i]),
+			high = L4_MemoryDescHigh(&mds[i]);
+		int type = L4_MemoryDescType(&mds[i]);
+		bool virtual = L4_IsMemoryDescVirtual(&mds[i]);
+
+		if(addr < low || addr > high) continue;
+
+#if 0
+		size_t size = (high - low + 1) / 1024;
+		printf("memdesc %d: %#x .. %#x, size %u KiB, type %x, %s\n",
+			i, low, high, (unsigned)size, type,
+			virtual ? "virtual" : "physical");
+#endif
+
+		if(!virt_ok && virtual) {
+			virt_ok = true;
+		} else if(!virtual && type == L4_ConventionalMemoryType
+			&& virt_ok && !conv_ok)
+		{
+			conv_ok = true;
+		} else if(!virtual && conv_ok && type != L4_ConventionalMemoryType) {
+			reserved = true;
+			break;
+		}
+	}
+
+	return virt_ok && conv_ok && !reserved;
+}
+
+
 /* reserves enough identity pages to create <struct page> for each physical
  * page. indicates which range to identity map by *resv_start and *resv_end.
  */
-void init_kernel_heap(
-	const struct multiboot_mmap_entry *mm,
+COLD void init_kernel_heap(
+	void *kcp_base,
 	uintptr_t *resv_start,
 	uintptr_t *resv_end)
 {
-	extern char _start, _end;
-	uintptr_t next_addr = ((uintptr_t)&_end + PAGE_SIZE - 1) & ~PAGE_MASK;
+	const L4_KernelConfigurationPage_t *kcp = kcp_base;
 
-	/* first, take a static 2 MiB for early kernel memory that's allocated per
-	 * page.
+	/* grab early pages from conventional memory that isn't reserved by a
+	 * bootloader-defined object.
 	 */
+	extern char _start, _end;
+	L4_Word_t next_addr = (L4_Word_t)&_end;	/* ... or the kernel binary. */
+	next_addr = (next_addr + PAGE_SIZE - 1) & ~PAGE_MASK;
+	printf("kernel early memory low address is %#x\n", (unsigned)next_addr);
+	int got = 0;
 	static struct page first_pages[N_FIRST_PAGES];
-	for(int i=0; i < N_FIRST_PAGES; i++) {
-		first_pages[i].id = next_addr >> PAGE_BITS;
-		first_pages[i].vm_addr = (void *)next_addr;
+	while(got < N_FIRST_PAGES) {
+		if(next_addr > (64 * 1024 * 1024)) {
+			/* stop at the 64 MiB mark. */
+			panic("init_kernel_heap limit reached");
+		}
+		if(page_is_available(kcp, next_addr)) {
+			struct page *pg = &first_pages[got++];
+			pg->id = next_addr >> PAGE_BITS;
+			pg->vm_addr = (void *)next_addr;
+			list_add(&k_free_pages, &pg->link);
+		}
 		next_addr += PAGE_SIZE;
-		list_add(&k_free_pages, &first_pages[i].link);
 	}
+	printf("uppermost reserved byte is at %#x\n", (unsigned)next_addr - 1);
 
 	/* initialize page slab & return. */
 	mm_page_cache = kmem_cache_create("mm_page_cache", sizeof(struct page),

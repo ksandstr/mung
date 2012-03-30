@@ -22,9 +22,6 @@
 #include <ukernel/mapdb.h>
 #include <ukernel/misc.h>
 
-#include "multiboot.h"
-#include "elf.h"
-
 
 /* keyboard variables. these are just for testing the PIC setup, and will be
  * replaced with the timer chip's variables soon enough.
@@ -53,15 +50,6 @@
 #define KBD_KBF_PCCOMPAT	0x80	/* PC compat crap, must be 0 */
 
 
-#define MAX_BOOT_MODULES 8	/* FIXME: build a kickstart program instead */
-
-
-struct boot_module {
-	uintptr_t start, end;	/* occupies [start, end) */
-	char cmdline[248];
-} __attribute__((packed));
-
-
 struct tss kernel_tss;
 struct space *sigma0_space = NULL;
 struct page *kip_page = NULL;
@@ -72,9 +60,6 @@ static struct page *next_dir_page = NULL;
 uint8_t syscall_stack[4096] PAGE_ALIGN;
 
 uint64_t *global_timer_count = NULL;
-
-static struct boot_module boot_mods[MAX_BOOT_MODULES];
-static int num_boot_mods = 0;
 
 
 /* rudimentary serial port output from µiX */
@@ -232,7 +217,7 @@ void put_supervisor_page(uintptr_t addr, uint32_t page_id)
 }
 
 
-static void setup_paging(intptr_t id_start, intptr_t id_end)
+static void setup_paging(uintptr_t id_start, uintptr_t id_end)
 {
 	assert(kernel_space != NULL);
 
@@ -242,7 +227,7 @@ static void setup_paging(intptr_t id_start, intptr_t id_end)
 	/* identitymap between id_start and id_end inclusive */
 	id_start &= ~PAGE_MASK;
 	id_end = (id_end + PAGE_SIZE - 1) & ~PAGE_MASK;
-	for(intptr_t addr = id_start; addr < id_end; addr += PAGE_SIZE) {
+	for(uintptr_t addr = id_start; addr < id_end; addr += PAGE_SIZE) {
 		put_supervisor_page(addr, addr >> PAGE_BITS);
 	}
 
@@ -291,25 +276,27 @@ void pump_keyboard(void)
 }
 
 
-static void add_mbi_memory(
-	struct multiboot_info *mbi,
+static void add_kcp_memory(
+	void *kcp_base,
 	intptr_t excl_start,
 	intptr_t excl_end)
 {
 	printf("%s: excl_start 0x%x, excl_end 0x%x\n", __func__,
 		(unsigned)excl_start, (unsigned)excl_end);
-	for(struct multiboot_mmap_entry *mm = (void *)mbi->mmap_addr;
-		(unsigned long)mm < mbi->mmap_addr + mbi->mmap_length;
-		mm = (void *)mm + mm->size + sizeof(mm->size))
-	{
-		if(mm->type != MULTIBOOT_MEMORY_AVAILABLE
-			|| mm->len < PAGE_SIZE
-			|| mm->addr > (uint64_t)~0u)
-		{
-			continue;
-		}
+	/* FIXME: write accessors for these. */
+	L4_Word_t *md_base = kcp_base + (*(L4_Word_t *)(kcp_base + 0x54) >> 16);
+	int md_count = *(L4_Word_t *)(kcp_base + 0x54) & 0xffff;
+	for(int i=0; i < md_count; i++) {
+		L4_Word_t low = md_base[i*2 + 0], high = md_base[i * 2 + 1];
+		int type = low & 0xf; //, t = (low >> 4) & 0xf;
+		bool virtual = CHECK_FLAG(low, 0x200);
+		low &= ~0x3ff;
+		high &= ~0x3ff;
+		size_t size = (high - low + 1) / 1024;
 
-		intptr_t start = mm->addr, end = (mm->addr + mm->len) & ~PAGE_MASK;
+		if(type != 1 || virtual || size < 4 || low < 0x100000) continue;
+
+		const uintptr_t start = low, end = high;
 		if(start > excl_end || end < excl_start) {
 			add_boot_pages(start, end);
 		} else if(start >= excl_start && end <= excl_end) {
@@ -413,7 +400,11 @@ static void pager_thread(void *parameter)
 }
 
 
-static void spawn_sigma0(const struct boot_module *mod_s0)
+static void spawn_sigma0(
+	L4_Word_t s0_start,
+	L4_Word_t s0_end,
+	L4_Word_t s0_sp,
+	L4_Word_t s0_ip)
 {
 	/* sigma0 shouldn't really have a pager, but this avoids a special case in
 	 * the fault handler and thus is quite OK.
@@ -429,46 +420,21 @@ static void spawn_sigma0(const struct boot_module *mod_s0)
 	void *u_base = thread_get_utcb(t);
 	L4_VREG(u_base, L4_TCR_PAGER) = pager->id;
 
-	/* map sigma0's own pages. they don't need to have a particular physical
-	 * address. sigma0 will _provide_ idempotent mappings to the root task,
-	 * but this doesn't require it to receive idempotent mappings itself.
+	/* map sigma0's own pages. these will be idempotent, as all memory that
+	 * sigma0 can map idempotently.
 	 */
-	const void *elf = (const void *)mod_s0->start;
-	const Elf32_Ehdr *eh = (const Elf32_Ehdr *)elf;
-	uintptr_t phoff = eh->e_phoff;
-	for(int i=0; i < eh->e_phnum; i++, phoff += eh->e_phentsize) {
-		const Elf32_Phdr *ph = elf + phoff;
-		if(ph->p_type != PT_LOAD) continue;
-
-		int num_pages = (ph->p_memsz + PAGE_SIZE - 1) >> PAGE_BITS;
-		uint32_t *ids = malloc(sizeof(uint32_t) * num_pages);
-		for(int j=0; j < num_pages; j++) {
-			/* FIXME: add these pages to a "system reserved" list. */
-			struct page *pg = get_kern_page(0);
-			ids[j] = pg->id;
-			int copysize = MIN(int, PAGE_SIZE, ph->p_filesz - PAGE_SIZE * j);
-			assert(copysize >= 0);
-			memcpy(pg->vm_addr, elf + ph->p_offset + PAGE_SIZE * j, copysize);
-			if(copysize < PAGE_SIZE) {
-				memset(pg->vm_addr + copysize, 0, PAGE_SIZE - copysize);
-			}
-			/* FIXME: release the address space; use a unmap_kern_page()
-			 * or some such.
-			 */
-			put_supervisor_page((uintptr_t)pg->vm_addr, 0);
-		}
-		mapdb_init_range(&sigma0_space->mapdb, ph->p_vaddr,
-			ids, num_pages, 0x7);
-		free(ids);
-
-#if 0
-		printf("%s: added %d pages to mapdb [0x%x .. 0x%x]\n",
-			__func__, num_pages, ph->p_vaddr,
-			ph->p_vaddr + PAGE_SIZE * num_pages - 1);
-#endif
+	assert((s0_start & PAGE_MASK) == 0);
+	assert((s0_end & PAGE_MASK) == 0xfff);
+	int num_pages = (s0_end - s0_start + 1) >> PAGE_BITS;
+	uint32_t *ids = malloc(sizeof(uint32_t) * num_pages);
+	for(int i=0; i < num_pages; i++) {
+		ids[i] = (s0_start + i * PAGE_SIZE) >> PAGE_BITS;
 	}
+	mapdb_init_range(&sigma0_space->mapdb, s0_start, ids, num_pages,
+		L4_FullyAccessible);
+	free(ids);
 
-	thread_set_spip(t, 0xdeadbeef, eh->e_entry);
+	thread_set_spip(t, s0_sp, s0_ip);
 	thread_start(t);
 }
 
@@ -478,28 +444,39 @@ void malloc_panic(void) {
 }
 
 
-/* go over multiboot detail & make copies, because multiboot info will be lost
- * when paging is enabled.
- *
- * TODO: this should be moved into a kickstart program, which would massage
- * the relevant multiboot info into a L4.X2 generic bootinfo page allocated so
- * as to never overlap the microkernel, sigma0, or any other boot module.
- */
-static void crawl_multiboot_info(
-	struct multiboot_info *mbi,
+static void crawl_kcp_memdescs(
+	void *kcp_base,
 	uintptr_t *resv_start_p,
 	uintptr_t *resv_end_p)
 {
 	uintptr_t r_start = ~0ul, r_end = 0;
 
-	printf("flags 0x%x\n", mbi->flags);
-	if(CHECK_FLAG(mbi->flags, MULTIBOOT_INFO_MEMORY)) {
-		printf("mem_lower 0x%x, mem_upper 0x%x\n", mbi->mem_lower,
-			mbi->mem_upper);
+	L4_Word_t meminfo = *(L4_Word_t *)(kcp_base + 0x54),
+		*md_base = kcp_base + (meminfo >> 16);
+	int md_count = (meminfo & 0xffff);
+	printf("KCP has %d memdescs (%d bytes)\n", md_count,
+		md_count * sizeof(L4_Word_t) * 2);
+	/* (TODO: enforce a maximum size for the memdesc array.) */
+	bool found_mem = false;
+	for(int i=0; i < md_count; i++) {
+		L4_Word_t low = md_base[i*2 + 0], high = md_base[i * 2 + 1];
+		int type = low & 0xf; //, t = (low >> 4) & 0xf;
+		bool virtual = CHECK_FLAG(low, 0x200);
+		low &= ~0x3ff;
+		high &= ~0x3ff;
+		size_t size = (high - low + 1) / 1024;
+		if(!virtual && type == 1 && size >= 4 * 1024) {
+			/* conventional physical memory (the good shit) */
+			printf("... item %d is %lu KiB of physical memory [%#x .. %#x]\n",
+				i, (unsigned long)size, low, high);
+			found_mem = true;
+		}
+		/* TODO: examine other types. add reserved sections for multiboot
+		 * modules. and so forth
+		 */
 	}
-	if(CHECK_FLAG(mbi->flags, MULTIBOOT_INFO_BOOTDEV)) {
-		printf("bootdev 0x%x\n", mbi->boot_device);
-	}
+
+#if 0
 	if(CHECK_FLAG(mbi->flags, MULTIBOOT_INFO_MODS)) {
 		printf("mods_count %u, mods_addr 0x%x\n", mbi->mods_count,
 			mbi->mods_addr);
@@ -515,32 +492,10 @@ static void crawl_multiboot_info(
 			r_end = MAX(uintptr_t, bm->end - 1, r_end);
 		}
 	}
+#endif
 
-	bool found_mem = false;
-	if(CHECK_FLAG(mbi->flags, MULTIBOOT_INFO_MEM_MAP)) {
-		printf("multiboot memory map (0x%x, length 0x%x):\n",
-			mbi->mmap_addr, mbi->mmap_length);
-		for(struct multiboot_mmap_entry *mm = (void *)mbi->mmap_addr;
-			(unsigned long)mm < mbi->mmap_addr + mbi->mmap_length;
-			mm = (void *)mm + mm->size + sizeof(mm->size))
-		{
-			printf("  %s: addr 0x%x, size 0x%x, len 0x%x (%d MiB)\n",
-				mm->type == MULTIBOOT_MEMORY_AVAILABLE
-					? "available" : "reserved",
-				(unsigned)mm->addr, (unsigned)mm->size,
-				(unsigned)mm->len, (int)(mm->len / (1024 * 1024)));
-
-			if(mm->type == MULTIBOOT_MEMORY_AVAILABLE
-				&& mm->len >= 8 * 1024 * 1024
-				&& mm->addr <= ~0u)
-			{
-				found_mem = true;
-				init_kernel_heap(mm, &r_start, &r_end);
-			}
-		}
-	}
 	if(!found_mem) {
-		panic("didn't find any memory in multiboot spec!");
+		panic("didn't find any physical memory in KCP!");
 	}
 
 	*resv_start_p = MIN(uintptr_t, *resv_start_p, r_start);
@@ -548,7 +503,21 @@ static void crawl_multiboot_info(
 }
 
 
-void kmain(void *mbd, unsigned int magic)
+static void *find_kcp(size_t mem_after_1m)
+{
+	void *ptr = (void *)0x100000;
+	for(size_t i=0; i < mem_after_1m; i++, ptr += PAGE_SIZE) {
+		if(memcmp(ptr, "L4\346K", 4) == 0) return ptr;
+	}
+
+	return NULL;
+}
+
+
+/* entry point called from loader-32.S. first parameter is the "*P" pointer
+ * per L4.X2 ia32 booting, second is 0x2BADB002.
+ */
+void kmain(void *bigp, unsigned int magic)
 {
 	if(magic != 0x2BADB002) {
 		/* hang! */
@@ -556,11 +525,30 @@ void kmain(void *mbd, unsigned int magic)
 	}
 
 	/* also, output some stuff to the serial port. */
-	printf("hello, world! mbd is at 0x%x\n", (unsigned)mbd);
+	printf("hello, world! P is at %p\n", bigp);
 
-	struct multiboot_info *mbi = mbd;
+	size_t mem_before_640k = *(L4_Word_t *)(bigp + 0x04),
+		mem_after_1m = *(L4_Word_t *)(bigp + 0x08);
+	printf("%u KiB of memory below 640K; %u KiB after 1M\n",
+		mem_before_640k, mem_after_1m);
+	void *kcp_base = find_kcp(mem_after_1m);
+	if(kcp_base == NULL) panic("cannot find kernel configuration page!");
+	printf("KCP found at %p\n", kcp_base);
+
+	/* TODO: instead of simply copying the KCP, it should be relocated to page
+	 * 0 (or some such) and reused as the KIP.
+	 */
+	static uint8_t kcp_copy[PAGE_SIZE] PAGE_ALIGN;
+	memcpy(kcp_copy, kcp_base, PAGE_SIZE);
+	kcp_base = &kcp_copy[0];
+
 	uintptr_t resv_start = ~0ul, resv_end = 0;
-	crawl_multiboot_info(mbd, &resv_start, &resv_end);
+	init_kernel_heap(kcp_base, &resv_start, &resv_end);
+
+	/* FIXME: replace crawl_kcp_memdescs() with a find_reserved_memory()
+	 * instead
+	 */
+	crawl_kcp_memdescs(kcp_base, &resv_start, &resv_end);
 
 	/* initialize interrupt-related data structures with the I bit cleared. */
 	x86_irq_disable();
@@ -592,31 +580,10 @@ void kmain(void *mbd, unsigned int magic)
 	struct list_head ksp_resv = LIST_HEAD_INIT(ksp_resv);
 	init_spaces(&ksp_resv);
 	setup_paging(resv_start, resv_end);
-	printf("adding identity maps for MBI memory...\n");
-	/* NOTE: this is a big hack: generally the MBI info fits in less than 4k
-	 * of memory. FIXME: it should also take the MBI page out of circulation
-	 * until it's no longer required.
-	 */
-	put_supervisor_page((intptr_t)mbi & ~PAGE_MASK, (intptr_t)mbi >> PAGE_BITS);
 
 	/* (see comment for init_spaces().) */
 	mapdb_init(&kernel_space->mapdb, kernel_space);
-	if(CHECK_FLAG(mbi->flags, MULTIBOOT_INFO_MEM_MAP)) {
-		printf("adding MultiBoot memory...\n");
-		add_mbi_memory(mbi, resv_start & ~PAGE_MASK, resv_end | PAGE_MASK);
-	}
-	struct boot_module *mod_sigma0 = NULL;
-	for(int i=0; i < num_boot_mods; i++) {
-		printf("boot module: [0x%x .. 0x%x], cmdline = `%s'\n",
-			boot_mods[i].start, boot_mods[i].end, boot_mods[i].cmdline);
-		char *name = strrchr(boot_mods[i].cmdline, '/');
-		if(name == NULL) name = boot_mods[i].cmdline; else name++;
-		if(strcmp(name, "sigma0") == 0) {
-			mod_sigma0 = &boot_mods[i];
-			break;
-		}
-	}
-	if(mod_sigma0 == NULL) panic("didn't find sigma0!");
+	add_kcp_memory(kcp_base, resv_start & ~PAGE_MASK, resv_end | PAGE_MASK);
 
 	space_add_resv_pages(kernel_space, &ksp_resv);
 	list_head_init(&ksp_resv);
@@ -660,7 +627,9 @@ void kmain(void *mbd, unsigned int magic)
 	space_add_thread(kernel_space, first_thread);
 	thread_test();
 
-	spawn_sigma0(mod_sigma0);
+	spawn_sigma0(*(L4_Word_t *)(kcp_base + 0x28),
+		*(L4_Word_t *)(kcp_base + 0x2c), *(L4_Word_t *)(kcp_base + 0x20),
+		*(L4_Word_t *)(kcp_base + 0x24));
 
 #if 0
 	static int zero;
