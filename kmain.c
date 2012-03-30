@@ -10,6 +10,8 @@
 #include <l4/ipc.h>
 #include <l4/message.h>
 #include <l4/vregs.h>
+#include <l4/kip.h>
+#include <l4/kcp.h>
 
 #include <ukernel/mm.h>
 #include <ukernel/space.h>
@@ -52,12 +54,13 @@
 
 struct tss kernel_tss;
 struct space *sigma0_space = NULL;
-struct page *kip_page = NULL;
 
 static struct list_head resv_page_list = LIST_HEAD_INIT(resv_page_list);
 static struct page *next_dir_page = NULL;
 
-uint8_t syscall_stack[4096] PAGE_ALIGN;
+uint8_t syscall_stack[PAGE_SIZE] PAGE_ALIGN;
+uint8_t kcp_copy[PAGE_SIZE] PAGE_ALIGN;
+void *kip_mem = NULL;
 
 uint64_t *global_timer_count = NULL;
 
@@ -132,6 +135,7 @@ void __assert_failure(
 }
 
 
+#if 0
 static int __attribute__((pure)) list_length(struct list_head *list)
 {
 	int count = 0;
@@ -140,6 +144,7 @@ static int __attribute__((pure)) list_length(struct list_head *list)
 	}
 	return count;
 }
+#endif
 
 
 static struct page *find_page_by_id(uint32_t id)
@@ -449,14 +454,10 @@ void kmain(void *bigp, unsigned int magic)
 		mem_after_1m = *(L4_Word_t *)(bigp + 0x08);
 	printf("%u KiB of memory below 640K; %u KiB after 1M\n",
 		mem_before_640k, mem_after_1m);
+
 	void *kcp_base = find_kcp(mem_after_1m);
 	if(kcp_base == NULL) panic("cannot find kernel configuration page!");
-	printf("KCP found at %p\n", kcp_base);
-
-	/* TODO: instead of simply copying the KCP, it should be relocated to page
-	 * 0 (or some such) and reused as the KIP.
-	 */
-	static uint8_t kcp_copy[PAGE_SIZE] PAGE_ALIGN;
+	printf("KCP found at %p (copy at %p)\n", kcp_base, &kcp_copy[0]);
 	memcpy(kcp_copy, kcp_base, PAGE_SIZE);
 	kcp_base = &kcp_copy[0];
 
@@ -501,15 +502,17 @@ void kmain(void *bigp, unsigned int magic)
 	space_add_resv_pages(kernel_space, &ksp_resv);
 	list_head_init(&ksp_resv);
 
-	kip_page = get_kern_page(0);
-	list_add(&resv_page_list, &kip_page->link);
-	make_kip(kip_page->vm_addr);
-	global_timer_count = kip_page->vm_addr + PAGE_SIZE - sizeof(uint64_t);
-	*global_timer_count = 0;
-	printf("KIP on page id %d\n", kip_page->id);
+	const L4_KernelConfigurationPage_t *kcp = kcp_base;
+	L4_KernelRootServer_t s0_mod = kcp->sigma0;
 
-	printf("so far, the kernel reserves %d pages (%u KiB) of memory.\n",
-		list_length(&resv_page_list), list_length(&resv_page_list) * PAGE_SIZE / 1024);
+	/* initialize KIP */
+	kip_mem = kcp_base;
+	assert(kcp_base == (void *)&kcp_copy[0]);
+	make_kip(kip_mem);
+	global_timer_count = kip_mem + PAGE_SIZE - sizeof(uint64_t);
+	*global_timer_count = 0;
+	printf("KIP on page id %d\n", (L4_Word_t)kip_mem >> PAGE_BITS);
+	kcp_base = (void *)0xdeadbeef;
 
 	/* move the kernel to a high linear address, and change its segments so
 	 * that it sees itself at a low address.
@@ -539,9 +542,7 @@ void kmain(void *bigp, unsigned int magic)
 	struct thread *first_thread = init_threading(THREAD_ID(17, 1));
 	space_add_thread(kernel_space, first_thread);
 
-	spawn_sigma0(*(L4_Word_t *)(kcp_base + 0x28),
-		*(L4_Word_t *)(kcp_base + 0x2c), *(L4_Word_t *)(kcp_base + 0x20),
-		*(L4_Word_t *)(kcp_base + 0x24));
+	spawn_sigma0(s0_mod.low, s0_mod.high, s0_mod.sp, s0_mod.ip);
 
 	printf("enabling keyboard & keyboard interrupt\n");
 	outb(KBD_CMD_REG, KBD_CMD_WRITECMD);

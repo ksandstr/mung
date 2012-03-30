@@ -47,7 +47,6 @@ void isr_exn_ud_bottom(struct x86_exregs *regs)
 		regs->eip += 2;
 		regs->eax = L4_Address(current->space->kip_area);
 		/* TODO: replace these with proper KIP accessors */
-		const void *kip_mem = kip_page->vm_addr;
 		regs->ecx = *(L4_Word_t *)(kip_mem + 0x04);		/* API VERSION */
 		regs->edx = *(L4_Word_t *)(kip_mem + 0x08);		/* API FLAGS */
 		/* id = 23 (because 2 + 3 = 5); subid = 17

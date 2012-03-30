@@ -146,7 +146,8 @@ int space_set_kip_area(struct space *sp, L4_Fpage_t area)
 	assert(L4_Size(area) >= PAGE_SIZE);
 
 	sp->kip_area = area;
-	space_put_page(sp, L4_Address(sp->kip_area), kip_page->id, 0x5);
+	space_put_page(sp, L4_Address(sp->kip_area),
+		(L4_Word_t)kip_mem >> PAGE_BITS, L4_Readable | L4_eXecutable);
 
 	return 0;
 }

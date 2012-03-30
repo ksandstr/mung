@@ -5,6 +5,9 @@
 #include <string.h>
 
 #include <l4/types.h>
+#include <l4/kcp.h>
+#include <l4/kip.h>
+
 #include <ukernel/mm.h>
 #include <ukernel/syscall.h>
 
@@ -72,8 +75,14 @@ static void make_systemclock_stub(void *start, int *len_p)
 
 void make_kip(void *mem)
 {
-	memset(mem, 0, PAGE_SIZE);
+	/* preserve memorydescs */
+	L4_KernelConfigurationPage_t *kcp = mem;
+	int num_mds = kcp->MemoryInfo.n;
+	L4_MemoryDesc_t mds[num_mds];
+	memcpy(mds, mem + kcp->MemoryInfo.MemDescPtr,
+		sizeof(L4_Word_t) * 2 * num_mds);
 
+	/* fill in KernelInterfacePage */
 	memcpy(mem, "L4\346K", 4);
 	/* L4.X2, rev 5 (XXX: what the heck is revision 5?) */
 	*(L4_Word_t *)(mem + 0x4) = 0x84 << 24 | 5 << 16;
@@ -143,8 +152,8 @@ void make_kip(void *mem)
 	kip_pos += (len + 63) & ~63;
 
 	void *memdesc_base = mem + kip_pos;
-	/* TODO: add # of memory descriptors in the lower 16 bits */
-	*memoryinfo_p = (L4_Word_t)(memdesc_base - mem) << 16;
+	memcpy(memdesc_base, mds, sizeof(L4_Word_t) * 2 * num_mds);
+	*memoryinfo_p = (L4_Word_t)(memdesc_base - mem) << 16 | num_mds;
 
 	/* TODO: fill these in */
 	*procdescptr_p = 0;

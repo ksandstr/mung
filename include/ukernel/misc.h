@@ -20,7 +20,7 @@ struct page;
 
 /* from kmain.c */
 
-extern struct page *kip_page;
+extern void *kip_mem;
 extern uint8_t syscall_stack[];
 /* should only be read with interrupts disabled! */
 extern uint64_t *global_timer_count;
@@ -35,6 +35,9 @@ extern uint32_t ptr_hash(const void *ptr);
 
 
 /* from kip.c */
+/* parameter is a pointer to the KCP, which gets reworked to be a proper
+ * KIP.
+ */
 extern void make_kip(void *mem);
 
 #endif
