@@ -317,29 +317,6 @@ static void add_kcp_memory(
 }
 
 
-static void test_thread(void *ptr)
-{
-	int x = 666;
-	printf("test thread active! local variable at 0x%x.\n", (unsigned)&x);
-
-	yield(NULL);
-
-	printf("test thread was returned into. ptr is `%s'\n",
-		(const char *)ptr);
-}
-
-
-void thread_test(void)
-{
-	struct thread *other = create_kthread(&test_thread, "hello, thread!");
-	printf("other thread created. switching...\n");
-	yield(other);
-	printf("back in old thread. boinking yield...\n");
-	for(int i=0; i < 8; i++) yield(NULL);
-	printf("thread_test() ends.\n");
-}
-
-
 static void pager_thread(void *parameter)
 {
 	printf("pager thread started.\n");
@@ -561,27 +538,10 @@ void kmain(void *bigp, unsigned int magic)
 
 	struct thread *first_thread = init_threading(THREAD_ID(17, 1));
 	space_add_thread(kernel_space, first_thread);
-	thread_test();
 
 	spawn_sigma0(*(L4_Word_t *)(kcp_base + 0x28),
 		*(L4_Word_t *)(kcp_base + 0x2c), *(L4_Word_t *)(kcp_base + 0x20),
 		*(L4_Word_t *)(kcp_base + 0x24));
-
-#if 0
-	static int zero;
-	printf("divide by zero: %d\n", 777 / zero);
-#endif
-
-#if 0
-	printf("performing malloc test...\n");
-	char *foo = malloc(64);
-	foo[0] = 'q';
-	foo[1] = 'w';
-	foo[2] = 'e';
-	foo[3] = '\0';
-	printf("string at 0x%x should say `qwe': `%s'\n", (unsigned)foo, foo);
-	free(foo);
-#endif
 
 	printf("enabling keyboard & keyboard interrupt\n");
 	outb(KBD_CMD_REG, KBD_CMD_WRITECMD);
