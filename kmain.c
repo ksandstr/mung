@@ -372,8 +372,8 @@ static void pager_thread(void *parameter)
 				/* sigma0's con_putstr() protocol. */
 				char buf[257];
 				for(int i=0; i < tag.X.u; i++) {
-					*(L4_Word_t *)&buf[i * 4] = L4_VREG(utcb,
-						L4_TCR_MR(i + 1));
+					L4_Word_t val = L4_VREG(utcb, L4_TCR_MR(i + 1));
+					memcpy(&buf[i * 4], &val, sizeof(L4_Word_t));
 				}
 				buf[tag.X.u * 4] = '\0';
 				int len = strlen(buf);
@@ -491,12 +491,11 @@ static void crawl_kcp_memdescs(
 			r_start = MIN(uintptr_t, bm->start, r_start);
 			r_end = MAX(uintptr_t, bm->end - 1, r_end);
 		}
+		init_kernel_heap(m_base, mbi->mods_count, &r_start, &r_end);
+	} else {
+		init_kernel_heap(NULL, 0, &r_start, &r_end);
 	}
 #endif
-
-	if(!found_mem) {
-		panic("didn't find any physical memory in KCP!");
-	}
 
 	*resv_start_p = MIN(uintptr_t, *resv_start_p, r_start);
 	*resv_end_p = MAX(uintptr_t, *resv_end_p, r_end);

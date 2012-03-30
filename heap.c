@@ -75,8 +75,6 @@ void add_boot_pages(intptr_t start, intptr_t end)
 			start + pos * PAGE_SIZE, id_chunk, seg, 0x7);
 		pos += seg;
 	}
-
-	printf("%s: added %d pages.\n", __func__, npages);
 }
 
 
@@ -123,7 +121,7 @@ static COLD bool page_is_available(
 /* reserves enough identity pages to create <struct page> for each physical
  * page. indicates which range to identity map by *resv_start and *resv_end.
  */
-COLD void init_kernel_heap(
+void init_kernel_heap(
 	void *kcp_base,
 	uintptr_t *resv_start,
 	uintptr_t *resv_end)
