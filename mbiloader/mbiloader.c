@@ -255,15 +255,28 @@ static void load_elf_module(struct boot_module *mod)
 
 
 /* verify that the load ranges of the boot modules don't overlap with one
- * another, or with a later module's MBI load address. (TODO: or with the
- * mbiloader's code range!)
+ * another, or with a later module's MBI load address, or with mbiloader's own
+ * range.
  *
- * in the latter case the modules are relocated to after reloc_addr.
+ * in the second case affected modules are moved to after reloc_addr.
  */
 static void check_boot_modules(uintptr_t *reloc_addr)
 {
+	extern char _start, _end;
+	const L4_Word_t this_start = (L4_Word_t)&_start,
+		this_end = (L4_Word_t)&_end;
 	for(int i=0; i < num_boot_mods; i++) {
 		struct boot_module *m = &boot_mods[i];
+
+		/* check for overlap with mbiloader. */
+		if(RANGE_OVERLAP(m->load_start, m->load_end, this_start, this_end)) {
+			printf("mbiloader: module %d's load range [%#x..%#x] overlaps mbiloader!\n"
+				"  (mbiloader is at [%#x..%#x])\n",
+				i, m->load_start, m->load_end, this_start, this_end);
+			panic("mbiloader: boot module overlaps with loader");
+		}
+
+		/* verify that the _load addresses_ don't overlap. */
 		for(int j=0; j < i; j++) {
 			struct boot_module *o = &boot_mods[j];
 			if(RANGE_OVERLAP(m->load_start, m->load_end,
@@ -277,6 +290,9 @@ static void check_boot_modules(uintptr_t *reloc_addr)
 			}
 		}
 
+		/* now check if load addresses overlap with the modules' data, and
+		 * move those modules if so.
+		 */
 		for(int j=i + 1; j < num_boot_mods; j++) {
 			if(RANGE_OVERLAP(m->load_start, m->load_end,
 				boot_mods[j].start, boot_mods[j].end - 1))
