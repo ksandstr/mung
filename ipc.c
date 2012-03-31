@@ -343,6 +343,8 @@ static void ipc(struct thread *current, void *utcb)
 			current->status = TS_RUNNING;
 		}
 	}
+
+	if(current->status == TS_READY) current->status = TS_RUNNING;
 }
 
 
