@@ -382,42 +382,46 @@ static void pager_thread(void *parameter)
 }
 
 
-static void spawn_sigma0(
-	L4_Word_t s0_start,
-	L4_Word_t s0_end,
-	L4_Word_t s0_sp,
-	L4_Word_t s0_ip)
+static struct thread *spawn_kernel_server(
+	L4_Word_t thread_id,
+	const L4_KernelRootServer_t *s0,
+	struct thread *pager,
+	int utcb_size_log2)
 {
-	/* sigma0 shouldn't really have a pager, but this avoids a special case in
-	 * the fault handler and thus is quite OK.
-	 */
-	struct thread *pager = create_kthread(&pager_thread, NULL),
-		*t = thread_new(THREAD_ID(128, 1));
+	assert(utcb_size_log2 >= PAGE_BITS);
+
+	struct thread *t = thread_new(thread_id);
 	struct space *sp = space_new();
-	sigma0_space = sp;
-	space_set_utcb_area(sp, L4_FpageLog2(0x50000, 13));
-	space_set_kip_area(sp, L4_FpageLog2(0x10000, 12));
+	/* position the UTCB area to fall within the kernel's reservation. */
+	extern char _start;
+	L4_Word_t align = (1 << utcb_size_log2) - 1,
+		first_kernel_page = ((L4_Word_t)&_start + align) & ~align;
+	space_set_utcb_area(sp, L4_FpageLog2(first_kernel_page, utcb_size_log2));
+	/* set the KIP where it is physically to avoid overlap with idempotent
+	 * mappings.
+	 */
+	space_set_kip_area(sp, L4_FpageLog2((L4_Word_t)kip_mem, PAGE_BITS));
 	thread_set_space(t, sp);
 	thread_set_utcb(t, L4_Address(sp->utcb_area));
 	void *u_base = thread_get_utcb(t);
 	L4_VREG(u_base, L4_TCR_PAGER) = pager->id;
 
-	/* map sigma0's own pages. these will be idempotent, as all memory that
-	 * sigma0 can map idempotently.
-	 */
-	assert((s0_start & PAGE_MASK) == 0);
-	assert((s0_end & PAGE_MASK) == 0xfff);
-	int num_pages = (s0_end - s0_start + 1) >> PAGE_BITS;
+	/* create idempotent mappings of kernel server memory. */
+	assert((s0->low & PAGE_MASK) == 0);
+	assert((s0->high & PAGE_MASK) == 0xfff);
+	int num_pages = (s0->high - s0->low + 1) >> PAGE_BITS;
 	uint32_t *ids = malloc(sizeof(uint32_t) * num_pages);
 	for(int i=0; i < num_pages; i++) {
-		ids[i] = (s0_start + i * PAGE_SIZE) >> PAGE_BITS;
+		ids[i] = (s0->low + i * PAGE_SIZE) >> PAGE_BITS;
 	}
-	mapdb_init_range(&sigma0_space->mapdb, s0_start, ids, num_pages,
+	mapdb_init_range(&t->space->mapdb, s0->low, ids, num_pages,
 		L4_FullyAccessible);
 	free(ids);
 
-	thread_set_spip(t, s0_sp, s0_ip);
+	thread_set_spip(t, s0->sp, s0->ip);
 	thread_start(t);
+
+	return t;
 }
 
 
@@ -503,7 +507,8 @@ void kmain(void *bigp, unsigned int magic)
 	list_head_init(&ksp_resv);
 
 	const L4_KernelConfigurationPage_t *kcp = kcp_base;
-	L4_KernelRootServer_t s0_mod = kcp->sigma0;
+	L4_KernelRootServer_t s0_mod = kcp->sigma0,
+		roottask_mod = kcp->root_server;
 
 	/* initialize KIP */
 	kip_mem = kcp_base;
@@ -542,7 +547,24 @@ void kmain(void *bigp, unsigned int magic)
 	struct thread *first_thread = init_threading(THREAD_ID(17, 1));
 	space_add_thread(kernel_space, first_thread);
 
-	spawn_sigma0(s0_mod.low, s0_mod.high, s0_mod.sp, s0_mod.ip);
+	/* this creates a pager for the s0, s1 processes. it isn't necessary, but
+	 * in development it functions as a printf() output path and for catching
+	 * segfaults, so that's OK.
+	 */
+	struct thread *sigma0_pager = create_kthread(&pager_thread, NULL),
+		*s0_thread = spawn_kernel_server(THREAD_ID(128, 1),
+			&s0_mod, sigma0_pager, PAGE_BITS);
+	sigma0_space = s0_thread->space;
+	if(roottask_mod.high >= PAGE_SIZE) {
+		/* FIXME: this pre-creates the root task's mapping database. it should
+		 * instead be mapped page by page from sigma0 as faults happen.
+		 */
+		struct thread *roottask = spawn_kernel_server(THREAD_ID(160, 1),
+			&roottask_mod, s0_thread, 16);
+		printf("roottask [%#x .. %#x] created as %d:%d.\n",
+			roottask_mod.low, roottask_mod.high,
+			TID_THREADNUM(roottask->id), TID_VERSION(roottask->id));
+	}
 
 	printf("enabling keyboard & keyboard interrupt\n");
 	outb(KBD_CMD_REG, KBD_CMD_WRITECMD);

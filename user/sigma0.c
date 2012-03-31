@@ -93,6 +93,39 @@ void __assert_failure(
 }
 
 
+static int sigma0_ipc_loop(void *kip_base)
+{
+	for(;;) {
+		L4_ThreadId_t from = L4_nilthread;
+		L4_MsgTag_t tag = L4_Ipc(L4_nilthread, L4_anythread,
+			L4_Timeouts(L4_Never, L4_Never), &from);
+
+		for(;;) {
+			if(L4_IpcFailed(tag)) {
+				printf("pager ipc failed (no ec yet)\n");
+				break;
+			}
+
+			L4_ThreadId_t sender = from;
+			if(true) {
+				printf("unknown IPC label %#x from %u:%u\n",
+					tag.X.label, from.global.X.thread_no,
+					from.global.X.version);
+				break;
+			}
+
+			/* ReplyWait */
+			from = L4_nilthread;
+			tag = L4_Ipc(sender, L4_anythread,
+				L4_Timeouts(L4_ZeroTime, L4_Never), &from);
+		}
+	}
+
+	/* never reached, but whatever. */
+	return 0;
+}
+
+
 static void tid_test(void)
 {
 	printf("threadid test start.\n");
@@ -208,9 +241,5 @@ int main(void)
 	schedule_test();
 	spacectl_test();
 
-	/* L4_Word64_t now = */ L4_SystemClock();
-
-	*(char *)(kip - 0x1000) = '*';	/* pagefault at a definite spot */
-
-	return 0;
+	return sigma0_ipc_loop(kip);
 }
