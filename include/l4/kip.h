@@ -39,19 +39,19 @@ static inline L4_MemoryDesc_t *L4_MemoryDesc(void *kip, L4_Word_t num)
 	else return (L4_MemoryDesc_t *)(kip + (meminfo >> 16)) + num;
 }
 
-static inline int L4_IsMemoryDescVirtual(L4_MemoryDesc_t *m) {
+static inline int L4_IsMemoryDescVirtual(const L4_MemoryDesc_t *m) {
 	return m->x.v;
 }
 
-static inline L4_Word_t L4_MemoryDescType(L4_MemoryDesc_t *m) {
+static inline L4_Word_t L4_MemoryDescType(const L4_MemoryDesc_t *m) {
 	return (m->x.type >= 0x0E) ? (m->x.type + (m->x.t << 4)) : (m->x.type);
 }
 
-static inline L4_Word_t L4_MemoryDescLow(L4_MemoryDesc_t *m) {
+static inline L4_Word_t L4_MemoryDescLow(const L4_MemoryDesc_t *m) {
 	return m->x.low << 10;
 }
 
-static inline L4_Word_t L4_MemoryDescHigh(L4_MemoryDesc_t *m) {
+static inline L4_Word_t L4_MemoryDescHigh(const L4_MemoryDesc_t *m) {
 	return (m->x.high << 10) | 0x3ff;
 }
 
