@@ -200,8 +200,25 @@ static void fill_kcp(
 			};
 		}
 	}
-
-	/* TODO: reserve non-loaded boot module memory also! */
+	/* and for the other boot modules */
+	for(int i=0; i < num_boot_mods; i++) {
+		const struct boot_module *m = &boot_mods[i];
+		bool found = false;
+		for(int j=0; j < sizeof(bms) / sizeof(bms[0]); j++) {
+			if(m == bms[j]) {
+				found = true;
+				break;
+			}
+		}
+		if(!found) {
+			printf("dedicating %#x .. %#x for module `%s'\n",
+				m->start & ~PAGE_MASK, m->end | PAGE_MASK, m->cmdline);
+			mdbuf[p++] = (L4_MemoryDesc_t){
+				.x.type = L4_DedicatedMemoryType, .x.v = 0,
+				.x.low = m->start >> 10, .x.high = m->end >> 10,
+			};
+		}
+	}
 
 	/* MemoryInfo */
 	assert(offsetof(L4_KernelConfigurationPage_t, MemoryInfo) == 0x54);
