@@ -281,40 +281,60 @@ void pump_keyboard(void)
 }
 
 
-static void add_kcp_memory(
-	void *kcp_base,
-	intptr_t excl_start,
-	intptr_t excl_end)
+/* FIXME: this'll overrun the kernel heap when given more than 256 megabytes
+ * of memory. the kernel initial area should be sized to suffice.
+ */
+static void add_s0_pages(L4_Word_t start, L4_Word_t end)
+{
+	uint32_t ids[128];
+	int count = (end - start + 1) >> PAGE_BITS, done = 0;
+	printf("adding %#x .. %#x to sigma0 (%d pages)\n", start, end, count);
+	while(done < count) {
+		int seg = MIN(int, 128, count - done);
+		for(int i=0; i < seg; i++) ids[i] = (start >> PAGE_BITS) + done + i;
+		mapdb_init_range(&sigma0_space->mapdb, start + (done << PAGE_BITS),
+			ids, seg, L4_FullyAccessible);
+		done += seg;
+	}
+}
+
+
+/* the algorithm is intentionally simple. there'll only be a single range
+ * that's reserved by the kernel, and that is covered entirely by
+ * [excl_start .. excl_end].
+ */
+static void add_mem_to_sigma0(
+	const L4_KernelConfigurationPage_t *kcp,
+	L4_Word_t excl_start,
+	L4_Word_t excl_end)
 {
 	printf("%s: excl_start 0x%x, excl_end 0x%x\n", __func__,
 		(unsigned)excl_start, (unsigned)excl_end);
-	/* FIXME: write accessors for these. */
-	L4_Word_t *md_base = kcp_base + (*(L4_Word_t *)(kcp_base + 0x54) >> 16);
-	int md_count = *(L4_Word_t *)(kcp_base + 0x54) & 0xffff;
+	const L4_MemoryDesc_t *mds = (void *)kcp + kcp->MemoryInfo.MemDescPtr;
+	int md_count = kcp->MemoryInfo.n;
 	for(int i=0; i < md_count; i++) {
-		L4_Word_t low = md_base[i*2 + 0], high = md_base[i * 2 + 1];
-		int type = low & 0xf; //, t = (low >> 4) & 0xf;
-		bool virtual = CHECK_FLAG(low, 0x200);
-		low &= ~0x3ff;
-		high &= ~0x3ff;
-		size_t size = (high - low + 1) / 1024;
+		L4_Word_t start = L4_MemoryDescLow(&mds[i]),
+			end = L4_MemoryDescHigh(&mds[i]);
+		if(L4_MemoryDescType(&mds[i]) != L4_ConventionalMemoryType
+			|| L4_IsMemoryDescVirtual(&mds[i])
+			|| end - start + 1 < PAGE_SIZE)
+		{
+			continue;
+		}
 
-		if(type != 1 || virtual || size < 4 || low < 0x100000) continue;
-
-		const uintptr_t start = low, end = high;
 		if(start > excl_end || end < excl_start) {
-			add_boot_pages(start, end);
+			add_s0_pages(start, end);
 		} else if(start >= excl_start && end <= excl_end) {
 			/* skip entirely */
 		} else if(start >= excl_start) {
-			add_boot_pages(excl_end + 1, end);
+			add_s0_pages(excl_end + 1, end);
 		} else if(end <= excl_end) {
-			add_boot_pages(start, excl_start - 1);
+			add_s0_pages(start, excl_start - 1);
 		} else {
 			/* brute force. */
-			for(intptr_t p = start; p < end; p += PAGE_SIZE) {
+			for(L4_Word_t p = start; p < end; p += PAGE_SIZE) {
 				if(p < excl_start || p > excl_end) {
-					add_boot_pages(p, p + PAGE_SIZE - 1);
+					add_s0_pages(p, p + PAGE_SIZE - 1);
 				}
 			}
 		}
@@ -382,6 +402,7 @@ static void pager_thread(void *parameter)
 }
 
 
+/* NOTE: the resulting first thread is not started. */
 static struct thread *spawn_kernel_server(
 	L4_Word_t thread_id,
 	const L4_KernelRootServer_t *s0,
@@ -419,7 +440,6 @@ static struct thread *spawn_kernel_server(
 	free(ids);
 
 	thread_set_spip(t, s0->sp, s0->ip);
-	thread_start(t);
 
 	return t;
 }
@@ -501,7 +521,6 @@ void kmain(void *bigp, unsigned int magic)
 
 	/* (see comment for init_spaces().) */
 	mapdb_init(&kernel_space->mapdb, kernel_space);
-	add_kcp_memory(kcp_base, resv_start & ~PAGE_MASK, resv_end | PAGE_MASK);
 
 	space_add_resv_pages(kernel_space, &ksp_resv);
 	list_head_init(&ksp_resv);
@@ -553,18 +572,26 @@ void kmain(void *bigp, unsigned int magic)
 	 */
 	struct thread *sigma0_pager = create_kthread(&pager_thread, NULL),
 		*s0_thread = spawn_kernel_server(THREAD_ID(128, 1),
-			&s0_mod, sigma0_pager, PAGE_BITS);
+			&s0_mod, sigma0_pager, PAGE_BITS),
+		*roottask = NULL;
 	sigma0_space = s0_thread->space;
 	if(roottask_mod.high >= PAGE_SIZE) {
 		/* FIXME: this pre-creates the root task's mapping database. it should
 		 * instead be mapped page by page from sigma0 as faults happen.
 		 */
-		struct thread *roottask = spawn_kernel_server(THREAD_ID(160, 1),
-			&roottask_mod, s0_thread, 16);
+		roottask = spawn_kernel_server(THREAD_ID(160, 1), &roottask_mod,
+			s0_thread, 16);
 		printf("roottask [%#x .. %#x] created as %d:%d.\n",
 			roottask_mod.low, roottask_mod.high,
 			TID_THREADNUM(roottask->id), TID_VERSION(roottask->id));
 	}
+
+	/* FIXME: pass KernelInterfacePage_t pointer instead. for now the KIP
+	 * passes for the KCP.
+	 */
+	add_mem_to_sigma0(kip_mem, resv_start & ~PAGE_MASK, resv_end | PAGE_MASK);
+	thread_start(s0_thread);
+	if(roottask != NULL) thread_start(roottask);
 
 	printf("enabling keyboard & keyboard interrupt\n");
 	outb(KBD_CMD_REG, KBD_CMD_WRITECMD);

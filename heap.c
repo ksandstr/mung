@@ -17,12 +17,14 @@
 #include <ukernel/mm.h>
 
 
-
 #define N_FIRST_PAGES (2 * 1024 * 1024 / PAGE_SIZE)
 
 
 static struct list_head k_free_pages = LIST_HEAD_INIT(k_free_pages),
+	k_slab_pages = LIST_HEAD_INIT(k_slab_pages),
 	k_heap_pages = LIST_HEAD_INIT(k_heap_pages);
+
+/* allocates <struct page> */
 static struct kmem_cache *mm_page_cache = NULL;
 
 static uintptr_t heap_pos = KERNEL_HEAP_TOP;
@@ -49,32 +51,6 @@ uintptr_t reserve_heap_page(void)
 {
 	heap_pos -= PAGE_SIZE;
 	return heap_pos;
-}
-
-
-void add_boot_pages(intptr_t start, intptr_t end)
-{
-	printf("%s: start 0x%x, end 0x%x\n", __func__, (unsigned)start,
-		(unsigned)end);
-	int npages = (end - start + PAGE_SIZE - 1) >> PAGE_BITS;
-	for(int i=0; i < npages; i++) {
-		struct page *p = kmem_cache_alloc(mm_page_cache);
-		p->id = (start >> PAGE_BITS) + i;
-		p->vm_addr = NULL;
-		list_add(&k_free_pages, &p->link);
-	}
-
-	uint32_t id_chunk[256];
-	int pos = 0;
-	while(pos < npages) {
-		int seg = MIN(int, 256, npages - pos);
-		for(int i=0; i < seg; i++) {
-			id_chunk[i] = (start >> PAGE_BITS) + pos + i;
-		}
-		mapdb_init_range(&kernel_space->mapdb,
-			start + pos * PAGE_SIZE, id_chunk, seg, 0x7);
-		pos += seg;
-	}
 }
 
 
@@ -118,8 +94,8 @@ static COLD bool page_is_available(
 }
 
 
-/* reserves enough identity pages to create <struct page> for each physical
- * page. indicates which range to identity map by *resv_start and *resv_end.
+/* reserves initial memory for the kernel. this is subsequently used to
+ * allocate spaces, threads, UTCB pages, and page tracking structures.
  */
 void init_kernel_heap(
 	void *kcp_base,
@@ -218,10 +194,14 @@ void free_kern_page(struct page *page)
 
 /* interface for slab.c */
 struct page *kmem_alloc_new_page(void) {
-	return get_kern_page(0);
+	struct page *pg = get_kern_page(0);
+	if(pg != NULL) list_add(&k_slab_pages, &pg->link);
+	return pg;
 }
 
 
-void kmem_free_page(struct page *p) {
-	free_kern_page(p);
+void kmem_free_page(struct page *pg)
+{
+	list_del_from(&k_slab_pages, &pg->link);
+	free_kern_page(pg);
 }

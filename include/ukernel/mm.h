@@ -46,7 +46,7 @@ typedef uint32_t page_t;
 #define PT_GLOBAL (1 << 7)
 
 
-/* represents a hardware page. */
+/* represents a hardware page reserved by the kernel. */
 struct page
 {
 	struct list_node link;
@@ -71,8 +71,6 @@ extern void init_kernel_heap(
 	void *kcp_base,
 	uintptr_t *resv_start,
 	uintptr_t *resv_end);
-
-extern void add_boot_pages(intptr_t start, intptr_t end);
 
 
 /* supervisor page table access from kmain.c */
