@@ -6,6 +6,8 @@
 #include <stdint.h>
 #include <ccan/compiler/compiler.h>
 
+#include <l4/types.h>
+
 
 #define CHECK_FLAG(mask, bit) (((mask) & (bit)) != 0)
 
@@ -36,8 +38,9 @@ extern uint32_t ptr_hash(const void *ptr);
 
 /* from kip.c */
 /* parameter is a pointer to the KCP, which gets reworked to be a proper
- * KIP.
+ * KIP. the range between kern_start and kern_end will be added to MemoryInfo
+ * as a reserved range before the first dedicated range.
  */
-extern void make_kip(void *mem);
+extern void make_kip(void *mem, L4_Word_t kern_start, L4_Word_t kern_end);
 
 #endif

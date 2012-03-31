@@ -73,14 +73,36 @@ static void make_systemclock_stub(void *start, int *len_p)
 }
 
 
-void make_kip(void *mem)
+void make_kip(void *mem, L4_Word_t kern_start, L4_Word_t kern_end)
 {
 	/* preserve memorydescs */
 	L4_KernelConfigurationPage_t *kcp = mem;
 	int num_mds = kcp->MemoryInfo.n;
-	L4_MemoryDesc_t mds[num_mds];
+	L4_MemoryDesc_t mds[num_mds + 1];
 	memcpy(mds, mem + kcp->MemoryInfo.MemDescPtr,
 		sizeof(L4_Word_t) * 2 * num_mds);
+
+	/* the kernel's initial heap appears as a reserved region, before the
+	 * first dedicated region (as they take precedence).
+	 */
+	int first_ded = 0;
+	while(first_ded < num_mds
+		&& L4_MemoryDescType(&mds[first_ded]) != L4_DedicatedMemoryType)
+	{
+		first_ded++;
+	}
+	if(first_ded < num_mds) {
+		/* move other descriptors up. */
+		int count = num_mds - first_ded;
+		L4_MemoryDesc_t tmp[count];
+		memcpy(tmp, &mds[first_ded], count * sizeof(L4_MemoryDesc_t));
+		memcpy(&mds[first_ded + 1], tmp, count * sizeof(L4_MemoryDesc_t));
+	}
+	mds[first_ded] = (L4_MemoryDesc_t){
+		.x.v = 0, .x.type = L4_ReservedMemoryType,
+		.x.low = kern_start >> 10, .x.high = kern_end >> 10,
+	};
+	num_mds++;
 
 	/* fill in KernelInterfacePage */
 	memcpy(mem, "L4\346K", 4);

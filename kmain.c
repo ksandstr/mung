@@ -513,7 +513,7 @@ void kmain(void *bigp, unsigned int magic)
 	/* initialize KIP */
 	kip_mem = kcp_base;
 	assert(kcp_base == (void *)&kcp_copy[0]);
-	make_kip(kip_mem);
+	make_kip(kip_mem, resv_start & ~PAGE_MASK, resv_end | PAGE_MASK);
 	global_timer_count = kip_mem + PAGE_SIZE - sizeof(uint64_t);
 	*global_timer_count = 0;
 	printf("KIP on page id %d\n", (L4_Word_t)kip_mem >> PAGE_BITS);
