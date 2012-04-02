@@ -2,23 +2,46 @@
 #include <stdio.h>
 #include <stdint.h>
 #include <stdlib.h>
+#include <string.h>
 #include <assert.h>
-
 #include <ccan/htable/htable.h>
 #include <ccan/alignof/alignof.h>
+#include <ccan/likely/likely.h>
 #include <ccan/container_of/container_of.h>
 
+#include <l4/types.h>
 #include <ukernel/misc.h>
+#include <ukernel/slab.h>
 #include <ukernel/mapdb.h>
 
 
-#define GROUP_SIZE (PAGE_SIZE * ENTRIES_PER_GROUP)
+#define TRACE_VERBOSE 0		/* 1 for mapdb dumps on add/remove */
+
+#if TRACE_VERBOSE
+#define TRACE(fmt, ...) printf(fmt, __VA_ARGS__)
+#else
+#define TRACE(fmt, ...)
+#endif
+
+
+#define GROUP_SIZE (PAGE_SIZE * MAX_ENTRIES_PER_GROUP)
 #define GROUP_ADDR(addr) ((addr) & ~(GROUP_SIZE - 1))
+
+/* the largest map_entry that appears here is 4 MiB, i.e. 2^22 bytes. if a 4
+ * KiB page within it is replaced, the previous 4-meg entry is divided into at
+ * most 10 more (one each of 4k, 8k, 16k, 32k, 64k, 128k, 256k, 512k, 1m, 2m;
+ * the original page adds the final 4k).
+ *
+ * callers to entry_split_and_insert() should reserve at least this many
+ * map_entry structs somewhere.
+ */
+#define MAX_SPLIT 10
 
 
 static size_t rehash_ref_hash(const void *, void *);
 
 
+static struct kmem_cache *map_group_slab = NULL;
 static uint32_t next_ref_id = 1;
 static struct htable ref_hash = HTABLE_INITIALIZER(ref_hash,
 	rehash_ref_hash, NULL);
@@ -32,15 +55,17 @@ static bool flush_entry(struct map_entry *e, int access)
 		/* TODO: deref children[j], recur */
 	}
 
-	e->flags &= ~access;
-	if((e->flags & 0x7) == 0) {
+	int rwx = L4_Rights(e->range);
+	rwx &= ~access;
+	L4_Set_Rights(&e->range, rwx);
+	if(rwx != 0) return false;
+	else {
 		/* everything was revoked. */
-		e->page_id = 0;
+		e->range = L4_Nilpage;
 		if(e->num_children > 1) free(e->children);
+		e->child = 0;
 		e->num_children = 0;
 		return true;
-	} else {
-		return false;
 	}
 }
 
@@ -49,11 +74,11 @@ static bool flush_entry(struct map_entry *e, int access)
 static bool flush_group(struct map_db *db, struct map_group *g, int access)
 {
 	int active_maps = 0;
-	for(int i=0; i < ENTRIES_PER_GROUP; i++) {
+	for(int i=0; i < g->num_entries; i++) {
 		struct map_entry *e = &g->entries[i];
-		if(e->page_id == 0) continue;
-		if(!flush_entry(e, access)) active_maps++;
+		if(!L4_IsNilFpage(e->range) && !flush_entry(e, access)) active_maps++;
 	}
+	/* TODO: compress the range when active_maps != 0 */
 
 	return active_maps == 0;
 }
@@ -99,7 +124,8 @@ void mapdb_destroy(struct map_db *db)
 		g = htable_next(&db->groups, &it))
 	{
 		flush_group(db, g, 0x7);
-		free(g);
+		free(g->entries);
+		kmem_cache_free(map_group_slab, g);
 	}
 
 	htable_clear(&db->groups);
@@ -114,6 +140,272 @@ static struct map_group *group_for_addr(struct map_db *db, uintptr_t addr)
 }
 
 
+/* TODO: unit test the living crap out of this function, please. right now
+ * there's the rudimentary "iters" limit to break it up after 20 iterations
+ * (2^20 being 1024^2, one power more than the maximum number of elements in a
+ * map_group)
+ */
+static struct map_entry *find_entry_in_group(
+	struct map_group *g,
+	uintptr_t addr)
+{
+	if(g->num_entries == 0) return NULL;
+
+	/* common binary search. there's a segment that might handle sparse inputs
+	 * correctly in there, but it's quite untested.
+	 */
+	int imin = 0, imax = g->num_entries - 1;
+	int iters = 0;
+	while(imax >= imin && ++iters < 100) {
+		int probe = (imin + imax) / 2, slide = probe;
+		struct map_entry *ent = &g->entries[probe];
+#if 0
+		if(L4_IsNilFpage(ent->range)) {
+			/* sparse storage handling.
+			 *
+			 * TODO: maybe put this to use one day? the insertion routines
+			 * don't currently produce sparse arrays, so this complexity is
+			 * pointless.
+			 */
+			for(int i = probe - 1;
+				i >= imin && L4_IsNilFpage(ent->range);
+				i--)
+			{
+				assert(i >= imin && i <= imax);
+				ent = &g->entries[i];
+			}
+			for(int i = probe + 1;
+				L4_IsNilFpage(ent->range) && i <= imax;
+				i++)
+			{
+				assert(i >= imin && i <= imax);
+				ent = &g->entries[i];
+			}
+			if(L4_IsNilFpage(ent->range)) return NULL;
+			slide = ent - &g->entries[0];
+		}
+#endif
+		assert(slide >= 0 && slide < MAX_ENTRIES_PER_GROUP);
+
+		if(addr < L4_Address(ent->range)) {
+			imax = MIN(int, probe - 1, slide);
+		} else if(addr >= L4_Address(ent->range) + L4_Size(ent->range)) {
+			imin = MAX(int, probe + 1, slide);
+		} else {
+			return ent;
+		}
+	}
+	assert(iters < 100);
+
+	return NULL;
+}
+
+
+/* TODO: move this into an utility header */
+static uint32_t mask32_range(int first, int count)
+{
+	uint32_t mask = (~0u << first);
+	if(first + count < 32) mask &= ~(~0u << (first + count));
+#ifndef NDEBUG
+	for(int i=0; i < 32; i++) {
+		bool set = (mask & (1 << i)) != 0;
+		assert(set || i < first || i >= first + count);
+		assert(!set || (i >= first && i < first + count));
+	}
+#endif
+	return mask;
+}
+
+
+static void add_to_group_occ(struct map_group *g, L4_Fpage_t fpage)
+{
+	/* +2 for aliasing four 4 KiB pages per bit */
+	const int first = (L4_Address(fpage) - g->start) >> (PAGE_BITS + 2),
+		count = L4_Size(fpage) >> (PAGE_BITS + 2);
+	int done = 0;
+	while(done < count) {
+		int pos = first + done, limb = pos >> 5, offset = pos & 0x1f,
+			seg = MIN(int, 32 - offset, count - done);
+		g->occ[limb] |= mask32_range(offset, seg);
+		done += seg;
+		assert(done == count || ((done + first) & 0x1f) == 0);
+	}
+
+#ifndef NDEBUG
+	for(int i = first; i < first + count; i++) {
+		int limb = i >> 5, offset = i & 0x1f;
+		assert((g->occ[limb] & (1 << offset)) != 0);
+	}
+#endif
+}
+
+
+static struct map_entry *probe_group_bitmap(
+	struct map_group *g,
+	L4_Fpage_t fpage)
+{
+	assert(!L4_IsNilFpage(fpage));
+	int num_pages = MAX(int, 1, L4_Size(fpage) >> PAGE_BITS);
+	if(num_pages <= 4) {
+		/* optimized unit case (with aliasing) */
+		int pos = (L4_Address(fpage) - g->start) >> (PAGE_BITS + 2),
+			limb = pos >> 5, offset = pos & 0x1f;
+#if 0
+		TRACE("probing pos %d (limb %d, offset %d) in %#x; occ[%d] = %#x\n",
+			pos, limb, offset, g->start, limb, g->occ[limb]);
+#endif
+		if((g->occ[limb] & (1 << offset)) != 0) {
+			/* do a final 4-page scan at the aliased range. */
+			for(int p=0; p < 4; p++) {
+				struct map_entry *e = find_entry_in_group(g,
+					L4_Address(fpage) + p * PAGE_SIZE);
+				if(e != NULL) return e;
+			}
+		}
+	} else {
+		/* other cases in terms of the previous.
+		 * TODO: use proper mask tests, bit-magic
+		 */
+		for(int p=0; p < num_pages; p += 4) {
+			struct map_entry *e = probe_group_bitmap(g,
+				L4_FpageLog2(L4_Address(fpage) + p * PAGE_SIZE, 14));
+			if(e != NULL) return e;
+		}
+	}
+
+	return NULL;
+}
+
+
+static int entry_split_and_insert(
+	struct map_entry *outbuf,
+	const struct map_entry *src,
+	L4_Fpage_t fpage,
+	uint32_t first_page_id)
+{
+	return 0;
+}
+
+
+/* TODO: add prototype to <ukernel/mapdb.h>
+ * FIXME: add out-of-memory condition
+ */
+void mapdb_add_map(
+	struct map_db *db,
+	L4_Fpage_t fpage,
+	uint32_t first_page_id)
+{
+	L4_Word_t addr = L4_Address(fpage);
+	TRACE("%s: adding fpage at %#x, size %#x\n", __func__, addr,
+		L4_Size(fpage));
+
+	struct map_group *g = group_for_addr(db, addr);
+	if(g == NULL) {
+		/* trivial case. */
+		g = kmem_cache_zalloc(map_group_slab);
+		/* (FIXME: catch OOM) */
+		g->start = GROUP_ADDR(addr);
+		htable_add(&db->groups, int_hash(g->start), g);
+		g->entries = malloc(sizeof(struct map_entry) * 2);
+		g->num_alloc = 2;
+		g->entries[0] = (struct map_entry){
+			.range = fpage, .first_page_id = first_page_id,
+		};
+		g->entries[1].range = L4_Nilpage;
+		g->num_entries = 1;
+		add_to_group_occ(g, fpage);
+	} else {
+		struct map_entry *old = probe_group_bitmap(g, fpage);
+		if(old == NULL) {
+			/* TODO: use a clever binary hoppity-skip algorithm here,
+			 * recycling it for the split-placement bit in the next case.
+			 *
+			 * this stuff requires that entries be tightly packed at the
+			 * beginning of g->entries[] . the algorithm won't compact holes
+			 * to the right of the right-side ("prev") entry.
+			 */
+			int prev = -1;
+			for(int i=0; i < g->num_entries; i++) {
+				L4_Fpage_t e = g->entries[i].range;
+				if(L4_IsNilFpage(e)) continue;
+				assert(L4_Address(e) + L4_Size(e) - 1 < L4_Address(fpage)
+					|| L4_Address(fpage) + L4_Size(fpage) - 1 < L4_Address(e));
+				if(L4_Address(e) < L4_Address(fpage)) prev = i; else break;
+			}
+			int dst_pos;
+			if(prev + 1 < g->num_alloc
+				&& L4_IsNilFpage(g->entries[prev + 1].range))
+			{
+				dst_pos = prev + 1;
+			} else {
+				if(g->num_entries + 1 >= g->num_alloc) {
+					int next_size = g->num_alloc > 0 ? g->num_alloc * 2 : 2;
+					TRACE("resizing group at %p from %d to %d entries\n",
+						g, g->num_alloc, next_size);
+					struct map_entry *new_ents = realloc(g->entries,
+						next_size * sizeof(struct map_entry));
+					if(new_ents == NULL) {
+						/* FIXME: pop OOM */
+						panic("realloc() failed in mapdb blargh");
+					}
+					for(int i = g->num_alloc; i < next_size; i++) {
+						new_ents[i].range = L4_Nilpage;
+					}
+					g->num_alloc = next_size;
+					g->entries = new_ents;
+				}
+				dst_pos = prev + 1;
+				if(prev < g->num_entries) {
+					struct map_entry prev_ent = g->entries[prev];
+					for(int i=prev + 1; i <= g->num_entries; i++) {
+						SWAP(struct map_entry, g->entries[i], prev_ent);
+					}
+				}
+			}
+//			TRACE("g->entries %p; setting pos %d\n", g->entries, dst_pos);
+			g->entries[dst_pos] = (struct map_entry){
+				.range = fpage, .first_page_id = first_page_id,
+			};
+			g->num_entries++;
+			add_to_group_occ(g, fpage);
+		} else {
+			struct map_entry split_tmp[MAX_SPLIT];
+			int split_count = entry_split_and_insert(split_tmp, old,
+				fpage, first_page_id);
+			TRACE("%s: ESI returned %d\n", __func__, split_count);
+			if(split_count <= 1) {
+				/* simple 1:1 replacement, no bitmap update even */
+				if(old->num_children > 1) {
+					free(old->children);
+					old->children = NULL;
+				}
+				*old = (struct map_entry){
+					.range = fpage, .first_page_id = first_page_id,
+				};
+			} else {
+				int dst_pos = old - &g->entries[0];
+				printf("would insert %d items at %d\n", split_count, dst_pos);
+				panic("N-insert case not written");
+			}
+		}
+	}
+
+#ifndef NDEBUG
+	TRACE("%s: group %#x .. %#x contains (%d ents, %d alloc):\n",
+		__func__, g->start, g->start + GROUP_SIZE - 1,
+		g->num_entries, g->num_alloc);
+	for(int i=0; i < g->num_entries; i++) {
+		struct map_entry *e = &g->entries[i];
+		assert(!L4_IsNilFpage(e->range));
+		TRACE("  %d: [%#x .. %#x], pages [%u .. %u]\n", i,
+			L4_Address(e->range), L4_Address(e->range) + L4_Size(e->range) - 1,
+			e->first_page_id,
+			e->first_page_id + L4_Size(e->range) / PAGE_SIZE - 1);
+	}
+#endif
+}
+
+
 const struct map_entry *mapdb_probe(
 	struct map_db *db,
 	uintptr_t addr)
@@ -121,15 +413,17 @@ const struct map_entry *mapdb_probe(
 	struct map_group *g = group_for_addr(db, addr);
 	if(g == NULL) return NULL;
 
-	int g_offset = (addr - g->start) >> PAGE_BITS;
-	assert(g_offset < ENTRIES_PER_GROUP);
-	return &g->entries[g_offset];
+	assert(addr >= g->start);
+	assert(addr < g->start + GROUP_SIZE);
+	return find_entry_in_group(g, addr);
 }
 
 
 COLD void init_mapdb(void)
 {
-	/* ... */
+	map_group_slab = kmem_cache_create("map_group_slab",
+		sizeof(struct map_group), ALIGNOF(struct map_group),
+		0, NULL, NULL);
 }
 
 
@@ -140,43 +434,72 @@ COLD void mapdb_init_range(
 	unsigned int num_pages,
 	int entry_flags)
 {
-	uintptr_t g_first = GROUP_ADDR(start_addr),
-		g_last = GROUP_ADDR(start_addr + num_pages * PAGE_SIZE - 1);
-
-#ifndef NDEBUG
-	int done = 0;
+#if 1
+	TRACE("%s: start_addr %#x, num_pages %u (%#x bytes)\n", __func__,
+		start_addr, num_pages, num_pages * PAGE_SIZE);
 #endif
-	for(uintptr_t i = g_first; i <= g_last; i += GROUP_SIZE) {
-		struct map_group *g = group_for_addr(db, i);
+#ifndef NDEBUG
+	unsigned int done = 0;
+#endif
+	for(uintptr_t g_addr = GROUP_ADDR(start_addr),
+				  g_last = GROUP_ADDR(start_addr + num_pages * PAGE_SIZE - 1);
+		g_addr <= g_last;
+		g_addr += GROUP_SIZE)
+	{
+		uintptr_t range_start = MAX(uintptr_t, start_addr, g_addr),
+			range_end = MIN(uintptr_t, start_addr + num_pages * PAGE_SIZE,
+				g_addr + GROUP_SIZE) - 1;
+		struct map_group *g = group_for_addr(db, g_addr);
 		if(g == NULL) {
-			g = calloc(1, sizeof(struct map_group));
-			g->start = i;
-			htable_add(&db->groups, int_hash(i), g);
+			g = kmem_cache_zalloc(map_group_slab);
+			g->start = g_addr;
+			assert((g->start & (GROUP_SIZE - 1)) == 0);
+			htable_add(&db->groups, int_hash(g->start), g);
 		}
 
-		uintptr_t start = MAX(uintptr_t, start_addr, g->start),
-			end = MIN(uintptr_t, start_addr + num_pages * PAGE_SIZE - 1,
-				g->start + GROUP_SIZE - 1);
-		int id_offset = (start - start_addr) >> PAGE_BITS,
-			g_offset = (start - g->start) >> PAGE_BITS,
-			length = (end - start + 1) >> PAGE_BITS;
-		assert(id_offset >= 0);
-		assert(id_offset < num_pages);
-		assert(id_offset + length <= num_pages);
-		assert(g_offset >= 0);
-		assert(g_offset < ENTRIES_PER_GROUP);
-		assert(g_offset + length <= ENTRIES_PER_GROUP);
-		for(int j=0; j < length; j++) {
-			struct map_entry *e = &g->entries[j + g_offset];
-			assert(e->page_id == 0);
-			*e = (struct map_entry){
-				.page_id = page_ids[j + id_offset],
-				.flags = entry_flags,
-			};
+		/* - search page_ids[id_offset ...] for contiguous blocks of
+		 *   appropriate alignment (for the current address between [range_start
+		 *   .. range_end]);
+		 */
+		uintptr_t range_pos = range_start;
+		int range_len = (range_end - range_start + 1) >> PAGE_BITS;
+		while(range_pos <= range_end) {
+			int b = ffsl(range_pos);
+//			TRACE("%s: range_pos %#x, b %d\n", __func__, range_pos, b);
+			assert(b == 0
+				|| __builtin_popcount(range_pos) == 1
+				|| ffsl(range_pos & ~(1 << (b - 1))) > b);
+
+			/* 4 MiB at most */
+			if(unlikely(b == 0)) b = 22; else b = MIN(int, 22, b - 1);
+			int r_ix = (range_pos - range_start) >> PAGE_BITS,
+				seg = MIN(int, 1 << (b - 12), range_len - r_ix),
+				id_offset = (range_pos - start_addr) >> PAGE_BITS;
+			for(int i=1, last = page_ids[id_offset]; i < seg; i++) {
+				if(page_ids[id_offset + i] != last + 1) {
+					seg = i;
+					break;
+				}
+				last++;
+				assert(last == page_ids[id_offset + i]);
+			}
+			assert(seg > 0);
+			int mag = sizeof(int) * 8 - __builtin_clz(seg) - 1 + 12;
+			assert(1 << mag <= seg * PAGE_SIZE);
+			/* - then pass those one by one to mapdb_add_map(db, fpage, first_id,
+			 *   [rwx])
+			 */
+			L4_Fpage_t page = L4_FpageLog2(range_pos, mag);
+			assert((range_pos & (L4_Size(page) - 1)) == 0);
+			L4_Set_Rights(&page, L4_FullyAccessible);
+			mapdb_add_map(db, page, page_ids[id_offset]);
+
+			range_pos += 1 << mag;
 #ifndef NDEBUG
-			done++;
+			done += 1 << (mag - 12);
 #endif
 		}
 	}
+
 	assert(done == num_pages);
 }

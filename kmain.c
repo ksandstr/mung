@@ -281,9 +281,6 @@ void pump_keyboard(void)
 }
 
 
-/* FIXME: this'll overrun the kernel heap when given more than 256 megabytes
- * of memory. the kernel initial area should be sized to suffice.
- */
 static void add_s0_pages(L4_Word_t start, L4_Word_t end)
 {
 	uint32_t ids[128];

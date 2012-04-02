@@ -37,7 +37,7 @@ void isr_exn_ud_bottom(struct x86_exregs *regs)
 		regs->eip & ~PAGE_MASK);
 	if(e == NULL) panic("no map_entry for #UD eip? what.");
 	uintptr_t heap_addr = reserve_heap_page();
-	put_supervisor_page(heap_addr, e->page_id);
+	put_supervisor_page(heap_addr, mapdb_page_id_in_entry(e, regs->eip));
 	int offset = regs->eip & PAGE_MASK;
 	const uint8_t *mem = (void *)heap_addr;
 	if(mem[offset] == 0xf0 && mem[offset + 1] == 0x90) {
@@ -136,12 +136,12 @@ void isr_exn_pf_bottom(struct x86_exregs *regs)
 		panic("KERNEL #PF");
 	}
 
-
-#if 0
+#ifndef NDEBUG
 	static uintptr_t last_fault = ~0;
 	static int repeat_count = 0;
 	if(last_fault == fault_addr && ++repeat_count == 3) {
-		printf("faulted many times on the same address\n");
+		printf("WARNING: faulted many times on the same address %#x\n",
+			fault_addr);
 		thread_save_exregs(current, regs);
 		current->status = TS_STOPPED;
 		return_to_scheduler(regs);
@@ -154,10 +154,14 @@ void isr_exn_pf_bottom(struct x86_exregs *regs)
 	const struct map_entry *e = mapdb_probe(&current->space->mapdb,
 		fault_addr);
 	if(e != NULL) {
-		space_put_page(current->space, fault_addr & ~PAGE_MASK,
-			e->page_id, e->flags & 0x7);
+		space_put_page(current->space, fault_addr,
+			mapdb_page_id_in_entry(e, fault_addr), L4_Rights(e->range));
 		space_commit(current->space);
 	} else {
+#ifndef NDEBUG
+		repeat_count = 0;	/* sufficiently userspacey. */
+#endif
+
 		thread_save_exregs(current, regs);
 		void *utcb = thread_get_utcb(current);
 		L4_ThreadId_t pager_id = { .raw = L4_VREG(utcb, L4_TCR_PAGER) };
@@ -180,4 +184,3 @@ void isr_exn_pf_bottom(struct x86_exregs *regs)
 		}
 	}
 }
-

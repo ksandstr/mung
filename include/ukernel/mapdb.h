@@ -2,6 +2,7 @@
 #define SEEN_UKERNEL_MAPDB_H
 
 #include <stdint.h>
+#include <assert.h>
 #include <ccan/htable/htable.h>
 
 #include <l4/types.h>
@@ -17,35 +18,40 @@
 #define REF_SPACE(ref) ((ref) & PAGE_MASK)
 #define REF_ADDR(ref) ((ref) & ~PAGE_MASK)
 
-#define ENTRIES_PER_GROUP 128		/* half a megabyte in 4k pages */
+#define MAX_ENTRIES_PER_GROUP 1024	/* 4 MiB in 4 KiB pages */
 
 
 struct space;
 
 
-/* represents a hole when page_id == 0 . */
+/* "range" is L4_nilpage if entry is empty */
 struct map_entry
 {
-	uintptr_t parent;
-	uint32_t page_id;
-	uint16_t flags;			/* 0-2: L4 access bits */
-	uint16_t num_children;	/* (upper 6 bits redundant) */
+	L4_Fpage_t range;		/* incl. L4 permission bits */
+	uint32_t first_page_id;
+	/* there may be fewer actual children of this map_entry; num_children only
+	 * tracks whether "child" or "children" is to be used, and how many words
+	 * are allocated under "children" when num_children > 1.
+	 *
+	 * empties may show up as L4_nilpage, or a reference to a child space that
+	 * either doesn't exist, has no mapping at that address, or the mapping
+	 * doesn't reference a physical page in this map_entry.
+	 */
+	uint16_t num_children;	/* (upper 4 bits redundant) */
 	union {
-		uintptr_t child;		/* when num_children <= 1 */
-		uintptr_t *children;	/* otherwise (malloc()'d) */
+		L4_Word_t child;		/* when num_children <= 1 */
+		L4_Word_t *children;	/* otherwise (malloc()'d) */
 	};
 };
 
 
-/* TODO: this format eats up 16 MiB of memory for a whole 4 GiB of mappings.
- * that's clearly not OK, so add a sparse representation as well (& a
- * conversion criteria). that'll permit allocation of map groups on a slab,
- * too.
- */
 struct map_group
 {
-	uintptr_t start;
-	struct map_entry entries[ENTRIES_PER_GROUP];
+	uintptr_t start;			/* virtual address */
+	uint16_t num_entries;
+	uint16_t num_alloc;			/* always a power of two, or 0; never 1 */
+	uint32_t occ[8];			/* occupancy bitmap, 4 entries per bit */
+	struct map_entry *entries;	/* at most MAX_ENTRIES_PER_GROUP */
 };
 
 
@@ -74,6 +80,16 @@ extern void mapdb_destroy(struct map_db *ptr);
 extern const struct map_entry *mapdb_probe(
 	struct map_db *db,
 	uintptr_t addr);
+
+/* map_entry accessor */
+static inline uint32_t mapdb_page_id_in_entry(
+	const struct map_entry *m,
+	uintptr_t addr)
+{
+	assert(!L4_IsNilFpage(m->range));
+	return m->first_page_id + ((addr - L4_Address(m->range)) >> PAGE_BITS);
+}
+
 
 /* kernel-mode initialization */
 extern void mapdb_init_range(
