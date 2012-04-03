@@ -95,6 +95,8 @@ void __assert_failure(
 
 static int sigma0_ipc_loop(void *kip_base)
 {
+	/* FIXME: add "proper" L4_LoadMR(), L4_StoreMR() functions */
+	void *utcb = __L4_Get_UtcbAddress();
 	for(;;) {
 		L4_ThreadId_t from = L4_nilthread;
 		L4_MsgTag_t tag = L4_Ipc(L4_nilthread, L4_anythread,
@@ -107,9 +109,42 @@ static int sigma0_ipc_loop(void *kip_base)
 			}
 
 			L4_ThreadId_t sender = from;
-			if(true) {
-				printf("unknown IPC label %#x from %u:%u\n",
-					tag.X.label, from.global.X.thread_no,
+			if((tag.X.label & 0xfff0) == 0xffe0
+				&& tag.X.u == 2 && tag.X.t == 0)
+			{
+				L4_Word_t ip = L4_VREG(utcb, L4_TCR_MR(2)),
+					addr = L4_VREG(utcb, L4_TCR_MR(1));
+				printf("pagefault from %d:%d (ip %#x, addr %#x)\n",
+					from.global.X.thread_no, from.global.X.version,
+					ip, addr);
+				L4_Fpage_t page = L4_FpageLog2(addr, 12);
+				L4_Set_Rights(&page, L4_FullyAccessible);
+				L4_MapItem_t idemp = L4_MapItem(page,
+					addr & ~((1 << 12) - 1));
+				L4_VREG(utcb, L4_TCR_MR(0)) = (L4_MsgTag_t){ .X.t = 2 }.raw;
+				L4_VREG(utcb, L4_TCR_MR(1)) = idemp.raw[0];
+				L4_VREG(utcb, L4_TCR_MR(2)) = idemp.raw[1];
+			} else if((tag.X.label & 0xfff0) == 0xffa0
+				&& tag.X.u == 2 && tag.X.t == 0)
+			{
+				/* s0 user protocol: fpage request */
+				L4_Fpage_t req_fpage = { .raw = L4_VREG(utcb, L4_TCR_MR(1)) };
+				L4_Word_t req_attr = L4_VREG(utcb, L4_TCR_MR(2));
+				printf("roottask requested page %#x:%#x attr %#x\n",
+					L4_Address(req_fpage), L4_Size(req_fpage), req_attr);
+				/* FIXME: implement this by allocating a "struct free_page"
+				 * per aligned fpage that the KIP's memorydesc ranges leave,
+				 * up to the largest page size that the KIP declares native
+				 * support for, or 4 MiB if smaller. stick these in buckets.
+				 * allocate new slab pages from those buckets, smallest first,
+				 * breaking up pages as necessary, with the same allocator as
+				 * used by the fpage request protocol and the pagefault
+				 * protcol handlers, above.
+				 */
+				break;
+			} else {
+				printf("unknown IPC label %#x (u %d, t %d) from %u:%u\n",
+					tag.X.label, tag.X.u, tag.X.t, from.global.X.thread_no,
 					from.global.X.version);
 				break;
 			}

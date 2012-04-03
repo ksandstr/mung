@@ -385,9 +385,9 @@ static void pager_thread(void *parameter)
 				L4_VREG(utcb, L4_TCR_MR(0)) = ((L4_MsgTag_t){ .X.u = 1 }).raw;
 				L4_VREG(utcb, L4_TCR_MR(1)) = 0xc0def00d;
 			} else {
-				printf("%s: unknown IPC label 0x%x from %d:%d\n",
-					__func__, tag.X.label, TID_THREADNUM(from.raw),
-					TID_VERSION(from.raw));
+				printf("%s: unknown IPC label 0x%x (u %d, t %d) from %d:%d\n",
+					__func__, tag.X.label, tag.X.u, tag.X.t,
+					TID_THREADNUM(from.raw), TID_VERSION(from.raw));
 				break;
 			}
 
@@ -404,7 +404,8 @@ static struct thread *spawn_kernel_server(
 	L4_Word_t thread_id,
 	const L4_KernelRootServer_t *s0,
 	struct thread *pager,
-	int utcb_size_log2)
+	int utcb_size_log2,
+	bool premap)
 {
 	assert(utcb_size_log2 >= PAGE_BITS);
 
@@ -424,17 +425,19 @@ static struct thread *spawn_kernel_server(
 	void *u_base = thread_get_utcb(t);
 	L4_VREG(u_base, L4_TCR_PAGER) = pager->id;
 
-	/* create idempotent mappings of kernel server memory. */
-	assert((s0->low & PAGE_MASK) == 0);
-	assert((s0->high & PAGE_MASK) == 0xfff);
-	int num_pages = (s0->high - s0->low + 1) >> PAGE_BITS;
-	uint32_t *ids = malloc(sizeof(uint32_t) * num_pages);
-	for(int i=0; i < num_pages; i++) {
-		ids[i] = (s0->low + i * PAGE_SIZE) >> PAGE_BITS;
+	if(premap) {
+		/* create idempotent mappings of kernel server memory. */
+		assert((s0->low & PAGE_MASK) == 0);
+		assert((s0->high & PAGE_MASK) == 0xfff);
+		int num_pages = (s0->high - s0->low + 1) >> PAGE_BITS;
+		uint32_t *ids = malloc(sizeof(uint32_t) * num_pages);
+		for(int i=0; i < num_pages; i++) {
+			ids[i] = (s0->low + i * PAGE_SIZE) >> PAGE_BITS;
+		}
+		mapdb_init_range(&t->space->mapdb, s0->low, ids, num_pages,
+			L4_FullyAccessible);
+		free(ids);
 	}
-	mapdb_init_range(&t->space->mapdb, s0->low, ids, num_pages,
-		L4_FullyAccessible);
-	free(ids);
 
 	thread_set_spip(t, s0->sp, s0->ip);
 
@@ -569,15 +572,12 @@ void kmain(void *bigp, unsigned int magic)
 	 */
 	struct thread *sigma0_pager = create_kthread(&pager_thread, NULL),
 		*s0_thread = spawn_kernel_server(THREAD_ID(128, 1),
-			&s0_mod, sigma0_pager, PAGE_BITS),
+			&s0_mod, sigma0_pager, PAGE_BITS, true),
 		*roottask = NULL;
 	sigma0_space = s0_thread->space;
 	if(roottask_mod.high >= PAGE_SIZE) {
-		/* FIXME: this pre-creates the root task's mapping database. it should
-		 * instead be mapped page by page from sigma0 as faults happen.
-		 */
 		roottask = spawn_kernel_server(THREAD_ID(160, 1), &roottask_mod,
-			s0_thread, 16);
+			s0_thread, 16, false);
 		printf("roottask [%#x .. %#x] created as %d:%d.\n",
 			roottask_mod.low, roottask_mod.high,
 			TID_THREADNUM(roottask->id), TID_VERSION(roottask->id));
