@@ -355,9 +355,9 @@ void mapdb_add_map(
 					g->entries = new_ents;
 				}
 				dst_pos = prev + 1;
-				if(prev < g->num_entries) {
-					struct map_entry prev_ent = g->entries[prev];
-					for(int i=prev + 1; i <= g->num_entries; i++) {
+				if(dst_pos < g->num_entries) {
+					struct map_entry prev_ent = g->entries[dst_pos];
+					for(int i=dst_pos + 1; i <= g->num_entries; i++) {
 						SWAP(struct map_entry, g->entries[i], prev_ent);
 					}
 				}
