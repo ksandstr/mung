@@ -117,6 +117,13 @@ static int sigma0_ipc_loop(void *kip_base)
 				printf("pagefault from %d:%d (ip %#x, addr %#x)\n",
 					from.global.X.thread_no, from.global.X.version,
 					ip, addr);
+				static L4_Word_t last_fault = 0;
+				if(last_fault == addr) {
+					printf("... two faults at the same address! s0 rejects this.\n");
+					break;
+				} else {
+					last_fault = addr;
+				}
 				L4_Fpage_t page = L4_FpageLog2(addr, 12);
 				L4_Set_Rights(&page, L4_FullyAccessible);
 				L4_MapItem_t idemp = L4_MapItem(page,
