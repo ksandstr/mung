@@ -432,15 +432,30 @@ int mapdb_map_pages(
 	printf("%s: first->range is %#x:%#x\n", __func__,
 		L4_Address(first->range), L4_Size(first->range));
 
-	/* the nice, common 1:1 case. (also works with a larger source range; it
-	 * just has to start at offset 0.)
-	 */
-	if(first_addr == L4_Address(map_page)
+	if(L4_Address(first->range) == L4_Address(map_page)
 		&& L4_Size(first->range) >= L4_Size(map_page))
 	{
+		assert(first_addr == L4_Address(map_page));
+		/* the nice, common 1:1 case. (also works with a larger source range; it
+		 * just has to start at offset 0. this is a distinct case because it is
+		 * virtually always hit for 4-8 KiB pages.)
+		 */
 		L4_Fpage_t p = L4_FpageLog2(dest_addr, L4_SizeLog2(map_page));
 		L4_Set_Rights(&p, L4_Rights(first->range) & L4_Rights(map_page));
 		if(L4_Rights(p) != 0) mapdb_add_map(to_db, p, first->first_page_id);
+		return L4_Rights(p);
+	} else if(first_addr == L4_Address(map_page)
+		&& last_addr < L4_Address(first->range) + L4_Size(first->range))
+	{
+		/* the "entirely contained inside" case, common for 4KiB pages being
+		 * mapped from inside a hugepage
+		 */
+		int offset = (first_addr - L4_Address(first->range)) >> PAGE_BITS;
+		L4_Fpage_t p = L4_FpageLog2(dest_addr, L4_SizeLog2(map_page));
+		L4_Set_Rights(&p, L4_Rights(first->range) & L4_Rights(map_page));
+		if(L4_Rights(p) != 0) {
+			mapdb_add_map(to_db, p, first->first_page_id + offset);
+		}
 		return L4_Rights(p);
 	} else {
 		panic("complex case not implemented!");
