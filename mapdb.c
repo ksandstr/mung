@@ -406,7 +406,7 @@ void mapdb_add_map(
 }
 
 
-const struct map_entry *mapdb_probe(
+struct map_entry *mapdb_probe(
 	struct map_db *db,
 	uintptr_t addr)
 {

@@ -35,7 +35,13 @@ struct map_entry
 	 *
 	 * empties may show up as L4_nilpage, or a reference to a child space that
 	 * either doesn't exist, has no mapping at that address, or the mapping
-	 * doesn't reference a physical page in this map_entry.
+	 * doesn't reference a physical page in this map_entry. (the latter are
+	 * compacted by Unmap and the large-page splitting function [which divvies
+	 * the larger page's children appropriately].)
+	 *
+	 * "children" is also used to verify that the previous mapping was made
+	 * from this entry at this address, as required by the L4.X2 criteria on
+	 * when a map/grant extends the privileges of an existing mapping.
 	 */
 	uint16_t num_children;	/* (upper 4 bits redundant) */
 	union {
@@ -77,7 +83,7 @@ extern void mapdb_destroy(struct map_db *ptr);
 /* access from the pagefault handler. returns NULL when the entry doesn't
  * exist.
  */
-extern const struct map_entry *mapdb_probe(
+extern struct map_entry *mapdb_probe(
 	struct map_db *db,
 	uintptr_t addr);
 
