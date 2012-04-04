@@ -48,8 +48,7 @@ static struct htable sendwait_hash;
 static inline void set_ipc_error(void *utcb, L4_Word_t ec)
 {
 	L4_VREG(utcb, L4_TCR_ERRORCODE) = ec;
-	L4_VREG(utcb, L4_TCR_MR(0)) = ((L4_MsgTag_t){
-		.X.flags = 0x8 }).raw;
+	L4_VREG(utcb, L4_TCR_MR(0)) = ((L4_MsgTag_t){ .X.flags = 0x8 }).raw;
 	L4_VREG(utcb, L4_TCR_MR(1)) = 0;
 	L4_VREG(utcb, L4_TCR_MR(2)) = 0;
 }
@@ -126,10 +125,10 @@ static void do_ipc_transfer(
 }
 
 
-static void restore_saved_regs(struct thread *t)
+static bool restore_saved_regs(struct thread *t)
 {
 	/* most IPC is not for page faults or exceptions. */
-	if(likely(t->saved_mrs == 0 && t->saved_brs == 0)) return;
+	if(likely(t->saved_mrs == 0 && t->saved_brs == 0)) return false;
 
 	void *utcb = thread_get_utcb(t);
 	memcpy(&L4_VREG(utcb, L4_TCR_MR(0)), t->saved_regs,
@@ -138,6 +137,32 @@ static void restore_saved_regs(struct thread *t)
 		sizeof(L4_Word_t) * (int)t->saved_brs);
 	t->saved_mrs = 0;
 	t->saved_brs = 0;
+
+	return true;
+}
+
+
+static void set_ipc_return_regs(
+	struct x86_exregs *regs,
+	struct thread *current,
+	void *utcb)
+{
+	assert(utcb == thread_get_utcb(current));
+	regs->eax = current->ipc_from.raw;
+	regs->esi = L4_VREG(utcb, L4_TCR_MR(0));
+	regs->ebx = L4_VREG(utcb, L4_TCR_MR(1));
+	regs->ebp = L4_VREG(utcb, L4_TCR_MR(2));
+}
+
+
+static void set_ipc_return_thread(struct thread *t)
+{
+	struct x86_exregs regs;
+	set_ipc_return_regs(&regs, t, thread_get_utcb(t));
+	t->ctx.regs[0] = regs.eax;
+	t->ctx.regs[1] = regs.ebx;
+	t->ctx.regs[4] = regs.esi;
+	t->ctx.regs[6] = regs.ebp;
 }
 
 
@@ -165,8 +190,12 @@ bool ipc_send_half(struct thread *self)
 			TID_THREADNUM(self->id), TID_VERSION(self->id));
 
 		do_ipc_transfer(self, dest);
+		dest->ipc_from.raw = self->id;
+		if(!restore_saved_regs(dest)) {
+			/* ordinary IPC; set up the IPC return registers. */
+			set_ipc_return_thread(dest);
+		}
 		dest->status = TS_READY;
-		restore_saved_regs(dest);
 
 		if(L4_IsNilThread(self->ipc_from)) {
 			assert(self->status == TS_RUNNING);
@@ -348,18 +377,6 @@ static void ipc(struct thread *current, void *utcb)
 }
 
 
-static void set_ipc_return(
-	struct x86_exregs *regs,
-	struct thread *current,
-	void *utcb)
-{
-	regs->eax = current->ipc_from.raw;
-	regs->esi = L4_VREG(utcb, L4_TCR_MR(0));
-	regs->ebx = L4_VREG(utcb, L4_TCR_MR(1));
-	regs->ebp = L4_VREG(utcb, L4_TCR_MR(2));
-}
-
-
 void sys_ipc(struct x86_exregs *regs)
 {
 	struct thread *current = get_current_thread();
@@ -385,7 +402,7 @@ void sys_ipc(struct x86_exregs *regs)
 	} else {
 		/* return from IPC at once. */
 		assert(current->status == TS_RUNNING);
-		set_ipc_return(regs, current, utcb);
+		set_ipc_return_regs(regs, current, utcb);
 	}
 }
 
