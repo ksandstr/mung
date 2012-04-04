@@ -247,9 +247,7 @@ void *thread_get_utcb(struct thread *t)
 	int page_ix = t->utcb_pos / UTCB_PER_PAGE,
 		offset = t->utcb_pos & (UTCB_PER_PAGE - 1);
 	struct page *p = t->space->utcb_pages[page_ix];
-	if(unlikely(p->vm_addr == NULL)) {
-		panic("UTCB page not mapped in kernel?? HALP");
-	}
+	assert(p->vm_addr != NULL);
 	/* the UTCB pointer starts with the kernel-defined MR0 slot, and has at
 	 * least 200 bytes available at negative offsets.
 	 */
