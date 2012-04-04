@@ -378,6 +378,7 @@ static void pager_thread(void *parameter)
 				int len = strlen(buf);
 				while(len > 0 && buf[len - 1] == '\n') buf[--len] = '\0';
 				printf("[sigma0]: %s\n", buf);
+				L4_VREG(utcb, L4_TCR_MR(0)) = 0;
 			} else if(tag.X.label == 0x2369) {
 				/* respond, to test out ReplyWait. */
 				printf("%s: got test message at %llu, mr1 is %#x\n", __func__,
