@@ -406,17 +406,19 @@ void mapdb_add_map(
 }
 
 
+/* does mappings of all physical pages inside map_page. skips holes in the
+ * sender address space within the mapping (so pages in the receiver won't be
+ * unmapped on overlap with empty.)
+ *
+ * TODO: should have a "grant" option, removing the maps from the source
+ * database.
+ */
 int mapdb_map_pages(
 	struct map_db *from_db,
 	struct map_db *to_db,
 	L4_Fpage_t map_page,
 	L4_Word_t dest_addr)
 {
-	/* do mappings of all physical pages inside map_page. holes in the sender
-	 * address space within the mapping are skipped, and therefore not
-	 * replaced in the receiver address space when overlapped.
-	 */
-
 	struct map_entry *first;
 	L4_Word_t first_addr = L4_Address(map_page),
 		last_addr = L4_Address(map_page) + L4_Size(map_page) - 1;
@@ -428,9 +430,6 @@ int mapdb_map_pages(
 		/* no pages; it's a no-op. */
 		return 0;
 	}
-
-	printf("%s: first->range is %#x:%#x\n", __func__,
-		L4_Address(first->range), L4_Size(first->range));
 
 	if(L4_Address(first->range) == L4_Address(map_page)
 		&& L4_Size(first->range) >= L4_Size(map_page))
@@ -458,16 +457,11 @@ int mapdb_map_pages(
 		}
 		return L4_Rights(p);
 	} else {
+		/* TODO: the first version of the complex case should likely be
+		 * entirely brute force, going over 4 KiB pages one at a time. not
+		 * fancy like what used to be #if 0'd below.
+		 */
 		panic("complex case not implemented!");
-#if 0
-		while(first_addr <= last_addr) {
-			int src_off = (first_addr - L4_Address(first->range)) >> PAGE_BITS,
-				map_off = (first_addr - L4_Address(map_page)) >> PAGE_BITS,
-				length = MIN(int, (L4_Size(first->range) >> PAGE_BITS) - page_off,
-					(L4_Size(map_page) >> PAGE_BITS) - map_off);
-
-		}
-#endif
 	}
 
 	return 0;
