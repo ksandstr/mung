@@ -80,6 +80,16 @@ extern void init_mapdb(void);
 extern void mapdb_init(struct map_db *ptr, struct space *space);
 extern void mapdb_destroy(struct map_db *ptr);
 
+/* returns OR mask of rights that would've been granted by this mapping
+ * operation (which doesn't happen in the rights extension case, but is
+ * ignored. [TODO: consider what difference this makes.])
+ */
+extern int mapdb_map_pages(
+	struct map_db *from,
+	struct map_db *to,
+	L4_Fpage_t src_page,
+	L4_Word_t dest_addr);
+
 /* access from the pagefault handler. returns NULL when the entry doesn't
  * exist.
  */

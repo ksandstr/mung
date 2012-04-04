@@ -54,6 +54,51 @@ static inline void set_ipc_error(void *utcb, L4_Word_t ec)
 }
 
 
+/* FIXME: this function should indicate to the caller that active TLBs for the
+ * destination space may need to be flushed, or at least invalidated in the
+ * regions given in a buffer of some kind (if provided by the caller; it may
+ * flip into "all-flushing" mode at some point).
+ *
+ * the fourth bit in the return value, perhaps? and a size_t * & a L4_Fpage_t
+ * buffer for 10 items (up to a megabyte). the fifth bit as a "better off
+ * flushing it all" hint.
+ *
+ * fuck, this interface is getting complicated just because of the snd_base
+ * and rcvwindow computation. maybe it'd be better off in a function of its
+ * own.
+ */
+static int apply_mapitem(
+	struct thread *source,
+	const void *s_base,
+	struct thread *dest,
+	void *d_base,
+	L4_MapItem_t m)
+{
+	if(source->space == dest->space) return 0; /* no-op. */
+
+	L4_Fpage_t wnd = { .raw = L4_VREG(d_base, L4_TCR_BR(0)) };
+	if(unlikely(L4_IsNilFpage(wnd))) {
+		/* TODO: isn't this an error condition? */
+		return 0;
+	}
+
+	L4_Fpage_t map_page = L4_MapItemSndFpage(m);
+	printf("mapping 0x%x:0x%x, sndbase 0x%x, rcvwindow %#x:%#x (%s)\n",
+		L4_Address(map_page), L4_Size(map_page),
+		L4_MapItemSndBase(m), L4_Address(wnd), L4_Size(wnd),
+		wnd.raw == L4_CompleteAddressSpace.raw ? "CompleteAddressSpace" : "<- that");
+
+	if(wnd.raw == L4_CompleteAddressSpace.raw) {
+		return mapdb_map_pages(&source->space->mapdb,
+			&dest->space->mapdb, map_page, L4_MapItemSndBase(m));
+	} else {
+		/* TODO */
+		panic("apply_mapitem() can't handle rcvwindow cases");
+		return 0;
+	}
+}
+
+
 static void do_typed_transfer(
 	struct thread *source,
 	const void *s_base,
@@ -70,13 +115,9 @@ static void do_typed_transfer(
 				L4_MapItem_t m = {
 					.raw = { w0, L4_VREG(s_base, pos + 1) },
 				};
-				printf("would map 0x%x[0x%x], sndbase 0x%x\n",
-					L4_Address(m.X.snd_fpage), L4_Size(m.X.snd_fpage),
-					L4_MapItemSndBase(m));
-				/* TODO: change .X.rwx to reflect the actual access bits
-				 * given
-				 */
+				int given = apply_mapitem(source, s_base, dest, d_base, m);
 				m.X.snd_fpage.X.b = 0;
+				m.X.snd_fpage.X.rwx = given;
 				m.X.C = (pos + 2 <= last);
 				L4_VREG(d_base, pos) = m.raw[0];
 				L4_VREG(d_base, pos + 1) = m.raw[1];

@@ -406,6 +406,59 @@ void mapdb_add_map(
 }
 
 
+int mapdb_map_pages(
+	struct map_db *from_db,
+	struct map_db *to_db,
+	L4_Fpage_t map_page,
+	L4_Word_t dest_addr)
+{
+	/* do mappings of all physical pages inside map_page. holes in the sender
+	 * address space within the mapping are skipped, and therefore not
+	 * replaced in the receiver address space when overlapped.
+	 */
+
+	struct map_entry *first;
+	L4_Word_t first_addr = L4_Address(map_page),
+		last_addr = L4_Address(map_page) + L4_Size(map_page) - 1;
+	do {
+		first = mapdb_probe(from_db, first_addr);
+	} while(first == NULL && (first_addr += PAGE_SIZE) <= last_addr);
+
+	if(first == NULL) {
+		/* no pages; it's a no-op. */
+		return 0;
+	}
+
+	printf("%s: first->range is %#x:%#x\n", __func__,
+		L4_Address(first->range), L4_Size(first->range));
+
+	/* the nice, common 1:1 case. (also works with a larger source range; it
+	 * just has to start at offset 0.)
+	 */
+	if(first_addr == L4_Address(map_page)
+		&& L4_Size(first->range) >= L4_Size(map_page))
+	{
+		L4_Fpage_t p = L4_FpageLog2(dest_addr, L4_SizeLog2(map_page));
+		L4_Set_Rights(&p, L4_Rights(first->range) & L4_Rights(map_page));
+		if(L4_Rights(p) != 0) mapdb_add_map(to_db, p, first->first_page_id);
+		return L4_Rights(p);
+	} else {
+		panic("complex case not implemented!");
+#if 0
+		while(first_addr <= last_addr) {
+			int src_off = (first_addr - L4_Address(first->range)) >> PAGE_BITS,
+				map_off = (first_addr - L4_Address(map_page)) >> PAGE_BITS,
+				length = MIN(int, (L4_Size(first->range) >> PAGE_BITS) - page_off,
+					(L4_Size(map_page) >> PAGE_BITS) - map_off);
+
+		}
+#endif
+	}
+
+	return 0;
+}
+
+
 struct map_entry *mapdb_probe(
 	struct map_db *db,
 	uintptr_t addr)
