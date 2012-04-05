@@ -104,7 +104,7 @@ static int sigma0_ipc_loop(void *kip_base)
 
 		for(;;) {
 			if(L4_IpcFailed(tag)) {
-				printf("pager ipc failed (no ec yet)\n");
+				printf("pager ipc failed (errorcode %#x)\n", L4_ErrorCode());
 				break;
 			}
 
