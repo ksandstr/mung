@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <assert.h>
+#include <errno.h>
 #include <ccan/htable/htable.h>
 #include <ccan/alignof/alignof.h>
 #include <ccan/likely/likely.h>
@@ -105,12 +106,13 @@ static size_t rehash_ref_hash(const void *elem, void *priv) {
 }
 
 
-void mapdb_init(struct map_db *ptr, struct space *space)
+int mapdb_init(struct map_db *ptr, struct space *space)
 {
 	htable_init(&ptr->groups, &rehash_map_group, NULL);
 	ptr->space = space;
 	ptr->ref_id = next_ref_id++;
-	htable_add(&ref_hash, int_hash(ptr->ref_id), ptr);
+	bool ok = htable_add(&ref_hash, int_hash(ptr->ref_id), ptr);
+	return ok ? 0 : -ENOMEM;
 }
 
 
@@ -287,10 +289,10 @@ static int entry_split_and_insert(
 }
 
 
-/* TODO: add prototype to <ukernel/mapdb.h>
- * FIXME: add out-of-memory condition
+/* TODO: add prototype to <ukernel/mapdb.h> once all cases are covered and
+ * there's an actual use case
  */
-void mapdb_add_map(
+static int mapdb_add_map(
 	struct map_db *db,
 	L4_Fpage_t fpage,
 	uint32_t first_page_id)
@@ -303,16 +305,25 @@ void mapdb_add_map(
 	if(g == NULL) {
 		/* trivial case. */
 		g = kmem_cache_zalloc(map_group_slab);
-		/* (FIXME: catch OOM) */
-		g->start = GROUP_ADDR(addr);
-		htable_add(&db->groups, int_hash(g->start), g);
+		if(unlikely(g == NULL)) return -ENOMEM;
 		g->entries = malloc(sizeof(struct map_entry) * 2);
+		if(unlikely(g->entries == NULL)) {
+			kmem_cache_free(map_group_slab, g);
+			return -ENOMEM;
+		}
+		g->start = GROUP_ADDR(addr);
 		g->num_alloc = 2;
 		g->entries[0] = (struct map_entry){
 			.range = fpage, .first_page_id = first_page_id,
 		};
 		g->entries[1].range = L4_Nilpage;
 		g->num_entries = 1;
+		bool ok = htable_add(&db->groups, int_hash(g->start), g);
+		if(unlikely(!ok)) {
+			free(g->entries);
+			kmem_cache_free(map_group_slab, g);
+			return -ENOMEM;
+		}
 		add_to_group_occ(g, fpage);
 	} else {
 		struct map_entry *old = probe_group_bitmap(g, fpage);
@@ -344,10 +355,7 @@ void mapdb_add_map(
 						g, g->num_alloc, next_size);
 					struct map_entry *new_ents = realloc(g->entries,
 						next_size * sizeof(struct map_entry));
-					if(new_ents == NULL) {
-						/* FIXME: pop OOM */
-						panic("realloc() failed in mapdb blargh");
-					}
+					if(unlikely(new_ents == NULL)) return -ENOMEM;
 					for(int i = g->num_alloc; i < next_size; i++) {
 						new_ents[i].range = L4_Nilpage;
 					}
@@ -403,6 +411,8 @@ void mapdb_add_map(
 			e->first_page_id + L4_Size(e->range) / PAGE_SIZE - 1);
 	}
 #endif
+
+	return 0;
 }
 
 
@@ -514,9 +524,16 @@ COLD void mapdb_init_range(
 		struct map_group *g = group_for_addr(db, g_addr);
 		if(g == NULL) {
 			g = kmem_cache_zalloc(map_group_slab);
+			if(g == NULL) {
+				/* there's no point in handling ENOMEM in early boot. */
+				panic("mapdb_init_range() [early boot call] can't allocate map group");
+			}
 			g->start = g_addr;
 			assert((g->start & (GROUP_SIZE - 1)) == 0);
-			htable_add(&db->groups, int_hash(g->start), g);
+			bool ok = htable_add(&db->groups, int_hash(g->start), g);
+			if(!ok) {
+				panic("mapdb_init_range() [early boot call] htable_add() failed");
+			}
 		}
 
 		/* - search page_ids[id_offset ...] for contiguous blocks of
@@ -554,7 +571,9 @@ COLD void mapdb_init_range(
 			L4_Fpage_t page = L4_FpageLog2(range_pos, mag);
 			assert((range_pos & (L4_Size(page) - 1)) == 0);
 			L4_Set_Rights(&page, L4_FullyAccessible);
-			mapdb_add_map(db, page, page_ids[id_offset]);
+			if(mapdb_add_map(db, page, page_ids[id_offset]) < 0) {
+				panic("mapdb_init_range() [early boot call] mapdb_add_map() failed");
+			}
 
 			range_pos += 1 << mag;
 #ifndef NDEBUG

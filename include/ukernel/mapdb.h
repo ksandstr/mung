@@ -77,12 +77,15 @@ struct map_db
 
 extern void init_mapdb(void);
 
-extern void mapdb_init(struct map_db *ptr, struct space *space);
+/* returns 0 on success, or -ENOMEM */
+extern int mapdb_init(struct map_db *ptr, struct space *space);
 extern void mapdb_destroy(struct map_db *ptr);
 
-/* returns OR mask of rights that would've been granted by this mapping
- * operation (which doesn't happen in the rights extension case, but is
- * ignored. [TODO: consider what difference this makes.])
+/* on success, returns OR mask of rights that would've been granted by this
+ * mapping operation (which doesn't happen in the rights extension case, but
+ * is ignored. [TODO: consider what difference this makes.])
+ *
+ * on failure, returns negative errno.
  */
 extern int mapdb_map_pages(
 	struct map_db *from,
