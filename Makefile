@@ -40,12 +40,6 @@ ia32-kernel: linker.ld loader.o isr.o kmain.o kip.o cpu.o \
 		$(shell gcc $(CFLAGS) -print-libgcc-file-name)
 
 
-# build CCAN sources as though they were in the kernel tree.
-ccan-%.o ::
-	@echo "  CC $@ <ccan>"
-	@$(CC) -m32 -c -o $@ $(CCAN_DIR)/ccan/$*/$*.c $(CFLAGS) -nostartfiles -nodefaultlibs
-
-
 dlmalloc.o: CFLAGS += -Wno-unused-variable
 
 
