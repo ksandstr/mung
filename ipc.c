@@ -3,7 +3,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
-
+#include <errno.h>
 #include <ccan/likely/likely.h>
 #include <ccan/compiler/compiler.h>
 #include <ccan/alignof/alignof.h>
@@ -66,6 +66,9 @@ static inline void set_ipc_error(void *utcb, L4_Word_t ec)
  * fuck, this interface is getting complicated just because of the snd_base
  * and rcvwindow computation. maybe it'd be better off in a function of its
  * own.
+ *
+ *
+ * anyway, on failure this returns negative errno.
  */
 static int apply_mapitem(
 	struct thread *source,
@@ -83,10 +86,12 @@ static int apply_mapitem(
 	}
 
 	L4_Fpage_t map_page = L4_MapItemSndFpage(m);
+#if 0
 	printf("mapping 0x%x:0x%x, sndbase 0x%x, rcvwindow %#x:%#x (%s)\n",
 		L4_Address(map_page), L4_Size(map_page),
 		L4_MapItemSndBase(m), L4_Address(wnd), L4_Size(wnd),
 		wnd.raw == L4_CompleteAddressSpace.raw ? "CompleteAddressSpace" : "<- that");
+#endif
 
 	if(wnd.raw == L4_CompleteAddressSpace.raw) {
 		return mapdb_map_pages(&source->space->mapdb,
@@ -99,7 +104,7 @@ static int apply_mapitem(
 }
 
 
-static void do_typed_transfer(
+static L4_Word_t do_typed_transfer(
 	struct thread *source,
 	const void *s_base,
 	struct thread *dest,
@@ -108,7 +113,7 @@ static void do_typed_transfer(
 {
 	int pos = tag.X.u + 1, last = tag.X.u + tag.X.t;
 	while(pos <= last) {
-		L4_Word_t w0 = L4_VREG(s_base, pos);
+		L4_Word_t w0 = L4_VREG(s_base, L4_TCR_MR(pos));
 		switch(w0 & 0xe) {
 			case 0x8: {
 				if(unlikely(pos + 1 > last)) goto too_short;
@@ -116,6 +121,12 @@ static void do_typed_transfer(
 					.raw = { w0, L4_VREG(s_base, pos + 1) },
 				};
 				int given = apply_mapitem(source, s_base, dest, d_base, m);
+				if(unlikely(given == -ENOMEM)) {
+					/* code = message overflow
+					 * offset = MR# of mg/ item's first word
+					 */
+					return ((L4_Word_t)pos << 5) | (4ul << 1);
+				}
 				m.X.snd_fpage.X.b = 0;
 				m.X.snd_fpage.X.rwx = given;
 				m.X.C = (pos + 2 <= last);
@@ -140,14 +151,17 @@ static void do_typed_transfer(
 		}
 	}
 
-	return;
+	return 0;
 
 too_short:
+	/* FIXME: return a proper error */
 	panic("not enough typed message words");
+	return 0;
 }
 
 
-static void do_ipc_transfer(
+/* returns ErrorCode value, or 0 for success. */
+static L4_Word_t do_ipc_transfer(
 	struct thread *source,
 	struct thread *dest)
 {
@@ -160,8 +174,9 @@ static void do_ipc_transfer(
 		L4_VREG(d_base, reg) = L4_VREG(s_base, reg);
 	}
 
-	if(tag.X.t > 0) {
-		do_typed_transfer(source, s_base, dest, d_base, tag);
+	if(tag.X.t == 0) return 0;
+	else {
+		return do_typed_transfer(source, s_base, dest, d_base, tag);
 	}
 }
 
@@ -207,9 +222,11 @@ static void set_ipc_return_thread(struct thread *t)
 }
 
 
-/* NOTE: this function doesn't account for timeouts. if the send phase doesn't
- * immediately succeed, status changes to TS_SEND_WAIT if the thread should
- * sleep, and something else on error.
+/* returns true when the send phase has completed succesfully. false
+ * otherwise; if the send phase doesn't immediately succeed, status changes to
+ * TS_SEND_WAIT if the thread should sleep, and sets ErrorCode on error.
+ *
+ * NOTE: this function doesn't account for timeouts.
  */
 bool ipc_send_half(struct thread *self)
 {
@@ -230,7 +247,25 @@ bool ipc_send_half(struct thread *self)
 			TID_THREADNUM(dest->id), TID_VERSION(dest->id),
 			TID_THREADNUM(self->id), TID_VERSION(self->id));
 
-		do_ipc_transfer(self, dest);
+		L4_Word_t error = do_ipc_transfer(self, dest);
+		if(unlikely(error != 0)) {
+			TRACE("%s: active send caused errorcode %#x\n", __func__, error);
+			int code = (error & 0xe) >> 1;
+			if(code >= 4) {
+				/* mutual error; signal to partner also. */
+				dest->ipc_from.raw = self->id;
+				if(likely(!restore_saved_regs(dest))) {
+					set_ipc_error(thread_get_utcb(dest), error | 1);
+					set_ipc_return_thread(dest);
+				}
+				dest->status = TS_READY;
+			}
+			set_ipc_error(thread_get_utcb(self), error & ~1ul);
+			assert(self->status == TS_RUNNING);
+			return false;
+		}
+
+		/* receiver's IPC return */
 		dest->ipc_from.raw = self->id;
 		if(!restore_saved_regs(dest)) {
 			/* ordinary IPC; set up the IPC return registers. */
@@ -242,7 +277,11 @@ bool ipc_send_half(struct thread *self)
 			assert(self->status == TS_RUNNING);
 			return true;
 		} else {
-			/* try active receive, just in case. */
+			/* try active receive, just in case.
+			 *
+			 * FIXME: ... isn't this handled by ipc() and kipc()? the state
+			 * machine should only spin for exception IPCs.
+			 */
 			if(ipc_recv_half(self)) {
 				assert(self->status == TS_RUNNING);
 				return true;
@@ -274,6 +313,7 @@ bool ipc_send_half(struct thread *self)
 void ipc_simple(struct thread *dest)
 {
 	struct thread *current = get_current_thread();
+	assert(current->saved_mrs != 0 || current->saved_brs != 0);
 
 	current->ipc_to.raw = dest->id;
 	current->ipc_from.raw = dest->id;
@@ -284,6 +324,9 @@ void ipc_simple(struct thread *dest)
 }
 
 
+/* returns true when receive half completed successfully; false if the thread
+ * should either wait _or_ return immediately.
+ */
 bool ipc_recv_half(struct thread *self)
 {
 	/* find sender. */
@@ -323,7 +366,23 @@ bool ipc_recv_half(struct thread *self)
 			TID_THREADNUM(self->id), TID_VERSION(self->id));
 		assert(from->status == TS_SEND_WAIT);
 
-		do_ipc_transfer(from, self);
+		L4_Word_t error = do_ipc_transfer(from, self);
+		if(unlikely(error != 0)) {
+			TRACE("%s: active receive caused errorcode %#x\n",
+				__func__, error);
+			int code = (error & 0xe) >> 1;
+			if(code >= 4) {
+				/* mutual error; notify sender also */
+				if(likely(!restore_saved_regs(from))) {
+					set_ipc_error(thread_get_utcb(from), error & ~1ul);
+					set_ipc_return_thread(from);
+				}
+				from->status = TS_READY;
+			}
+			set_ipc_error(thread_get_utcb(self), error | 1);
+			assert(self->status == TS_RUNNING);
+			return false;
+		}
 
 		self->status = TS_READY;
 		self->ipc_from.raw = from->id;
@@ -388,11 +447,13 @@ L4_MsgTag_t kipc(
 
 static void ipc(struct thread *current, void *utcb)
 {
+	assert(utcb == thread_get_utcb(current));
+
 	if(likely(!L4_IsNilThread(current->ipc_to))
 		&& !ipc_send_half(current))
 	{
-		/* there was a send-half, and it didn't complete yet. */
 		if(current->status == TS_SEND_WAIT) {
+			/* there was a send-half, and it didn't complete yet. */
 			if(current->send_timeout.raw == L4_ZeroTime.raw) {
 				/* send-phase timeout.
 				 * TODO: grab the good defs from µiX, use them here.
@@ -400,6 +461,8 @@ static void ipc(struct thread *current, void *utcb)
 				set_ipc_error(utcb, (1 << 1) | 0);
 				current->status = TS_RUNNING;
 			}
+		} else {
+			/* there was an error. flow my tears. */
 		}
 	} else if(likely(!L4_IsNilThread(current->ipc_from))
 		&& !ipc_recv_half(current)
