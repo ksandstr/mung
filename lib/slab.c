@@ -18,6 +18,9 @@
 #define SLAB_FIRST(cache, slab) \
 	((void *)((((intptr_t)&(slab)[1]) + (cache)->align - 1) & ~((cache)->align - 1)))
 
+#define KMEM_CACHE_MAGIC 0x61e98d0e
+#define SLAB_MAGIC 0x99274b34
+
 
 struct kmem_cache
 {
@@ -25,6 +28,7 @@ struct kmem_cache
 	unsigned long flags;
 
 	struct list_head free_list, partial_list;
+	uint32_t magic;				/* for kmem_cache_find() */
 
 	struct list_node link;		/* in cache_list */
 	const char *name;
@@ -37,6 +41,7 @@ struct slab
 	struct list_node link;	/* in free_list or partial_list */
 	void *freelist;			/* freelist (may be chained) */
 	struct page *mm_page;
+	uint32_t magic;
 	unsigned short in_use;
 };
 
@@ -51,6 +56,7 @@ static COLD void init_kmem_cache_slab(void)
 		.size = sizeof(struct kmem_cache),
 		.align = ALIGNOF(struct kmem_cache),
 		.name = "kmem_cache",
+		.magic = KMEM_CACHE_MAGIC,
 	};
 	list_head_init(&meta_cache.free_list);
 	list_head_init(&meta_cache.partial_list);
@@ -82,6 +88,7 @@ struct kmem_cache *kmem_cache_create(
 	c->align = align;
 	c->flags = flags;
 	c->name = name;
+	c->magic = KMEM_CACHE_MAGIC;
 	list_head_init(&c->free_list);
 	list_head_init(&c->partial_list);
 	list_add(&cache_list, &c->link);
@@ -113,6 +120,7 @@ void *kmem_cache_alloc(struct kmem_cache *cache)
 		slab->freelist = SLAB_FIRST(cache, slab);
 		*(void **)slab->freelist = NULL;
 		slab->in_use = 0;
+		slab->magic = SLAB_MAGIC;
 		list_add(&cache->partial_list, &slab->link);
 	} else {
 		slab = container_of(cache->partial_list.n.next, struct slab, link);
@@ -160,6 +168,7 @@ void kmem_cache_free(struct kmem_cache *cache, void *ptr)
 	if(slab->in_use == 0) {
 		list_del_from(&cache->partial_list, &slab->link);
 		list_add(&cache->free_list, &slab->link);
+		slab->magic = 0xdeadbeef;
 	}
 }
 
@@ -186,4 +195,27 @@ int kmem_cache_shrink(struct kmem_cache *cache)
 	}
 	assert(list_empty(&cache->free_list));
 	return n_freed;
+}
+
+
+struct kmem_cache *kmem_cache_find(void *allocation)
+{
+	struct slab *slab = (void *)((uintptr_t)allocation & ~PAGE_MASK);
+	if(slab->magic != SLAB_MAGIC) return NULL;
+	for(struct list_node *n = slab->link.next;
+		n != &slab->link;
+		n = n->next)
+	{
+		struct kmem_cache *cache;
+		if(slab->in_use == 0) {
+			cache = container_of((struct list_head *)n, struct kmem_cache,
+				free_list);
+		} else {
+			cache = container_of((struct list_head *)n, struct kmem_cache,
+				partial_list);
+		}
+		if(cache->magic == KMEM_CACHE_MAGIC) return cache;
+	}
+
+	return NULL;
 }

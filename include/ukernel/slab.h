@@ -40,6 +40,9 @@ extern size_t kmem_cache_size(struct kmem_cache *cache);
 extern const char *kmem_cache_name(struct kmem_cache *cache);
 extern int kmem_cache_shrink(struct kmem_cache *cache);
 
+/* does Grodey Memory Hax to find the slab that swallowed the rat. or not. */
+extern struct kmem_cache *kmem_cache_find(void *allocation);
+
 
 /* external API that must be implemented by users of slab.c . struct page is
  * that defined in <ukernel/mm.h>, but not included here.
