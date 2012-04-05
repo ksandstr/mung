@@ -2,6 +2,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdarg.h>
+#include <stdbool.h>
+#include <ccan/list/list.h>
+#include <ccan/avl/avl.h>
 #include <ccan/compiler/compiler.h>
 
 #include <l4/types.h>
@@ -9,8 +12,38 @@
 #include <l4/thread.h>
 #include <l4/vregs.h>
 #include <l4/syscall.h>
+#include <l4/kip.h>
+
+#include <ukernel/mm.h>
+#include <ukernel/slab.h>
+
 
 #define CHECK_FLAG(mask, bit) (((mask) & (bit)) != 0)
+#define NUM_SEED_PAGES 24
+#define PAGE_BUCKETS 20		/* word size - 12 */
+
+
+struct track_page
+{
+	struct list_node link;
+	L4_Fpage_t page;
+	bool dedicated;
+};
+
+struct malloc_size
+{
+	struct list_node link;
+	int size;
+	struct kmem_cache *cache;
+};
+
+
+static struct list_head free_pages[PAGE_BUCKETS];	/* size_log2 = index + 12 */
+static AVL *pages_by_range = NULL;
+static LIST_HEAD(malloc_size_list);
+static LIST_HEAD(slab_page_list);
+static LIST_HEAD(dead_trk_list);
+static struct kmem_cache *slab_page_slab = NULL, *track_page_slab = NULL;
 
 
 static void con_putstr(const char *str, size_t len);
@@ -75,12 +108,6 @@ static void con_putstr(const char *str, size_t len)
 }
 
 
-void *malloc(size_t size) {
-	printf("malloc() in sigma0 is a stub\n");
-	return NULL;
-}
-
-
 void __assert_failure(
 	const char *condition,
 	const char *file,
@@ -95,6 +122,8 @@ void __assert_failure(
 
 static int sigma0_ipc_loop(void *kip_base)
 {
+	printf("entering IPC loop\n");
+
 	/* FIXME: add "proper" L4_LoadMR(), L4_StoreMR() functions */
 	void *utcb = __L4_Get_UtcbAddress();
 	for(;;) {
@@ -266,6 +295,228 @@ static void schedule_test(void)
 }
 
 
+static void *get_free_page(int size_log2)
+{
+	struct track_page *pg = NULL;
+	for(int i=size_log2 - PAGE_BITS; i < PAGE_BUCKETS; i++) {
+		if(!list_empty(&free_pages[i])) {
+			pg = list_top(&free_pages[i], struct track_page, link);
+			list_del_from(&free_pages[i], &pg->link);
+			break;
+		}
+	}
+	if(pg == NULL) return NULL;
+
+	assert(!pg->dedicated);
+	void *ret;
+	if(L4_SizeLog2(pg->page) == size_log2) {
+		ret = (void *)L4_Address(pg->page);
+	} else {
+		/* FIXME: implement splitting for propers */
+		printf("can't handle complex get_free_page() yet! %#x:%#x dropped.\n",
+			L4_Address(pg->page), L4_Size(pg->page));
+		return get_free_page(size_log2);
+	}
+
+	/* this should remove the page from pages_by_range, but we can't call
+	 * AVL-tree functions from here as this indirectly backs its allocator.
+	 * instead remove these items lazily in find_page_by_range().
+	 */
+	list_add_tail(&dead_trk_list, &pg->link);
+	return ret;
+}
+
+
+static void free_phys_page(void *ptr, int size_log2)
+{
+	if(track_page_slab == NULL) {
+		track_page_slab = KMEM_CACHE_NEW("track_page_slab", struct track_page);
+	}
+
+	struct track_page *pg = kmem_cache_alloc(track_page_slab);
+	if(pg == NULL) {
+		printf("warning: can't allocate track_page for %#x:%#x; memory was lost\n",
+			(unsigned)ptr, (unsigned)(1 << size_log2));
+		return;
+	}
+
+	pg->page = L4_FpageLog2((L4_Word_t)ptr, size_log2);
+	pg->dedicated = false;
+	list_add(&free_pages[size_log2 - PAGE_BITS], &pg->link);
+}
+
+
+static struct track_page *find_page_by_range(L4_Fpage_t key)
+{
+	struct track_page *tp, *next;
+	list_for_each_safe(&dead_trk_list, tp, next, link) {
+		printf("%s: removing allocated track_page %#x:%#x\n", __func__,
+			L4_Address(tp->page), L4_Size(tp->page));
+		avl_remove(pages_by_range, &tp->page);
+		list_del_from(&dead_trk_list, &tp->link);
+		if(kmem_cache_find(tp) != NULL) {
+			kmem_cache_free(track_page_slab, tp);
+		} else {
+			/* TODO: track the statically allocated struct track_page in a "usable
+			 * track_page list" or some such, and recycle those in
+			 * free_phys_page().
+			 */
+		}
+	}
+
+	return avl_lookup(pages_by_range, &key);
+}
+
+
+static int compare_disjoint_fpages(const void *keyptr, const void *candptr)
+{
+	const L4_Fpage_t *key = keyptr, *cand = candptr;
+	if(L4_Address(*key) + L4_Size(*key) <= L4_Address(*cand)) return -1;
+	if(L4_Address(*key) >= L4_Address(*cand) + L4_Size(*cand)) return 1;
+	return 0;
+}
+
+
+static void build_heap(void *kip_base)
+{
+	for(int i=0; i < PAGE_BUCKETS; i++) list_head_init(&free_pages[i]);
+
+	/* a little bit of seed memory for the slabs and whatnot.
+	 *
+	 * the s_page[] members can be distinguished from those allocated from
+	 * slabs by how kmem_cache_find() returns NULL for them.
+	 */
+	static uint8_t mem_seed[PAGE_SIZE * NUM_SEED_PAGES] PAGE_ALIGN;
+	static struct track_page s_page[NUM_SEED_PAGES] PAGE_ALIGN;
+	for(int i=0; i < NUM_SEED_PAGES; i++) {
+		s_page[i].dedicated = false;
+		s_page[i].page = L4_FpageLog2(
+			(L4_Word_t)&mem_seed[i * PAGE_SIZE], 12);
+		list_add_tail(&free_pages[0], &s_page[i].link);
+	}
+
+	/* add these to the AVL tree. this triggers most of the allocation
+	 * mechanisms.
+	 */
+	pages_by_range = avl_new(&compare_disjoint_fpages);
+	for(int i=0; i < NUM_SEED_PAGES; i++) {
+		avl_insert(pages_by_range, &s_page[i].page, &s_page[i]);
+	}
+	printf("added %u items to page AVL tree\n",
+		(unsigned)avl_count(pages_by_range));
+
+	L4_Word_t meminfo = *(L4_Word_t *)(kip_base + 0x54),
+		num_mds = meminfo & 0xffff;
+	L4_MemoryDesc_t *mds = kip_base + (meminfo >> 16);
+	printf("%d memory descriptors at %p\n", (int)num_mds, mds);
+
+	/* discover system memory.
+	 *
+	 * the way this works is, it finds ranges of conventional memory that
+	 * overlap virtual memory and don't overlap a reserved range. those areas
+	 * are added to the free lists and the AVL tree. ranges that further
+	 * overlap dedicated memory are added only to the AVL tree but not the
+	 * freelists.
+	 */
+
+	find_page_by_range(L4_FpageLog2(0, 12));
+}
+
+
+/* support interface for the slab allocator */
+
+struct page *kmem_alloc_new_page(void)
+{
+	struct page *pg = NULL;
+	static struct page st_pages[NUM_SEED_PAGES];
+	static int st_pos = 0;
+	if(st_pos < NUM_SEED_PAGES) pg = &st_pages[st_pos++];
+	else {
+		if(slab_page_slab == NULL) {
+			slab_page_slab = KMEM_CACHE_NEW("slab_page_slab", struct page);
+		}
+		struct page *pg = kmem_cache_alloc(slab_page_slab);
+		if(pg == NULL) return NULL;
+	}
+
+	void *phys = get_free_page(12);
+	if(phys == NULL) {
+		if(pg >= &st_pages[0] && pg < &st_pages[NUM_SEED_PAGES]) {
+			assert(kmem_cache_find(pg) == NULL);
+			st_pos--;
+		} else {
+			assert(kmem_cache_find(pg) == slab_page_slab);
+			kmem_cache_free(slab_page_slab, pg);
+		}
+		return NULL;
+	}
+
+	pg->id = (L4_Word_t)phys >> PAGE_BITS;
+	pg->vm_addr = phys;
+	list_add_tail(&slab_page_list, &pg->link);
+
+	return pg;
+}
+
+
+void kmem_free_page(struct page *pg)
+{
+	assert(slab_page_slab != NULL);
+
+	list_del_from(&slab_page_list, &pg->link);
+	free_phys_page(pg->vm_addr, 12);
+	if(kmem_cache_find(pg) == slab_page_slab) {
+		kmem_cache_free(slab_page_slab, pg);
+	} else {
+		/* TODO: recycle the statically allocated structs instead? */
+	}
+}
+
+
+/* an ugly malloc() for ccan-avl.o's use */
+void *malloc(size_t size)
+{
+	if(size > 4000) {
+		printf("failing malloc(%u)\n", (unsigned)size);
+		return NULL;
+	}
+
+	size = (size + 15) & ~15ul;
+	struct malloc_size *ms;
+	bool found = false;
+	list_for_each(&malloc_size_list, ms, link) {
+		if(ms->size == size) {
+			found = true;
+			break;
+		}
+	}
+	if(!found) {
+		static struct kmem_cache *malloc_size_slab = NULL;
+		if(malloc_size_slab == NULL) {
+			malloc_size_slab = KMEM_CACHE_NEW("malloc_size_slab",
+				struct malloc_size);
+		}
+		ms = kmem_cache_alloc(malloc_size_slab);
+		ms->size = size;
+		ms->cache = kmem_cache_create("malloc slab", size, 16, 0, NULL, NULL);
+		list_add(&malloc_size_list, &ms->link);
+	}
+
+	return kmem_cache_alloc(ms->cache);
+}
+
+
+void free(void *ptr)
+{
+	if(ptr == NULL) return;
+	struct kmem_cache *cache = kmem_cache_find(ptr);
+	if(cache != NULL) kmem_cache_free(cache, ptr);
+	else {
+		printf("can't find slab to free memory at %p (leaked!)\n", ptr);
+	}
+}
+
+
 int main(void)
 {
 	printf("hello, world!\n");
@@ -282,6 +533,8 @@ int main(void)
 	threadswitch_test();
 	schedule_test();
 	spacectl_test();
+
+	build_heap(kip);
 
 	return sigma0_ipc_loop(kip);
 }
