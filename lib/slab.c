@@ -105,6 +105,7 @@ void *kmem_cache_alloc(struct kmem_cache *cache)
 			list_del(cache->free_list.n.next);
 		} else {
 			struct page *kpage = kmem_alloc_new_page();
+			if(unlikely(kpage == NULL)) return NULL;
 			slab = kpage->vm_addr;
 			slab->mm_page = kpage;
 		}
@@ -138,7 +139,7 @@ void *kmem_cache_alloc(struct kmem_cache *cache)
 void *kmem_cache_zalloc(struct kmem_cache *cache)
 {
 	void *ptr = kmem_cache_alloc(cache);
-	memset(ptr, '\0', cache->size);
+	if(likely(ptr != NULL)) memset(ptr, '\0', cache->size);
 	return ptr;
 }
 
