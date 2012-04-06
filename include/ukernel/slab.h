@@ -4,6 +4,7 @@
 
 #include <stdlib.h>
 #include <stdint.h>
+#include <ccan/alignof/alignof.h>
 #include <ccan/compiler/compiler.h>
 
 
@@ -11,6 +12,13 @@
 
 struct kmem_cache;
 typedef void (*kmem_cache_ctor)(void *, struct kmem_cache *, unsigned long);
+
+
+/* utility because kmem_cache_create() is horrible */
+#define KMEM_CACHE_NEW(name, type) \
+	kmem_cache_create((name), sizeof(type), ALIGNOF(type), \
+		0, NULL, NULL)
+
 
 extern struct kmem_cache *kmem_cache_create(
 	const char *name,
