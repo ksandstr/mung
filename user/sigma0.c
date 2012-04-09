@@ -120,6 +120,13 @@ void __assert_failure(
 }
 
 
+void abort(void)
+{
+	printf("abort() called!\n");
+	for(;;) { /* wheeee */ }
+}
+
+
 static int sigma0_ipc_loop(void *kip_base)
 {
 	printf("entering IPC loop\n");
