@@ -16,10 +16,11 @@
 
 #include <ukernel/mm.h>
 #include <ukernel/slab.h>
+#include <ukernel/misc.h>
 
 
 #define CHECK_FLAG(mask, bit) (((mask) & (bit)) != 0)
-#define NUM_SEED_PAGES 24
+#define NUM_SEED_PAGES 12
 #define PAGE_BUCKETS 20		/* word size - 12 */
 
 
@@ -47,6 +48,8 @@ static struct kmem_cache *track_page_slab = NULL;
 
 
 static void con_putstr(const char *str, size_t len);
+static struct track_page *find_page_by_range(L4_Fpage_t key);
+static void *get_free_page_at(L4_Word_t address, int size_log2);
 
 
 int vprintf(const char *fmt, va_list al)
@@ -150,7 +153,7 @@ static int sigma0_ipc_loop(void *kip_base)
 			{
 				L4_Word_t ip = L4_VREG(utcb, L4_TCR_MR(2)),
 					addr = L4_VREG(utcb, L4_TCR_MR(1));
-				printf("pagefault from %d:%d (ip %#x, addr %#x)\n",
+				printf("pf in %d:%d (ip %#x, addr %#x)\n",
 					from.global.X.thread_no, from.global.X.version,
 					ip, addr);
 				static L4_Word_t last_fault = 0;
@@ -160,6 +163,13 @@ static int sigma0_ipc_loop(void *kip_base)
 				} else {
 					last_fault = addr;
 				}
+				void *ptr = get_free_page_at(addr & ~PAGE_BITS, 12);
+				if(ptr == NULL) {
+					printf("page at %#x unavailable in fault handler\n",
+						addr);
+					break;
+				}
+				assert((L4_Word_t)ptr == (addr & ~PAGE_BITS));
 				L4_Fpage_t page = L4_FpageLog2(addr, 12);
 				L4_Set_Rights(&page, L4_FullyAccessible);
 				L4_MapItem_t idemp = L4_MapItem(page,
@@ -302,6 +312,30 @@ static void schedule_test(void)
 }
 
 
+static void *get_free_page_at(L4_Word_t address, int size_log2)
+{
+	L4_Fpage_t key = L4_FpageLog2(address, size_log2);
+	struct track_page *pg = find_page_by_range(key);
+	if(pg == NULL) return NULL;
+
+	if(L4_Address(pg->page) == L4_Address(key)
+		&& L4_SizeLog2(pg->page) == L4_SizeLog2(key))
+	{
+		avl_remove(pages_by_range, &pg->page);
+		if(!pg->dedicated) {
+			list_del_from(&free_pages[size_log2 - PAGE_BITS], &pg->link);
+		}
+		void *ptr = (void *)L4_Address(pg->page);
+		kmem_cache_free(track_page_slab, pg);
+		return ptr;
+	} else {
+		/* FIXME */
+		printf("get_free_page_at: complex case not handled (yet)\n");
+		return NULL;
+	}
+}
+
+
 static void *get_free_page(int size_log2)
 {
 	struct track_page *pg = NULL;
@@ -330,11 +364,12 @@ static void *get_free_page(int size_log2)
 	 * instead remove these items lazily in find_page_by_range().
 	 */
 	list_add_tail(&dead_trk_list, &pg->link);
+
 	return ret;
 }
 
 
-static void free_phys_page(void *ptr, int size_log2)
+static void free_phys_page(void *ptr, int size_log2, bool dedicate)
 {
 	if(track_page_slab == NULL) {
 		track_page_slab = KMEM_CACHE_NEW("track_page_slab", struct track_page);
@@ -347,9 +382,12 @@ static void free_phys_page(void *ptr, int size_log2)
 		return;
 	}
 
+	pg->dedicated = dedicate;
 	pg->page = L4_FpageLog2((L4_Word_t)ptr, size_log2);
-	pg->dedicated = false;
-	list_add(&free_pages[size_log2 - PAGE_BITS], &pg->link);
+	avl_insert(pages_by_range, &pg->page, pg);
+	if(!dedicate) {
+		list_add_tail(&free_pages[size_log2 - PAGE_BITS], &pg->link);
+	}
 }
 
 
@@ -357,8 +395,6 @@ static struct track_page *find_page_by_range(L4_Fpage_t key)
 {
 	struct track_page *tp, *next;
 	list_for_each_safe(&dead_trk_list, tp, next, link) {
-		printf("%s: removing allocated track_page %#x:%#x\n", __func__,
-			L4_Address(tp->page), L4_Size(tp->page));
 		avl_remove(pages_by_range, &tp->page);
 		list_del_from(&dead_trk_list, &tp->link);
 		if(kmem_cache_find(tp) != NULL) {
@@ -371,12 +407,15 @@ static struct track_page *find_page_by_range(L4_Fpage_t key)
 		}
 	}
 
-	return avl_lookup(pages_by_range, &key);
+	struct track_page *pg = avl_lookup(pages_by_range, &key);
+	return pg;
 }
 
 
 static int compare_disjoint_fpages(const void *keyptr, const void *candptr)
 {
+	if(keyptr == candptr) return 0;
+
 	const L4_Fpage_t *key = keyptr, *cand = candptr;
 	if(L4_Address(*key) + L4_Size(*key) <= L4_Address(*cand)) return -1;
 	if(L4_Address(*key) >= L4_Address(*cand) + L4_Size(*cand)) return 1;
@@ -409,8 +448,6 @@ static void build_heap(void *kip_base)
 	for(int i=0; i < NUM_SEED_PAGES; i++) {
 		avl_insert(pages_by_range, &s_page[i].page, &s_page[i]);
 	}
-	printf("added %u items to page AVL tree\n",
-		(unsigned)avl_count(pages_by_range));
 
 	L4_Word_t meminfo = *(L4_Word_t *)(kip_base + 0x54),
 		num_mds = meminfo & 0xffff;
@@ -425,8 +462,76 @@ static void build_heap(void *kip_base)
 	 * overlap dedicated memory are added only to the AVL tree but not the
 	 * freelists.
 	 */
+	L4_Word_t v_start = 0, v_end = 0;
+	int v_at = -1;
+	for(int i=0; i < num_mds; i++) {
+		if(L4_IsMemoryDescVirtual(&mds[i])) {
+			v_start = L4_MemoryDescLow(&mds[i]);
+			v_end = L4_MemoryDescHigh(&mds[i]);
+			if(v_end - v_start > 1024 * 1024 * 1024) {
+				v_at = i;
+				break;
+			}
+		}
+	}
+	if(v_at < 0) {
+		printf("virtual address space isn't declared in KIP; assuming lower 3 GiB\n");
+		v_start = 0;
+		v_end = 0xc0000000ul - 1;
+	}
+	for(int i = v_at + 1; i < num_mds; i++) {
+		if(L4_MemoryDescType(&mds[i]) != L4_ConventionalMemoryType
+			|| L4_IsMemoryDescVirtual(&mds[i]))
+		{
+			/* skip non-conventional, or non-physical memory */
+			continue;
+		}
 
-	find_page_by_range(L4_FpageLog2(0, 12));
+		printf("range %#x .. %#x: type %d, virtual %d\n",
+			L4_MemoryDescLow(&mds[i]), L4_MemoryDescHigh(&mds[i]),
+			L4_MemoryDescType(&mds[i]), L4_IsMemoryDescVirtual(&mds[i]));
+
+		/* FIXME: handle x86 low memory. */
+		for(L4_Word_t addr = MAX(L4_Word_t, 0x100000, L4_MemoryDescLow(&mds[i]));
+			addr < L4_MemoryDescHigh(&mds[i]);
+			addr += PAGE_SIZE)
+		{
+			bool dedicate = false, skip = false;
+			for(int j = i + 1; j < num_mds; j++) {
+				const L4_MemoryDesc_t *sub = &mds[j];
+				if(L4_IsMemoryDescVirtual(sub)
+					|| L4_MemoryDescLow(sub) > (addr | PAGE_BITS)
+					|| L4_MemoryDescHigh(sub) < addr)
+				{
+					continue;
+				}
+
+				switch(L4_MemoryDescType(sub)) {
+					case L4_ConventionalMemoryType:
+						/* stacked? that's OK. */
+						break;
+
+					/* NOTE: should this also include SharedMemoryType? if
+					 * it's actual, mappable memory then the root server would
+					 * likely want to have access and whatnot. same for
+					 * ArchitectureSpecificMemoryType.
+					 */
+					case L4_DedicatedMemoryType:
+					case L4_BootLoaderSpecificMemoryType:
+						dedicate = true;
+						break;
+
+					default:
+						skip = true;
+						break;
+				}
+			}
+
+			if(skip) continue;
+
+			free_phys_page((void *)addr, PAGE_BITS, dedicate);
+		}
+	}
 }
 
 
@@ -437,7 +542,7 @@ void *kmem_alloc_new_page(void) {
 
 
 void kmem_free_page(void *ptr) {
-	free_phys_page(ptr, 12);
+	free_phys_page(ptr, 12, false);
 }
 
 
