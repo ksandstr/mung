@@ -43,7 +43,7 @@ static AVL *pages_by_range = NULL;
 static LIST_HEAD(malloc_size_list);
 static LIST_HEAD(slab_page_list);
 static LIST_HEAD(dead_trk_list);
-static struct kmem_cache *slab_page_slab = NULL, *track_page_slab = NULL;
+static struct kmem_cache *track_page_slab = NULL;
 
 
 static void con_putstr(const char *str, size_t len);
@@ -424,52 +424,13 @@ static void build_heap(void *kip_base)
 
 
 /* support interface for the slab allocator */
-
-struct page *kmem_alloc_new_page(void)
-{
-	struct page *pg = NULL;
-	static struct page st_pages[NUM_SEED_PAGES];
-	static int st_pos = 0;
-	if(st_pos < NUM_SEED_PAGES) pg = &st_pages[st_pos++];
-	else {
-		if(slab_page_slab == NULL) {
-			slab_page_slab = KMEM_CACHE_NEW("slab_page_slab", struct page);
-		}
-		struct page *pg = kmem_cache_alloc(slab_page_slab);
-		if(pg == NULL) return NULL;
-	}
-
-	void *phys = get_free_page(12);
-	if(phys == NULL) {
-		if(pg >= &st_pages[0] && pg < &st_pages[NUM_SEED_PAGES]) {
-			assert(kmem_cache_find(pg) == NULL);
-			st_pos--;
-		} else {
-			assert(kmem_cache_find(pg) == slab_page_slab);
-			kmem_cache_free(slab_page_slab, pg);
-		}
-		return NULL;
-	}
-
-	pg->id = (L4_Word_t)phys >> PAGE_BITS;
-	pg->vm_addr = phys;
-	list_add_tail(&slab_page_list, &pg->link);
-
-	return pg;
+void *kmem_alloc_new_page(void) {
+	return get_free_page(12);
 }
 
 
-void kmem_free_page(struct page *pg)
-{
-	assert(slab_page_slab != NULL);
-
-	list_del_from(&slab_page_list, &pg->link);
-	free_phys_page(pg->vm_addr, 12);
-	if(kmem_cache_find(pg) == slab_page_slab) {
-		kmem_cache_free(slab_page_slab, pg);
-	} else {
-		/* TODO: recycle the statically allocated structs instead? */
-	}
+void kmem_free_page(void *ptr) {
+	free_phys_page(ptr, 12);
 }
 
 

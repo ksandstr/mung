@@ -40,7 +40,6 @@ struct slab
 {
 	struct list_node link;	/* in free_list or partial_list */
 	void *freelist;			/* freelist (may be chained) */
-	struct page *mm_page;
 	uint32_t magic;
 	unsigned short in_use;
 };
@@ -111,10 +110,9 @@ void *kmem_cache_alloc(struct kmem_cache *cache)
 			slab = container_of(cache->free_list.n.next, struct slab, link);
 			list_del(cache->free_list.n.next);
 		} else {
-			struct page *kpage = kmem_alloc_new_page();
+			void *kpage = kmem_alloc_new_page();
 			if(unlikely(kpage == NULL)) return NULL;
-			slab = kpage->vm_addr;
-			slab->mm_page = kpage;
+			slab = kpage;
 		}
 
 		slab->freelist = SLAB_FIRST(cache, slab);
@@ -190,7 +188,8 @@ int kmem_cache_shrink(struct kmem_cache *cache)
 	list_for_each_safe(&cache->free_list, slab, next, link) {
 		assert(slab->in_use == 0);
 		list_del_from(&cache->free_list, &slab->link);
-		kmem_free_page(slab->mm_page);
+		slab->magic = 0xfaceb007u;
+		kmem_free_page(slab);
 		n_freed++;
 	}
 	assert(list_empty(&cache->free_list));

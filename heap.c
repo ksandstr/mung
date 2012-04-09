@@ -193,15 +193,26 @@ void free_kern_page(struct page *page)
 
 
 /* interface for slab.c */
-struct page *kmem_alloc_new_page(void) {
+void *kmem_alloc_new_page(void)
+{
 	struct page *pg = get_kern_page(0);
 	if(pg != NULL) list_add(&k_slab_pages, &pg->link);
-	return pg;
+	assert(pg->vm_addr != NULL);
+	return pg->vm_addr;
 }
 
 
-void kmem_free_page(struct page *pg)
+void kmem_free_page(void *ptr)
 {
-	list_del_from(&k_slab_pages, &pg->link);
-	free_kern_page(pg);
+	/* FIXME: proper data structures, man */
+	struct page *pg;
+	list_for_each(&k_slab_pages, pg, link) {
+		if(pg->vm_addr == ptr) {
+			list_del_from(&k_slab_pages, &pg->link);
+			free_kern_page(pg);
+			return;
+		}
+	}
+
+	printf("warning: %s(%p) refers to an unknown page\n", __func__, ptr);
 }
