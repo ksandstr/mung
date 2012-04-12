@@ -27,7 +27,7 @@ struct kmem_cache
 	size_t size, align;
 	unsigned long flags;
 
-	struct list_head free_list, partial_list;
+	struct list_head free_list, partial_list, full_list;
 	uint32_t magic;				/* for kmem_cache_find() */
 
 	struct list_node link;		/* in cache_list */
@@ -59,6 +59,7 @@ static COLD void init_kmem_cache_slab(void)
 	};
 	list_head_init(&meta_cache.free_list);
 	list_head_init(&meta_cache.partial_list);
+	list_head_init(&meta_cache.full_list);
 	list_add(&cache_list, &meta_cache.link);
 }
 
@@ -90,6 +91,7 @@ struct kmem_cache *kmem_cache_create(
 	c->magic = KMEM_CACHE_MAGIC;
 	list_head_init(&c->free_list);
 	list_head_init(&c->partial_list);
+	list_head_init(&c->full_list);
 	list_add(&cache_list, &c->link);
 
 	return c;
@@ -135,6 +137,7 @@ void *kmem_cache_alloc(struct kmem_cache *cache)
 	if(slab->freelist + bump >= (void *)slab + PAGE_SIZE) {
 		/* it became full. */
 		list_del_from(&cache->partial_list, &slab->link);
+		list_add(&cache->full_list, &slab->link);
 		slab->freelist = NULL;
 	}
 
@@ -156,6 +159,7 @@ void kmem_cache_free(struct kmem_cache *cache, void *ptr)
 	assert(slab->in_use > 0);
 	if(slab->freelist == NULL) {
 		/* reinstate into the partial slab list */
+		list_del_from(&cache->full_list, &slab->link);
 		list_add(&cache->partial_list, &slab->link);
 	}
 
@@ -206,7 +210,10 @@ struct kmem_cache *kmem_cache_find(void *allocation)
 		n = n->next)
 	{
 		struct kmem_cache *cache;
-		if(slab->in_use == 0) {
+		if(slab->freelist == NULL) {
+			cache = container_of((struct list_head *)n, struct kmem_cache,
+				full_list);
+		} else if(slab->in_use == 0) {
 			cache = container_of((struct list_head *)n, struct kmem_cache,
 				free_list);
 		} else {
