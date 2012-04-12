@@ -188,6 +188,9 @@ struct page *get_kern_page(uintptr_t vm_addr)
 
 void free_kern_page(struct page *page)
 {
+	/* better here than at the call sites. */
+	if(page == NULL) return;
+
 	list_add(&k_free_pages, &page->link);
 }
 
