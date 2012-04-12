@@ -17,6 +17,10 @@ static inline CONST_FUNCTION void *__L4_Get_UtcbAddress(void) {
 }
 
 
+/* NOTE: this is UNSAFE from user space as there's no "volatile" constraint on
+ * the compiler. it should be moved into <ukernel/thread.h> and replaced with
+ * calls to the L4.X2 C API where appropriate.
+ */
 #define L4_VREG(base, pos) (((L4_Word_t *)(base))[(pos)])
 
 
@@ -36,5 +40,20 @@ static inline CONST_FUNCTION void *__L4_Get_UtcbAddress(void) {
 #define L4_TCR_MYGLOBALID (-15)
 #define L4_TCR_MR(n) (n)
 #define L4_TCR_BR(n) (-(n) - 16)
+
+
+static inline void L4_LoadMR(int i, L4_Word_t w) {
+	*(volatile L4_Word_t *)&L4_VREG(__L4_Get_UtcbAddress(), L4_TCR_MR(i)) = w;
+}
+
+
+static inline void L4_LoadMRs(int i, int num, const L4_Word_t *w)
+{
+	void *utcb = __L4_Get_UtcbAddress();
+	for(int c=0; c<num; c++, i++) {
+		*(volatile L4_Word_t *)&L4_VREG(utcb, L4_TCR_MR(i)) = w[c];
+	}
+}
+
 
 #endif
