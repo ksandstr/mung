@@ -167,7 +167,7 @@ static int sigma0_ipc_loop(void *kip_base)
 						addr);
 					break;
 				}
-				assert((L4_Word_t)ptr == (addr & ~PAGE_BITS));
+				assert((L4_Word_t)ptr == (addr & ~PAGE_MASK));
 				L4_Fpage_t page = L4_FpageLog2(addr, PAGE_BITS);
 				L4_Set_Rights(&page, L4_FullyAccessible);
 				L4_MapItem_t idemp = L4_MapItem(page, addr & ~PAGE_MASK);
