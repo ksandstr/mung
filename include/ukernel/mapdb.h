@@ -109,6 +109,11 @@ static inline uint32_t mapdb_page_id_in_entry(
 	return m->first_page_id + ((addr - L4_Address(m->range)) >> PAGE_BITS);
 }
 
+extern int mapdb_add_map(
+	struct map_db *db,
+	L4_Fpage_t fpage,
+	uint32_t first_page_id);
+
 
 /* kernel-mode initialization */
 extern void mapdb_init_range(

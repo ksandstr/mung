@@ -289,10 +289,7 @@ static int entry_split_and_insert(
 }
 
 
-/* TODO: add prototype to <ukernel/mapdb.h> once all cases are covered and
- * there's an actual use case
- */
-static int mapdb_add_map(
+int mapdb_add_map(
 	struct map_db *db,
 	L4_Fpage_t fpage,
 	uint32_t first_page_id)

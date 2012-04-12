@@ -211,9 +211,10 @@ void thread_set_utcb(struct thread *t, L4_Word_t start)
 		sp->utcb_pages[page] = p;
 		/* TODO: list "p" somewhere? */
 		if(likely(sp != kernel_space)) {
-			space_put_page(sp, L4_Address(sp->utcb_area) + page * PAGE_SIZE,
-				sp->utcb_pages[page]->id, L4_ReadWriteOnly);
-			space_commit(sp);
+			L4_Fpage_t u_page = L4_FpageLog2(L4_Address(sp->utcb_area)
+				+ page * PAGE_SIZE, PAGE_BITS);
+			L4_Set_Rights(&u_page, L4_FullyAccessible);
+			mapdb_add_map(&sp->mapdb, u_page, sp->utcb_pages[page]->id);
 		}
 	}
 	if(new_pos != t->utcb_pos) {
