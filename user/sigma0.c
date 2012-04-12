@@ -85,26 +85,24 @@ L4_Word_t L4_ErrorCode(void) {
 
 static L4_Word_t send_test(L4_Word_t payload)
 {
-	void *utcb = __L4_Get_UtcbAddress();
-	L4_VREG(utcb, L4_TCR_MR(0)) = ((L4_MsgTag_t){
-		.X.label = 0x2369, .X.u = 1 }).raw;
-	L4_VREG(utcb, L4_TCR_MR(1)) = payload;
+	L4_LoadMR(0, (L4_MsgTag_t){ .X.label = 0x2369, .X.u = 1 }.raw);
+	L4_LoadMR(1, payload);
 	L4_ThreadId_t dummy;
 	L4_MsgTag_t tag = L4_Ipc(L4_Pager(), L4_Pager(),
 		L4_Timeouts(L4_Never, L4_Never), &dummy);
-	if(L4_IpcFailed(tag)) return 0; else return L4_VREG(utcb, L4_TCR_MR(1));
+	if(L4_IpcFailed(tag)) return 0;
+	else return L4_VREG(__L4_Get_UtcbAddress(), L4_TCR_MR(1));
 }
 
 
 static void con_putstr(const char *str, size_t len)
 {
-	void *utcb = __L4_Get_UtcbAddress();
-	L4_VREG(utcb, L4_TCR_MR(0)) = ((L4_MsgTag_t){
+	L4_LoadMR(0, (L4_MsgTag_t){
 		.X.label = 0x5370, /* "pS" */
 		.X.u = (len + 3) / 4,
-	}).raw;
+	}.raw);
 	for(int i=0; i * 4 < len; i++) {
-		L4_VREG(utcb, L4_TCR_MR(i + 1)) = *(L4_Word_t *)&str[i * 4];
+		L4_LoadMR(i + 1, *(L4_Word_t *)&str[i * 4]);
 	}
 	L4_ThreadId_t dummy;
 	L4_Ipc(L4_Pager(), L4_Pager(), L4_Timeouts(L4_Never, L4_Never), &dummy);
@@ -170,13 +168,12 @@ static int sigma0_ipc_loop(void *kip_base)
 					break;
 				}
 				assert((L4_Word_t)ptr == (addr & ~PAGE_BITS));
-				L4_Fpage_t page = L4_FpageLog2(addr, 12);
+				L4_Fpage_t page = L4_FpageLog2(addr, PAGE_BITS);
 				L4_Set_Rights(&page, L4_FullyAccessible);
-				L4_MapItem_t idemp = L4_MapItem(page,
-					addr & ~((1 << 12) - 1));
-				L4_VREG(utcb, L4_TCR_MR(0)) = (L4_MsgTag_t){ .X.t = 2 }.raw;
-				L4_VREG(utcb, L4_TCR_MR(1)) = idemp.raw[0];
-				L4_VREG(utcb, L4_TCR_MR(2)) = idemp.raw[1];
+				L4_MapItem_t idemp = L4_MapItem(page, addr & ~PAGE_MASK);
+				L4_LoadMR(0, (L4_MsgTag_t){ .X.label = 666, .X.t = 2 }.raw);
+				L4_LoadMR(1, idemp.raw[0]);
+				L4_LoadMR(2, idemp.raw[1]);
 			} else if((tag.X.label & 0xfff0) == 0xffa0
 				&& tag.X.u == 2 && tag.X.t == 0)
 			{
@@ -241,7 +238,7 @@ void unmap_test(void)
 	const int n_pages = sizeof(pages) / sizeof(pages[0]);
 	for(int i=0; i < n_pages; i++) {
 		L4_Set_Rights(&pages[i], L4_FullyAccessible);
-		L4_VREG(utcb, L4_TCR_MR(i)) = pages[i].raw;
+		L4_LoadMR(i, pages[i].raw);
 	}
 	L4_Fpage_t out_pages[n_pages];
 	L4_Unmap(1);
