@@ -334,9 +334,6 @@ static void *get_free_page_at(L4_Word_t address, int size_log2)
 	assert(L4_SizeLog2(key) == size_log2);
 	struct track_page *pg = find_page_by_range(key);
 	if(pg == NULL) return NULL;
-	printf("%s: found %#x:%#x for %#x:%#x\n", __func__,
-		L4_Address(pg->page), L4_Size(pg->page),
-		L4_Address(key), L4_Size(key));
 
 	L4_Fpage_t page = pg->page;
 	bool dedicated = pg->dedicated;
