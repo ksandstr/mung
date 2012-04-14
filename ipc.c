@@ -96,12 +96,14 @@ static int apply_mapitem(
 		wnd.raw == L4_CompleteAddressSpace.raw ? "CompleteAddressSpace" : "<- that");
 #endif
 
-	if(wnd.raw == L4_CompleteAddressSpace.raw) {
+	if(wnd.raw == L4_CompleteAddressSpace.raw
+		|| L4_Size(wnd) >= L4_MapItemSndBase(m) + L4_Size(map_page))
+	{
 		return mapdb_map_pages(&source->space->mapdb,
 			&dest->space->mapdb, map_page, L4_MapItemSndBase(m));
 	} else {
 		/* TODO */
-		panic("apply_mapitem() can't handle rcvwindow cases");
+		panic("apply_mapitem() can't handle trunc rcvwindow cases");
 		return 0;
 	}
 }
