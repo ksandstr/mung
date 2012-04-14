@@ -100,7 +100,8 @@ static int apply_mapitem(
 		|| L4_Size(wnd) >= L4_MapItemSndBase(m) + L4_Size(map_page))
 	{
 		return mapdb_map_pages(&source->space->mapdb,
-			&dest->space->mapdb, map_page, L4_MapItemSndBase(m));
+			&dest->space->mapdb, map_page,
+			L4_Address(wnd) + L4_MapItemSndBase(m));
 	} else {
 		/* TODO */
 		panic("apply_mapitem() can't handle trunc rcvwindow cases");
