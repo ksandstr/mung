@@ -3,6 +3,7 @@
 #include <stdlib.h>
 #include <stdarg.h>
 #include <stdbool.h>
+#include <string.h>
 #include <ccan/list/list.h>
 #include <ccan/avl/avl.h>
 #include <ccan/compiler/compiler.h>
@@ -49,7 +50,12 @@ static struct kmem_cache *track_page_slab = NULL;
 
 static void con_putstr(const char *str, size_t len);
 static struct track_page *find_page_by_range(L4_Fpage_t key);
+static void *get_free_page(int size_log2);
 static void *get_free_page_at(L4_Word_t address, int size_log2);
+static void free_page_range(
+	L4_Word_t start,
+	L4_Word_t length,
+	bool dedicate);
 
 
 int vprintf(const char *fmt, va_list al)
@@ -182,16 +188,27 @@ static int sigma0_ipc_loop(void *kip_base)
 				L4_Word_t req_attr = L4_VREG(utcb, L4_TCR_MR(2));
 				printf("roottask requested page %#x:%#x attr %#x\n",
 					L4_Address(req_fpage), L4_Size(req_fpage), req_attr);
-				/* FIXME: implement this by allocating a "struct free_page"
-				 * per aligned fpage that the KIP's memorydesc ranges leave,
-				 * up to the largest page size that the KIP declares native
-				 * support for, or 4 MiB if smaller. stick these in buckets.
-				 * allocate new slab pages from those buckets, smallest first,
-				 * breaking up pages as necessary, with the same allocator as
-				 * used by the fpage request protocol and the pagefault
-				 * protcol handlers, above.
-				 */
-				break;
+				if((req_fpage.raw & (~0u << PAGE_BITS)) == (~0u << PAGE_BITS)) {
+					/* any address. */
+				} else {
+					printf("definite address not supported\n");
+					break;
+				}
+				void *ptr = get_free_page(L4_SizeLog2(req_fpage));
+				if(ptr == NULL) {
+					/* reject */
+					L4_LoadMR(0, (L4_MsgTag_t){ .X.t = 2 }.raw);
+					L4_LoadMR(1, 0x8);
+					L4_LoadMR(2, L4_Nilpage.raw);
+				} else {
+					L4_Fpage_t map_page = L4_FpageLog2((L4_Word_t)ptr,
+						L4_SizeLog2(req_fpage));
+					L4_Set_Rights(&map_page, L4_FullyAccessible);
+					L4_MapItem_t map = L4_MapItem(map_page, 0);
+					L4_LoadMR(0, (L4_MsgTag_t){ .X.t = 2 }.raw);
+					L4_LoadMR(1, map.raw[0]);
+					L4_LoadMR(2, map.raw[1]);
+				}
 			} else {
 				printf("unknown IPC label %#x (u %d, t %d) from %u:%u\n",
 					tag.X.label, tag.X.u, tag.X.t, from.global.X.thread_no,
@@ -311,25 +328,38 @@ static void schedule_test(void)
 
 static void *get_free_page_at(L4_Word_t address, int size_log2)
 {
+	assert((address & PAGE_MASK) == 0);
+
 	L4_Fpage_t key = L4_FpageLog2(address, size_log2);
+	assert(L4_Address(key) == address);
+	assert(L4_SizeLog2(key) == size_log2);
 	struct track_page *pg = find_page_by_range(key);
 	if(pg == NULL) return NULL;
+	printf("%s: found %#x:%#x for %#x:%#x\n", __func__,
+		L4_Address(pg->page), L4_Size(pg->page),
+		L4_Address(key), L4_Size(key));
 
-	if(L4_Address(pg->page) == L4_Address(key)
-		&& L4_SizeLog2(pg->page) == L4_SizeLog2(key))
-	{
-		avl_remove(pages_by_range, &pg->page);
-		if(!pg->dedicated) {
-			list_del_from(&free_pages[size_log2 - PAGE_BITS], &pg->link);
-		}
-		void *ptr = (void *)L4_Address(pg->page);
-		kmem_cache_free(track_page_slab, pg);
-		return ptr;
-	} else {
-		/* FIXME */
-		printf("get_free_page_at: complex case not handled (yet)\n");
-		return NULL;
+	L4_Fpage_t page = pg->page;
+	bool dedicated = pg->dedicated;
+	avl_remove(pages_by_range, &pg->page);
+	if(!dedicated) {
+		list_del_from(&free_pages[size_log2 - PAGE_BITS], &pg->link);
 	}
+	kmem_cache_free(track_page_slab, pg);
+	pg = (void *)0xdeadbeef;
+
+	if(L4_Address(page) != address || L4_SizeLog2(page) != size_log2) {
+		/* complex case. */
+		L4_Word_t start_len = address - L4_Address(page);
+		free_page_range(L4_Address(page), start_len, dedicated);
+		L4_Word_t top = address + (1 << size_log2),
+			pg_top = L4_Address(page) + L4_Size(page);
+		if(top < pg_top) {
+			free_page_range(top, pg_top - top, dedicated);
+		}
+	}
+
+	return (void *)address;
 }
 
 
@@ -384,6 +414,25 @@ static void free_phys_page(void *ptr, int size_log2, bool dedicate)
 	avl_insert(pages_by_range, &pg->page, pg);
 	if(!dedicate) {
 		list_add_tail(&free_pages[size_log2 - PAGE_BITS], &pg->link);
+	}
+}
+
+
+static void free_page_range(
+	L4_Word_t start,
+	L4_Word_t length,
+	bool dedicate)
+{
+	/* TODO: generalize this into a for_page_range() macro in
+	 * <ukernel/mm.h>
+	 */
+	L4_Word_t addr = start;
+	while(addr < start + length) {
+		L4_Word_t remain = length - (addr - start);
+		int bit = MIN(int, ffsl(addr) - 1, MSB(remain));
+		free_phys_page((void *)addr, bit, dedicate);
+
+		addr += 1 << bit;
 	}
 }
 
@@ -477,6 +526,10 @@ static void build_heap(void *kip_base)
 		v_end = 0xc0000000ul - 1;
 	}
 	for(int i = v_at + 1; i < num_mds; i++) {
+		printf("range %#x .. %#x: type %d, virtual %d\n",
+			L4_MemoryDescLow(&mds[i]), L4_MemoryDescHigh(&mds[i]),
+			L4_MemoryDescType(&mds[i]), L4_IsMemoryDescVirtual(&mds[i]));
+
 		if(L4_MemoryDescType(&mds[i]) != L4_ConventionalMemoryType
 			|| L4_IsMemoryDescVirtual(&mds[i]))
 		{
@@ -484,12 +537,11 @@ static void build_heap(void *kip_base)
 			continue;
 		}
 
-		printf("range %#x .. %#x: type %d, virtual %d\n",
-			L4_MemoryDescLow(&mds[i]), L4_MemoryDescHigh(&mds[i]),
-			L4_MemoryDescType(&mds[i]), L4_IsMemoryDescVirtual(&mds[i]));
-
 		/* FIXME: handle x86 low memory. */
-		for(L4_Word_t addr = MAX(L4_Word_t, 0x100000, L4_MemoryDescLow(&mds[i]));
+		L4_Word_t last_start = MAX(L4_Word_t, 0x100000,
+			L4_MemoryDescLow(&mds[i]));
+		bool last_ded = false;
+		for(L4_Word_t addr = last_start;
 			addr < L4_MemoryDescHigh(&mds[i]);
 			addr += PAGE_SIZE)
 		{
@@ -524,10 +576,21 @@ static void build_heap(void *kip_base)
 				}
 			}
 
-			if(skip) continue;
+			if(skip) {
+				free_page_range(last_start, addr - last_start, last_ded);
+				last_start = addr + PAGE_SIZE;
+				continue;
+			}
 
-			free_phys_page((void *)addr, PAGE_BITS, dedicate);
+			if(dedicate != last_ded) {
+				free_page_range(last_start, addr - last_start, last_ded);
+				last_ded = dedicate;
+				last_start = addr;
+			}
 		}
+
+		free_page_range(last_start,
+			L4_MemoryDescHigh(&mds[i]) + 1 - last_start, last_ded);
 	}
 }
 
