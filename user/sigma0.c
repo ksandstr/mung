@@ -161,7 +161,7 @@ static int sigma0_ipc_loop(void *kip_base)
 				} else {
 					last_fault = addr;
 				}
-				void *ptr = get_free_page_at(addr & ~PAGE_BITS, 12);
+				void *ptr = get_free_page_at(addr & ~PAGE_MASK, 12);
 				if(ptr == NULL) {
 					printf("page at %#x unavailable in fault handler\n",
 						addr);
