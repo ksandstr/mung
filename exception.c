@@ -12,6 +12,7 @@
 #include <ukernel/ipc.h>
 #include <ukernel/syscall.h>
 #include <ukernel/cpu.h>
+#include <ukernel/kip.h>
 #include <ukernel/misc.h>
 
 

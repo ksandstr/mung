@@ -22,6 +22,7 @@
 #include <ukernel/ipc.h>
 #include <ukernel/thread.h>
 #include <ukernel/mapdb.h>
+#include <ukernel/kip.h>
 #include <ukernel/misc.h>
 
 
@@ -60,7 +61,6 @@ static struct page *next_dir_page = NULL;
 
 uint8_t syscall_stack[PAGE_SIZE] PAGE_ALIGN;
 uint8_t kcp_copy[PAGE_SIZE] PAGE_ALIGN;
-void *kip_mem = NULL;
 
 uint64_t *global_timer_count = NULL;
 

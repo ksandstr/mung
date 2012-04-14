@@ -1,4 +1,9 @@
-/* quasi-runtime functions for the microkernel. */
+/* quasi-runtime functions for the microkernel.
+ *
+ * TODO: move the utility things into <ukernel/util.h>. this header should be
+ * for miscellaneous kernel exports, and not be included from e.g. sigma0 or
+ * mbiloader.
+ */
 
 #ifndef SEEN_UKERNEL_MISC_H
 #define SEEN_UKERNEL_MISC_H
@@ -46,7 +51,6 @@ struct page;
 
 /* from kmain.c */
 
-extern void *kip_mem;
 extern uint8_t syscall_stack[];
 /* should only be read with interrupts disabled! */
 extern uint64_t *global_timer_count;
@@ -58,13 +62,5 @@ extern uint64_t read_global_timer(void);
 /* from hash.c */
 extern uint32_t int_hash(uint32_t key);
 extern uint32_t ptr_hash(const void *ptr);
-
-
-/* from kip.c */
-/* parameter is a pointer to the KCP, which gets reworked to be a proper
- * KIP. the range between kern_start and kern_end will be added to MemoryInfo
- * as a reserved range before the first dedicated range.
- */
-extern void make_kip(void *mem, L4_Word_t kern_start, L4_Word_t kern_end);
 
 #endif

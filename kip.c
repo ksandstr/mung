@@ -9,7 +9,11 @@
 #include <l4/kip.h>
 
 #include <ukernel/mm.h>
+#include <ukernel/kip.h>
 #include <ukernel/syscall.h>
+
+
+void *kip_mem = NULL;
 
 
 /* let's use interrupt 0x8f, for now.
