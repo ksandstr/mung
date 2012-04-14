@@ -668,7 +668,9 @@ extern void malloc_panic(void);
 #ifndef HAVE_MREMAP
 #ifdef linux
 #define HAVE_MREMAP 1
+#ifndef _GNU_SOURCE
 #define _GNU_SOURCE /* Turns on mremap() definition */
+#endif
 #else   /* linux */
 #define HAVE_MREMAP 0
 #endif  /* linux */
