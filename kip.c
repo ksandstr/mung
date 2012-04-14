@@ -116,8 +116,8 @@ void make_kip(void *mem, L4_Word_t kern_start, L4_Word_t kern_end)
 	L4_Word_t *kerndescptr_p = mem + 0xc,
 		*procdescptr_p = mem + 0xbc,
 		*memoryinfo_p = mem + 0x54;
-	/* UtcbInfo: minimum area 4k (one page); size 512B; alignment 4k (page) */
-	*(L4_Word_t *)(mem + 0xa8) = 12 << 16 | 12 << 10 | 512;
+	/* UtcbInfo: minimum area 4k (one page); size 512B; alignment 512B */
+	*(L4_Word_t *)(mem + 0xa8) = PAGE_BITS << 16 | 9 << 10 | 1;
 	*(L4_Word_t *)(mem + 0xac) = 12; /* kipareainfo (one page) */
 	/* BootInfo (0xb8) is left unaltered, per spec */
 
