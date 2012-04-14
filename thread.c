@@ -351,22 +351,108 @@ void sys_schedule(struct x86_exregs *regs)
 
 void sys_threadcontrol(struct x86_exregs *regs)
 {
-	L4_ThreadId_t dest = { .raw = regs->eax },
+	L4_ThreadId_t dest_tid = { .raw = regs->eax },
 		pager = { .raw = regs->ecx },
 		scheduler = { .raw = regs->edx },
 		spacespec = { .raw = regs->esi };
 	L4_Word_t utcb_loc = regs->edi, result;
+	struct thread *current = get_current_thread();
+	/* TODO: check thread privilege */
+	void *utcb = thread_get_utcb(current);
 
 	printf("%s: called; dest %d:%d, pager %d:%d, scheduler %d:%d, space %d:%d\n",
 		__func__,
-		TID_THREADNUM(dest.raw), TID_VERSION(dest.raw),
+		TID_THREADNUM(dest_tid.raw), TID_VERSION(dest_tid.raw),
 		TID_THREADNUM(pager.raw), TID_VERSION(pager.raw),
 		TID_THREADNUM(scheduler.raw), TID_VERSION(scheduler.raw),
 		TID_THREADNUM(spacespec.raw), TID_VERSION(spacespec.raw));
 	printf("%s: utcb_loc %p\n", __func__, (void *)utcb_loc);
 	result = 0;
-	void *utcb = thread_get_utcb(get_current_thread());
-	L4_VREG(utcb, L4_TCR_ERRORCODE) = 1;	/* "no privilege" */
 
+	L4_Word_t ec;
+	if(TID_VERSION(dest_tid.raw) == 0) {
+		ec = 2;		/* "unavailable thread" */
+		goto end;
+	}
+	if(!L4_IsNilThread(spacespec)
+		&& TID_THREADNUM(spacespec.raw) < NUM_KERNEL_THREADS)
+	{
+		ec = 3;		/* invalid space specifier */
+		goto end;
+	}
+
+	struct thread *dest = thread_find(dest_tid.raw);
+	bool is_new = false;
+	if(!L4_IsNilThread(spacespec) && dest == NULL) {
+		/* thread creation */
+		if(L4_IsNilThread(scheduler)) {
+			ec = 4;		/* invalid scheduler */
+			goto end;
+		}
+		if(utcb_loc == ~0ul) {
+			ec = 6;		/* invalid UTCB location */
+			goto end;
+		}
+
+		printf("creating thread %d:%d\n", TID_THREADNUM(dest_tid.raw),
+			TID_VERSION(dest_tid.raw));
+		dest = thread_new(dest_tid.raw);
+		if(dest == NULL) {
+			ec = 8;		/* "out of memory" */
+			goto end;
+		}
+		struct space *sp = space_find(spacespec.raw);
+		if(sp == NULL) sp = space_new();
+		space_add_thread(sp, dest);
+		is_new = true;
+	} else if(L4_IsNilThread(spacespec) && dest != NULL) {
+		/* thread/space deletion */
+		ec = 1;
+	} else if(!L4_IsNilThread(spacespec) && dest != NULL) {
+		/* modification only. (rest shared with creation.) */
+		if(spacespec.raw != dest_tid.raw) {
+			struct space *to_sp = space_find(spacespec.raw);
+			if(to_sp != dest->space) {
+				/* FIXME: needs a way to abort ongoing IPCs, and to remove
+				 * threads from spaces.
+				 */
+				panic("TODO: movement of threads between spaces");
+			}
+		}
+	} else {
+		/* parameter fuckup. */
+		ec = 2;
+		goto end;
+	}
+
+	assert(dest != NULL);
+	struct space *sp = dest->space;
+
+	if(utcb_loc != ~0ul) {
+		/* set utcb_pos. */
+		if(utcb_loc < L4_Address(sp->utcb_area)
+			|| utcb_loc + UTCB_SIZE > L4_Address(sp->utcb_area) + L4_Size(sp->utcb_area)
+			|| (utcb_loc & (UTCB_SIZE - 1)) != 0)
+		{
+			ec = 6;
+			goto end;
+		}
+		thread_set_utcb(dest, utcb_loc);
+	}
+
+	if(!L4_IsNilThread(scheduler)) dest->scheduler = scheduler;
+	if(!L4_IsNilThread(pager)) {
+		void *dest_utcb = thread_get_utcb(dest);
+		L4_VREG(dest_utcb, L4_TCR_PAGER) = pager.raw;
+		if(is_new) {
+			printf("TODO: should make thread %d:%d wait for breath-of-life\n",
+				TID_THREADNUM(dest->id), TID_VERSION(dest->id));
+		}
+	}
+
+	result = 1;
+
+end:
+	L4_VREG(utcb, L4_TCR_ERRORCODE) = ec;
 	regs->eax = result;
 }

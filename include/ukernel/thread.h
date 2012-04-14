@@ -70,6 +70,7 @@ struct thread
 	struct list_node space_link;
 	int utcb_pos;				/* offset in space's UTCB region */
 	int utcb_ptr_seg;			/* segment descriptor index for %gs */
+	L4_ThreadId_t scheduler;
 
 	struct page *stack_page;
 
