@@ -427,10 +427,12 @@ int mapdb_map_pages(
 	L4_Word_t dest_addr)
 {
 	struct map_entry *first;
+	struct map_group *grp;
 	L4_Word_t first_addr = L4_Address(map_page),
 		last_addr = L4_Address(map_page) + L4_Size(map_page) - 1;
 	do {
-		first = mapdb_probe(from_db, first_addr);
+		grp = group_for_addr(from_db, first_addr);
+		if(grp != NULL) first = find_entry_in_group(grp, first_addr);
 	} while(first == NULL && (first_addr += PAGE_SIZE) <= last_addr);
 
 	if(first == NULL) {
@@ -464,11 +466,56 @@ int mapdb_map_pages(
 		}
 		return L4_Rights(p);
 	} else {
-		/* TODO: the first version of the complex case should likely be
-		 * entirely brute force, going over 4 KiB pages one at a time. not
-		 * fancy like what used to be #if 0'd below.
-		 */
-		panic("complex case not implemented!");
+#if 0
+		printf("%s: first->range %#x:%#x; map_page %#x:%#x\n", __func__,
+			L4_Address(first->range), L4_Size(first->range),
+			L4_Address(map_page), L4_Size(map_page));
+#endif
+
+		const struct map_entry *ent = first;
+		L4_Word_t pos = MAX(L4_Word_t, L4_Address(ent->range), first_addr),
+			limit = last_addr + 1;
+		while(pos < limit && ent != NULL && L4_Address(ent->range) < limit) {
+			L4_Word_t start = MAX(L4_Word_t, pos, L4_Address(ent->range)),
+				end = MIN(L4_Word_t, limit,
+					L4_Address(ent->range) + L4_Size(ent->range));
+			int p_offs = (start - L4_Address(ent->range)) >> PAGE_BITS,
+				size_log2;
+			L4_Word_t r_addr;
+			for_page_range(start, end, r_addr, size_log2) {
+				/* brute force, one at a time.
+				 * should instead do a for_page_range() over the dest range.
+				 */
+				for(L4_Word_t i = 0;
+					i < 1 << size_log2;
+					i += PAGE_SIZE, p_offs++)
+				{
+					L4_Fpage_t p = L4_FpageLog2(
+						dest_addr + r_addr - L4_Address(map_page) + i,
+						PAGE_BITS);
+					L4_Set_Rights(&p, L4_Rights(ent->range) & L4_Rights(map_page));
+					if(L4_Rights(p) != 0) {
+						mapdb_add_map(to_db, p, ent->first_page_id + p_offs);
+					}
+				}
+			}
+
+			/* next entry. */
+			if(ent < &grp->entries[grp->num_entries - 1]) ent++;
+			else {
+				/* next group, even */
+				grp = NULL;
+				for(uintptr_t grp_addr = grp->start + GROUP_SIZE;
+					grp == NULL && grp_addr <= last_addr;
+					grp_addr += GROUP_SIZE)
+				{
+					grp = group_for_addr(from_db, grp_addr);
+				}
+				ent = grp != NULL ? &grp->entries[0] : NULL;
+			}
+
+			pos = end;
+		}
 	}
 
 	return 0;
