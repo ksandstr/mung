@@ -3,7 +3,6 @@
 #include <stdlib.h>
 #include <stdarg.h>
 #include <stdbool.h>
-#include <string.h>
 #include <ccan/list/list.h>
 #include <ccan/avl/avl.h>
 #include <ccan/compiler/compiler.h>
@@ -423,16 +422,10 @@ static void free_page_range(
 	L4_Word_t length,
 	bool dedicate)
 {
-	/* TODO: generalize this into a for_page_range() macro in
-	 * <ukernel/mm.h>
-	 */
-	L4_Word_t addr = start;
-	while(addr < start + length) {
-		L4_Word_t remain = length - (addr - start);
-		int bit = MIN(int, ffsl(addr) - 1, MSB(remain));
+	int bit;
+	L4_Word_t addr;
+	for_page_range(start, start + length, addr, bit) {
 		free_phys_page((void *)addr, bit, dedicate);
-
-		addr += 1 << bit;
 	}
 }
 
