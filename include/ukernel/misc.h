@@ -17,6 +17,8 @@
 #define MAX(t, a, b) ({ t __a = (a), __b = (b); __a > __b ? (t)__a : (t)__b; })
 #define SWAP(t, a, b) do { t __tmp = (a); (a) = (b); (b) = __tmp; } while(0)
 
+#define MSB(x) (sizeof((x)) * 8 - __builtin_clzl((x)) - 1)
+
 
 struct page;
 
