@@ -292,6 +292,94 @@ static int entry_split_and_insert(
 }
 
 
+static void coalesce_entries(
+	struct map_group *g,
+	struct map_entry *ent)
+{
+	const L4_Word_t size_mask = 1 << L4_SizeLog2(ent->range);
+	bool is_low = (L4_Address(ent->range) & size_mask) == 0;
+	int ent_ix = ent - g->entries, oth_ix = ent_ix + (is_low ? 1 : -1);
+	struct map_entry *oth = &g->entries[oth_ix];
+	if(oth_ix < 0 || oth_ix == g->num_entries
+		|| L4_Rights(oth->range) != L4_Rights(ent->range)
+		|| L4_SizeLog2(oth->range) != L4_SizeLog2(ent->range))
+	{
+		/* rejected. */
+		return;
+	}
+
+	if(is_low) {
+		SWAP(struct map_entry *, oth, ent);
+		SWAP(int, ent_ix, oth_ix);
+	}
+
+	if(LAST_PAGE_ID(oth) + 1 == ent->first_page_id
+		&& L4_Address(oth->range) + L4_Size(oth->range) == L4_Address(ent->range))
+	{
+		TRACE("%s: hit between %#x:%#x and %#x:%#x\n",
+			__func__, L4_Address(oth->range), L4_Size(oth->range),
+			L4_Address(ent->range), L4_Size(ent->range));
+
+		oth->range = L4_FpageLog2(L4_Address(oth->range),
+			L4_SizeLog2(oth->range) + 1);
+		L4_Set_Rights(&oth->range, L4_Rights(ent->range));
+		assert(LAST_PAGE_ID(oth) == LAST_PAGE_ID(ent));
+
+		/* move stuff back one step into *ent */
+		g->num_entries--;
+		for(ent_ix = ent - g->entries; ent_ix < g->num_entries; ent_ix++) {
+			g->entries[ent_ix] = g->entries[ent_ix + 1];
+		}
+
+		coalesce_entries(g, oth);
+	}
+}
+
+
+/* attempts to merge the given parameters of mapdb_add_map() to previously
+ * existing items.
+ */
+static bool merge_entries(
+	struct map_group *g,
+	int prev_pos,
+	L4_Fpage_t fpage,
+	uint32_t first_page_id)
+{
+	/* try merging. */
+	struct map_entry *pred = &g->entries[prev_pos],
+		*succ = &g->entries[prev_pos + 1];
+	if((L4_Address(pred->range) & (1 << L4_SizeLog2(fpage))) == 0
+		&& L4_SizeLog2(pred->range) == L4_SizeLog2(fpage)
+		&& LAST_PAGE_ID(pred) + 1 == first_page_id
+		&& L4_Address(pred->range) + L4_Size(pred->range) == L4_Address(fpage))
+	{
+		/* backward merge. */
+		int access = L4_Rights(pred->range) | L4_Rights(fpage);
+		pred->range = L4_FpageLog2(L4_Address(pred->range),
+			L4_SizeLog2(pred->range) + 1);
+		L4_Set_Rights(&pred->range, access);
+		coalesce_entries(g, pred);
+		return true;
+	} else if(succ < &g->entries[g->num_entries]
+		&& (L4_Address(succ->range) & (1 << L4_SizeLog2(fpage))) != 0
+		&& L4_SizeLog2(succ->range) == L4_SizeLog2(fpage)
+		&& succ->first_page_id == first_page_id + 1
+		&& L4_Address(fpage) + L4_Size(fpage) == L4_Address(succ->range))
+	{
+		/* forward merge. */
+		int access = L4_Rights(succ->range) | L4_Rights(fpage);
+		succ->range = L4_FpageLog2(L4_Address(fpage), L4_SizeLog2(fpage) + 1);
+		L4_Set_Rights(&succ->range, access);
+		succ->first_page_id--;
+		assert(succ->first_page_id == first_page_id);
+		coalesce_entries(g, succ);
+		return true;
+	} else {
+		return false;
+	}
+}
+
+
 int mapdb_add_map(
 	struct map_db *db,
 	L4_Fpage_t fpage,
@@ -342,38 +430,39 @@ int mapdb_add_map(
 					|| L4_Address(fpage) + L4_Size(fpage) - 1 < L4_Address(e));
 				if(L4_Address(e) < L4_Address(fpage)) prev = i; else break;
 			}
-			int dst_pos;
-			if(prev + 1 < g->num_alloc
-				&& L4_IsNilFpage(g->entries[prev + 1].range))
-			{
-				dst_pos = prev + 1;
-			} else {
-				if(g->num_entries + 1 >= g->num_alloc) {
-					int next_size = g->num_alloc > 0 ? g->num_alloc * 2 : 2;
-					TRACE("resizing group at %p from %d to %d entries\n",
-						g, g->num_alloc, next_size);
-					struct map_entry *new_ents = realloc(g->entries,
-						next_size * sizeof(struct map_entry));
-					if(unlikely(new_ents == NULL)) return -ENOMEM;
-					for(int i = g->num_alloc; i < next_size; i++) {
-						new_ents[i].range = L4_Nilpage;
+			if(prev < 0 || !merge_entries(g, prev, fpage, first_page_id)) {
+				int dst_pos;
+				if(prev + 1 < g->num_alloc
+					&& L4_IsNilFpage(g->entries[prev + 1].range))
+				{
+					dst_pos = prev + 1;
+				} else {
+					if(g->num_entries + 1 >= g->num_alloc) {
+						int next_size = g->num_alloc > 0 ? g->num_alloc * 2 : 2;
+						TRACE("resizing group at %p from %d to %d entries\n",
+							g, g->num_alloc, next_size);
+						struct map_entry *new_ents = realloc(g->entries,
+							next_size * sizeof(struct map_entry));
+						if(unlikely(new_ents == NULL)) return -ENOMEM;
+						for(int i = g->num_alloc; i < next_size; i++) {
+							new_ents[i].range = L4_Nilpage;
+						}
+						g->num_alloc = next_size;
+						g->entries = new_ents;
 					}
-					g->num_alloc = next_size;
-					g->entries = new_ents;
-				}
-				dst_pos = prev + 1;
-				if(dst_pos < g->num_entries) {
-					struct map_entry prev_ent = g->entries[dst_pos];
-					for(int i=dst_pos + 1; i <= g->num_entries; i++) {
-						SWAP(struct map_entry, g->entries[i], prev_ent);
+					dst_pos = prev + 1;
+					if(dst_pos < g->num_entries) {
+						struct map_entry prev_ent = g->entries[dst_pos];
+						for(int i=dst_pos + 1; i <= g->num_entries; i++) {
+							SWAP(struct map_entry, g->entries[i], prev_ent);
+						}
 					}
 				}
+				g->entries[dst_pos] = (struct map_entry){
+					.range = fpage, .first_page_id = first_page_id,
+				};
+				g->num_entries++;
 			}
-//			TRACE("g->entries %p; setting pos %d\n", g->entries, dst_pos);
-			g->entries[dst_pos] = (struct map_entry){
-				.range = fpage, .first_page_id = first_page_id,
-			};
-			g->num_entries++;
 			add_to_group_occ(g, fpage);
 		} else {
 			struct map_entry split_tmp[MAX_SPLIT];

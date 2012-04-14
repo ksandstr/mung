@@ -18,6 +18,8 @@
 #define REF_SPACE(ref) ((ref) & PAGE_MASK)
 #define REF_ADDR(ref) ((ref) & ~PAGE_MASK)
 
+#define LAST_PAGE_ID(ent) ((ent)->first_page_id + (L4_Size((ent)->range) >> PAGE_BITS) - 1)
+
 #define MAX_ENTRIES_PER_GROUP 1024	/* 4 MiB in 4 KiB pages */
 
 
