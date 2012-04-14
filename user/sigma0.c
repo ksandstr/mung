@@ -494,7 +494,7 @@ static void build_heap(void *kip_base)
 			addr += PAGE_SIZE)
 		{
 			bool dedicate = false, skip = false;
-			for(int j = i + 1; j < num_mds; j++) {
+			for(int j = i + 1; j < num_mds && !skip; j++) {
 				const L4_MemoryDesc_t *sub = &mds[j];
 				if(L4_IsMemoryDescVirtual(sub)
 					|| L4_MemoryDescLow(sub) > (addr | PAGE_BITS)
