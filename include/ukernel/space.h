@@ -55,6 +55,10 @@ extern struct space *sigma0_space;
 extern struct space *space_new(void);
 extern void space_free(struct space *sp);
 extern void space_add_thread(struct space *sp, struct thread *t);
+/* (this only finds spaces that've got at least one thread associated with
+ * them.)
+ */
+extern struct space *space_find(thread_id tid);
 /* (these both return SpaceControl error, or 0 on success.) */
 extern int space_set_utcb_area(struct space *sp, L4_Fpage_t area);
 extern int space_set_kip_area(struct space *sp, L4_Fpage_t area);

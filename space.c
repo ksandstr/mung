@@ -116,6 +116,13 @@ void space_add_thread(struct space *sp, struct thread *t)
 }
 
 
+struct space *space_find(thread_id tid)
+{
+	struct thread *t = thread_find(tid);
+	return t == NULL ? NULL : t->space;
+}
+
+
 /* the UTCB setting part of SpaceControl. */
 int space_set_utcb_area(struct space *sp, L4_Fpage_t area)
 {
