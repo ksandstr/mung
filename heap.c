@@ -14,6 +14,7 @@
 #include <ukernel/slab.h>
 #include <ukernel/thread.h>
 #include <ukernel/space.h>
+#include <ukernel/misc.h>
 #include <ukernel/mm.h>
 
 

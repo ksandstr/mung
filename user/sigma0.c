@@ -16,7 +16,7 @@
 
 #include <ukernel/mm.h>
 #include <ukernel/slab.h>
-#include <ukernel/misc.h>
+#include <ukernel/util.h>
 
 
 #define CHECK_FLAG(mask, bit) (((mask) & (bit)) != 0)

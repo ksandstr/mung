@@ -12,7 +12,7 @@
 #include <ukernel/x86.h>
 #include <ukernel/16550.h>
 #include <ukernel/mm.h>
-#include <ukernel/misc.h>
+#include <ukernel/util.h>
 
 #include "multiboot.h"
 #include "elf.h"

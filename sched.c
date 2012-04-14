@@ -4,8 +4,10 @@
 #include <ccan/htable/htable.h>
 #include <ccan/likely/likely.h>
 
+#include <ukernel/util.h>
 #include <ukernel/ipc.h>
 #include <ukernel/space.h>
+#include <ukernel/misc.h>
 #include <ukernel/thread.h>
 
 

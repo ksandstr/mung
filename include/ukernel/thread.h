@@ -9,7 +9,7 @@
 
 #include <l4/types.h>
 #include <ukernel/mm.h>
-#include <ukernel/misc.h>
+#include <ukernel/util.h>
 #include <ukernel/x86.h>
 
 

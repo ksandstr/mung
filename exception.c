@@ -13,6 +13,7 @@
 #include <ukernel/syscall.h>
 #include <ukernel/cpu.h>
 #include <ukernel/kip.h>
+#include <ukernel/util.h>
 #include <ukernel/misc.h>
 
 
