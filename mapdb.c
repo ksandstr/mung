@@ -77,7 +77,7 @@ static bool flush_group(struct map_db *db, struct map_group *g, int access)
 	int active_maps = 0;
 	for(int i=0; i < g->num_entries; i++) {
 		struct map_entry *e = &g->entries[i];
-		if(!L4_IsNilFpage(e->range) && !flush_entry(e, access)) active_maps++;
+		if(!flush_entry(e, access)) active_maps++;
 	}
 	/* TODO: compress the range when active_maps != 0 */
 
@@ -168,6 +168,9 @@ static struct map_entry *find_entry_in_group(
 			 * TODO: maybe put this to use one day? the insertion routines
 			 * don't currently produce sparse arrays, so this complexity is
 			 * pointless.
+			 *
+			 * NOTE: handling of nil ranges should be added to everywhere that
+			 * iterates over map_entries. that might be ugly.
 			 */
 			for(int i = probe - 1;
 				i >= imin && L4_IsNilFpage(ent->range);
@@ -335,7 +338,6 @@ int mapdb_add_map(
 			int prev = -1;
 			for(int i=0; i < g->num_entries; i++) {
 				L4_Fpage_t e = g->entries[i].range;
-				if(L4_IsNilFpage(e)) continue;
 				assert(L4_Address(e) + L4_Size(e) - 1 < L4_Address(fpage)
 					|| L4_Address(fpage) + L4_Size(fpage) - 1 < L4_Address(e));
 				if(L4_Address(e) < L4_Address(fpage)) prev = i; else break;
