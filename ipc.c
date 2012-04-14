@@ -77,7 +77,11 @@ static int apply_mapitem(
 	void *d_base,
 	L4_MapItem_t m)
 {
-	if(source->space == dest->space) return 0; /* no-op. */
+	L4_Fpage_t map_page = L4_MapItemSndFpage(m);
+
+	/* no-ops */
+	if(source->space == dest->space) return 0;
+	if(L4_IsNilFpage(map_page)) return 0;
 
 	L4_Fpage_t wnd = { .raw = L4_VREG(d_base, L4_TCR_BR(0)) };
 	if(unlikely(L4_IsNilFpage(wnd))) {
@@ -85,7 +89,6 @@ static int apply_mapitem(
 		return 0;
 	}
 
-	L4_Fpage_t map_page = L4_MapItemSndFpage(m);
 #if 0
 	printf("mapping 0x%x:0x%x, sndbase 0x%x, rcvwindow %#x:%#x (%s)\n",
 		L4_Address(map_page), L4_Size(map_page),
