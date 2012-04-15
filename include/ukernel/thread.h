@@ -66,6 +66,18 @@ struct thread
 	/* "from" is altered on receive. */
 	L4_ThreadId_t ipc_from, ipc_to;
 
+	/* the IPC mechanism arranges for post_exn_call() to be called once either
+	 * the correct thread replies to an exception IPC (page faults,
+	 * exceptions, breath-of-life), or the IPC receive is aborted (but then
+	 * only if "exn_priv" is not NULL). in the former case "thread" will refer
+	 * to the receiving thread, and in the latter it will be NULL.
+	 *
+	 * the callback function is supposed to clear post_exn_call, unless the
+	 * next IPC reception is also supposed to trigger it.
+	 */
+	void (*post_exn_call)(struct thread *thread, void *priv);
+	void *exn_priv;
+
 	struct space *space;
 	struct list_node space_link;
 	int utcb_pos;				/* offset in space's UTCB region */

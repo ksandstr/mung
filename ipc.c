@@ -187,20 +187,35 @@ static L4_Word_t do_ipc_transfer(
 }
 
 
-static bool restore_saved_regs(struct thread *t)
+/* returns false for ordinary IPC (with return values etc), and true for
+ * exception IPC (with a full frame restore).
+ */
+static bool post_exn_ok(struct thread *t)
 {
-	/* most IPC is not for page faults or exceptions. */
-	if(likely(t->saved_mrs == 0 && t->saved_brs == 0)) return false;
+	if(t->post_exn_call != NULL) {
+		(*t->post_exn_call)(t, t->exn_priv);
+		return true;
+	} else {
+		return false;
+	}
+}
 
-	void *utcb = thread_get_utcb(t);
-	memcpy(&L4_VREG(utcb, L4_TCR_MR(0)), t->saved_regs,
-		sizeof(L4_Word_t) * (int)t->saved_mrs);
-	memcpy(&L4_VREG(utcb, L4_TCR_BR(0)), &t->saved_regs[t->saved_mrs],
-		sizeof(L4_Word_t) * (int)t->saved_brs);
-	t->saved_mrs = 0;
-	t->saved_brs = 0;
 
-	return true;
+static bool post_exn_fail(struct thread *t)
+{
+	if(t->post_exn_call != NULL) {
+		if(t->exn_priv != NULL) {
+			/* (this is fancy so that the function doesn't need an exn_priv
+			 * just to clear the callback.)
+			 */
+			void (*fn)(struct thread *, void *) = t->post_exn_call;
+			t->post_exn_call = NULL;
+			(*fn)(NULL, t->exn_priv);
+		}
+		return true;
+	} else {
+		return false;
+	}
 }
 
 
@@ -260,7 +275,7 @@ bool ipc_send_half(struct thread *self)
 			if(code >= 4) {
 				/* mutual error; signal to partner also. */
 				dest->ipc_from.raw = self->id;
-				if(likely(!restore_saved_regs(dest))) {
+				if(likely(!post_exn_fail(dest))) {
 					set_ipc_error(thread_get_utcb(dest), error | 1);
 					set_ipc_return_thread(dest);
 				}
@@ -273,7 +288,7 @@ bool ipc_send_half(struct thread *self)
 
 		/* receiver's IPC return */
 		dest->ipc_from.raw = self->id;
-		if(!restore_saved_regs(dest)) {
+		if(likely(!post_exn_ok(dest))) {
 			/* ordinary IPC; set up the IPC return registers. */
 			set_ipc_return_thread(dest);
 		}
@@ -378,8 +393,10 @@ bool ipc_recv_half(struct thread *self)
 				__func__, error);
 			int code = (error & 0xe) >> 1;
 			if(code >= 4) {
-				/* mutual error; notify sender also */
-				if(likely(!restore_saved_regs(from))) {
+				/* mutual error; notify sender also (i.e. break its exception
+				 * receive phase, if any)
+				 */
+				if(likely(!post_exn_fail(from))) {
 					set_ipc_error(thread_get_utcb(from), error & ~1ul);
 					set_ipc_return_thread(from);
 				}
@@ -399,7 +416,7 @@ bool ipc_recv_half(struct thread *self)
 			/* userspace threads operate via a state machine. */
 			from->status = L4_IsNilThread(from->ipc_from) ? TS_READY : TS_R_RECV;
 		}
-		restore_saved_regs(self);
+		post_exn_ok(self);
 
 		return true;
 	}

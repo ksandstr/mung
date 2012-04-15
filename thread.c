@@ -78,8 +78,26 @@ void thread_save_exregs(
 }
 
 
+static void restore_saved_regs(struct thread *t, void *priv)
+{
+	if(t == NULL) return;
+	assert(t->saved_mrs > 0 || t->saved_brs > 0);
+
+	void *utcb = thread_get_utcb(t);
+	memcpy(&L4_VREG(utcb, L4_TCR_MR(0)), t->saved_regs,
+		sizeof(L4_Word_t) * (int)t->saved_mrs);
+	memcpy(&L4_VREG(utcb, L4_TCR_BR(0)), &t->saved_regs[t->saved_mrs],
+		sizeof(L4_Word_t) * (int)t->saved_brs);
+	t->saved_mrs = 0;
+	t->saved_brs = 0;
+
+	t->post_exn_call = NULL;
+}
+
+
 void save_ipc_regs(struct thread *t, int mrs, int brs)
 {
+	assert(t->post_exn_call == NULL);
 	assert(t->saved_mrs == 0 && t->saved_brs == 0);
 	assert(mrs >= 1 && brs >= 0);
 	assert(mrs + brs < sizeof(t->saved_regs) / sizeof(t->saved_regs[0]));
@@ -91,6 +109,9 @@ void save_ipc_regs(struct thread *t, int mrs, int brs)
 		sizeof(L4_Word_t) * mrs);
 	memcpy(&t->saved_regs[mrs], &L4_VREG(utcb, L4_TCR_BR(0)),
 		sizeof(L4_Word_t) * brs);
+
+	t->post_exn_call = &restore_saved_regs;
+	t->exn_priv = NULL;
 }
 
 
