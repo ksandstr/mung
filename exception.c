@@ -110,11 +110,59 @@ void isr_exn_memctl_sc_bottom(struct x86_exregs *regs)
 
 void isr_exn_gp_bottom(struct x86_exregs *regs)
 {
-	printf("#GP(0x%x) at eip 0x%x, esp 0x%x\n", regs->error,
-		regs->eip, regs->esp);
+	struct thread *current = get_current_thread();
 
-	get_current_thread()->status = TS_STOPPED;
-	return_to_scheduler(regs);
+	if(regs->error == 0x1a) {
+		/* int3, i.e. KDB enter. there's a message we should decode. */
+		const struct map_entry *e = mapdb_probe(&current->space->mapdb,
+			regs->eip & ~PAGE_MASK);
+		if(e == NULL) {
+			printf("KDB callsite not mapped? what.\n");
+			goto msgfail;
+		}
+
+		/* get string address from succeeding "MOV EAX, imm32" instruction. */
+		uintptr_t heap_addr = reserve_heap_page();
+		put_supervisor_page(heap_addr, mapdb_page_id_in_entry(e, regs->eip));
+		int offset = regs->eip & PAGE_MASK;
+		if(((const uint8_t *)heap_addr)[offset + 3] != 0xb8) {
+			printf("KDB message not indicated with MOV EAX, imm32!\n");
+			goto msgfail;
+		}
+		L4_Word_t strptr = *(const uint32_t *)(heap_addr + offset + 4);
+
+		/* now crawl out at most 256 bytes of debug crap, not crossing a page
+		 * boundary.
+		 */
+		e = mapdb_probe(&current->space->mapdb, strptr & ~PAGE_MASK);
+		if(e == NULL) {
+			printf("KDB message not mapped\n");
+			goto msgfail;
+		}
+		put_supervisor_page(heap_addr, mapdb_page_id_in_entry(e, strptr));
+		x86_flush_tlbs();
+		assert((heap_addr & PAGE_MASK) == 0);
+		const char *str = (void *)(heap_addr | (strptr & PAGE_MASK));
+		char buf[257];
+		memset(buf, 0, sizeof(buf));
+		strlcpy(buf, str, MIN(size_t, 256, PAGE_SIZE - (strptr & PAGE_MASK)));
+		printf("#KDB (eip %#x): [%#x] %s\n", regs->eip, strptr, buf);
+
+msgfail:
+		current->status = TS_STOPPED;
+		return_to_scheduler(regs);
+	} else {
+		printf("#GP(0x%x) at eip 0x%x, esp 0x%x in %d:%d\n", regs->error,
+			regs->eip, regs->esp, TID_THREADNUM(current->id),
+			TID_VERSION(current->id));
+
+		/* TODO: try to emit an exception message to the thread's exception
+		 * handler
+		 */
+
+		current->status = TS_STOPPED;
+		return_to_scheduler(regs);
+	}
 }
 
 
