@@ -166,15 +166,16 @@ static int sigma0_ipc_loop(void *kip_base)
 				/* s0 user protocol: fpage request */
 				L4_Fpage_t req_fpage = { .raw = L4_VREG(utcb, L4_TCR_MR(1)) };
 				L4_Word_t req_attr = L4_VREG(utcb, L4_TCR_MR(2));
-				printf("roottask requested page %#x:%#x attr %#x\n",
+				printf("roottask (tid %d:%d) requested page %#x:%#x attr %#x\n",
+					sender.global.X.thread_no, sender.global.X.version,
 					L4_Address(req_fpage), L4_Size(req_fpage), req_attr);
+				void *ptr;
 				if((req_fpage.raw & (~0u << PAGE_BITS)) == (~0u << PAGE_BITS)) {
-					/* any address. */
+					ptr = get_free_page(L4_SizeLog2(req_fpage));
 				} else {
-					printf("definite address not supported\n");
-					break;
+					ptr = get_free_page_at(L4_Address(req_fpage),
+						L4_SizeLog2(req_fpage));
 				}
-				void *ptr = get_free_page(L4_SizeLog2(req_fpage));
 				if(ptr == NULL) {
 					/* reject */
 					L4_LoadMR(0, (L4_MsgTag_t){ .X.t = 2 }.raw);
