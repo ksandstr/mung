@@ -332,6 +332,20 @@ static void receive_breath_of_life(struct thread *t, void *priv)
 
 /* system calls */
 
+/* exregs control bitmasks (W RCdh pufi sSRH) */
+#define CTL_H 0x001
+#define CTL_R 0x002
+#define CTL_S 0x004
+#define CTL_s 0x008
+#define CTL_i 0x010
+#define CTL_f 0x020
+#define CTL_u 0x040
+#define CTL_p 0x080
+#define CTL_h 0x100
+#define CTL_d 0x200
+#define CTL_XFER_MASK (0x1c00)
+
+
 L4_Word_t sys_exregs(
 	L4_ThreadId_t dest,
 	L4_Word_t *control_p,
@@ -340,6 +354,18 @@ L4_Word_t sys_exregs(
 	L4_ThreadId_t *pager_p)
 {
 	struct thread *current = get_current_thread(), *dest_thread = NULL;
+
+#ifndef NDEBUG
+	printf("%s: called from %d:%d on %d:%d; control %#x (", __func__,
+		TID_THREADNUM(current->id), TID_VERSION(current->id),
+		TID_THREADNUM(dest.raw), TID_VERSION(dest.raw),
+		*control_p);
+	const char *ctl_chars = "HRSsifuphd";
+	for(int i=0; ctl_chars[i] != '\0'; i++) {
+		if(CHECK_FLAG(*control_p, 1 << i)) printf("%c", ctl_chars[i]);
+	}
+	printf(")\n");
+#endif
 
 	if(!L4_IsNilThread(dest)) {
 		if(dest.local.X.zeros == 0) {
@@ -365,12 +391,125 @@ L4_Word_t sys_exregs(
 		assert(result.local.X.zeros != 0);
 	}
 
-	if(*control_p != 0) {
-		printf("%s: control is 0x%#x, but no flags are implemented\n",
-			__func__, *control_p);
+	if(unlikely(CHECK_FLAG_ANY(*control_p, CTL_XFER_MASK))) {
+		TRACE("%s: control transfer items are not supported by this microkernel\n",
+			__func__);
+		goto fail;
 	}
 
+	void *dest_utcb;
+	if(CHECK_FLAG_ANY(*control_p, CTL_R | CTL_S | CTL_p | CTL_u | CTL_d)) {
+		dest_utcb = thread_get_utcb(dest_thread);
+	} else {
+		dest_utcb = NULL;
+	}
+
+	L4_Word_t ctl_in = *control_p;
+	if(CHECK_FLAG(ctl_in, CTL_h)) {
+		bool halt = CHECK_FLAG(ctl_in, CTL_H);
+		if(dest_thread->halted && !halt) {
+			dest_thread->halted = false;
+			if(dest_thread->status == TS_STOPPED
+				|| dest_thread->status == TS_INACTIVE)
+			{
+				TRACE("%s: starting halted thread\n", __func__);
+				dest_thread->status = TS_READY;
+			}
+		} else if(!dest_thread->halted && halt) {
+			dest_thread->halted = true;
+			if(dest_thread->status == TS_READY
+				|| dest_thread->status == TS_RUNNING)
+			{
+				TRACE("%s: stopped running thread\n", __func__);
+				dest_thread->status = TS_STOPPED;
+			}
+		}
+
+		ctl_in &= ~(CTL_H | CTL_h);
+	}
+
+	if(CHECK_FLAG(ctl_in, CTL_R)) {
+		/* abort receive. */
+		/* TODO: check for the "currently receiving" state */
+		/* ... and move this into ipc.c, & also the one for the send side */
+		if(dest_thread->status == TS_R_RECV
+			|| dest_thread->status == TS_RECV_WAIT)
+		{
+			dest_thread->status = TS_READY;
+			dest_thread->ipc_from = L4_nilthread;
+			/* "canceled in receive phase" */
+			assert(dest_utcb != NULL);
+			L4_VREG(dest_utcb, L4_TCR_ERRORCODE) = 1 | (3 << 1);
+			L4_VREG(dest_utcb, L4_TCR_MR(0)) = (L4_MsgTag_t){ .X.flags = 0x8 }.raw;
+
+			/* that covers exceptions, too. */
+			if(dest_thread->post_exn_call != NULL) {
+				(*dest_thread->post_exn_call)(NULL,
+					dest_thread->exn_priv);
+				dest_thread->post_exn_call = NULL;
+				dest_thread->exn_priv = NULL;
+			}
+
+			TRACE("%s: aborted receive\n", __func__);
+		}
+		ctl_in &= ~CTL_R;
+	}
+
+	if(CHECK_FLAG(ctl_in, CTL_S)) {
+		/* abort send. */
+		/* TODO: check for the "currently sending" state */
+		if(dest_thread->status == TS_SEND_WAIT) {
+			dest_thread->status = TS_READY;
+			dest_thread->ipc_from = L4_nilthread;
+			/* "canceled in send phase" */
+			assert(dest_utcb != NULL);
+			L4_VREG(dest_utcb, L4_TCR_ERRORCODE) = 0 | (3 << 1);
+			L4_VREG(dest_utcb, L4_TCR_MR(0)) = (L4_MsgTag_t){ .X.flags = 0x8 }.raw;
+
+			TRACE("%s: aborted send\n", __func__);
+		}
+		ctl_in &= ~CTL_S;
+	}
+
+	/* register-setting control bits. */
+	const L4_Word_t regset_mask = CTL_p | CTL_u | CTL_f | CTL_i | CTL_s;
+	if(CHECK_FLAG_ANY(ctl_in, regset_mask)) {
+		if(CHECK_FLAG(ctl_in, CTL_p)) {
+			assert(dest_utcb != NULL);
+			L4_VREG(dest_utcb, L4_TCR_PAGER) = pager_p->raw;
+		}
+		if(CHECK_FLAG(ctl_in, CTL_u)) {
+			assert(dest_utcb != NULL);
+			L4_VREG(dest_utcb, L4_TCR_USERDEFINEDHANDLE) = *udh_p;
+		}
+		if(CHECK_FLAG(ctl_in, CTL_f)) dest_thread->ctx.regs[9] = *flags_p;
+		if(CHECK_FLAG(ctl_in, CTL_i)) dest_thread->ctx.regs[8] = *ip_p;
+		if(CHECK_FLAG(ctl_in, CTL_s)) dest_thread->ctx.regs[7] = *sp_p;
+
+		ctl_in &= ~regset_mask;
+	}
+
+	if(CHECK_FLAG(ctl_in, CTL_d)) {
+		/* readout */
+		TRACE("%s: my brain cannot handle readouts. poor me\n", __func__);
+		panic("hfasdjfa skhfd jahskdjf lhakjs");
+		ctl_in &= ~CTL_d;
+	}
+
+	if(unlikely(ctl_in != 0)) {
+		printf("%s: unhandled ExchangeRegister control bits %#x\n",
+			__func__, ctl_in);
+		goto fail;
+	}
+
+end:
 	return result.raw;
+
+fail:
+	result = L4_nilthread;
+	/* HAIL SATAN errday */
+	L4_VREG(thread_get_utcb(current), L4_TCR_ERRORCODE) = 666;
+	goto end;
 }
 
 
@@ -426,7 +565,7 @@ void sys_threadcontrol(struct x86_exregs *regs)
 			goto end;
 		}
 
-		printf("creating thread %d:%d\n", TID_THREADNUM(dest_tid.raw),
+		TRACE("creating thread %d:%d\n", TID_THREADNUM(dest_tid.raw),
 			TID_VERSION(dest_tid.raw));
 		dest = thread_new(dest_tid.raw);
 		if(dest == NULL) {
@@ -434,6 +573,7 @@ void sys_threadcontrol(struct x86_exregs *regs)
 			goto end;
 		}
 		dest->status = TS_INACTIVE;
+		dest->halted = true;
 		struct space *sp = space_find(spacespec.raw);
 		if(sp == NULL) sp = space_new();
 		space_add_thread(sp, dest);

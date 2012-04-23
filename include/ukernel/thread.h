@@ -67,6 +67,10 @@ struct thread
 	struct list_node link;		/* in the appropriate queue (sleep, ready) */
 	thread_id id;
 	enum thread_state status;
+	/* TODO: alter ipc.c to go to TS_STOPPED after IPC completion when halted
+	 * is set
+	 */
+	bool halted;
 	L4_Time_t send_timeout, recv_timeout;
 	/* "from" is altered on receive. */
 	L4_ThreadId_t ipc_from, ipc_to;
