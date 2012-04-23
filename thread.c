@@ -308,6 +308,28 @@ size_t hash_thread_by_id(const void *ptr, void *dataptr) {
 }
 
 
+static void receive_breath_of_life(struct thread *t, void *priv)
+{
+	if(t == NULL) return;
+
+	assert(t->post_exn_call == &receive_breath_of_life);
+	t->post_exn_call = NULL;
+	t->exn_priv = NULL;
+
+	void *utcb = thread_get_utcb(t);
+	L4_MsgTag_t tag = { .raw = L4_VREG(utcb, L4_TCR_MR(0)) };
+	TRACE("%s: in thread %d:%d, tag %#x\n", __func__,
+		TID_THREADNUM(t->id), TID_VERSION(t->id),
+		tag.raw);
+	if(tag.X.u != 2 || tag.X.t != 0) return;
+
+	L4_Word_t ip = L4_VREG(utcb, L4_TCR_MR(1)),
+		sp = L4_VREG(utcb, L4_TCR_MR(2));
+	TRACE("%s: setting sp %#x, ip %#x\n", __func__, sp, ip);
+	thread_set_spip(t, sp, ip);
+}
+
+
 /* system calls */
 
 L4_Word_t sys_exregs(
@@ -393,7 +415,6 @@ void sys_threadcontrol(struct x86_exregs *regs)
 	}
 
 	struct thread *dest = thread_find(dest_tid.raw);
-	bool is_new = false;
 	if(!L4_IsNilThread(spacespec) && dest == NULL) {
 		/* thread creation */
 		if(L4_IsNilThread(scheduler)) {
@@ -412,10 +433,10 @@ void sys_threadcontrol(struct x86_exregs *regs)
 			ec = 8;		/* "out of memory" */
 			goto end;
 		}
+		dest->status = TS_INACTIVE;
 		struct space *sp = space_find(spacespec.raw);
 		if(sp == NULL) sp = space_new();
 		space_add_thread(sp, dest);
-		is_new = true;
 	} else if(L4_IsNilThread(spacespec) && dest != NULL) {
 		/* thread/space deletion */
 		ec = 1;
@@ -455,9 +476,13 @@ void sys_threadcontrol(struct x86_exregs *regs)
 	if(!L4_IsNilThread(pager)) {
 		void *dest_utcb = thread_get_utcb(dest);
 		L4_VREG(dest_utcb, L4_TCR_PAGER) = pager.raw;
-		if(is_new) {
-			printf("TODO: should make thread %d:%d wait for breath-of-life\n",
-				TID_THREADNUM(dest->id), TID_VERSION(dest->id));
+		if(dest->status == TS_INACTIVE && !L4_IsNilThread(pager)) {
+			dest->ipc_from = pager;
+			dest->ipc_to = L4_nilthread;
+			dest->recv_timeout = L4_Never;
+			dest->status = TS_R_RECV;
+			dest->post_exn_call = &receive_breath_of_life;
+			dest->exn_priv = NULL;
 		}
 	}
 
