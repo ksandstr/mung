@@ -3,11 +3,17 @@
 #ifndef SEEN_UKERNEL_UTIL_H
 #define SEEN_UKERNEL_UTIL_H
 
+#include <assert.h>
 #include <stdint.h>
 #include <string.h>
 
 
-#define CHECK_FLAG(mask, bit) (((mask) & (bit)) != 0)
+#define CHECK_FLAG(mask, bit) ({ \
+		assert(__builtin_popcount((bit)) == 1); \
+		((mask) & (bit)) != 0; \
+	})
+#define CHECK_FLAG_ANY(mask, bits) (((mask) & (bits)) != 0)
+#define CHECK_FLAG_ALL(mask, bits) (((mask) & (bits)) == (bits))
 
 #define PURE __attribute__((pure))
 

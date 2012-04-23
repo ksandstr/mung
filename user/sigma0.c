@@ -19,7 +19,6 @@
 #include <ukernel/util.h>
 
 
-#define CHECK_FLAG(mask, bit) (((mask) & (bit)) != 0)
 #define NUM_SEED_PAGES 12
 #define PAGE_BUCKETS 20		/* word size - 12 */
 
