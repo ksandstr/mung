@@ -6,13 +6,16 @@ LDFLAGS=-e_start -N -nostdlib
 
 
 all: sigma0
+	+@make -C testbench all
 
 
 clean:
+	+@make -C testbench clean
 	@rm -f *.o
 
 
 distclean:
+	+@make -C testbench distclean
 	@rm -rf .deps
 
 
