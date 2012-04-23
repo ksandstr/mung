@@ -9,10 +9,6 @@ static FILE stdout_file, stderr_file;
 FILE *stdout = &stdout_file, *stderr = &stderr_file;
 
 
-/* from kmain.c */
-extern void computchar(unsigned char ch);
-
-
 int vfprintf(FILE *stream, const char *fmt, va_list args)
 {
 	if(stream == stderr) {
@@ -21,9 +17,7 @@ int vfprintf(FILE *stream, const char *fmt, va_list args)
 
 	char buffer[256];
 	int n = vsnprintf(buffer, sizeof(buffer), fmt, args);
-	for(int i=0, len=strlen(buffer); i < len; i++) {
-		computchar(buffer[i]);
-	}
+	con_putstr(buffer);
 	return n;
 }
 

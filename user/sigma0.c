@@ -47,7 +47,6 @@ static LIST_HEAD(dead_trk_list);
 static struct kmem_cache *track_page_slab = NULL;
 
 
-static void con_putstr(const char *str, size_t len);
 static struct track_page *find_page_by_range(L4_Fpage_t key);
 static void *get_free_page(int size_log2);
 static void *get_free_page_at(L4_Word_t address, int size_log2);
@@ -55,25 +54,6 @@ static void free_page_range(
 	L4_Word_t start,
 	L4_Word_t length,
 	bool dedicate);
-
-
-int vprintf(const char *fmt, va_list al)
-{
-	char buffer[256];
-	int n = vsnprintf(buffer, sizeof(buffer), fmt, al);
-	if(n > 0) con_putstr(buffer, n);
-	return n;
-}
-
-
-int printf(const char *format, ...)
-{
-	va_list al;
-	va_start(al, format);
-	int n = vprintf(format, al);
-	va_end(al);
-	return n;
-}
 
 
 L4_ThreadId_t L4_Pager(void) {
@@ -100,8 +80,9 @@ static L4_Word_t send_test(L4_Word_t payload)
 }
 
 
-static void con_putstr(const char *str, size_t len)
+void con_putstr(const char *str)
 {
+	size_t len = strlen(str);
 	L4_LoadMR(0, (L4_MsgTag_t){
 		.X.label = 0x5370, /* "pS" */
 		.X.u = (len + 3) / 4,

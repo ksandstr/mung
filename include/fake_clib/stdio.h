@@ -31,4 +31,8 @@ extern int vsnprintf(
 extern FILE *stdout, *stderr;
 
 
+/* interface for consumers of lib/fake_stdio.c */
+extern void con_putstr(const char *string);
+
+
 #endif

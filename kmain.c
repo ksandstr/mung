@@ -68,7 +68,7 @@ uint64_t *global_timer_count = NULL;
 /* rudimentary serial port output from µiX */
 #define COM_PORT 0x3f8
 
-void computchar(unsigned char ch)
+static void computchar(unsigned char ch)
 {
 //	unsigned int iter = 1;
 
@@ -96,8 +96,7 @@ void computchar(unsigned char ch)
 }
 
 
-void putstr(const char *str)
-{
+void con_putstr(const char *str) {
 	while(*str != '\0') computchar(*(str++));
 }
 

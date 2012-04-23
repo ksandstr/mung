@@ -73,7 +73,7 @@ void computchar(unsigned char ch)
 }
 
 
-void putstr(const char *str)
+void con_putstr(const char *str)
 {
 	while(*str != '\0') computchar(*(str++));
 }
