@@ -21,6 +21,15 @@
 #include <ukernel/thread.h>
 
 
+#define TRACE_VERBOSE 1		/* 1 for exregs, threadctl, threadswitch prints */
+
+#if TRACE_VERBOSE
+#define TRACE(fmt, ...) printf(fmt, __VA_ARGS__)
+#else
+#define TRACE(fmt, ...)
+#endif
+
+
 /* also referenced by sched.c . thread_list, dead_thread_list should be moved
  * into a per-cpu scheduler state structure anyway; the latter is only used by
  * terminated kthreads.
@@ -362,13 +371,13 @@ void sys_threadcontrol(struct x86_exregs *regs)
 	/* TODO: check thread privilege */
 	void *utcb = thread_get_utcb(current);
 
-	printf("%s: called; dest %d:%d, pager %d:%d, scheduler %d:%d, space %d:%d\n",
+	TRACE("%s: called; dest %d:%d, pager %d:%d, scheduler %d:%d, space %d:%d\n",
 		__func__,
 		TID_THREADNUM(dest_tid.raw), TID_VERSION(dest_tid.raw),
 		TID_THREADNUM(pager.raw), TID_VERSION(pager.raw),
 		TID_THREADNUM(scheduler.raw), TID_VERSION(scheduler.raw),
 		TID_THREADNUM(spacespec.raw), TID_VERSION(spacespec.raw));
-	printf("%s: utcb_loc %p\n", __func__, (void *)utcb_loc);
+	TRACE("%s: utcb_loc %p\n", __func__, (void *)utcb_loc);
 	result = 0;
 
 	L4_Word_t ec;
