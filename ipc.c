@@ -304,7 +304,8 @@ bool ipc_send_half(struct thread *self)
 			 * machine should only spin for exception IPCs.
 			 */
 			if(ipc_recv_half(self)) {
-				assert(self->status == TS_RUNNING);
+				assert(self->status == TS_RUNNING
+					|| self->status == TS_READY);
 				return true;
 			} else {
 				assert(self->status == TS_RECV_WAIT);
