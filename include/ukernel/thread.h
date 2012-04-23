@@ -24,6 +24,8 @@ typedef uint32_t thread_id;
 /* (requires inclusion of <ukernel/space.h>) */
 #define IS_KERNEL_THREAD(thread) ((thread)->space == kernel_space)
 #define IS_READY(st) ((st) == TS_READY || (st) == TS_R_RECV)
+#define IS_IPC(st) ((st) == TS_SEND_WAIT || (st) == TS_RECV_WAIT \
+	|| (st) == TS_R_RECV)
 
 /* let's leave this at 128. interrupts also get UTCBs as interrupt IPCs are
  * done that way.
@@ -54,6 +56,9 @@ enum thread_state {
 	/* ready threads. */
 	TS_READY,		/* ready to execute in user or kernel */
 	TS_R_RECV,		/* ready to do IPC receive side in kernel */
+
+	/* inactive ("pre-active") threads */
+	TS_INACTIVE,
 };
 
 
@@ -137,7 +142,6 @@ extern L4_Word_t sys_exregs(
 	L4_ThreadId_t *pager_p);
 
 extern void sys_threadswitch(struct x86_exregs *regs);
-extern void sys_schedule(struct x86_exregs *regs);
 extern void sys_threadcontrol(struct x86_exregs *regs);
 
 
@@ -162,6 +166,8 @@ extern size_t hash_thread_by_id(const void *threadptr, void *dataptr);
 
 /* defined in sched.c */
 extern struct thread *current_thread, *scheduler_thread;
+
+extern void sys_schedule(struct x86_exregs *regs);
 
 /* switches away from a kernel thread.
  * returns false when no thread was activated.

@@ -4,6 +4,8 @@
 #include <ccan/htable/htable.h>
 #include <ccan/likely/likely.h>
 
+#include <l4/vregs.h>
+
 #include <ukernel/util.h>
 #include <ukernel/ipc.h>
 #include <ukernel/space.h>
@@ -163,4 +165,62 @@ void return_to_ipc(struct x86_exregs *regs, struct thread *target)
 	list_add(&thread_list, &target->link);
 
 	return_to_scheduler(regs);
+}
+
+
+void sys_schedule(struct x86_exregs *regs)
+{
+	L4_ThreadId_t dest_tid = { .raw = regs->eax };
+	L4_Word_t timectl = regs->edx, procctl = regs->esi,
+		prioctl = regs->ecx, preemptctl = regs->edi;
+
+	printf("%s: called; dest %d:%d, procctl %#x, prioctl %#x\n", __func__,
+		TID_THREADNUM(dest_tid.raw), TID_VERSION(dest_tid.raw),
+		(unsigned)procctl, (unsigned)prioctl);
+	printf("%s: ... timectl %#x, preemptctl %#x\n", __func__,
+		(unsigned)timectl, (unsigned)preemptctl);
+	L4_Word_t old_timectl = 0, result = 0;
+
+	struct thread *dest = thread_find(dest_tid.raw);
+	if(dest == NULL) result = 1;	/* "dead" */
+	else if(IS_IPC(dest->status)
+		/* TODO: check flag to see if current IPC is by kernel */
+		&& (dest->post_exn_call != NULL
+			|| dest->saved_mrs > 0 || dest->saved_brs > 0))
+	{
+		result = 3;		/* "running", as IPC not by usermode */
+	} else {
+		switch(dest->status) {
+			case TS_STOPPED: case TS_INACTIVE:
+				result = 2;		/* "inactive" */
+				break;
+			case TS_RUNNING: case TS_READY:
+				result = 3;		/* "running" */
+				break;
+			case TS_SEND_WAIT:
+				result = 4;		/* "pending send" */
+				break;
+			case TS_RECV_WAIT:
+			case TS_R_RECV:
+				result = 6;		/* "waiting to receive" */
+				break;
+			/* TODO: 5 "sending" (in the middle of string transfer, send)
+			 *       7 "receiving" (same, receive)
+			 */
+			default:
+				printf("WARNING: %s: unknown state %d in thread %d:%d\n",
+					__func__, (int)dest->status, TID_THREADNUM(dest->id),
+					TID_VERSION(dest->id));
+				result = 0;		/* "error" */
+				L4_VREG(thread_get_utcb(get_current_thread()),
+					L4_TCR_ERRORCODE) = 2;	/* "invalid thread ID" */
+				break;
+		}
+	}
+
+	/* TODO: apply procctl, prioctl, timectl, preemptctl */
+
+	printf("%s: result %d, old_timectl %d\n", __func__, result, old_timectl);
+	regs->eax = result;
+	regs->edx = old_timectl;
 }
