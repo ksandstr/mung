@@ -8,6 +8,7 @@
 #include <stdbool.h>
 
 
+
 /* hardcoded for ia32. bitfields not properly endianized. */
 
 typedef uint32_t L4_Word_t;
@@ -200,5 +201,8 @@ typedef union {
 	} __attribute__((packed)) X;
 } L4_Clock_t;
 
+
+/* that header includes this one, anyhow. */
+#include <l4/arch.h>
 
 #endif
