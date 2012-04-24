@@ -13,7 +13,7 @@ clean:
 
 
 distclean:
-	@rm -rf .deps
+	@rm -rf .deps testbench
 
 
 testbench: testbench.ld crt0.o testbench.o syscalls.o ccan-list.o
