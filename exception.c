@@ -178,34 +178,41 @@ static void handle_io_fault(struct thread *current, struct x86_exregs *regs)
 		goto fail;
 	}
 
-	bool in;
-	int port, size;
+	bool in = true;
+	int port, size = 1;
 	switch(insn[0]) {
 		case 0xe4:	/* IN AL, imm8 */
 			port = insn[1];
-			size = 1;
-			in = true;
 			break;
 
 		case 0xe5:	/* IN AX, imm8 */
 			port = insn[1];
 			size = 2;
-			in = true;
 			/* FIXME: recognize IN EAX, imm8 also! */
 			break;
 
 		case 0xec:	/* IN AL, DX */
 			port = regs->edx & 0xffff;
-			size = 1;
-			in = true;
 			break;
 
 		case 0xed:	/* IN AX, DX */
 			port = regs->edx & 0xffff;
 			size = 2;
-			in = true;
 			/* FIXME: recognize IN EAX, DX also! */
 			break;
+
+		case 0xee:	/* OUT DX, AL */
+			port = regs->edx & 0xffff;
+			in = false;
+			break;
+
+		case 0xef:	/* OUT DX, AX */
+			port = regs->edx & 0xffff;
+			in = false;
+			/* FIXME: recognize OUT DX, EAX also! */
+			break;
+
+		/* TODO: OUT imm8, AL; OUT imm8, [E]AX */
 
 		default:
 			printf("unknown instruction %#02x in I/O fault at %#x\n",
