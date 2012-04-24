@@ -588,6 +588,9 @@ void kmain(void *bigp, unsigned int magic)
 	 * passes for the KCP.
 	 */
 	add_mem_to_sigma0(kip_mem, resv_start & ~PAGE_MASK, resv_end | PAGE_MASK);
+	if(!space_add_ioperm(s0_thread->space, 0, 65536)) {
+		panic("can't create sigma0 I/O bitmap");
+	}
 	thread_start(s0_thread);
 	if(roottask != NULL) thread_start(roottask);
 

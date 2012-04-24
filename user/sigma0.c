@@ -199,8 +199,6 @@ static int sigma0_ipc_loop(void *kip_base)
 					printf("I/O fault didn't deliver I/O fpage? what.\n");
 					break;
 				}
-				printf("I/O fault size %d port %#x ip %#x\n",
-					L4_IoFpageSize(iofp), L4_IoFpagePort(iofp), fault_ip);
 				/* just map it.
 				 *
 				 * TODO: keep track of ports that've been mapped and refuse

@@ -108,6 +108,7 @@ void space_free(struct space *sp)
 	list_del_from(&space_list, &sp->link);
 
 	if(sp->tss != NULL) {
+		assert(sp->tss != &kernel_tss);
 		free(sp->tss);
 		free_gdt_slot(sp->tss_seg);
 	}
@@ -418,6 +419,9 @@ COLD void init_spaces(struct list_head *resv_list)
 	memset(&kernel_space_mem, 0, sizeof(kernel_space_mem));
 	kernel_space = &kernel_space_mem;
 	space_init(kernel_space, resv_list);
+	kernel_space->tss = &kernel_tss;
+	kernel_space->tss_len = sizeof(struct tss);
+	kernel_space->tss_seg = 5;
 
 	/* preallocate page table pages for the kernel segment, so that it makes
 	 * sense to copy the page table pointers.

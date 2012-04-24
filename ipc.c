@@ -54,14 +54,53 @@ static inline void set_ipc_error(void *utcb, L4_Word_t ec)
 }
 
 
+/* NOTE: this treats I/O ports as inclusive. this is good enough; exclusive
+ * (i.e. refusing to pass ranges that aren't all present) would just be
+ * another hassle.
+ *
+ * TODO: this doesn't fail atomically.
+ * ALSO TODO: nor does it handle grantitems.
+ */
 static int apply_io_mapitem(
 	struct thread *source,
 	const void *s_base,
 	struct thread *dest,
 	void *d_base,
-	L4_MapItem_t m)
+	L4_MapItem_t m,
+	L4_Fpage_t recvwnd)
 {
-	return -ENOMEM;
+	if(source->space->tss == NULL) return 0;	/* no-op */
+
+	assert(L4_IsIoFpage(m.X.snd_fpage));
+	const uint8_t *src_bm = (void *)&source->space->tss[1];
+	int run = 0;
+	L4_Word_t start = 0, first_port = L4_IoFpagePort(recvwnd),
+		last_port = first_port + L4_IoFpageSize(recvwnd) - 1,
+		max_port = (source->space->tss_len - sizeof(struct tss)) * 8 - 1;
+	for(L4_Word_t port = L4_IoFpagePort(m.X.snd_fpage),
+				  end = MIN(L4_Word_t, max_port,
+					port + L4_IoFpageSize(m.X.snd_fpage));
+		port < end;
+		port++)
+	{
+		int byte = port >> 3, bit = port & 0x7;
+		bool skip = CHECK_FLAG(src_bm[byte], 1 << bit)
+			|| port < first_port || port > last_port;
+		if(skip && run > 0) {
+			if(!space_add_ioperm(dest->space, start, run)) {
+				return -ENOMEM;
+			}
+			run = 0;
+		} else if(!skip) {
+			if(run == 0) start = port;
+			run++;
+		}
+	}
+	if(run > 0 && !space_add_ioperm(dest->space, start, run)) {
+		return -ENOMEM;
+	}
+
+	return 0;
 }
 
 
@@ -94,14 +133,15 @@ static int apply_mapitem(
 	if(source->space == dest->space) return 0;
 	if(L4_IsNilFpage(map_page)) return 0;
 
-	if(unlikely(L4_IsIoFpage(map_page))) {
-		return apply_io_mapitem(source, s_base, dest, d_base, m);
-	}
-
 	L4_Fpage_t wnd = { .raw = L4_VREG(d_base, L4_TCR_BR(0)) };
 	if(unlikely(L4_IsNilFpage(wnd))) {
 		/* TODO: isn't this an error condition? */
 		return 0;
+	}
+
+	if(unlikely(L4_IsIoFpage(map_page))) {
+		if(!L4_IsIoFpage(wnd)) return 0;	/* again, error? */
+		else return apply_io_mapitem(source, s_base, dest, d_base, m, wnd);
 	}
 
 #if 0

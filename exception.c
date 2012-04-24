@@ -162,9 +162,6 @@ static void handle_io_fault(struct thread *current, struct x86_exregs *regs)
 {
 	thread_save_exregs(current, regs);
 
-	printf("I/O fault in %d:%d\n", TID_THREADNUM(current->id),
-		TID_VERSION(current->id));
-
 	uint8_t insn[16];
 	size_t n = space_memcpy_from(current->space, insn, regs->eip, 16);
 #if 0
@@ -220,6 +217,7 @@ static void handle_io_fault(struct thread *current, struct x86_exregs *regs)
 			goto fail;
 	}
 
+	/* TODO: make this a TRACE() */
 	printf("#GP(IO): I/O fault; %s size %d in port %#x at eip %#x\n",
 		in ? "in" : "out", size, port, regs->eip);
 #if 0
@@ -232,7 +230,7 @@ static void handle_io_fault(struct thread *current, struct x86_exregs *regs)
 	struct thread *pager = get_thread_pager(current, utcb);
 	if(pager == NULL) goto fail;
 	save_ipc_regs(current, 3, 1);
-	L4_VREG(utcb, L4_TCR_BR(0)) = L4_CompleteAddressSpace.raw;
+	L4_VREG(utcb, L4_TCR_BR(0)) = L4_IoFpageLog2(0, 16).raw;
 	L4_VREG(utcb, L4_TCR_MR(0)) = ((-8) & 0xfff) << 20 | 0x6 << 16 | 2;
 	L4_VREG(utcb, L4_TCR_MR(1)) = L4_IoFpage(port, size).raw;
 	L4_VREG(utcb, L4_TCR_MR(2)) = regs->eip;

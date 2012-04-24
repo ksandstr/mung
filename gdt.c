@@ -226,6 +226,7 @@ int set_gdt_slot(L4_Word_t base, L4_Word_t limit, int access, int flags)
 
 void free_gdt_slot(int slot)
 {
+	assert(slot >= N_KERNEL_SEGS);
 	assert(gdt_array[slot].flags_limit1 != 0);
 	gdt_array[slot].flags_limit1 = 0;
 }
