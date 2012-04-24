@@ -41,15 +41,12 @@ void isr_exn_ud_bottom(struct x86_exregs *regs)
 	 * the mapping database, page tables, and supervisor space.
 	 */
 	struct thread *current = get_current_thread();
-	struct space *sp = current->space;
-	const struct map_entry *e = mapdb_probe(&sp->mapdb,
-		regs->eip & ~PAGE_MASK);
-	if(e == NULL) panic("no map_entry for #UD eip? what.");
-	uintptr_t heap_addr = reserve_heap_page();
-	put_supervisor_page(heap_addr, mapdb_page_id_in_entry(e, regs->eip));
-	int offset = regs->eip & PAGE_MASK;
-	const uint8_t *mem = (void *)heap_addr;
-	if(mem[offset] == 0xf0 && mem[offset + 1] == 0x90) {
+	uint8_t buf[2];
+	size_t n = space_memcpy_from(current->space, buf, regs->eip, 2);
+	if(n < 2) {
+		panic("can't read from #UD eip? what.");
+	}
+	if(buf[0] == 0xf0 && buf[1] == 0x90) {
 		/* it is L4_KernelInterface().
 		 * FIXME: proper values
 		 */
@@ -68,9 +65,6 @@ void isr_exn_ud_bottom(struct x86_exregs *regs)
 		current->status = TS_STOPPED;
 		return_to_scheduler(regs);
 	}
-
-	put_supervisor_page(heap_addr, 0);
-	/* TODO: release heap_addr */
 }
 
 
