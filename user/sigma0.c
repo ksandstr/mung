@@ -189,6 +189,30 @@ static int sigma0_ipc_loop(void *kip_base)
 					L4_LoadMR(1, map.raw[0]);
 					L4_LoadMR(2, map.raw[1]);
 				}
+			} else if((tag.X.label & 0xfff0) == 0xff80
+				&& tag.X.u == 2 && tag.X.t == 0)
+			{
+				/* I/O faults (ia32, amd64) */
+				L4_Fpage_t iofp = { .raw = L4_VREG(utcb, L4_TCR_MR(1)) };
+				L4_Word_t fault_ip = L4_VREG(utcb, L4_TCR_MR(2));
+				if(!L4_IsIoFpage(iofp)) {
+					printf("I/O fault didn't deliver I/O fpage? what.\n");
+					break;
+				}
+				printf("I/O fault size %d port %#x ip %#x\n",
+					L4_IoFpageSize(iofp), L4_IoFpagePort(iofp), fault_ip);
+				/* just map it.
+				 *
+				 * TODO: keep track of ports that've been mapped and refuse
+				 * double mappings.
+				 */
+				L4_MapItem_t map = L4_MapItem(
+					L4_IoFpageLog2(L4_IoFpagePort(iofp),
+						L4_IoFpageSizeLog2(iofp)), 0);
+				L4_Set_Rights(&map.X.snd_fpage, L4_FullyAccessible);
+				L4_LoadMR(0, (L4_MsgTag_t){ .X.t = 2 }.raw);
+				L4_LoadMR(1, map.raw[0]);
+				L4_LoadMR(2, map.raw[1]);
 			} else {
 				printf("unknown IPC label %#x (u %d, t %d) from %u:%u\n",
 					tag.X.label, tag.X.u, tag.X.t, from.global.X.thread_no,
