@@ -45,22 +45,6 @@ struct gdt_resv
 #define NUM_GDT_ENTRIES 1024	/* max 8191 */
 
 
-/* type fields for code/data */
-#define DESC_A_ACCESSED (1 << 0)
-#define DESC_A_RW (1 << 1)		/* readable / read-write */
-#define DESC_A_DC (1 << 2)		/* direction/conforming bit */
-#define DESC_A_EX (1 << 3)		/* executable bit */
-
-/* type values for system descriptors (well, just the one) */
-#define DESC_A_TSS_32BIT 0x09
-
-#define DESC_A_SYSTEM (1 << 4)	/* clear for system, set for code/data */
-#define DESC_A_PRIV_MASK ((1 << 5) | (1 << 6))
-#define DESC_A_PRESENT (1 << 7)
-
-#define DESC_F_SZ (1 << 2)		/* 0 = 16 bit, 1 = 32 bit */
-#define DESC_F_GR (1 << 3)		/* 0 = bytes, 1 = 4k pages */
-
 #define GDT_ENTRY(base, limit, access_, flags) \
 	((struct gdt_entry){ \
 		.base_0 = (base) & 0xffff, \
@@ -219,6 +203,45 @@ static size_t rehash_gdt_resv_addr(const void *elem, void *priv) {
 static bool cmp_gdt_resv_addr(const void *cand, void *key) {
 	const struct gdt_resv *r = cand;
 	return r->l_addr == *(uintptr_t *)key;
+}
+
+
+int set_gdt_slot(L4_Word_t base, L4_Word_t limit, int access, int flags)
+{
+	/* FIXME: use a bitmap for allocating the free segments. */
+	int slot = 0;
+	for(int i=N_KERNEL_SEGS; i < NUM_GDT_ENTRIES; i++) {
+		if(gdt_array[i].flags_limit1 == 0) {
+			slot = i;
+			break;
+		}
+	}
+	if(slot != 0) {
+		gdt_array[slot] = GDT_ENTRY(base, limit, access, flags);
+		assert(gdt_array[slot].flags_limit1 != 0);
+	}
+	return slot;
+}
+
+
+void free_gdt_slot(int slot)
+{
+	assert(gdt_array[slot].flags_limit1 != 0);
+	gdt_array[slot].flags_limit1 = 0;
+}
+
+
+void unbusy_tss(int slot)
+{
+	assert(gdt_array[slot].flags_limit1 != 0);
+	gdt_array[slot].access &= ~0x02;
+}
+
+
+void set_current_tss(int slot)
+{
+	assert(gdt_array[slot].flags_limit1 != 0);
+	asm volatile ("ltr %%ax" :: "a" (slot * 8) : "memory");
 }
 
 

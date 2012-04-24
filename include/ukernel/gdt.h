@@ -19,9 +19,28 @@
 #ifndef IN_ASM_SOURCE
 
 #include <stdbool.h>
+#include <l4/types.h>
 #include <ukernel/mm.h>
 
 #define KERNEL_TO_LINEAR(addr) (is_kernel_high ? (addr) + KERNEL_SEG_START : (addr))
+
+
+/* type fields for code/data */
+#define DESC_A_ACCESSED (1 << 0)
+#define DESC_A_RW (1 << 1)		/* readable / read-write */
+#define DESC_A_DC (1 << 2)		/* direction/conforming bit */
+#define DESC_A_EX (1 << 3)		/* executable bit */
+
+/* type values for system descriptors (well, just the one) */
+#define DESC_A_TSS_32BIT 0x09
+
+#define DESC_A_SYSTEM (1 << 4)	/* clear for system, set for code/data */
+#define DESC_A_PRIV_MASK ((1 << 5) | (1 << 6))
+#define DESC_A_PRESENT (1 << 7)
+
+#define DESC_F_SZ (1 << 2)		/* 0 = 16 bit, 1 = 32 bit */
+#define DESC_F_GR (1 << 3)		/* 0 = bytes, 1 = 4k pages */
+
 
 /* false at boot, set to true by go_high() */
 extern bool is_kernel_high;
@@ -40,6 +59,11 @@ extern void init_gdt_resv(void);
 
 extern int reserve_gdt_ptr_seg(uintptr_t l_addr);
 extern void release_gdt_ptr_seg(uintptr_t l_addr, int slot);
+
+extern int set_gdt_slot(L4_Word_t base, L4_Word_t limit, int access, int flags);
+extern void free_gdt_slot(int slot);
+extern void unbusy_tss(int slot);
+extern void set_current_tss(int slot);
 
 
 #endif
