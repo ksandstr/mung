@@ -49,6 +49,10 @@ struct tss
 } __attribute__((packed));
 
 
+/* TODO: this should be renamed to default_tss. it grants no I/O permissions
+ * while active. (the kernel can do all I/O it wants due to always running in
+ * an IOPL ring.)
+ */
 extern struct tss kernel_tss;		/* from kmain.c */
 
 

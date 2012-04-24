@@ -222,6 +222,12 @@ static void handle_io_fault(struct thread *current, struct x86_exregs *regs)
 
 	printf("#GP(IO): I/O fault; %s size %d in port %#x at eip %#x\n",
 		in ? "in" : "out", size, port, regs->eip);
+#if 0
+	/* debugging aid for space_add_ioperm() */
+	if(!space_add_ioperm(current->space, port, size)) {
+		panic("couldn't add IO permissions");
+	}
+#else
 	void *utcb = thread_get_utcb(current);
 	struct thread *pager = get_thread_pager(current, utcb);
 	if(pager == NULL) goto fail;
@@ -231,6 +237,7 @@ static void handle_io_fault(struct thread *current, struct x86_exregs *regs)
 	L4_VREG(utcb, L4_TCR_MR(1)) = L4_IoFpage(port, size).raw;
 	L4_VREG(utcb, L4_TCR_MR(2)) = regs->eip;
 	return_to_ipc(regs, pager);
+#endif
 
 	return;
 

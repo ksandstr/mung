@@ -32,6 +32,10 @@ struct space
 
 	/* x86 specific bits */
 	struct page *pdirs;
+
+	unsigned tss_seg;
+	size_t tss_len;				/* total amount of RAM under "tss" */
+	struct tss *tss;			/* immediately followed by I/O bitmap memory */
 };
 
 
@@ -78,6 +82,12 @@ extern size_t space_memcpy_from(
 	void *dest,
 	L4_Word_t address,
 	size_t size);
+
+/* returns false on OOM */
+extern bool space_add_ioperm(
+	struct space *sp,
+	L4_Word_t base_port,
+	int size);
 
 
 /* stubbed out interface for architectures (non-x86, non-amd64) that don't

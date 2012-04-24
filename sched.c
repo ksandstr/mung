@@ -83,6 +83,10 @@ bool schedule(void)
 	next->status = TS_RUNNING;
 	current_thread = next;
 	if(self->space != next->space) {
+		if(self->space->tss != next->space->tss) {
+			int slot = next->space->tss == NULL ? SEG_KERNEL_TSS : next->space->tss_seg;
+			set_current_tss(slot);
+		}
 		if(unlikely(self->space == kernel_space)) {
 			/* switch from kernel initial space */
 			asm volatile ("movl %0, %%cr3"

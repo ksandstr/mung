@@ -4,6 +4,7 @@
 #include <stdbool.h>
 #include <string.h>
 #include <assert.h>
+#include <errno.h>
 
 #include <ccan/likely/likely.h>
 #include <ccan/list/list.h>
@@ -72,6 +73,9 @@ struct space *space_new(void)
 	struct space *sp = kmem_cache_alloc(space_slab);
 	space_init(sp, NULL);
 	mapdb_init(&sp->mapdb, sp);
+	sp->tss = NULL;
+	sp->tss_len = 0;
+	sp->tss_seg = 0;
 
 	return sp;
 }
@@ -102,6 +106,11 @@ void space_free(struct space *sp)
 	htable_clear(&sp->ptab_pages);
 
 	list_del_from(&space_list, &sp->link);
+
+	if(sp->tss != NULL) {
+		free(sp->tss);
+		free_gdt_slot(sp->tss_seg);
+	}
 
 	kmem_cache_free(space_slab, sp);
 }
@@ -260,6 +269,90 @@ size_t space_memcpy_from(
 	/* TODO: release heap_addr */
 
 	return pos;
+}
+
+
+/* x86/amd64 bits */
+
+static void *alloc_tss(size_t size)
+{
+	assert(size >= sizeof(struct tss));
+
+	struct list_head trash_list;
+	list_head_init(&trash_list);
+
+	void *ptr;
+	L4_Word_t p0, p1;
+	do {
+		ptr = malloc(size);
+		if(ptr == NULL) break;
+		p0 = (L4_Word_t)ptr >> PAGE_BITS;
+		p1 = ((L4_Word_t)ptr + sizeof(struct tss)) >> PAGE_BITS;
+		if(p0 < p1) list_add(&trash_list, ptr);
+	} while(p0 < p1);
+	struct trash_entry { struct list_node n; } *ent, *next;
+	list_for_each_safe(&trash_list, ent, next, n) {
+		free(ent);
+	}
+	return ptr;
+}
+
+
+bool space_add_ioperm(struct space *sp, L4_Word_t base_port, int size)
+{
+	int last_byte = (base_port + size - 1 + 7) / 8;
+
+	int map_len = 0;
+	if(sp->tss_len > sizeof(struct tss)) {
+		map_len = sp->tss_len - sizeof(struct tss);
+	}
+	uint8_t *map;
+	if(last_byte >= map_len) {
+		size_t newlen = ((last_byte + 15) & ~15) + 1;
+		/* TODO: it'd be nice if dlmalloc's posix_memalign() worked. */
+		struct tss *newt = alloc_tss(sizeof(struct tss) + newlen);
+		if(newt == NULL) return false;
+		struct tss *old_tss = sp->tss;
+		if(old_tss != NULL) {
+			memcpy(newt, old_tss, sizeof(struct tss) + map_len);
+		} else {
+			*newt = kernel_tss;
+			newt->iopb_offset = sizeof(struct tss);
+		}
+		map = (void *)&newt[1];
+		memset(&map[map_len], 0xff, newlen - map_len);
+		map_len = newlen;
+		sp->tss = newt;
+		sp->tss_len = sizeof(struct tss) + newlen;
+		if(sp->tss_seg > 0) free_gdt_slot(sp->tss_seg);
+		assert(sp->tss_len >= sizeof(struct tss) + 1);
+		sp->tss_seg = set_gdt_slot(KERNEL_TO_LINEAR((L4_Word_t)sp->tss),
+			sp->tss_len, DESC_A_PRESENT | DESC_A_TSS_32BIT, DESC_F_SZ);
+		if(sp->tss_seg == 0) {
+			panic("ran out of segment table entries!");
+		}
+
+		if(get_current_thread()->space == sp) {
+			/* the fresh segment descriptor has a 0 "busy" flag. so this TSS
+			 * is good to go!
+			 */
+			set_current_tss(sp->tss_seg);
+		}
+
+		free(old_tss);
+	} else {
+		map = (void *)&sp->tss[1];
+	}
+
+	/* brute force. */
+	for(L4_Word_t i = base_port; i < base_port + size; i++) {
+		int pos = i >> 3, off = i & 0x7;
+		map[pos] &= ~(1 << off);
+	}
+
+	assert(map[map_len - 1] == 0xff);
+
+	return true;
 }
 
 
