@@ -17,6 +17,13 @@
 #include <ukernel/misc.h>
 
 
+static struct thread *get_thread_pager(struct thread *t, void *utcb)
+{
+	L4_ThreadId_t pager_id = { .raw = L4_VREG(utcb, L4_TCR_PAGER) };
+	return !L4_IsNilThread(pager_id) ? thread_find(pager_id.raw) : NULL;
+}
+
+
 void isr_exn_de_bottom(struct x86_exregs *regs)
 {
 	printf("#DE(0x%x) at eip 0x%x, esp 0x%x\n", regs->error,
@@ -153,9 +160,74 @@ msgfail:
 
 static void handle_io_fault(struct thread *current, struct x86_exregs *regs)
 {
+	thread_save_exregs(current, regs);
+
 	printf("I/O fault in %d:%d\n", TID_THREADNUM(current->id),
 		TID_VERSION(current->id));
 
+	uint8_t insn[16];
+	size_t n = space_memcpy_from(current->space, insn, regs->eip, 16);
+#if 0
+	printf("insn bytes [%u]:", (unsigned)n);
+	for(int i=0; i < n; i++) printf(" %#02x", insn[i]);
+	printf("\n");
+#endif
+	if(n == 0) {
+		printf("can't read instructions at %#x; stopping thread\n",
+			regs->eip);
+		goto fail;
+	}
+
+	bool in;
+	int port, size;
+	switch(insn[0]) {
+		case 0xe4:	/* IN AL, imm8 */
+			port = insn[1];
+			size = 1;
+			in = true;
+			break;
+
+		case 0xe5:	/* IN AX, imm8 */
+			port = insn[1];
+			size = 2;
+			in = true;
+			/* FIXME: recognize IN EAX, imm8 also! */
+			break;
+
+		case 0xec:	/* IN AL, DX */
+			port = regs->edx & 0xffff;
+			size = 1;
+			in = true;
+			break;
+
+		case 0xed:	/* IN AX, DX */
+			port = regs->edx & 0xffff;
+			size = 2;
+			in = true;
+			/* FIXME: recognize IN EAX, DX also! */
+			break;
+
+		default:
+			printf("unknown instruction %#02x in I/O fault at %#x\n",
+				insn[0], regs->eip);
+			goto fail;
+	}
+
+	printf("#GP(IO): I/O fault; %s size %d in port %#x at eip %#x\n",
+		in ? "in" : "out", size, port, regs->eip);
+	void *utcb = thread_get_utcb(current);
+	struct thread *pager = get_thread_pager(current, utcb);
+	if(pager == NULL) goto fail;
+	save_ipc_regs(current, 3, 1);
+	L4_VREG(utcb, L4_TCR_BR(0)) = L4_CompleteAddressSpace.raw;
+	L4_VREG(utcb, L4_TCR_MR(0)) = ((-8) & 0xfff) << 20 | 0x6 << 16 | 2;
+	L4_VREG(utcb, L4_TCR_MR(1)) = L4_IoFpage(port, size).raw;
+	L4_VREG(utcb, L4_TCR_MR(2)) = regs->eip;
+	return_to_ipc(regs, pager);
+
+	return;
+
+fail:
 	current->status = TS_STOPPED;
 	return_to_scheduler(regs);
 }
