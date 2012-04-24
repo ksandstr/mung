@@ -54,6 +54,17 @@ static inline void set_ipc_error(void *utcb, L4_Word_t ec)
 }
 
 
+static int apply_io_mapitem(
+	struct thread *source,
+	const void *s_base,
+	struct thread *dest,
+	void *d_base,
+	L4_MapItem_t m)
+{
+	return -ENOMEM;
+}
+
+
 /* FIXME: this function should indicate to the caller that active TLBs for the
  * destination space may need to be flushed, or at least invalidated in the
  * regions given in a buffer of some kind (if provided by the caller; it may
@@ -82,6 +93,10 @@ static int apply_mapitem(
 	/* no-ops */
 	if(source->space == dest->space) return 0;
 	if(L4_IsNilFpage(map_page)) return 0;
+
+	if(unlikely(L4_IsIoFpage(map_page))) {
+		return apply_io_mapitem(source, s_base, dest, d_base, m);
+	}
 
 	L4_Fpage_t wnd = { .raw = L4_VREG(d_base, L4_TCR_BR(0)) };
 	if(unlikely(L4_IsNilFpage(wnd))) {
