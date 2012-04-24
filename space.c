@@ -228,6 +228,41 @@ void space_put_page(
 }
 
 
+size_t space_memcpy_from(
+	struct space *sp,
+	void *dest,
+	L4_Word_t address,
+	size_t size)
+{
+	if(size == 0) return 0;
+
+	/* TODO: play weird segment games when sp == current_thread->space */
+
+	uintptr_t heap_addr = reserve_heap_page();
+	size_t pos = 0;
+	while(pos < size) {
+		int seg = MIN(int, size - pos, PAGE_SIZE - (address & PAGE_MASK));
+		const struct map_entry *e = mapdb_probe(&sp->mapdb,
+			address & ~PAGE_MASK);
+		if(e == NULL) break;
+		put_supervisor_page(heap_addr, mapdb_page_id_in_entry(e, address));
+		/* FIXME: fix put_supervisor_page() somehow */
+		x86_flush_tlbs();
+
+		memcpy(dest + pos, (void *)(heap_addr | (address & PAGE_MASK)), seg);
+
+		address += seg;
+		pos += seg;
+
+		assert(pos >= size || (address & PAGE_MASK) == 0);
+	}
+	put_supervisor_page(heap_addr, 0);
+	/* TODO: release heap_addr */
+
+	return pos;
+}
+
+
 /* syscalls.
  *
  * TODO: divorce them from the x86_regs representation.

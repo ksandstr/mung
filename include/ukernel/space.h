@@ -73,6 +73,13 @@ extern void space_put_page(
 	uint32_t page_id,
 	int access);
 
+extern size_t space_memcpy_from(
+	struct space *sp,
+	void *dest,
+	L4_Word_t address,
+	size_t size);
+
+
 /* stubbed out interface for architectures (non-x86, non-amd64) that don't
  * have an INVLPG equivalent. a sequence of calls to space_put_page(), or
  * others that alter the page tables, should be terminated with
