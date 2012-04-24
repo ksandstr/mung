@@ -539,9 +539,7 @@ extern void malloc_panic(void);
 #define ABORT malloc_panic()
 #define MALLOC_FAILURE_ACTION malloc_panic()
 
-/* FIXME: add <errno.h> */
-#define EINVAL 23
-#define ENOMEM 24
+#include <errno.h>
 
 
 /* Version identifier to allow people to support multiple versions */
