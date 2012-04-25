@@ -178,7 +178,6 @@ static int sigma0_ipc_loop(void *kip_base)
 			{
 				/* I/O faults (ia32, amd64) */
 				L4_Fpage_t iofp = { .raw = L4_VREG(utcb, L4_TCR_MR(1)) };
-				L4_Word_t fault_ip = L4_VREG(utcb, L4_TCR_MR(2));
 				if(!L4_IsIoFpage(iofp)) {
 					printf("I/O fault didn't deliver I/O fpage? what.\n");
 					break;
