@@ -200,9 +200,13 @@ void free_kern_page(struct page *page)
 void *kmem_alloc_new_page(void)
 {
 	struct page *pg = get_kern_page(0);
-	if(pg != NULL) list_add(&k_slab_pages, &pg->link);
-	assert(pg->vm_addr != NULL);
-	return pg->vm_addr;
+	if(pg != NULL) {
+		list_add(&k_slab_pages, &pg->link);
+		assert(pg->vm_addr != NULL);
+		return pg->vm_addr;
+	} else {
+		return NULL;
+	}
 }
 
 
