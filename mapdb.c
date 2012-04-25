@@ -595,8 +595,9 @@ int mapdb_map_pages(
 			if(ent < &grp->entries[grp->num_entries - 1]) ent++;
 			else {
 				/* next group, even */
+				uintptr_t g_start = grp->start + GROUP_SIZE;
 				grp = NULL;
-				for(uintptr_t grp_addr = grp->start + GROUP_SIZE;
+				for(uintptr_t grp_addr = g_start;
 					grp == NULL && grp_addr <= last_addr;
 					grp_addr += GROUP_SIZE)
 				{
