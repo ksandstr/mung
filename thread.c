@@ -355,7 +355,7 @@ L4_Word_t sys_exregs(
 {
 	struct thread *current = get_current_thread(), *dest_thread = NULL;
 
-#ifndef NDEBUG
+#if 0
 	printf("%s: called from %d:%d on %d:%d; control %#x (", __func__,
 		TID_THREADNUM(current->id), TID_VERSION(current->id),
 		TID_THREADNUM(dest.raw), TID_VERSION(dest.raw),
