@@ -517,7 +517,7 @@ int mapdb_map_pages(
 	L4_Fpage_t map_page,
 	L4_Word_t dest_addr)
 {
-	struct map_entry *first;
+	struct map_entry *first = NULL;
 	struct map_group *grp;
 	L4_Word_t first_addr = L4_Address(map_page),
 		last_addr = L4_Address(map_page) + L4_Size(map_page) - 1;
