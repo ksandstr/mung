@@ -49,4 +49,16 @@ static inline L4_ThreadId_t L4_MyLocalId(void) {
 }
 
 
+static inline L4_ThreadId_t L4_Pager(void) {
+	void *utcb = __L4_Get_UtcbAddress();
+	return (L4_ThreadId_t){ .raw = L4_VREG(utcb, L4_TCR_PAGER) };
+}
+
+
+static inline L4_Word_t L4_ErrorCode(void) {
+	void *utcb = __L4_Get_UtcbAddress();
+	return L4_VREG(utcb, L4_TCR_ERRORCODE);
+}
+
+
 #endif
