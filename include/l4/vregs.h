@@ -50,8 +50,23 @@ static inline void L4_LoadMR(int i, L4_Word_t w) {
 static inline void L4_LoadMRs(int i, int num, const L4_Word_t *w)
 {
 	void *utcb = __L4_Get_UtcbAddress();
-	for(int c=0; c<num; c++, i++) {
+	for(int c = 0; c < num; c++, i++) {
 		*(volatile L4_Word_t *)&L4_VREG(utcb, L4_TCR_MR(i)) = w[c];
+	}
+}
+
+
+static inline void L4_StoreMR(int i, L4_Word_t *ptr) {
+	void *utcb = __L4_Get_UtcbAddress();
+	*ptr = L4_VREG(utcb, L4_TCR_MR(i));
+}
+
+
+static inline void L4_StoreMRs(int i, int num, L4_Word_t *ptr)
+{
+	void *utcb = __L4_Get_UtcbAddress();
+	for(int c = 0; c < num; c++, i++) {
+		ptr[c] = L4_VREG(utcb, L4_TCR_MR(i));
 	}
 }
 

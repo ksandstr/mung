@@ -101,11 +101,13 @@ static void tid_test(void)
 }
 
 
+/* NOTE: this test is useless in the absence of a serious sys_unmap() in the
+ * kernel.
+ */
 void unmap_test(void)
 {
 	printf("unmap test start.\n");
 
-	void *utcb = __L4_Get_UtcbAddress();
 	L4_Fpage_t pages[] = {
 		L4_FpageLog2(0xdeadbeef, 12),
 		L4_FpageLog2(0xcafebabe, 12),
@@ -117,9 +119,7 @@ void unmap_test(void)
 	}
 	L4_Fpage_t out_pages[n_pages];
 	L4_Unmap(1);
-	for(int i=0; i < n_pages; i++) {
-		out_pages[i].raw = L4_VREG(utcb, L4_TCR_MR(i));
-	}
+	for(int i=0; i < n_pages; i++) L4_StoreMR(i, &out_pages[i].raw);
 
 	for(int i=0; i < n_pages; i++) {
 		L4_Fpage_t fp = out_pages[i];
