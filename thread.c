@@ -533,7 +533,7 @@ void sys_threadcontrol(struct x86_exregs *regs)
 	TRACE("%s: utcb_loc %p\n", __func__, (void *)utcb_loc);
 	result = 0;
 
-	L4_Word_t ec;
+	L4_Word_t ec = 0;
 	if(TID_VERSION(dest_tid.raw) == 0) {
 		ec = 2;		/* "unavailable thread" */
 		goto end;
