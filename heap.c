@@ -167,8 +167,6 @@ struct page *get_kern_page(uintptr_t vm_addr)
 			vm_addr = reserve_heap_page();
 			put_supervisor_page(vm_addr, p->id);
 			p->vm_addr = (void *)vm_addr;
-		} else {
-			vm_addr = (uintptr_t)p->vm_addr;
 		}
 	} else {
 		if(p->vm_addr != NULL) {
