@@ -412,7 +412,7 @@ L4_Word_t sys_exregs(
 		if(dest_thread->status == TS_R_RECV
 			|| dest_thread->status == TS_RECV_WAIT)
 		{
-			dest_thread->status = TS_READY;
+			dest_thread->status = dest_thread->halted ? TS_STOPPED : TS_READY;
 			dest_thread->ipc_from = L4_nilthread;
 			/* "canceled in receive phase" */
 			assert(dest_utcb != NULL);
@@ -436,7 +436,7 @@ L4_Word_t sys_exregs(
 		/* abort send. */
 		/* TODO: check for the "currently sending" state */
 		if(dest_thread->status == TS_SEND_WAIT) {
-			dest_thread->status = TS_READY;
+			dest_thread->status = dest_thread->halted ? TS_STOPPED : TS_READY;
 			dest_thread->ipc_from = L4_nilthread;
 			/* "canceled in send phase" */
 			assert(dest_utcb != NULL);
