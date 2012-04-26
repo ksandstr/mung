@@ -6,6 +6,7 @@
 
 #include <l4/types.h>
 #include <l4/message.h>
+#include <l4/syscall.h>
 
 
 static inline L4_Word_t L4_Timeouts(L4_Time_t snd, L4_Time_t recv) {
@@ -20,5 +21,92 @@ static inline bool L4_IpcSucceeded(L4_MsgTag_t tag) {
 	return !L4_IpcFailed(tag);
 }
 
+
+static inline L4_MsgTag_t L4_Call_Timeouts(
+	L4_ThreadId_t peer,
+	L4_Time_t snd_timeout,
+	L4_Time_t rcv_timeout)
+{
+	L4_ThreadId_t dummy;
+	return L4_Ipc(peer, peer, L4_Timeouts(snd_timeout, rcv_timeout), &dummy);
+}
+
+static inline L4_MsgTag_t L4_Call(L4_ThreadId_t peer) {
+	return L4_Call_Timeouts(peer, L4_Never, L4_Never);
+}
+
+
+static inline L4_MsgTag_t L4_Send_Timeout(
+	L4_ThreadId_t peer,
+	L4_Time_t timeout)
+{
+	L4_ThreadId_t dummy;
+	return L4_Ipc(peer, L4_nilthread, L4_Timeouts(timeout, L4_Never), &dummy);
+}
+
+static inline L4_MsgTag_t L4_Send(L4_ThreadId_t peer) {
+	return L4_Send_Timeout(peer, L4_Never);
+}
+
+static inline L4_MsgTag_t L4_Reply(L4_ThreadId_t peer) {
+	return L4_Send_Timeout(peer, L4_ZeroTime);
+}
+
+
+static inline L4_MsgTag_t L4_Receive_Timeout(
+	L4_ThreadId_t from,
+	L4_Time_t timeout)
+{
+	L4_ThreadId_t dummy;
+	return L4_Ipc(L4_nilthread, from, L4_Timeouts(L4_Never, timeout), &dummy);
+}
+
+static inline L4_MsgTag_t L4_Receive(L4_ThreadId_t from) {
+	return L4_Receive_Timeout(from, L4_Never);
+}
+
+
+static inline L4_MsgTag_t L4_Wait_Timeout(
+	L4_Time_t rcv_timeout,
+	L4_ThreadId_t *from_p)
+{
+	return L4_Ipc(L4_nilthread, L4_anythread,
+		L4_Timeouts(L4_Never, rcv_timeout), from_p);
+}
+
+static inline L4_MsgTag_t L4_Wait(L4_ThreadId_t *from_p) {
+	return L4_Wait_Timeout(L4_Never, from_p);
+}
+
+
+static inline L4_MsgTag_t L4_ReplyWait_Timeout(
+	L4_ThreadId_t to,
+	L4_Time_t rcv_timeout,
+	L4_ThreadId_t *from_p)
+{
+	return L4_Ipc(to, L4_anythread, L4_Timeouts(L4_Never, rcv_timeout),
+		from_p);
+}
+
+static inline L4_MsgTag_t L4_ReplyWait(
+	L4_ThreadId_t to,
+	L4_ThreadId_t *from_p)
+{
+	return L4_ReplyWait_Timeout(to, L4_Never, from_p);
+}
+
+
+static inline L4_MsgTag_t L4_Lcall(L4_ThreadId_t to) {
+	L4_ThreadId_t dummy;
+	return L4_Ipc(to, to, L4_Timeouts(L4_Never, L4_Never), &dummy);
+}
+
+static inline L4_MsgTag_t L4_LreplyWait(
+	L4_ThreadId_t to,
+	L4_ThreadId_t *from_p)
+{
+	return L4_Ipc(to, L4_anylocalthread, L4_Timeouts(L4_ZeroTime, L4_Never),
+		from_p);
+}
 
 #endif

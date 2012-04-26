@@ -59,9 +59,7 @@ static L4_Word_t send_test(L4_Word_t payload)
 {
 	L4_LoadMR(0, (L4_MsgTag_t){ .X.label = 0x2369, .X.u = 1 }.raw);
 	L4_LoadMR(1, payload);
-	L4_ThreadId_t dummy;
-	L4_MsgTag_t tag = L4_Ipc(L4_Pager(), L4_Pager(),
-		L4_Timeouts(L4_Never, L4_Never), &dummy);
+	L4_MsgTag_t tag = L4_Call(L4_Pager());
 	if(L4_IpcFailed(tag)) return 0;
 	else return L4_VREG(__L4_Get_UtcbAddress(), L4_TCR_MR(1));
 }
@@ -77,8 +75,7 @@ void con_putstr(const char *str)
 	for(int i=0; i * 4 < len; i++) {
 		L4_LoadMR(i + 1, *(L4_Word_t *)&str[i * 4]);
 	}
-	L4_ThreadId_t dummy;
-	L4_Ipc(L4_Pager(), L4_Pager(), L4_Timeouts(L4_Never, L4_Never), &dummy);
+	L4_Call(L4_Pager());
 }
 
 
@@ -108,9 +105,8 @@ static int sigma0_ipc_loop(void *kip_base)
 	/* FIXME: add "proper" L4_LoadMR(), L4_StoreMR() functions */
 	void *utcb = __L4_Get_UtcbAddress();
 	for(;;) {
-		L4_ThreadId_t from = L4_nilthread;
-		L4_MsgTag_t tag = L4_Ipc(L4_nilthread, L4_anythread,
-			L4_Timeouts(L4_Never, L4_Never), &from);
+		L4_ThreadId_t from;
+		L4_MsgTag_t tag = L4_Wait(&from);
 
 		for(;;) {
 			if(L4_IpcFailed(tag)) {
@@ -206,10 +202,7 @@ static int sigma0_ipc_loop(void *kip_base)
 				break;
 			}
 
-			/* ReplyWait */
-			from = L4_nilthread;
-			tag = L4_Ipc(sender, L4_anythread,
-				L4_Timeouts(L4_ZeroTime, L4_Never), &from);
+			tag = L4_ReplyWait(sender, &from);
 		}
 	}
 

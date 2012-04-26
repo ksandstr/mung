@@ -5,7 +5,7 @@
 #include <ccan/compiler/compiler.h>
 
 #include <l4/types.h>
-#include <l4/ipc.h>
+#include <l4/message.h>
 #include <l4/vregs.h>
 
 
