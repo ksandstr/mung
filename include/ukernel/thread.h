@@ -145,7 +145,6 @@ extern L4_Word_t sys_exregs(
 	L4_Word_t *udh_p,
 	L4_ThreadId_t *pager_p);
 
-extern void sys_threadswitch(struct x86_exregs *regs);
 extern void sys_threadcontrol(struct x86_exregs *regs);
 
 
@@ -172,6 +171,7 @@ extern size_t hash_thread_by_id(const void *threadptr, void *dataptr);
 extern struct thread *current_thread, *scheduler_thread;
 
 extern void sys_schedule(struct x86_exregs *regs);
+extern void sys_threadswitch(struct x86_exregs *regs);
 
 /* switches away from a kernel thread.
  * returns false when no thread was activated.

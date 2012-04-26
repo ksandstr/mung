@@ -174,6 +174,23 @@ void return_to_ipc(struct x86_exregs *regs, struct thread *target)
 }
 
 
+void sys_threadswitch(struct x86_exregs *regs)
+{
+	struct thread *current = get_current_thread();
+	thread_save_exregs(current, regs);
+
+	L4_ThreadId_t target = { .raw = regs->eax };
+	struct thread *other = L4_IsNilThread(target) ? NULL : thread_find(target.raw);
+	if(other != NULL && IS_READY(other->status)) {
+		list_del_from(&thread_list, &other->link);
+		list_add(&thread_list, &other->link);
+	}
+
+	current->status = TS_READY;
+	return_to_scheduler(regs);
+}
+
+
 void sys_schedule(struct x86_exregs *regs)
 {
 	L4_ThreadId_t dest_tid = { .raw = regs->eax };
