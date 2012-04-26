@@ -23,12 +23,16 @@ void *kip_mem = NULL;
  */
 static void make_syscall_stub(void *start, int *len_p, int sc_num)
 {
+	/* ThreadSwitch must retain %ebx. */
+	bool keep_ebx = (sc_num == SC_THREADSWITCH);
 	int p = 0;
 	uint8_t *mem = start;
+	if(keep_ebx) mem[p++] = 0x53;	/* PUSH EBX */
 	mem[p++] = 0xbb;	/* MOV EBX, imm32 */
 	*(uint32_t *)&mem[p] = sc_num; p += 4;
 	mem[p++] = 0xcd;	/* INT */
 	mem[p++] = 0x8f;
+	if(keep_ebx) mem[p++] = 0x5b;	/* POP EBX */
 	mem[p++] = 0xc3;	/* RET */
 	*len_p = p;
 }

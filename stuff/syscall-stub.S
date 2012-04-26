@@ -3,8 +3,10 @@
 
 	.global regular_syscall
 regular_syscall:
+	pushl %ebx		# only for ThreadSwitch (see kip.c)
 	movl $0xdd, %ebx
 	int $0x8f
+	popl %ebx
 	ret
 
 
