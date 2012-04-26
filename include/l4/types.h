@@ -92,6 +92,14 @@ static inline bool L4_IsGlobalId(L4_ThreadId_t tid) {
 	return tid.local.X.zeros != 0;
 }
 
+static inline L4_Word_t L4_ThreadNo(L4_ThreadId_t tid) {
+	return tid.global.X.thread_no;
+}
+
+static inline L4_Word_t L4_Version(L4_ThreadId_t tid) {
+	return tid.global.X.version;
+}
+
 
 static inline bool L4_IsNilFpage(L4_Fpage_t fp) {
 	return fp.raw == 0;
