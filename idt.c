@@ -52,6 +52,7 @@ void setup_idt(int code_seg)
 	 */
 	int code_sel = code_seg << 3;
 	EXN_GATE(ints, code_sel, 0, de);	/* divide error */
+	EXN_GATE(ints, code_sel, 3, int3);	/* int3 (KDB) */
 	EXN_GATE(ints, code_sel, 6, ud);	/* invalid opcode */
 	EXN_GATE(ints, code_sel, 13, gp);	/* general protection */
 	EXN_GATE(ints, code_sel, 14, pf);	/* pagefault */

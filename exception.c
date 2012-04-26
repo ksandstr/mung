@@ -377,6 +377,11 @@ struct thread *get_thread_exh(struct thread *t, void *utcb)
 }
 
 
+void isr_exn_int3_bottom(struct x86_exregs *regs) {
+	handle_kdb_enter(get_current_thread(), regs);
+}
+
+
 void isr_exn_gp_bottom(struct x86_exregs *regs)
 {
 	struct thread *current = get_current_thread();
@@ -393,8 +398,6 @@ void isr_exn_gp_bottom(struct x86_exregs *regs)
 
 	if(regs->error == 0) {
 		handle_io_fault(current, regs);
-	} else if(regs->error == 0x1a) {
-		handle_kdb_enter(current, regs);
 	} else {
 		thread_save_ctx(current, regs);
 
