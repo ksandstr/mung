@@ -21,7 +21,7 @@
 #include <ukernel/thread.h>
 
 
-#define TRACE_VERBOSE 1		/* 1 for exregs, threadctl, threadswitch prints */
+#define TRACE_VERBOSE 0		/* 1 for exregs, threadctl, threadswitch prints */
 
 #if TRACE_VERBOSE
 #define TRACE(fmt, ...) printf(fmt, __VA_ARGS__)
@@ -557,8 +557,8 @@ void sys_threadcontrol(struct x86_exregs *regs)
 			goto end;
 		}
 
-		TRACE("creating thread %d:%d\n", TID_THREADNUM(dest_tid.raw),
-			TID_VERSION(dest_tid.raw));
+		TRACE("%s: creating thread %d:%d\n", __func__,
+			TID_THREADNUM(dest_tid.raw), TID_VERSION(dest_tid.raw));
 		dest = thread_new(dest_tid.raw);
 		if(dest == NULL) {
 			ec = 8;		/* "out of memory" */
@@ -613,6 +613,7 @@ void sys_threadcontrol(struct x86_exregs *regs)
 			dest->ipc_to = L4_nilthread;
 			dest->recv_timeout = L4_Never;
 			dest->status = TS_R_RECV;
+			dest->halted = false;
 			dest->post_exn_call = &receive_breath_of_life;
 			dest->exn_priv = NULL;
 		}
