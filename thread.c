@@ -405,29 +405,6 @@ L4_Word_t sys_exregs(
 	}
 
 	L4_Word_t ctl_in = *control_p;
-	if(CHECK_FLAG(ctl_in, CTL_h)) {
-		bool halt = CHECK_FLAG(ctl_in, CTL_H);
-		if(dest_thread->halted && !halt) {
-			dest_thread->halted = false;
-			if(dest_thread->status == TS_STOPPED
-				|| dest_thread->status == TS_INACTIVE)
-			{
-				TRACE("%s: starting halted thread\n", __func__);
-				dest_thread->status = TS_READY;
-			}
-		} else if(!dest_thread->halted && halt) {
-			dest_thread->halted = true;
-			if(dest_thread->status == TS_READY
-				|| dest_thread->status == TS_RUNNING)
-			{
-				TRACE("%s: stopped running thread\n", __func__);
-				dest_thread->status = TS_STOPPED;
-			}
-		}
-
-		ctl_in &= ~(CTL_H | CTL_h);
-	}
-
 	if(CHECK_FLAG(ctl_in, CTL_R)) {
 		/* abort receive. */
 		/* TODO: check for the "currently receiving" state */
@@ -469,6 +446,29 @@ L4_Word_t sys_exregs(
 			TRACE("%s: aborted send\n", __func__);
 		}
 		ctl_in &= ~CTL_S;
+	}
+
+	if(CHECK_FLAG(ctl_in, CTL_h)) {
+		bool halt = CHECK_FLAG(ctl_in, CTL_H);
+		if(dest_thread->halted && !halt) {
+			dest_thread->halted = false;
+			if(dest_thread->status == TS_STOPPED
+				|| dest_thread->status == TS_INACTIVE)
+			{
+				TRACE("%s: starting halted thread\n", __func__);
+				dest_thread->status = TS_READY;
+			}
+		} else if(!dest_thread->halted && halt) {
+			dest_thread->halted = true;
+			if(dest_thread->status == TS_READY
+				|| dest_thread->status == TS_RUNNING)
+			{
+				TRACE("%s: stopped running thread\n", __func__);
+				dest_thread->status = TS_STOPPED;
+			}
+		}
+
+		ctl_in &= ~(CTL_H | CTL_h);
 	}
 
 	/* register-setting control bits. */
