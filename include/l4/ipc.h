@@ -21,6 +21,23 @@ static inline bool L4_IpcSucceeded(L4_MsgTag_t tag) {
 	return !L4_IpcFailed(tag);
 }
 
+static inline bool L4_IpcPropagated(L4_MsgTag_t tag) {
+	return (tag.X.flags & 0x1) != 0;
+}
+
+static inline bool L4_IpcRedirected(L4_MsgTag_t tag) {
+	return (tag.X.flags & 0x2) != 0;
+}
+
+static inline bool L4_IpcXcpu(L4_MsgTag_t tag) {
+	return (tag.X.flags & 0x4) != 0;
+}
+
+static inline void L4_Set_Propagation(L4_MsgTag_t *tag) {
+	/* the other flags are overwritten since they're ignored by IPC. */
+	tag->X.flags = 1;
+}
+
 
 static inline L4_MsgTag_t L4_Call_Timeouts(
 	L4_ThreadId_t peer,
