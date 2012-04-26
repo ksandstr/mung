@@ -2,11 +2,53 @@
 #ifndef __L4__THREAD_H__
 #define __L4__THREAD_H__
 
-#include <assert.h>
+#include <stdbool.h>
 
 #include <l4/types.h>
 #include <l4/vregs.h>
 #include <l4/syscall.h>
+
+
+/* error returns from ThreadControl and ExchangeRegisters */
+#define L4_ERROR_OK 0
+#define L4_ERROR_NO_PRIVILEGE 1
+#define L4_ERROR_INVALID_THREAD 2
+#define L4_ERROR_INVALID_SPACE 3
+#define L4_ERROR_INVALID_SCHEDULER 4
+#define L4_ERROR_INVALID_PARAM 5
+#define L4_ERROR_UTCB_AREA 6
+#define L4_ERROR_KIP_AREA 7
+#define L4_ERROR_NO_MEM 8
+
+
+/* thread states */
+
+typedef struct L4_ThreadState {
+	L4_Word_t raw;
+} L4_ThreadState_t;
+
+
+static inline bool L4_ThreadWasHalted(L4_ThreadState_t st) {
+	return (st.raw & (1 << 0)) != 0;
+}
+
+static inline bool L4_ThreadWasReceiving(L4_ThreadState_t st) {
+	return (st.raw & (1 << 1)) != 0;
+}
+
+static inline bool L4_ThreadWasSending(L4_ThreadState_t st) {
+	return (st.raw & (1 << 2)) != 0;
+}
+
+static inline bool L4_ThreadWasIpcing(L4_ThreadState_t st) {
+	return (st.raw & (1 << 3)) != 0;
+}
+
+
+static inline L4_ThreadId_t L4_GlobalId(L4_Word_t tnum, L4_Word_t vers) {
+	return (L4_ThreadId_t){ .global = {
+		.X.thread_no = tnum, .X.version = vers } };
+}
 
 
 static inline L4_ThreadId_t L4_GlobalIdOf(L4_ThreadId_t tid)
@@ -29,6 +71,8 @@ static inline L4_ThreadId_t L4_LocalIdOf(L4_ThreadId_t tid)
 }
 
 
+/* TCR-related functions */
+
 static inline L4_ThreadId_t L4_MyGlobalId(void) {
 	void *utcb = __L4_Get_UtcbAddress();
 	return (L4_ThreadId_t){ .raw = L4_VREG(utcb, L4_TCR_MYGLOBALID) };
@@ -44,9 +88,17 @@ static inline L4_ThreadId_t L4_MyLocalId(void) {
 	L4_ThreadId_t tid = {
 		.raw = (L4_Word_t)__L4_Get_UtcbAddress(),
 	};
-	assert(L4_IsLocalId(tid));
 	return tid;
 }
+
+/* TODO: L4_ProcessorNo(), L4_UserDefinedHandle(),
+ * L4_Set_UserDefinedHandle(), L4_ErrorCode_String(),
+ * L4_XferTimeouts(), L4_Set_XferTimeouts(),
+ * L4_IntendedReceiver(), L4_ActualSender(),
+ * L4_Set_VirtualSender(),
+ *
+ * (???) L4_WordSizeMask(), L4_Reset_WordSizeMask()
+ */
 
 
 static inline L4_ThreadId_t L4_Pager(void) {
@@ -54,10 +106,58 @@ static inline L4_ThreadId_t L4_Pager(void) {
 	return (L4_ThreadId_t){ .raw = L4_VREG(utcb, L4_TCR_PAGER) };
 }
 
+static inline void L4_Set_Pager(L4_ThreadId_t pg) {
+	void *utcb = __L4_Get_UtcbAddress();
+	L4_VREG(utcb, L4_TCR_PAGER) = pg.raw;
+}
+
+
+static inline L4_ThreadId_t L4_ExceptionHandler(void) {
+	void *utcb = __L4_Get_UtcbAddress();
+	return (L4_ThreadId_t){ .raw = L4_VREG(utcb, L4_TCR_EXCEPTIONHANDLER) };
+}
+
+static inline void L4_Set_ExceptionHandler(L4_ThreadId_t pg) {
+	void *utcb = __L4_Get_UtcbAddress();
+	L4_VREG(utcb, L4_TCR_EXCEPTIONHANDLER) = pg.raw;
+}
+
 
 static inline L4_Word_t L4_ErrorCode(void) {
 	void *utcb = __L4_Get_UtcbAddress();
 	return L4_VREG(utcb, L4_TCR_ERRORCODE);
+}
+
+
+static inline void L4_Start(L4_ThreadId_t t)
+{
+	L4_Word_t dummy;
+	L4_ThreadId_t dummy_id;
+	L4_ExchangeRegisters (t, (1 << 8) + 6, 0, 0, 0, 0, L4_nilthread,
+		&dummy, &dummy, &dummy, &dummy, &dummy, &dummy_id);
+}
+
+
+static inline void L4_Start_SpIp(L4_ThreadId_t t, L4_Word_t sp, L4_Word_t ip)
+{
+	L4_Word_t dummy;
+	L4_ThreadId_t dummy_id;
+	L4_ExchangeRegisters (t, (3 << 3) + (1 << 8) + 6, sp, ip, 0, 0,
+		L4_nilthread, &dummy, &dummy, &dummy, &dummy, &dummy, &dummy_id);
+}
+
+
+static inline void L4_Start_SpIpFlags(
+	L4_ThreadId_t t,
+	L4_Word_t sp,
+	L4_Word_t ip,
+	L4_Word_t flags)
+{
+	L4_Word_t dummy;
+	L4_ThreadId_t dummy_id;
+
+	L4_ExchangeRegisters (t, (7 << 3) + (1 << 8) + 6, sp, ip, flags, 0,
+		L4_nilthread, &dummy, &dummy, &dummy, &dummy, &dummy, &dummy_id);
 }
 
 
