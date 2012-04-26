@@ -134,17 +134,37 @@ void unmap_test(void)
 }
 
 
-static void threadctl_test(void)
+static void test_thread_fn(void)
+{
+	L4_ThreadId_t self = L4_Myself();
+	printf("test thread fn called! our ID is %u:%u\n",
+		L4_ThreadNo(self), L4_Version(self));
+
+	asm volatile ("int $1");
+}
+
+
+void threadctl_test(void)
 {
 	printf("threadcontrol test start.\n");
 
 	/* thread creation. */
-	L4_ThreadId_t dest = { .global = { .X.version = 1, .X.thread_no = 129 } };
-	L4_Word_t result = L4_ThreadControl(dest, L4_Myself(), L4_nilthread,
-		L4_Pager(), __L4_Get_UtcbAddress() + 512);
+	L4_ThreadId_t self = L4_Myself(),
+		dest = L4_GlobalId(L4_ThreadNo(self) + 1, 1);
+	L4_Word_t utcb_base = L4_MyLocalId().raw & ~0x1ffUL;
+	printf("utcb_base is %#x\n", utcb_base);
+	L4_Word_t result = L4_ThreadControl(dest, self, self,
+		L4_Pager(), (void *)(utcb_base + 512));
 	printf("creating threadcontrol result %u\n", (unsigned)result);
 	if(result == 0) {
 		printf("error code %#x\n", L4_ErrorCode());
+	} else {
+		/* statically allocated stack, because who gives a shit. */
+		static uint8_t stack[8192];
+		L4_Start_SpIp(dest, (L4_Word_t)(stack + sizeof(stack) - 16),
+			(L4_Word_t)&test_thread_fn);
+		printf("test thread started.\n");
+		L4_ThreadSwitch(dest);
 	}
 
 	printf("threadcontrol test ends.\n");
