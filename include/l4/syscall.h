@@ -180,18 +180,24 @@ static inline L4_Word_t L4_ThreadControl(
 {
 	extern _C_ void __L4_ThreadControl(void);
 	L4_Word_t result, dummy;
+	struct {
+		L4_Word_t edi;
+		L4_Word_t sc_addr;
+	} __attribute__((__packed__)) indirect = {
+		.edi = (L4_Word_t)utcb_location,
+		.sc_addr = (L4_Word_t)__L4_ThreadControl,
+	};
 	__asm__ __volatile__(
 		__L4_SAVE_REGS
-		"\tmovl %%edi, %%ebx\n"
-		"\tmovl %[utcbloc], %%edi\n"
+		"\tmovl 4(%%edi), %%ebx\n"
+		"\tmovl (%%edi), %%edi\n"
 		"\tcall *%%ebx\n"
 		__L4_RESTORE_REGS
 		: "=a" (result),
 		  "=c" (dummy), "=d" (dummy), "=S" (dummy), "=D" (dummy)
 		: "a" (dest.raw), "c" (pager.raw), "d" (scheduler.raw),
-		  "S" (space.raw), "D" (__L4_ThreadControl),
-		  [utcbloc] "m" (utcb_location)
-		: __L4_CLOBBER_REGS);
+		  "S" (space.raw), "D" (&indirect)
+		: __L4_CLOBBER_REGS, "memory");
 	return result;
 }
 
@@ -201,8 +207,7 @@ static inline void L4_ThreadSwitch(L4_ThreadId_t dest)
 	extern _C_ void __L4_ThreadSwitch(void);
 	__asm__ __volatile__(
 		"\tcall *%%ecx\n"
-		:: "a" (dest.raw), "c" (__L4_ThreadSwitch)
-		: "memory", __L4_CLOBBER_REGS);
+		:: "a" (dest.raw), "c" (__L4_ThreadSwitch));
 }
 
 
