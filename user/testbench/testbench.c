@@ -199,26 +199,40 @@ void threadctl_test(void)
 		}
 
 		/* wait for exception. */
-		for(;;) {
-			L4_MsgTag_t tag = L4_Receive(dest);
-			if(L4_IpcFailed(tag)) {
-				printf("receive from child thread failed: errorcode %#x\n",
-					L4_ErrorCode());
-				continue;
-			}
-
-			if(tag.X.label == ((-5) & 0xfff) << 4) {
-				L4_Word_t exno, err;
-				L4_StoreMR(3, &exno);
-				L4_StoreMR(4, &err);
-				printf("child had exception %#x, errorcode %#x\n",
-					exno, err);
-				break;
-			} else {
-				printf("got some other thing from child (tag %#x)\n",
-					tag.raw);
-			}
+		tag = L4_Receive(dest);
+		if(L4_IpcFailed(tag)) {
+			printf("receive from child thread failed: errorcode %#x\n",
+				L4_ErrorCode());
+			return;
 		}
+
+		if(tag.X.label == ((-5) & 0xfff) << 4) {
+			L4_Word_t exno, err;
+			L4_StoreMR(3, &exno);
+			L4_StoreMR(4, &err);
+			printf("child had exception %#x, errorcode %#x\n",
+				exno, err);
+		} else {
+			printf("got some other thing from child (tag %#x)\n",
+				tag.raw);
+			return;
+		}
+
+		/* reply with a complete restart of the thread function. */
+		L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 12 }.raw);
+		L4_LoadMR(1, (L4_Word_t)&test_thread_fn);
+		L4_LoadMR(8, (L4_Word_t)(stack + sizeof(stack) - 16));
+		tag = L4_Send(dest);
+		printf("child reply sent.\n");
+
+		/* re-init */
+		L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 1 }.raw);
+		L4_LoadMR(1, 0xfedcba98);
+		L4_Send(dest);
+
+		/* re-fault */
+		printf("waiting for another child fault...\n");
+		tag = L4_Receive(dest);
 
 		/* TODO: delete the thread */
 	}

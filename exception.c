@@ -124,6 +124,7 @@ static void handle_kdb_enter(struct thread *current, struct x86_exregs *regs)
 	put_supervisor_page(heap_addr, mapdb_page_id_in_entry(e, regs->eip));
 	int offset = regs->eip & PAGE_MASK;
 	if(((const uint8_t *)heap_addr)[offset + 3] != 0xb8) {
+		/* TODO: cause the #GP exception for int $3 instead */
 		printf("KDB message not indicated with MOV EAX, imm32!\n");
 		goto msgfail;
 	}
@@ -239,6 +240,37 @@ fail:
 }
 
 
+static void receive_exn_reply(struct thread *t, void *priv)
+{
+	if(t != NULL) {
+		assert(t->post_exn_call == &receive_exn_reply);
+		void *utcb = thread_get_utcb(t);
+		struct x86_exregs regs;
+		L4_Word_t *exvarptrs[] = {
+			&regs.eip, &regs.eflags,
+			&regs.reason,		/* ExceptionNo */
+			&regs.error,
+			&regs.edi, &regs.esp, &regs.ebp,
+			&regs.__esp, &regs.ebx, &regs.edx,
+			&regs.ecx, &regs.eax,
+		};
+		int num_vars = sizeof(exvarptrs) / sizeof(exvarptrs[0]);
+		assert(num_vars == 12);
+		for(int i=0; i < num_vars; i++) {
+			*(exvarptrs[i]) = L4_VREG(utcb, L4_TCR_MR(i + 1));
+		}
+		thread_save_exregs(t, &regs);
+	}
+
+	if(priv != NULL) {
+		/* the wrapped handler */
+		t->post_exn_call = priv;
+		t->exn_priv = NULL;
+		(*t->post_exn_call)(t, NULL);
+	}
+}
+
+
 void isr_exn_gp_bottom(struct x86_exregs *regs)
 {
 	struct thread *current = get_current_thread();
@@ -281,6 +313,11 @@ void isr_exn_gp_bottom(struct x86_exregs *regs)
 			for(int i=0; i < num_vars; i++) {
 				L4_VREG(utcb, L4_TCR_MR(i + 1)) = exvars[i];
 			}
+
+			assert(current->exn_priv == NULL);
+			current->exn_priv = current->post_exn_call;
+			current->post_exn_call = &receive_exn_reply;
+
 			return_to_ipc(regs, exh);
 		} else {
 			current->status = TS_STOPPED;
