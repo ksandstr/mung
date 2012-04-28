@@ -259,6 +259,11 @@ static void receive_exn_reply(struct thread *t, void *priv)
 		for(int i=0; i < num_vars; i++) {
 			*(exvarptrs[i]) = L4_VREG(utcb, L4_TCR_MR(i + 1));
 		}
+		/* retain privileged EFLAGS bits from thread context. */
+		regs.eflags = (t->ctx.regs[9] & 0xffffff00) | (regs.eflags & 0xff);
+		/* set reserved bits correctly */
+		regs.eflags &= 0xffffffd7;
+		regs.eflags |= 0x00000002;
 		thread_save_exregs(t, &regs);
 	}
 
