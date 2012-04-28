@@ -55,8 +55,9 @@ void threadctl_test(void)
 	} else {
 		/* statically allocated stack, because who gives a shit. */
 		static uint8_t stack[8192] __attribute__((aligned(4096)));
-		L4_Start_SpIp(dest, (L4_Word_t)(stack + sizeof(stack) - 16),
-			(L4_Word_t)&test_thread_fn);
+		const L4_Word_t child_stk_top = (L4_Word_t)(stack
+			+ sizeof(stack) - 16);
+		L4_Start_SpIp(dest, child_stk_top, (L4_Word_t)&test_thread_fn);
 		printf("test thread %u:%u started.\n",
 			L4_ThreadNo(dest), L4_Version(dest));
 		L4_ThreadSwitch(dest);
@@ -94,10 +95,24 @@ void threadctl_test(void)
 			return;
 		}
 
-		/* reply with a complete restart of the thread function. */
+		/* reply with a save of the returned exception registers into a bit of
+		 * static memory, and a complete restart of the the thread function.
+		 */
 		L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 12 }.raw);
-		L4_LoadMR(1, (L4_Word_t)&test_thread_fn);
-		L4_LoadMR(8, (L4_Word_t)(stack + sizeof(stack) - 16));
+		extern void exn_store_regs();
+		static L4_Word_t regs_out[20];
+		L4_LoadMR(1, (L4_Word_t)&exn_store_regs);
+		L4_LoadMR(2, 0);
+		L4_LoadMR(3, 0);
+		L4_LoadMR(4, 0);
+		L4_LoadMR(5, 0xed1);		/* edi */
+		L4_LoadMR(6, 0xe51);		/* esi */
+		L4_LoadMR(7, 0xeb4);		/* ebp */
+		L4_LoadMR(8, child_stk_top);	/* esp */
+		L4_LoadMR(9, (L4_Word_t)&test_thread_fn);	/* ebx */
+		L4_LoadMR(10, 0xed0);		/* edx */
+		L4_LoadMR(11, 0xec0);		/* ecx */
+		L4_LoadMR(12, (L4_Word_t)&regs_out[0]);		/* eax */
 		tag = L4_Send(dest);
 		printf("child reply sent.\n");
 
@@ -105,6 +120,12 @@ void threadctl_test(void)
 		L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 1 }.raw);
 		L4_LoadMR(1, 0xfedcba98);
 		L4_Send(dest);
+
+		/* examine the entrails. */
+		printf("child thread restarted; saved regs are:\n");
+		for(int i=0; i < 8; i++) {
+			printf("  %d = %#x\n", i, regs_out[i]);
+		}
 
 		/* re-fault */
 		printf("waiting for another child fault...\n");

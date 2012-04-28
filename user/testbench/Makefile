@@ -17,6 +17,7 @@ distclean:
 
 
 testbench: testbench.ld crt0.o testbench.o thread_test.o \
+		exn-store.o \
 		syscalls.o ccan-list.o
 	@echo "  LD $@"
 	@$(LD) $(LDFLAGS) -T testbench.ld $(filter %.o,$^) $(LIBS) -o $@ \
