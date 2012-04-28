@@ -16,7 +16,8 @@ distclean:
 	@rm -rf .deps testbench
 
 
-testbench: testbench.ld crt0.o testbench.o syscalls.o ccan-list.o
+testbench: testbench.ld crt0.o testbench.o thread_test.o \
+		syscalls.o ccan-list.o
 	@echo "  LD $@"
 	@$(LD) $(LDFLAGS) -T testbench.ld $(filter %.o,$^) $(LIBS) -o $@ \
 		-L $(CFGDIR)/lib -lukernel_util \
