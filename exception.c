@@ -247,12 +247,18 @@ static void receive_exn_reply(struct thread *t, void *priv)
 		void *utcb = thread_get_utcb(t);
 		struct x86_exregs regs;
 		L4_Word_t *exvarptrs[] = {
-			&regs.eip, &regs.eflags,
+			&regs.eip,
+			&regs.eflags,
 			&regs.reason,		/* ExceptionNo */
 			&regs.error,
-			&regs.edi, &regs.esp, &regs.ebp,
-			&regs.__esp, &regs.ebx, &regs.edx,
-			&regs.ecx, &regs.eax,
+			&regs.edi,
+			&regs.esi,
+			&regs.ebp,
+			&regs.esp,
+			&regs.ebx,
+			&regs.edx,
+			&regs.ecx,
+			&regs.eax,
 		};
 		int num_vars = sizeof(exvarptrs) / sizeof(exvarptrs[0]);
 		assert(num_vars == 12);
