@@ -248,6 +248,8 @@ void isr_exn_gp_bottom(struct x86_exregs *regs)
 	} else if(regs->error == 0x1a) {
 		handle_kdb_enter(current, regs);
 	} else {
+		thread_save_exregs(current, regs);
+
 		printf("#GP(0x%x) at eip 0x%x, esp 0x%x in %d:%d\n", regs->error,
 			regs->eip, regs->esp, TID_THREADNUM(current->id),
 			TID_VERSION(current->id));
@@ -255,9 +257,35 @@ void isr_exn_gp_bottom(struct x86_exregs *regs)
 		/* TODO: try to emit an exception message to the thread's exception
 		 * handler
 		 */
-
-		current->status = TS_STOPPED;
-		return_to_scheduler(regs);
+		void *utcb = thread_get_utcb(current);
+		L4_ThreadId_t exh_tid = {
+			.raw = L4_VREG(utcb, L4_TCR_EXCEPTIONHANDLER),
+		};
+		struct thread *exh = L4_IsNilThread(exh_tid) ? NULL
+			: thread_find(exh_tid.raw);
+		if(exh != NULL) {
+			save_ipc_regs(current, 12, 1);
+			L4_VREG(utcb, L4_TCR_BR(0)) = 0;
+			L4_VREG(utcb, L4_TCR_MR(0)) = (L4_MsgTag_t){
+				.X.label = ((-5) & 0xfff) << 4, .X.u = 12 }.raw;
+			L4_Word_t exvars[] = {
+				regs->eip, regs->eflags,
+				regs->reason,		/* ExceptionNo */
+				regs->error,
+				regs->edi, regs->esp, regs->ebp,
+				regs->__esp, regs->ebx, regs->edx,
+				regs->ecx, regs->eax,
+			};
+			int num_vars = sizeof(exvars) / sizeof(exvars[0]);
+			assert(num_vars == 12);
+			for(int i=0; i < num_vars; i++) {
+				L4_VREG(utcb, L4_TCR_MR(i + 1)) = exvars[i];
+			}
+			return_to_ipc(regs, exh);
+		} else {
+			current->status = TS_STOPPED;
+			return_to_scheduler(regs);
+		}
 	}
 }
 

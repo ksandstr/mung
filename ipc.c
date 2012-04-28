@@ -380,6 +380,7 @@ bool ipc_send_half(struct thread *self)
 		struct ipc_wait *w = kmem_cache_alloc(ipc_wait_slab);
 		w->dest_tid = self->ipc_to;
 		w->thread = self;
+
 		htable_add(&sendwait_hash, int_hash(w->dest_tid.raw), w);
 
 		self->status = TS_SEND_WAIT;

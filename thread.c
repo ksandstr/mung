@@ -109,7 +109,7 @@ void save_ipc_regs(struct thread *t, int mrs, int brs)
 	assert(t->post_exn_call == NULL);
 	assert(t->saved_mrs == 0 && t->saved_brs == 0);
 	assert(mrs >= 1 && brs >= 0);
-	assert(mrs + brs < sizeof(t->saved_regs) / sizeof(t->saved_regs[0]));
+	assert(mrs + brs <= sizeof(t->saved_regs) / sizeof(t->saved_regs[0]));
 
 	t->saved_mrs = mrs;
 	t->saved_brs = brs;
@@ -616,6 +616,8 @@ void sys_threadcontrol(struct x86_exregs *regs)
 			dest->halted = false;
 			dest->post_exn_call = &receive_breath_of_life;
 			dest->exn_priv = NULL;
+
+			L4_VREG(dest_utcb, L4_TCR_EXCEPTIONHANDLER) = L4_nilthread.raw;
 		}
 	}
 
