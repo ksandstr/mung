@@ -264,7 +264,7 @@ void isr_exn_gp_bottom(struct x86_exregs *regs)
 		struct thread *exh = L4_IsNilThread(exh_tid) ? NULL
 			: thread_find(exh_tid.raw);
 		if(exh != NULL) {
-			save_ipc_regs(current, 12, 1);
+			save_ipc_regs(current, 13, 1);
 			L4_VREG(utcb, L4_TCR_BR(0)) = 0;
 			L4_VREG(utcb, L4_TCR_MR(0)) = (L4_MsgTag_t){
 				.X.label = ((-5) & 0xfff) << 4, .X.u = 12 }.raw;

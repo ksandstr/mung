@@ -98,11 +98,11 @@ struct thread
 	struct x86_context ctx;
 
 	/* saved IPC registers. restored by a cold path in return_to_ipc(). at
-	 * most 13 (acceptor, 12 MRs for exception message) for x86.
-	 * (would be 21 for amd64.)
+	 * most 13 (acceptor, tag, 12 MRs for exception message) for x86.
+	 * (would be 22 for amd64.)
 	 */
 	uint8_t saved_mrs, saved_brs;
-	L4_Word_t saved_regs[13];
+	L4_Word_t saved_regs[14];
 };
 
 
