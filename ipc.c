@@ -312,12 +312,17 @@ bool ipc_send_half(struct thread *self)
 
 	struct thread *dest = thread_find(self->ipc_to.raw);
 	if(unlikely(dest == NULL)) {
+		TRACE("%s: can't find peer %d:%d\n", __func__,
+			TID_THREADNUM(self->ipc_to.raw), TID_VERSION(self->ipc_to.raw));
 		set_ipc_error(thread_get_utcb(self), 2 << 1 | 0);
 		return false;
 	}
 
 	/* TODO: override TS_R_RECV when peer's ipc_from == self->id . */
-	if(likely(dest->status == TS_RECV_WAIT)) {
+	if(dest->status == TS_RECV_WAIT
+		&& (dest->ipc_from.raw == L4_anythread.raw
+			|| dest->ipc_from.raw == self->id))
+	{
 		/* active send */
 		TRACE("%s: active send to %d:%d (from %d:%d)\n", __func__,
 			TID_THREADNUM(dest->id), TID_VERSION(dest->id),
@@ -566,6 +571,8 @@ void sys_ipc(struct x86_exregs *regs)
 	current->ipc_to.raw = regs->eax;
 	current->ipc_from.raw = regs->edx;
 	L4_Word_t timeouts = regs->ecx;
+	TRACE("%s: ipc_to %#x, ipc_from %#x, timeouts %#x\n", __func__,
+		regs->eax, regs->edx, regs->ecx);
 	current->send_timeout.raw = timeouts >> 16;
 	current->recv_timeout.raw = timeouts & 0xffff;
 
