@@ -289,12 +289,14 @@ static void set_ipc_return_regs(
 
 static void set_ipc_return_thread(struct thread *t)
 {
-	struct x86_exregs regs;
-	set_ipc_return_regs(&regs, t, thread_get_utcb(t));
-	t->ctx.regs[0] = regs.eax;
-	t->ctx.regs[1] = regs.ebx;
-	t->ctx.regs[4] = regs.esi;
-	t->ctx.regs[6] = regs.ebp;
+	if(likely(!IS_KERNEL_THREAD(t))) {
+		struct x86_exregs regs;
+		set_ipc_return_regs(&regs, t, thread_get_utcb(t));
+		t->ctx.regs[0] = regs.eax;
+		t->ctx.regs[1] = regs.ebx;
+		t->ctx.regs[4] = regs.esi;
+		t->ctx.regs[6] = regs.ebp;
+	}
 }
 
 
