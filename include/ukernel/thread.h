@@ -9,6 +9,7 @@
 
 #include <l4/types.h>
 #include <ukernel/mm.h>
+#include <ukernel/rbtree.h>
 #include <ukernel/util.h>
 #include <ukernel/x86.h>
 
@@ -64,13 +65,25 @@ enum thread_state {
 
 struct thread
 {
-	struct list_node link;		/* in the appropriate queue (sleep, ready) */
+	/* sched_rb is in a scheduling queue whenever .status is not TS_STOPPED,
+	 * TS_DEAD, or TS_INACTIVE.
+	 */
+	struct rb_node sched_rb;
+	uint64_t wakeup_time;		/* absolute seconds, 44:20 fixed point */
+
 	thread_id id;
 	enum thread_state status;
 	/* TODO: alter ipc.c to go to TS_STOPPED after IPC completion when halted
 	 * is set
 	 */
 	bool halted;
+
+	uint8_t pri, sens_pri;
+	uint16_t max_delay;
+	L4_Time_t ts_len;
+	uint32_t quantum;			/* # of µs left (goes up to 1h 6m) */
+	uint64_t total_quantum;		/* # of µs left */
+
 	L4_Time_t send_timeout, recv_timeout;
 	/* "from" is altered on receive. */
 	L4_ThreadId_t ipc_from, ipc_to;
@@ -103,6 +116,8 @@ struct thread
 	 */
 	uint8_t saved_mrs, saved_brs;
 	L4_Word_t saved_regs[14];
+
+	struct list_node dead_link;	/* link in dead_thread_list */
 };
 
 
@@ -156,6 +171,7 @@ extern struct thread *thread_new(thread_id tid);
 extern void thread_set_spip(struct thread *t, L4_Word_t sp, L4_Word_t ip);
 extern void thread_set_utcb(struct thread *t, L4_Word_t start);
 extern void thread_start(struct thread *t);
+extern void thread_stop(struct thread *t);
 
 extern void save_ipc_regs(struct thread *t, int mrs, int brs);
 
@@ -169,6 +185,15 @@ extern size_t hash_thread_by_id(const void *threadptr, void *dataptr);
 
 /* defined in sched.c */
 extern struct thread *current_thread, *scheduler_thread;
+
+/* scheduling queues */
+extern void sq_insert_thread(struct thread *t);
+extern void sq_remove_thread(struct thread *t);
+
+static inline void sq_update_thread(struct thread *t) {
+	sq_remove_thread(t);
+	sq_insert_thread(t);
+}
 
 extern void sys_schedule(struct x86_exregs *regs);
 extern void sys_threadswitch(struct x86_exregs *regs);

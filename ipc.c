@@ -386,6 +386,8 @@ bool ipc_send_half(struct thread *self)
 		htable_add(&sendwait_hash, int_hash(w->dest_tid.raw), w);
 
 		self->status = TS_SEND_WAIT;
+		self->wakeup_time = ~(uint64_t)0;
+		sq_update_thread(self);
 
 		return false;
 	}
@@ -443,6 +445,8 @@ bool ipc_recv_half(struct thread *self)
 			TID_THREADNUM(self->id), TID_VERSION(self->id),
 			TID_THREADNUM(self->ipc_from.raw), TID_VERSION(self->ipc_from.raw));
 		self->status = TS_RECV_WAIT;
+		self->wakeup_time = ~(uint64_t)0;
+		sq_update_thread(self);
 		return false;
 	} else {
 		/* active receive */

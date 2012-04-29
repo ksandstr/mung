@@ -440,6 +440,7 @@ static struct thread *spawn_kernel_server(
 	}
 
 	thread_set_spip(t, s0->sp, s0->ip);
+	thread_start(t);
 
 	return t;
 }
@@ -605,6 +606,12 @@ void kmain(void *bigp, unsigned int magic)
 	pic_clear_mask(0x01, 0x00);
 
 	printf("kmain() entering halt-schedule loop.\n");
+	first_thread->pri = 0;
+	first_thread->sens_pri = 0;
+	first_thread->total_quantum = 0;
+	first_thread->quantum = 10000;
+	first_thread->ts_len = L4_TimePeriod(10000);
+	sq_update_thread(first_thread);
 	while(true) {
 		first_thread->status = TS_READY;
 		if(!schedule()) {

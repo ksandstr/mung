@@ -285,6 +285,14 @@ void isr_exn_gp_bottom(struct x86_exregs *regs)
 {
 	struct thread *current = get_current_thread();
 
+	if(IS_KERNEL_THREAD(current)) {
+		printf("KERNEL #GP(0x%x) at eip 0x%x, esp 0x%x in %d:%d\n",
+			regs->error, regs->eip, regs->esp,
+			TID_THREADNUM(current->id), TID_VERSION(current->id));
+		thread_stop(current);
+		return_to_scheduler(regs);
+	}
+
 	if(regs->error == 0) {
 		handle_io_fault(current, regs);
 	} else if(regs->error == 0x1a) {
@@ -330,7 +338,7 @@ void isr_exn_gp_bottom(struct x86_exregs *regs)
 
 			return_to_ipc(regs, exh);
 		} else {
-			current->status = TS_STOPPED;
+			thread_stop(current);
 			return_to_scheduler(regs);
 		}
 	}

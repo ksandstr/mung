@@ -36,8 +36,7 @@
  */
 struct htable thread_hash = HTABLE_INITIALIZER(thread_hash,
 	hash_thread_by_id, NULL);
-struct list_head thread_list = LIST_HEAD_INIT(thread_list),
-	dead_thread_list = LIST_HEAD_INIT(dead_thread_list);
+struct list_head dead_thread_list = LIST_HEAD_INIT(dead_thread_list);
 
 static struct kmem_cache *thread_slab = NULL;
 static int next_kthread_num = 24;
@@ -53,7 +52,13 @@ COLD struct thread *init_threading(thread_id boot_tid)
 	boot->stack_page = NULL;
 	boot->id = boot_tid;
 	boot->status = TS_RUNNING;
-	list_add_tail(&thread_list, &boot->link);
+	boot->pri = 0xff;
+	boot->sens_pri = 0xff;
+	boot->max_delay = 0;
+	boot->ts_len = L4_Never;
+	boot->quantum = ~0ul;
+	boot->total_quantum = ~(uint64_t)0;
+	sq_insert_thread(boot);
 	htable_add(&thread_hash, int_hash(TID_THREADNUM(boot->id)), boot);
 
 	current_thread = boot;
@@ -143,16 +148,21 @@ struct thread *thread_new(thread_id tid)
 		t = kmem_cache_alloc(thread_slab);
 		t->stack_page = get_kern_page(0);
 	} else {
-		t = container_of(dead_thread_list.n.next, struct thread, link);
-		list_del_from(&dead_thread_list, &t->link);
+		t = container_of(dead_thread_list.n.next, struct thread,
+			dead_link);
+		list_del_from(&dead_thread_list, &t->dead_link);
 	}
 	*t = (struct thread){
 		.id = tid,
 		.status = TS_STOPPED,
 		.utcb_pos = -1,
+		.pri = 100, .sens_pri = 100,
+		.max_delay = 0,
+		.ts_len = L4_TimePeriod(10000),		/* 10 ms */
+		.quantum = 10000,		/* TODO: time2µs(.ts_len) */
+		.total_quantum = ~(uint64_t)0,
 	};
 
-	list_add(&thread_list, &t->link);
 	htable_add(&thread_hash, int_hash(TID_THREADNUM(t->id)), t);
 
 	return t;
@@ -187,7 +197,9 @@ struct thread *create_kthread(
 	stk_top[2] = function;
 	stk_top[3] = parameter;
 	t->ctx.regs[7] = (uintptr_t)stk_top;
-	t->status = TS_READY;
+	t->pri = 250;
+	t->sens_pri = 250;
+	thread_start(t);
 
 	return t;
 }
@@ -264,8 +276,20 @@ void thread_set_utcb(struct thread *t, L4_Word_t start)
 }
 
 
-void thread_start(struct thread *t) {
-	t->status = TS_READY;
+void thread_start(struct thread *t)
+{
+	assert(!t->halted);
+	if(!IS_READY(t->status)) {
+		t->status = TS_READY;
+		sq_insert_thread(t);
+	}
+}
+
+
+void thread_stop(struct thread *t)
+{
+	t->status = TS_STOPPED;
+	sq_remove_thread(t);
 }
 
 
@@ -327,6 +351,7 @@ static void receive_breath_of_life(struct thread *t, void *priv)
 		sp = L4_VREG(utcb, L4_TCR_MR(2));
 	TRACE("%s: setting sp %#x, ip %#x\n", __func__, sp, ip);
 	thread_set_spip(t, sp, ip);
+	thread_start(t);
 }
 
 
@@ -355,10 +380,10 @@ L4_Word_t sys_exregs(
 {
 	struct thread *current = get_current_thread(), *dest_thread = NULL;
 
-#if 0
-	printf("%s: called from %d:%d on %d:%d; control %#x (", __func__,
+#if 1
+	printf("%s: called from %d:%d on %d:%d (status %d); control %#x (", __func__,
 		TID_THREADNUM(current->id), TID_VERSION(current->id),
-		TID_THREADNUM(dest.raw), TID_VERSION(dest.raw),
+		TID_THREADNUM(dest.raw), TID_VERSION(dest.raw), current->status,
 		*control_p);
 	const char *ctl_chars = "HRSsifuphd";
 	for(int i=0; ctl_chars[i] != '\0'; i++) {
@@ -449,22 +474,21 @@ L4_Word_t sys_exregs(
 	}
 
 	if(CHECK_FLAG(ctl_in, CTL_h)) {
-		bool halt = CHECK_FLAG(ctl_in, CTL_H);
-		if(dest_thread->halted && !halt) {
+		if(!CHECK_FLAG(ctl_in, CTL_H)) {
 			dest_thread->halted = false;
 			if(dest_thread->status == TS_STOPPED
 				|| dest_thread->status == TS_INACTIVE)
 			{
 				TRACE("%s: starting halted thread\n", __func__);
-				dest_thread->status = TS_READY;
+				thread_start(dest_thread);
 			}
-		} else if(!dest_thread->halted && halt) {
+		} else {
 			dest_thread->halted = true;
 			if(dest_thread->status == TS_READY
 				|| dest_thread->status == TS_RUNNING)
 			{
+				thread_stop(dest_thread);
 				TRACE("%s: stopped running thread\n", __func__);
-				dest_thread->status = TS_STOPPED;
 			}
 		}
 
@@ -565,7 +589,6 @@ void sys_threadcontrol(struct x86_exregs *regs)
 			goto end;
 		}
 		dest->status = TS_INACTIVE;
-		dest->halted = true;
 		struct space *sp = space_find(spacespec.raw);
 		if(sp == NULL) sp = space_new();
 		space_add_thread(sp, dest);
@@ -614,6 +637,7 @@ void sys_threadcontrol(struct x86_exregs *regs)
 			dest->recv_timeout = L4_Never;
 			dest->status = TS_R_RECV;
 			dest->halted = false;
+			sq_insert_thread(dest);
 			dest->post_exn_call = &receive_breath_of_life;
 			dest->exn_priv = NULL;
 

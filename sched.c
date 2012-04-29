@@ -1,11 +1,13 @@
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <ccan/list/list.h>
 #include <ccan/htable/htable.h>
 #include <ccan/likely/likely.h>
 
 #include <l4/vregs.h>
 
+#include <ukernel/rbtree.h>
 #include <ukernel/util.h>
 #include <ukernel/ipc.h>
 #include <ukernel/space.h>
@@ -26,6 +28,8 @@
 struct thread *current_thread = NULL;
 struct thread *scheduler_thread = NULL;
 
+static struct rb_root sched_tree = { };
+
 extern struct list_head thread_list, dead_thread_list;
 extern struct htable thread_hash;
 
@@ -35,13 +39,128 @@ struct thread *get_current_thread(void) {
 }
 
 
+/* this establishes a strict ordering between threads in order of
+ *   - state (ready first, then the rest)
+ *   - wakeup time (per millisecond)
+ *   - priority
+ *   - thread number
+ *
+ * therefore collisions can only occur when a thread is being inserted into
+ * the tree twice.
+ */
+static inline int sq_cmp(const struct thread *a, const struct thread *b)
+{
+	bool ra = IS_READY(a->status), rb = IS_READY(b->status);
+	if(ra && !rb) return -1;
+	else if(!ra && rb) return 1;
+	else if(!ra && !rb) {
+		uint64_t wa = a->wakeup_time >> 10, wb = b->wakeup_time >> 10;
+		if(wa < wb) return -1;
+		else if(wb > wa) return 1;
+	}
+
+	if(a->pri > b->pri) return -1;
+	else if(a->pri < b->pri) return 1;
+
+	uint32_t na = TID_THREADNUM(a->id), nb = TID_THREADNUM(b->id);
+	if(na < nb) return -1;
+	else if(na > nb) return 1;
+	else return 0;
+}
+
+
+static inline struct thread *sq_insert_thread_helper(
+	struct rb_root *sq,
+	struct thread *t)
+{
+	struct rb_node **p = &sq->rb_node, *parent = NULL;
+
+	while(*p != NULL) {
+		parent = *p;
+		struct thread *other = rb_entry(parent, struct thread, sched_rb);
+
+		int v = sq_cmp(t, other);
+		if(v < 0) p = &(*p)->rb_left;
+		else if(v > 0) p = &(*p)->rb_right;
+		else return other;
+	}
+
+	rb_link_node(&t->sched_rb, parent, p);
+	return NULL;
+}
+
+
+void sq_insert_thread(struct thread *t)
+{
+	assert(t->status != TS_STOPPED
+		&& t->status != TS_INACTIVE
+		&& t->status != TS_DEAD);
+
+	struct thread *dupe = sq_insert_thread_helper(&sched_tree, t);
+	if(unlikely(dupe != NULL)) {
+		printf("%s: thread %d:%d already in tree\n", __func__,
+			TID_THREADNUM(t->id), TID_VERSION(t->id));
+		return;
+	}
+	rb_insert_color(&t->sched_rb, &sched_tree);
+}
+
+
+void sq_remove_thread(struct thread *t)
+{
+#ifndef NDEBUG
+	bool found = false;
+	RB_FOREACH(node, &sched_tree) {
+		if(node == &t->sched_rb) {
+			found = true;
+			break;
+		}
+	}
+	assert(found);
+#endif
+
+	rb_erase(&t->sched_rb, &sched_tree);
+}
+
+
+/* TODO: rejigger the clock to record ticks as 1024ths of a second to avoid
+ * this base-10 division bullshit.
+ *
+ * returns current time in 1024ths of a second, i.e. a 54:10 fixed-point
+ * format.
+ */
+static uint64_t get_sched_time(void)
+{
+	uint64_t raw = read_global_timer();
+	return (raw * 1024) / 1000;
+}
+
+
 static struct thread *schedule_next_thread(struct thread *current)
 {
-	/* well, that's simple. */
-	struct thread *next = NULL;
-	list_for_each(&thread_list, next, link) {
-		if(next != current && IS_READY(next->status)) return next;
+	uint64_t now = get_sched_time();
+
+	RB_FOREACH(node, &sched_tree) {
+		struct thread *cand = rb_entry(node, struct thread, sched_rb);
+		if(cand == current) continue;
+#if 0
+		TRACE("%s: candidate %d:%d (status %d, wakeup_time %#llx)\n",
+			__func__, TID_THREADNUM(cand->id), TID_VERSION(cand->id),
+			cand->status, cand->wakeup_time);
+#endif
+		if(!IS_READY(cand->status) && (cand->wakeup_time >> 10) <= now) {
+			/* cancel IPCs, set errors, etc */
+			TRACE("%s: would timeout IPC on thread %d:%d\n", __func__,
+				TID_THREADNUM(cand->id), TID_VERSION(cand->id));
+		} else if(IS_READY(cand->status)) {
+			return cand;
+		}
 	}
+
+#if 0
+	static int blargh = 0;
+	if(++blargh == 5) panic("foo!");
+#endif
 
 	return NULL;
 }
@@ -110,6 +229,12 @@ bool schedule(void)
 		}
 	}
 
+	TRACE("%s: returned to %d:%d from going to %d:%d; (current_thread is %d:%d)\n",
+		__func__,
+		TID_THREADNUM(self->id), TID_VERSION(self->id),
+		TID_THREADNUM(next->id), TID_VERSION(next->id),
+		TID_THREADNUM(current_thread->id), TID_VERSION(current_thread->id));
+
 	assert(current_thread == self);
 	assert(self->status == TS_RUNNING);
 
@@ -125,10 +250,10 @@ NORETURN void end_kthread(void)
 
 	assert(self->space == kernel_space);
 	list_del_from(&self->space->threads, &self->space_link);
-	list_del_from(&thread_list, &self->link);
 	htable_del(&thread_hash, int_hash(TID_THREADNUM(self->id)), self);
-	list_add(&dead_thread_list, &self->link);
+	list_add(&dead_thread_list, &self->dead_link);
 	self->status = TS_DEAD;
+	sq_remove_thread(self);
 	schedule();
 
 	/* schedule() won't return to this thread due to it having been moved to
@@ -166,9 +291,7 @@ void return_to_ipc(struct x86_exregs *regs, struct thread *target)
 {
 	ipc_simple(target);
 
-	/* schedule the target next. */
-	list_del_from(&thread_list, &target->link);
-	list_add(&thread_list, &target->link);
+	/* TODO: schedule the target thread next */
 
 	return_to_scheduler(regs);
 }
@@ -182,8 +305,7 @@ void sys_threadswitch(struct x86_exregs *regs)
 	L4_ThreadId_t target = { .raw = regs->eax };
 	struct thread *other = L4_IsNilThread(target) ? NULL : thread_find(target.raw);
 	if(other != NULL && IS_READY(other->status)) {
-		list_del_from(&thread_list, &other->link);
-		list_add(&thread_list, &other->link);
+		/* TODO: cause switch to "other" */
 	}
 
 	current->status = TS_READY;
