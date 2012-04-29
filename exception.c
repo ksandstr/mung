@@ -242,43 +242,42 @@ fail:
 
 static void receive_exn_reply(struct thread *t, void *priv)
 {
-	if(t != NULL) {
-		assert(t->post_exn_call == &receive_exn_reply);
-		void *utcb = thread_get_utcb(t);
-		struct x86_exregs regs;
-		L4_Word_t *exvarptrs[] = {
-			&regs.eip,
-			&regs.eflags,
-			&regs.reason,		/* ExceptionNo */
-			&regs.error,
-			&regs.edi,
-			&regs.esi,
-			&regs.ebp,
-			&regs.esp,
-			&regs.ebx,
-			&regs.edx,
-			&regs.ecx,
-			&regs.eax,
-		};
-		int num_vars = sizeof(exvarptrs) / sizeof(exvarptrs[0]);
-		assert(num_vars == 12);
-		for(int i=0; i < num_vars; i++) {
-			*(exvarptrs[i]) = L4_VREG(utcb, L4_TCR_MR(i + 1));
-		}
-		/* retain privileged EFLAGS bits from thread context. */
-		regs.eflags = (t->ctx.regs[9] & 0xffffff00) | (regs.eflags & 0xff);
-		/* set reserved bits correctly */
-		regs.eflags &= 0xffffffd7;
-		regs.eflags |= 0x00000002;
-		thread_save_exregs(t, &regs);
-	}
+	if(t == NULL) return;
 
-	if(priv != NULL) {
-		/* the wrapped handler */
-		t->post_exn_call = priv;
-		t->exn_priv = NULL;
-		(*t->post_exn_call)(t, NULL);
+	assert(t->post_exn_call == &receive_exn_reply);
+	void *utcb = thread_get_utcb(t);
+	struct x86_exregs regs;
+	L4_Word_t *exvarptrs[] = {
+		&regs.eip,
+		&regs.eflags,
+		&regs.reason,		/* ExceptionNo */
+		&regs.error,
+		&regs.edi,
+		&regs.esi,
+		&regs.ebp,
+		&regs.esp,
+		&regs.ebx,
+		&regs.edx,
+		&regs.ecx,
+		&regs.eax,
+	};
+	int num_vars = sizeof(exvarptrs) / sizeof(exvarptrs[0]);
+	assert(num_vars == 12);
+	for(int i=0; i < num_vars; i++) {
+		*(exvarptrs[i]) = L4_VREG(utcb, L4_TCR_MR(i + 1));
 	}
+	/* retain privileged EFLAGS bits from thread context. */
+	regs.eflags = (t->ctx.regs[9] & 0xffffff00) | (regs.eflags & 0xff);
+	/* set reserved bits correctly */
+	regs.eflags &= 0xffffffd7;
+	regs.eflags |= 0x00000002;
+
+	/* the wrapped handler */
+	t->post_exn_call = priv;
+	t->exn_priv = NULL;
+	(*t->post_exn_call)(t, NULL);
+
+	thread_save_exregs(t, &regs);
 }
 
 
