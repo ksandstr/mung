@@ -7,6 +7,8 @@
 #include <stdint.h>
 #include <string.h>
 
+#include <l4/types.h>
+
 
 #define CHECK_FLAG(mask, bit) ({ \
 		assert(__builtin_popcount((bit)) == 1); \
@@ -42,6 +44,14 @@
 		_A < _E; \
 		(_addr) = (_A += (1 << _S)), \
 			(_sizelog2) = _S = MIN(int, ffsl(_A) - 1, MSB(_E - _A)))
+
+
+static inline uint64_t time_in_us(L4_Time_t t)
+{
+	/* only defined for periods. c'mon. that's what "in" means. */
+	assert(t.period.a == 0);
+	return ((uint64_t)1 << t.period.e) * t.period.m;
+}
 
 
 /* from hash.c */
