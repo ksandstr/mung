@@ -24,6 +24,8 @@ extern uint8_t syscall_stack[];
 extern uint64_t *global_timer_count;
 
 extern void NORETURN panic(const char *message);
+
+/* returns kernel time in milliseconds. */
 extern uint64_t read_global_timer(void);
 
 #endif
