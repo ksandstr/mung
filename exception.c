@@ -62,7 +62,7 @@ void isr_exn_ud_bottom(struct x86_exregs *regs)
 	} else {
 		printf("#UD at eip 0x%x, esp 0x%x\n", regs->eip, regs->esp);
 		/* TODO: pop an "invalid opcode" exception. */
-		current->status = TS_STOPPED;
+		thread_stop(current);
 		return_to_scheduler(regs);
 	}
 }
@@ -87,7 +87,7 @@ void isr_exn_basic_sc_bottom(struct x86_exregs *regs)
 	if(unlikely(sc_num >= num_sc) || unlikely(fn[sc_num] == NULL)) {
 		struct thread *current = get_current_thread();
 		printf("unknown basic syscall %d (caller stopped)\n", regs->eax);
-		current->status = TS_STOPPED;
+		thread_stop(current);
 		return_to_scheduler(regs);
 	} else {
 		(*fn[sc_num])(regs);
@@ -148,7 +148,7 @@ static void handle_kdb_enter(struct thread *current, struct x86_exregs *regs)
 	printf("#KDB (eip %#x): [%#x] %s\n", regs->eip, strptr, buf);
 
 msgfail:
-	current->status = TS_STOPPED;
+	thread_stop(current);
 	return_to_scheduler(regs);
 }
 
@@ -235,7 +235,7 @@ static void handle_io_fault(struct thread *current, struct x86_exregs *regs)
 	return;
 
 fail:
-	current->status = TS_STOPPED;
+	thread_stop(current);
 	return_to_scheduler(regs);
 }
 
@@ -372,7 +372,7 @@ void isr_exn_pf_bottom(struct x86_exregs *regs)
 		printf("WARNING: faulted many times on the same address %#x\n",
 			fault_addr);
 		thread_save_exregs(current, regs);
-		current->status = TS_STOPPED;
+		thread_stop(current);
 		return_to_scheduler(regs);
 	} else if(last_fault != fault_addr) {
 		last_fault = fault_addr;
@@ -399,7 +399,7 @@ void isr_exn_pf_bottom(struct x86_exregs *regs)
 		if(unlikely(pager == NULL)) {
 			printf("thread %d:%d has no pager, stopping it\n",
 				TID_THREADNUM(current->id), TID_VERSION(current->id));
-			current->status = TS_STOPPED;
+			thread_stop(current);
 			return_to_scheduler(regs);
 		} else {
 			save_ipc_regs(current, 3, 1);

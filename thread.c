@@ -30,12 +30,12 @@
 #endif
 
 
-/* also referenced by sched.c . thread_list, dead_thread_list should be moved
- * into a per-cpu scheduler state structure anyway; the latter is only used by
- * terminated kthreads.
- */
 struct htable thread_hash = HTABLE_INITIALIZER(thread_hash,
 	hash_thread_by_id, NULL);
+
+/* NOTE: is dead_thread_list referenced by any other module? it's only for
+ * dead kthreads after all.
+ */
 struct list_head dead_thread_list = LIST_HEAD_INIT(dead_thread_list);
 
 static struct kmem_cache *thread_slab = NULL;
@@ -52,14 +52,15 @@ COLD struct thread *init_threading(thread_id boot_tid)
 	boot->stack_page = NULL;
 	boot->id = boot_tid;
 	boot->status = TS_RUNNING;
+	boot->flags = 0;
 	boot->pri = 0xff;
 	boot->sens_pri = 0xff;
 	boot->max_delay = 0;
-	boot->ts_len = L4_Never;
+	boot->ts_len = L4_TimePeriod(10000);
 	boot->quantum = ~0ul;
 	boot->total_quantum = ~(uint64_t)0;
-	sq_insert_thread(boot);
 	htable_add(&thread_hash, int_hash(TID_THREADNUM(boot->id)), boot);
+	sq_insert_thread(boot);
 
 	current_thread = boot;
 	scheduler_thread = boot;
@@ -70,7 +71,12 @@ COLD struct thread *init_threading(thread_id boot_tid)
 
 void yield(struct thread *t)
 {
-	get_current_thread()->status = TS_READY;
+	struct thread *current = get_current_thread();
+	current->status = TS_READY;
+	assert(current->wakeup_time < read_global_timer());
+
+	/* TODO: switch to "t" */
+
 	schedule();
 }
 
@@ -160,7 +166,7 @@ struct thread *thread_new(thread_id tid)
 		.max_delay = 0,
 		.ts_len = L4_TimePeriod(10000),		/* 10 ms */
 		.quantum = 10000,		/* TODO: time2µs(.ts_len) */
-		.total_quantum = ~(uint64_t)0,
+		.total_quantum = 0,
 	};
 
 	htable_add(&thread_hash, int_hash(TID_THREADNUM(t->id)), t);
@@ -278,18 +284,54 @@ void thread_set_utcb(struct thread *t, L4_Word_t start)
 
 void thread_start(struct thread *t)
 {
-	assert(!t->halted);
-	if(!IS_READY(t->status)) {
-		t->status = TS_READY;
-		sq_insert_thread(t);
-	}
+	assert(t->status == TS_STOPPED);
+
+	t->status = TS_READY;
+	t->wakeup_time = 0;
+	sq_insert_thread(t);
 }
 
 
 void thread_stop(struct thread *t)
 {
-	t->status = TS_STOPPED;
+	assert(t->status != TS_STOPPED);
+
 	sq_remove_thread(t);
+	t->status = TS_STOPPED;
+
+	if(t == get_current_thread()) {
+		if(IS_KERNEL_THREAD(t)) schedule();
+		/* otherwise, rely on the caller to invoke the scheduler */
+	}
+}
+
+
+uint64_t wakeup_at(L4_Time_t period)
+{
+	if(period.raw == L4_ZeroTime.raw) return 0;
+	else if(period.raw == L4_Never.raw) return ~(uint64_t)0;
+	else return read_global_timer() * 1000 + time_in_us(period);
+}
+
+
+void thread_sleep(struct thread *t, L4_Time_t period)
+{
+	assert(t->status == TS_SEND_WAIT || t->status == TS_RECV_WAIT);
+
+	t->wakeup_time = wakeup_at(period);
+	if(period.raw == L4_ZeroTime.raw) {
+		/* extreme napping */
+		t->status = TS_READY;
+	}
+	sq_update_thread(t);
+}
+
+
+void thread_wake(struct thread *t)
+{
+	t->status = TS_READY;
+	t->wakeup_time = 0;
+	sq_update_thread(t);
 }
 
 
@@ -351,7 +393,7 @@ static void receive_breath_of_life(struct thread *t, void *priv)
 		sp = L4_VREG(utcb, L4_TCR_MR(2));
 	TRACE("%s: setting sp %#x, ip %#x\n", __func__, sp, ip);
 	thread_set_spip(t, sp, ip);
-	thread_start(t);
+	/* the exception IPC mechanism starts the thread. */
 }
 
 
@@ -381,7 +423,7 @@ L4_Word_t sys_exregs(
 	struct thread *current = get_current_thread(), *dest_thread = NULL;
 
 #if 1
-	printf("%s: called from %d:%d on %d:%d (status %d); control %#x (", __func__,
+	printf("%s: called from %d:%d on %d:%d (state %d); control %#x (", __func__,
 		TID_THREADNUM(current->id), TID_VERSION(current->id),
 		TID_THREADNUM(dest.raw), TID_VERSION(dest.raw), current->status,
 		*control_p);
@@ -434,10 +476,10 @@ L4_Word_t sys_exregs(
 		/* abort receive. */
 		/* TODO: check for the "currently receiving" state */
 		/* ... and move this into ipc.c, & also the one for the send side */
-		if(dest_thread->status == TS_R_RECV
-			|| dest_thread->status == TS_RECV_WAIT)
-		{
-			dest_thread->status = dest_thread->halted ? TS_STOPPED : TS_READY;
+		int state = dest_thread->status;
+		if(state == TS_R_RECV || state == TS_RECV_WAIT) {
+			bool halted = CHECK_FLAG(dest_thread->flags, TF_HALT);
+			dest_thread->status = halted ? TS_STOPPED : TS_READY;
 			dest_thread->ipc_from = L4_nilthread;
 			/* "canceled in receive phase" */
 			assert(dest_utcb != NULL);
@@ -461,7 +503,9 @@ L4_Word_t sys_exregs(
 		/* abort send. */
 		/* TODO: check for the "currently sending" state */
 		if(dest_thread->status == TS_SEND_WAIT) {
-			dest_thread->status = dest_thread->halted ? TS_STOPPED : TS_READY;
+			bool halted = CHECK_FLAG(dest_thread->flags, TF_HALT);
+			dest_thread->status = halted ? TS_STOPPED : TS_READY;
+
 			dest_thread->ipc_from = L4_nilthread;
 			/* "canceled in send phase" */
 			assert(dest_utcb != NULL);
@@ -474,19 +518,16 @@ L4_Word_t sys_exregs(
 	}
 
 	if(CHECK_FLAG(ctl_in, CTL_h)) {
+		int state = dest_thread->status;
 		if(!CHECK_FLAG(ctl_in, CTL_H)) {
-			dest_thread->halted = false;
-			if(dest_thread->status == TS_STOPPED
-				|| dest_thread->status == TS_INACTIVE)
-			{
+			dest_thread->flags &= ~TF_HALT;
+			if(state == TS_STOPPED) {
 				TRACE("%s: starting halted thread\n", __func__);
 				thread_start(dest_thread);
 			}
 		} else {
-			dest_thread->halted = true;
-			if(dest_thread->status == TS_READY
-				|| dest_thread->status == TS_RUNNING)
-			{
+			dest_thread->flags |= TF_HALT;
+			if(IS_READY(dest_thread->status) || state == TS_RUNNING) {
 				thread_stop(dest_thread);
 				TRACE("%s: stopped running thread\n", __func__);
 			}
@@ -588,7 +629,6 @@ void sys_threadcontrol(struct x86_exregs *regs)
 			ec = 8;		/* "out of memory" */
 			goto end;
 		}
-		dest->status = TS_INACTIVE;
 		struct space *sp = space_find(spacespec.raw);
 		if(sp == NULL) sp = space_new();
 		space_add_thread(sp, dest);
@@ -631,12 +671,12 @@ void sys_threadcontrol(struct x86_exregs *regs)
 	if(!L4_IsNilThread(pager)) {
 		void *dest_utcb = thread_get_utcb(dest);
 		L4_VREG(dest_utcb, L4_TCR_PAGER) = pager.raw;
-		if(dest->status == TS_INACTIVE && !L4_IsNilThread(pager)) {
+		if(dest->status == TS_STOPPED && !L4_IsNilThread(pager)) {
 			dest->ipc_from = pager;
 			dest->ipc_to = L4_nilthread;
 			dest->recv_timeout = L4_Never;
 			dest->status = TS_R_RECV;
-			dest->halted = false;
+			dest->wakeup_time = 0;
 			sq_insert_thread(dest);
 			dest->post_exn_call = &receive_breath_of_life;
 			dest->exn_priv = NULL;

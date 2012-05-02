@@ -341,7 +341,7 @@ bool ipc_send_half(struct thread *self)
 					set_ipc_error(thread_get_utcb(dest), error | 1);
 					set_ipc_return_thread(dest);
 				}
-				dest->status = TS_READY;
+				thread_wake(dest);
 			}
 			set_ipc_error(thread_get_utcb(self), error & ~1ul);
 			assert(self->status == TS_RUNNING);
@@ -354,7 +354,7 @@ bool ipc_send_half(struct thread *self)
 			/* ordinary IPC; set up the IPC return registers. */
 			set_ipc_return_thread(dest);
 		}
-		dest->status = TS_READY;
+		thread_wake(dest);
 
 		if(L4_IsNilThread(self->ipc_from)) {
 			assert(self->status == TS_RUNNING);
@@ -371,6 +371,7 @@ bool ipc_send_half(struct thread *self)
 				return true;
 			} else {
 				assert(self->status == TS_RECV_WAIT);
+				thread_sleep(self, self->recv_timeout);
 				return false;
 			}
 		}
@@ -386,8 +387,7 @@ bool ipc_send_half(struct thread *self)
 		htable_add(&sendwait_hash, int_hash(w->dest_tid.raw), w);
 
 		self->status = TS_SEND_WAIT;
-		self->wakeup_time = ~(uint64_t)0;
-		sq_update_thread(self);
+		thread_sleep(self, self->send_timeout);
 
 		return false;
 	}
@@ -445,8 +445,7 @@ bool ipc_recv_half(struct thread *self)
 			TID_THREADNUM(self->id), TID_VERSION(self->id),
 			TID_THREADNUM(self->ipc_from.raw), TID_VERSION(self->ipc_from.raw));
 		self->status = TS_RECV_WAIT;
-		self->wakeup_time = ~(uint64_t)0;
-		sq_update_thread(self);
+		thread_sleep(self, self->recv_timeout);
 		return false;
 	} else {
 		/* active receive */
@@ -480,10 +479,18 @@ bool ipc_recv_half(struct thread *self)
 		if(unlikely(IS_KERNEL_THREAD(from))) {
 			/* kernel threads do the send/receive phases as control flow. */
 			from->status = TS_READY;
+			from->wakeup_time = 0;
 		} else {
 			/* userspace threads operate via a state machine. */
-			from->status = L4_IsNilThread(from->ipc_from) ? TS_READY : TS_R_RECV;
+			if(L4_IsNilThread(from->ipc_from)) {
+				from->status = TS_READY;	/* no receive phase. */
+				from->wakeup_time = 0;
+			} else {
+				from->status = TS_R_RECV;
+				from->wakeup_time = wakeup_at(from->recv_timeout);
+			}
 		}
+		sq_update_thread(from);
 		post_exn_ok(self);
 
 		return true;
@@ -509,6 +516,7 @@ L4_MsgTag_t kipc(
 	if(likely(!L4_IsNilThread(to)) && !ipc_send_half(current)) {
 		if(current->status == TS_SEND_WAIT) {
 			/* passive send. */
+			thread_sleep(current, current->send_timeout);
 			schedule();
 		}
 		tag.raw = L4_VREG(utcb, L4_TCR_MR(0));
@@ -525,6 +533,7 @@ L4_MsgTag_t kipc(
 				 *
 				 * TODO: implement switching right into the other thread.
 				 */
+				thread_sleep(current, current->recv_timeout);
 				schedule();
 			}
 		}
@@ -551,6 +560,8 @@ static void ipc(struct thread *current, void *utcb)
 				 */
 				set_ipc_error(utcb, (1 << 1) | 0);
 				current->status = TS_RUNNING;
+			} else {
+				thread_sleep(current, current->send_timeout);
 			}
 		} else {
 			/* there was an error. flow my tears. */
@@ -565,10 +576,13 @@ static void ipc(struct thread *current, void *utcb)
 		if(current->recv_timeout.raw == L4_ZeroTime.raw) {
 			set_ipc_error(utcb, (1 << 1) | 1);
 			current->status = TS_RUNNING;
+		} else {
+			thread_sleep(current, current->recv_timeout);
 		}
 	}
 
 	if(current->status == TS_READY) current->status = TS_RUNNING;
+	sq_update_thread(current);
 }
 
 

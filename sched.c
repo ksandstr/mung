@@ -40,24 +40,18 @@ struct thread *get_current_thread(void) {
 
 
 /* this establishes a strict ordering between threads in order of
- *   - state (ready first, then the rest)
- *   - wakeup time (per millisecond)
+ *   - wakeup time (per microsecond)
  *   - priority
- *   - thread number
+ *   - thread number (unique)
  *
  * therefore collisions can only occur when a thread is being inserted into
  * the tree twice.
  */
 static inline int sq_cmp(const struct thread *a, const struct thread *b)
 {
-	bool ra = IS_READY(a->status), rb = IS_READY(b->status);
-	if(ra && !rb) return -1;
-	else if(!ra && rb) return 1;
-	else if(!ra && !rb) {
-		uint64_t wa = a->wakeup_time >> 10, wb = b->wakeup_time >> 10;
-		if(wa < wb) return -1;
-		else if(wb > wa) return 1;
-	}
+	uint64_t wa = a->wakeup_time, wb = b->wakeup_time;
+	if(wa < wb) return -1;
+	else if(wb > wa) return 1;
 
 	if(a->pri > b->pri) return -1;
 	else if(a->pri < b->pri) return 1;
@@ -92,9 +86,7 @@ static inline struct thread *sq_insert_thread_helper(
 
 void sq_insert_thread(struct thread *t)
 {
-	assert(t->status != TS_STOPPED
-		&& t->status != TS_INACTIVE
-		&& t->status != TS_DEAD);
+	assert(t->status != TS_STOPPED && t->status != TS_DEAD);
 
 	struct thread *dupe = sq_insert_thread_helper(&sched_tree, t);
 	if(unlikely(dupe != NULL)) {
@@ -200,6 +192,7 @@ bool schedule(void)
 	assert(next->space != NULL);
 
 	next->status = TS_RUNNING;
+	sq_update_thread(next);
 	current_thread = next;
 	if(self->space != next->space) {
 		if(self->space->tss != next->space->tss) {
@@ -256,11 +249,7 @@ NORETURN void end_kthread(void)
 	sq_remove_thread(self);
 	schedule();
 
-	/* schedule() won't return to this thread due to it having been moved to
-	 * dead_thread_list.
-	 */
-
-	panic("swap_context() in end_kthread() returned???");
+	panic("schedule() in end_kthread() returned???");
 }
 
 
@@ -280,6 +269,7 @@ void return_to_scheduler(struct x86_exregs *regs)
 	assert(self->status != TS_RUNNING);
 	assert(next->status != TS_RUNNING);
 	next->status = TS_RUNNING;
+	sq_update_thread(next);
 	current_thread = next;
 
 	assert((next->ctx.regs[9] & (1 << 14)) == 0);
@@ -336,7 +326,7 @@ void sys_schedule(struct x86_exregs *regs)
 		result = 3;		/* "running", as IPC not by usermode */
 	} else {
 		switch(dest->status) {
-			case TS_STOPPED: case TS_INACTIVE:
+			case TS_STOPPED:
 				result = 2;		/* "inactive" */
 				break;
 			case TS_RUNNING: case TS_READY:

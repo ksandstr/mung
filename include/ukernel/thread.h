@@ -22,11 +22,26 @@ typedef uint32_t thread_id;
 #define TID_THREADNUM(tid) ((tid) >> TID_VERSION_BITS)
 #define TID_VERSION(tid) ((tid) & TID_VERSION_MASK)
 
+/* values of <struct thread>.flags */
+#define TF_HALT 0x1		/* after IPC completion, go to TS_STOPPED */
+
+/* thread states (<struct thread>.status) */
+#define TS_STOPPED 0
+#define TS_DEAD 1		/* (kthread only) thread waits for pruning */
+#define TS_RUNNING 2
+#define TS_READY 3		/* ready to execute */
+#define TS_R_RECV 4		/* (user only) ready to do IPC receive phase */
+#define TS_SEND_WAIT 5
+#define TS_RECV_WAIT 6
+
+
+#define IS_READY(st) (st == TS_READY || st == TS_R_RECV)
+#define IS_IPC_WAIT(st) (st == TS_SEND_WAIT || st == TS_RECV_WAIT)
+#define IS_IPC(st) (IS_IPC_WAIT(st) || st == TS_R_RECV)
+#define IS_SCHED(thread) ((thread)->status >= TS_RUNNING)
+
 /* (requires inclusion of <ukernel/space.h>) */
 #define IS_KERNEL_THREAD(thread) ((thread)->space == kernel_space)
-#define IS_READY(st) ((st) == TS_READY || (st) == TS_R_RECV)
-#define IS_IPC(st) ((st) == TS_SEND_WAIT || (st) == TS_RECV_WAIT \
-	|| (st) == TS_R_RECV)
 
 /* let's leave this at 128. interrupts also get UTCBs as interrupt IPCs are
  * done that way.
@@ -47,36 +62,20 @@ struct x86_context
 } __attribute__((packed));
 
 
-enum thread_state {
-	TS_STOPPED,
-	TS_RUNNING,
-	TS_DEAD,
-	TS_SEND_WAIT,
-	TS_RECV_WAIT,
-
-	/* ready threads. */
-	TS_READY,		/* ready to execute in user or kernel */
-	TS_R_RECV,		/* ready to do IPC receive side in kernel */
-
-	/* inactive ("pre-active") threads */
-	TS_INACTIVE,
-};
-
-
 struct thread
 {
-	/* sched_rb is in a scheduling queue whenever .status is not TS_STOPPED,
-	 * TS_DEAD, or TS_INACTIVE.
+	/* sched_rb is in a scheduling queue whenever the thread is not TS_STOPPED
+	 * or TS_DEAD. this can be tested with IS_SCHED().
 	 */
 	struct rb_node sched_rb;
 	uint64_t wakeup_time;		/* absolute seconds, 44:20 fixed point */
 
 	thread_id id;
-	enum thread_state status;
-	/* TODO: alter ipc.c to go to TS_STOPPED after IPC completion when halted
+	/* TODO: alter ipc.c to go to TS_STOPPED after IPC completion when TF_HALT
 	 * is set
 	 */
-	bool halted;
+	uint8_t flags;
+	uint8_t status;
 
 	uint8_t pri, sens_pri;
 	uint16_t max_delay;
@@ -172,6 +171,11 @@ extern void thread_set_spip(struct thread *t, L4_Word_t sp, L4_Word_t ip);
 extern void thread_set_utcb(struct thread *t, L4_Word_t start);
 extern void thread_start(struct thread *t);
 extern void thread_stop(struct thread *t);
+extern void thread_sleep(struct thread *t, L4_Time_t period);
+extern void thread_wake(struct thread *t);
+
+/* returns clock value that fits thread->wakeup_time */
+extern uint64_t wakeup_at(L4_Time_t period);
 
 extern void save_ipc_regs(struct thread *t, int mrs, int brs);
 
