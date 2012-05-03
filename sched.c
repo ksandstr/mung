@@ -172,6 +172,19 @@ static struct thread *schedule_next_thread(struct thread *current)
 			} else {
 				continue;
 			}
+		} else if(cand->status == TS_R_RECV
+			&& cand->recv_timeout.raw != L4_ZeroTime.raw
+			&& cand->wakeup_time < now)
+		{
+			/* apply timeout to a "ready to active receive" thread. the
+			 * justification is that the timeout should occur before the
+			 * active receive does even if the timeout is caused by scheduling
+			 * delay.
+			 */
+			/* FIXME: move this into a timeout_ipc() function */
+			if(CHECK_FLAG(cand->flags, TF_HALT)) thread_stop(cand);
+			else thread_wake(cand);
+			set_ipc_error_thread(cand, (1 << 1) | 0);
 		}
 
 		if(pick == NULL || pick->pri < cand->pri) pick = cand;
