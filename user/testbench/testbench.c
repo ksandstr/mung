@@ -169,14 +169,29 @@ static void schedule_test(void)
 }
 
 
+void sleep_test(void)
+{
+	L4_Time_t t = L4_TimePeriod(500000);
+	printf("half a second is e %#x, m %#x\n", t.period.e, t.period.m);
+
+	printf("testbench sleeping for 0.5s...\n");
+	L4_Word64_t sleep_start = L4_SystemClock().raw;
+	L4_Sleep(L4_TimePeriod(500000));
+	L4_Word64_t wake = L4_SystemClock().raw;
+	printf("testbench woke up at %llu; slept for %llu ticks\n", wake,
+		wake - sleep_start);
+}
+
+
 int main(void)
 {
 	printf("hello, world!\n");
 
 	tid_test();
-	unmap_test();
 	threadctl_test();
 	threadswitch_test();
+	sleep_test();
+	unmap_test();
 	schedule_test();
 	spacectl_test();
 
