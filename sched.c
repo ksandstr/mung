@@ -158,20 +158,13 @@ static struct thread *schedule_next_thread(struct thread *current)
 		assert(cand->status != TS_STOPPED);
 
 		if(cand->status == TS_SEND_WAIT || cand->status == TS_RECV_WAIT) {
-/* FIXME: this should be enabled. but something doesn't set wakeup_time
- * correctly, so it breaks.
- */
-//			if(cand->wakeup_time > now) break;
+			if(cand->wakeup_time > now) break;
 
-			if(cand->wakeup_time <= now) {
-				/* timed out. */
-				const bool send = cand->status == TS_SEND_WAIT;
-				if(CHECK_FLAG(cand->flags, TF_HALT)) thread_stop(cand);
-				else thread_wake(cand);
-				set_ipc_error_thread(cand, (1 << 1) | (send ? 0 : 1));
-			} else {
-				continue;
-			}
+			/* timed out. */
+			const bool send = cand->status == TS_SEND_WAIT;
+			if(CHECK_FLAG(cand->flags, TF_HALT)) thread_stop(cand);
+			else thread_wake(cand);
+			set_ipc_error_thread(cand, (1 << 1) | (send ? 0 : 1));
 		} else if(cand->status == TS_R_RECV
 			&& cand->recv_timeout.raw != L4_ZeroTime.raw
 			&& cand->wakeup_time < now)
