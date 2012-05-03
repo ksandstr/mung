@@ -199,6 +199,8 @@ static inline void sq_update_thread(struct thread *t) {
 	sq_insert_thread(t);
 }
 
+extern const char *sched_status_str(struct thread *t);
+
 extern void sys_schedule(struct x86_exregs *regs);
 extern void sys_threadswitch(struct x86_exregs *regs);
 

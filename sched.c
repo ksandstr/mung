@@ -39,6 +39,11 @@ struct thread *get_current_thread(void) {
 }
 
 
+static inline uint64_t runnable_at(const struct thread *t) {
+	if(t->status == TS_R_RECV) return 0; else return t->wakeup_time;
+}
+
+
 /* this establishes a strict ordering between threads in order of
  *   - wakeup time (per microsecond)
  *   - priority
@@ -49,7 +54,7 @@ struct thread *get_current_thread(void) {
  */
 static inline int sq_cmp(const struct thread *a, const struct thread *b)
 {
-	uint64_t wa = a->wakeup_time, wb = b->wakeup_time;
+	uint64_t wa = runnable_at(a), wb = runnable_at(b);
 	if(wa < wb) return -1;
 	else if(wb > wa) return 1;
 
@@ -84,6 +89,23 @@ static inline struct thread *sq_insert_thread_helper(
 }
 
 
+const char *sched_status_str(struct thread *t)
+{
+	int status = t->status;
+	static const char *table[] = {
+		[TS_STOPPED] = "stopped",
+		[TS_DEAD] = "dead",
+		[TS_RUNNING] = "running",
+		[TS_READY] = "ready",
+		[TS_R_RECV] = "r_recv",
+		[TS_SEND_WAIT] = "send_wait",
+		[TS_RECV_WAIT] = "recv_wait",
+	};
+	assert(status >= 0 && status < (sizeof(table) / sizeof(table[0])));
+	return table[status];
+}
+
+
 void sq_insert_thread(struct thread *t)
 {
 	assert(t->status != TS_STOPPED && t->status != TS_DEAD);
@@ -95,6 +117,10 @@ void sq_insert_thread(struct thread *t)
 		return;
 	}
 	rb_insert_color(&t->sched_rb, &sched_tree);
+
+	TRACE("%s: inserted %d:%d (status %s, wakeup %#llx, pri %d)\n", __func__,
+		TID_THREADNUM(t->id), TID_VERSION(t->id), sched_status_str(t),
+		t->wakeup_time, (int)t->pri);
 }
 
 
@@ -115,46 +141,53 @@ void sq_remove_thread(struct thread *t)
 }
 
 
-/* TODO: rejigger the clock to record ticks as 1024ths of a second to avoid
- * this base-10 division bullshit.
- *
- * returns current time in 1024ths of a second, i.e. a 54:10 fixed-point
- * format.
- */
-static uint64_t get_sched_time(void)
-{
-	uint64_t raw = read_global_timer();
-	return (raw * 1024) / 1000;
-}
-
-
 static struct thread *schedule_next_thread(struct thread *current)
 {
-	uint64_t now = get_sched_time();
+	uint64_t now = read_global_timer() * 1000;
 
+	struct thread *pick = NULL;
+	TRACE("%s: called at %#llx\n", __func__, now);
 	RB_FOREACH(node, &sched_tree) {
 		struct thread *cand = rb_entry(node, struct thread, sched_rb);
 		if(cand == current) continue;
-#if 0
-		TRACE("%s: candidate %d:%d (status %d, wakeup_time %#llx)\n",
+		TRACE("%s: candidate %d:%d (status %s, wakeup_time %#llx, pri %d)\n",
 			__func__, TID_THREADNUM(cand->id), TID_VERSION(cand->id),
-			cand->status, cand->wakeup_time);
-#endif
-		if(!IS_READY(cand->status) && (cand->wakeup_time >> 10) <= now) {
-			/* cancel IPCs, set errors, etc */
-			TRACE("%s: would timeout IPC on thread %d:%d\n", __func__,
-				TID_THREADNUM(cand->id), TID_VERSION(cand->id));
-		} else if(IS_READY(cand->status)) {
-			return cand;
+			sched_status_str(cand), cand->wakeup_time, (int)cand->pri);
+
+		assert(cand->status != TS_DEAD);
+		assert(cand->status != TS_STOPPED);
+
+		if(cand->status == TS_SEND_WAIT || cand->status == TS_RECV_WAIT) {
+/* FIXME: this should be enabled. but something doesn't set wakeup_time
+ * correctly, so it breaks.
+ */
+//			if(cand->wakeup_time > now) break;
+
+			if(cand->wakeup_time <= now) {
+				/* timed out. */
+				const bool send = cand->status == TS_SEND_WAIT;
+				if(CHECK_FLAG(cand->flags, TF_HALT)) thread_stop(cand);
+				else thread_wake(cand);
+				set_ipc_error_thread(cand, (1 << 1) | (send ? 0 : 1));
+			} else {
+				continue;
+			}
 		}
+
+		if(pick == NULL || pick->pri < cand->pri) pick = cand;
 	}
 
-#if 0
-	static int blargh = 0;
-	if(++blargh == 5) panic("foo!");
+#if TRACE_VERBOSE && 0
+	if(pick == NULL) {
+		static int blargh = 0;
+		if(++blargh == 5) panic("foo!");
+	} else {
+		TRACE("%s: picked %d:%d\n",
+			__func__, TID_THREADNUM(pick->id), TID_VERSION(pick->id));
+	}
 #endif
 
-	return NULL;
+	return pick;
 }
 
 
