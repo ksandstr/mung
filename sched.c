@@ -146,9 +146,15 @@ static struct thread *schedule_next_thread(struct thread *current)
 	uint64_t now = read_global_timer() * 1000;
 
 	struct thread *pick = NULL;
-	TRACE("%s: called at %#llx\n", __func__, now);
-	RB_FOREACH(node, &sched_tree) {
-		struct thread *cand = rb_entry(node, struct thread, sched_rb);
+	TRACE("%s: called in %d:%d at %#llx\n", __func__,
+		TID_THREADNUM(current->id), TID_VERSION(current->id), now);
+	for(struct rb_node *cur = rb_first(&sched_tree), *next;
+		cur != NULL;
+		cur = next)
+	{
+		next = rb_next(cur);
+
+		struct thread *cand = rb_entry(cur, struct thread, sched_rb);
 		if(cand == current) continue;
 		TRACE("%s: candidate %d:%d (status %s, wakeup_time %#llx, pri %d)\n",
 			__func__, TID_THREADNUM(cand->id), TID_VERSION(cand->id),
