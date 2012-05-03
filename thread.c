@@ -318,6 +318,10 @@ void thread_sleep(struct thread *t, L4_Time_t period)
 {
 	assert(t->status == TS_SEND_WAIT || t->status == TS_RECV_WAIT);
 
+	if(period.raw != L4_ZeroTime.raw && period.raw != L4_Never.raw) {
+		TRACE("%s: sleeping thread %d:%d for %u microseconds\n", __func__,
+			TID_THREADNUM(t->id), TID_VERSION(t->id), time_in_us(period));
+	}
 	t->wakeup_time = wakeup_at(period);
 	if(period.raw == L4_ZeroTime.raw) {
 		/* extreme napping */
@@ -675,8 +679,8 @@ void sys_threadcontrol(struct x86_exregs *regs)
 			dest->ipc_from = pager;
 			dest->ipc_to = L4_nilthread;
 			dest->recv_timeout = L4_Never;
+			dest->wakeup_time = ~(uint64_t)0;
 			dest->status = TS_R_RECV;
-			dest->wakeup_time = 0;
 			sq_insert_thread(dest);
 			dest->post_exn_call = &receive_breath_of_life;
 			dest->exn_priv = NULL;
