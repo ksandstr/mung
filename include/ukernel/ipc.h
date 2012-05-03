@@ -37,5 +37,8 @@ extern void sys_ipc(struct x86_exregs *regs);
 extern bool ipc_recv_half(struct thread *receiver);
 extern bool ipc_send_half(struct thread *sender);
 
+/* used by the scheduler */
+extern void set_ipc_error_thread(struct thread *t, L4_Word_t ec);
+
 
 #endif

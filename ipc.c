@@ -300,11 +300,16 @@ static void set_ipc_return_thread(struct thread *t)
 }
 
 
+void set_ipc_error_thread(struct thread *t, L4_Word_t ec)
+{
+	set_ipc_error(thread_get_utcb(t), ec);
+	set_ipc_return_thread(t);
+}
+
+
 /* returns true when the send phase has completed succesfully. false
  * otherwise; if the send phase doesn't immediately succeed, status changes to
  * TS_SEND_WAIT if the thread should sleep, and sets ErrorCode on error.
- *
- * NOTE: this function doesn't account for timeouts.
  */
 bool ipc_send_half(struct thread *self)
 {
@@ -370,8 +375,8 @@ bool ipc_send_half(struct thread *self)
 					|| self->status == TS_READY);
 				return true;
 			} else {
-				assert(self->status == TS_RECV_WAIT);
-				thread_sleep(self, self->recv_timeout);
+				assert(self->status == TS_RECV_WAIT
+					|| self->status == TS_READY);
 				return false;
 			}
 		}
@@ -388,6 +393,10 @@ bool ipc_send_half(struct thread *self)
 
 		self->status = TS_SEND_WAIT;
 		thread_sleep(self, self->send_timeout);
+		if(self->status == TS_READY) {
+			/* instant timeout. */
+			set_ipc_error_thread(self, (1 << 1) | 0);
+		}
 
 		return false;
 	}
@@ -446,6 +455,10 @@ bool ipc_recv_half(struct thread *self)
 			TID_THREADNUM(self->ipc_from.raw), TID_VERSION(self->ipc_from.raw));
 		self->status = TS_RECV_WAIT;
 		thread_sleep(self, self->recv_timeout);
+		if(self->status == TS_READY) {
+			/* instant timeout. */
+			set_ipc_error_thread(self, (1 << 1) | 1);
+		}
 		return false;
 	} else {
 		/* active receive */
@@ -467,7 +480,7 @@ bool ipc_recv_half(struct thread *self)
 					set_ipc_error(thread_get_utcb(from), error & ~1ul);
 					set_ipc_return_thread(from);
 				}
-				from->status = TS_READY;
+				thread_wake(from);
 			}
 			set_ipc_error(thread_get_utcb(self), error | 1);
 			assert(self->status == TS_RUNNING);
@@ -478,19 +491,21 @@ bool ipc_recv_half(struct thread *self)
 		self->ipc_from.raw = from->id;
 		if(unlikely(IS_KERNEL_THREAD(from))) {
 			/* kernel threads do the send/receive phases as control flow. */
-			from->status = TS_READY;
-			from->wakeup_time = 0;
+			thread_wake(from);
 		} else {
 			/* userspace threads operate via a state machine. */
 			if(L4_IsNilThread(from->ipc_from)) {
-				from->status = TS_READY;	/* no receive phase. */
-				from->wakeup_time = 0;
+				/* no receive phase. */
+				thread_wake(from);
 			} else {
+				/* (the only special thread state transition in this
+				 * module.)
+				 */
 				from->status = TS_R_RECV;
 				from->wakeup_time = wakeup_at(from->recv_timeout);
+				sq_update_thread(from);
 			}
 		}
-		sq_update_thread(from);
 		post_exn_ok(self);
 
 		return true;
@@ -549,40 +564,15 @@ static void ipc(struct thread *current, void *utcb)
 {
 	assert(utcb == thread_get_utcb(current));
 
-	if(likely(!L4_IsNilThread(current->ipc_to))
-		&& !ipc_send_half(current))
-	{
-		if(current->status == TS_SEND_WAIT) {
-			/* there was a send-half, and it didn't complete yet. */
-			if(current->send_timeout.raw == L4_ZeroTime.raw) {
-				/* send-phase timeout.
-				 * TODO: grab the good defs from µiX, use them here.
-				 */
-				set_ipc_error(utcb, (1 << 1) | 0);
-				current->status = TS_RUNNING;
-			} else {
-				thread_sleep(current, current->send_timeout);
-			}
-		} else {
-			/* there was an error. flow my tears. */
-		}
-	} else if(likely(!L4_IsNilThread(current->ipc_from))
-		&& !ipc_recv_half(current)
-		&& current->status == TS_RECV_WAIT)
-	{
-		/* there was no send-half, or it succeeded immediately, and the
-		 * receive-half did not cause an error or complete.
-		 */
-		if(current->recv_timeout.raw == L4_ZeroTime.raw) {
-			set_ipc_error(utcb, (1 << 1) | 1);
-			current->status = TS_RUNNING;
-		} else {
-			thread_sleep(current, current->recv_timeout);
-		}
+	/* send phase. */
+	if(!L4_IsNilThread(current->ipc_to) && !ipc_send_half(current)) {
+		/* an error was set. */
+	} else if(!L4_IsNilThread(current->ipc_from)) {
+		/* receive phase. */
+		ipc_recv_half(current);
 	}
 
 	if(current->status == TS_READY) current->status = TS_RUNNING;
-	sq_update_thread(current);
 }
 
 
