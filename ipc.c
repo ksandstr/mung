@@ -487,7 +487,7 @@ bool ipc_recv_half(struct thread *self)
 			return false;
 		}
 
-		self->status = TS_READY;
+		thread_wake(self);
 		self->ipc_from.raw = from->id;
 		if(unlikely(IS_KERNEL_THREAD(from))) {
 			/* kernel threads do the send/receive phases as control flow. */

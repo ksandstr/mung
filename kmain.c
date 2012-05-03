@@ -612,6 +612,7 @@ void kmain(void *bigp, unsigned int magic)
 	first_thread->ts_len = L4_TimePeriod(10000);
 	while(true) {
 		first_thread->status = TS_READY;
+		sq_update_thread(first_thread);
 		if(!schedule()) {
 			asm volatile ("hlt");
 		}

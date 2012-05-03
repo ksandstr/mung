@@ -73,7 +73,7 @@ void yield(struct thread *t)
 {
 	struct thread *current = get_current_thread();
 	current->status = TS_READY;
-	assert(current->wakeup_time < read_global_timer());
+	assert(current->wakeup_time < read_global_timer() * 1000);
 
 	/* TODO: switch to "t" */
 
@@ -333,6 +333,9 @@ void thread_sleep(struct thread *t, L4_Time_t period)
 
 void thread_wake(struct thread *t)
 {
+	assert(t->status != TS_STOPPED);
+	assert(t->status != TS_DEAD);
+
 	t->status = TS_READY;
 	t->wakeup_time = 0;
 	sq_update_thread(t);
@@ -483,7 +486,8 @@ L4_Word_t sys_exregs(
 		int state = dest_thread->status;
 		if(state == TS_R_RECV || state == TS_RECV_WAIT) {
 			bool halted = CHECK_FLAG(dest_thread->flags, TF_HALT);
-			dest_thread->status = halted ? TS_STOPPED : TS_READY;
+			if(halted) thread_stop(dest_thread);
+			else thread_wake(dest_thread);
 			dest_thread->ipc_from = L4_nilthread;
 			/* "canceled in receive phase" */
 			assert(dest_utcb != NULL);
@@ -508,7 +512,8 @@ L4_Word_t sys_exregs(
 		/* TODO: check for the "currently sending" state */
 		if(dest_thread->status == TS_SEND_WAIT) {
 			bool halted = CHECK_FLAG(dest_thread->flags, TF_HALT);
-			dest_thread->status = halted ? TS_STOPPED : TS_READY;
+			if(halted) thread_stop(dest_thread);
+			else thread_wake(dest_thread);
 
 			dest_thread->ipc_from = L4_nilthread;
 			/* "canceled in send phase" */
