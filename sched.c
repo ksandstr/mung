@@ -56,7 +56,7 @@ static inline int sq_cmp(const struct thread *a, const struct thread *b)
 {
 	uint64_t wa = runnable_at(a), wb = runnable_at(b);
 	if(wa < wb) return -1;
-	else if(wb > wa) return 1;
+	else if(wa > wb) return 1;
 
 	if(a->pri > b->pri) return -1;
 	else if(a->pri < b->pri) return 1;
