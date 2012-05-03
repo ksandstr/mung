@@ -220,9 +220,8 @@ bool schedule(void)
 
 	if(next->status == TS_R_RECV) {
 		assert(!IS_KERNEL_THREAD(next));
-		if(!ipc_recv_half(next)) {
+		if(!ipc_recv_half(next) && next->status == TS_RECV_WAIT) {
 			/* try again (passive receive) */
-			assert(next->status == TS_RECV_WAIT);
 			return schedule();
 		}
 	}
