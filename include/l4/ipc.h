@@ -6,6 +6,7 @@
 
 #include <l4/types.h>
 #include <l4/message.h>
+#include <l4/thread.h>
 #include <l4/syscall.h>
 
 
@@ -125,5 +126,12 @@ static inline L4_MsgTag_t L4_LreplyWait(
 	return L4_Ipc(to, L4_anylocalthread, L4_Timeouts(L4_ZeroTime, L4_Never),
 		from_p);
 }
+
+
+static inline void L4_Sleep(L4_Time_t t) {
+	/* i'm 12 and what is this */
+	L4_LoadMR(0, L4_Receive_Timeout(L4_MyGlobalId(), t).raw);
+}
+
 
 #endif
