@@ -189,6 +189,8 @@ int main(void)
 
 	tid_test();
 	threadctl_test();
+	sched_test();
+
 	threadswitch_test();
 	sleep_test();
 	unmap_test();
