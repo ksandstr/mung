@@ -101,6 +101,18 @@ static inline L4_ThreadId_t L4_MyLocalId(void) {
  */
 
 
+static inline L4_Word_t L4_UserDefinedHandle(void) {
+	void *utcb = __L4_Get_UtcbAddress();
+	return L4_VREG(utcb, L4_TCR_USERDEFINEDHANDLE);
+}
+
+
+static inline void L4_Set_UserDefinedHandle(L4_Word_t value) {
+	void *utcb = __L4_Get_UtcbAddress();
+	L4_VREG(utcb, L4_TCR_USERDEFINEDHANDLE) = value;
+}
+
+
 static inline L4_ThreadId_t L4_Pager(void) {
 	void *utcb = __L4_Get_UtcbAddress();
 	return (L4_ThreadId_t){ .raw = L4_VREG(utcb, L4_TCR_PAGER) };
@@ -158,6 +170,17 @@ static inline void L4_Start_SpIpFlags(
 
 	L4_ExchangeRegisters (t, (7 << 3) + (1 << 8) + 6, sp, ip, flags, 0,
 		L4_nilthread, &dummy, &dummy, &dummy, &dummy, &dummy, &dummy_id);
+}
+
+
+static inline void L4_Set_UserDefinedHandleOf(
+	L4_ThreadId_t dest,
+	L4_Word_t value)
+{
+	L4_Word_t dummy;
+	L4_ThreadId_t dummy_id;
+	L4_ExchangeRegisters(dest, (1 << 6), 0, 0, 0, value, L4_nilthread,
+		&dummy, &dummy, &dummy, &dummy, &dummy, &dummy_id);
 }
 
 
