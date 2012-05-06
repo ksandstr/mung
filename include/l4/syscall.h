@@ -120,13 +120,14 @@ static inline L4_MsgTag_t L4_Ipc(
 	__asm__ __volatile__ (
 		__L4_SAVE_REGS
 		"\tcall __L4_Ipc\n"
-		"\tmovl %%ebp, %[mr2_out]\n"
+		"\tmovl %%ebp, %%ecx\n"
 		__L4_RESTORE_REGS
-		: "=a" (*from_p), "=S" (tag.raw), "=b" (L4_VREG(utcb, L4_TCR_MR(1))),
-		  [mr2_out] "=m" (L4_VREG(utcb, L4_TCR_MR(2)))
+		: "=a" (*from_p), "=S" (tag.raw),
+		  "=b" (L4_VREG(utcb, L4_TCR_MR(1))),
+		  "=c" (L4_VREG(utcb, L4_TCR_MR(2)))
 		: "a" (to.raw), "c" (timeouts), "d" (fromspec.raw),
 		  "S" (L4_VREG(utcb, L4_TCR_MR(0))), "D" (utcb)
-		: "memory");
+		: "memory", "cc");
 #endif
 	return tag;
 }
@@ -146,10 +147,11 @@ static inline L4_MsgTag_t L4_Lipc(
 	__asm__ __volatile__ (
 		__L4_SAVE_REGS
 		"\tcall __L4_Lipc\n"
-		"\tmovl %%ebp, %[mr2_out]\n"
+		"\tmovl %%ebp, %%ecx\n"
 		__L4_RESTORE_REGS
-		: "=a" (*from_p), "=S" (tag.raw), "=b" (L4_VREG(utcb, L4_TCR_MR(1))),
-		  [mr2_out] "=m" (L4_VREG(utcb, L4_TCR_MR(2)))
+		: "=a" (*from_p), "=S" (tag.raw),
+		  "=b" (L4_VREG(utcb, L4_TCR_MR(1))),
+		  "=c" (L4_VREG(utcb, L4_TCR_MR(2)))
 		: "a" (to.raw), "c" (timeouts), "d" (fromspec.raw),
 		  "S" (L4_VREG(utcb, L4_TCR_MR(0))), "D" (utcb));
 #endif
