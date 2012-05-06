@@ -15,5 +15,9 @@ extern int posix_memalign(void **memptr, size_t alignment, size_t size);
 
 extern NORETURN void abort(void);
 
+extern int abs(int j);
+extern long int labs(long int j);
+extern long long int llabs(long long int j);
+
 
 #endif
