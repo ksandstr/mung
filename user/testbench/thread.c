@@ -72,7 +72,7 @@ static void thread_wrapper(void)
 		L4_ThreadNo(self), L4_Version(self));
 
 end:
-	thread_alive[tnum] = false;
+	thread_version[tnum] = -thread_version[tnum];
 	asm volatile ("int $1");
 }
 
@@ -88,7 +88,6 @@ L4_ThreadId_t start_thread(void (*fn)(void *param), void *param)
 	int t;
 	for(t = 0; t < MAX_THREADS; t++) {
 		if(!thread_alive[t]) {
-			if(thread_version[t] > 0) join_thread(tid_of(t));
 			assert(thread_version[t] <= 0);
 			thread_version[t] = -thread_version[t] + 1;
 			if(thread_version[t] >= 1 << 14) thread_version[t] = 1;
@@ -135,7 +134,7 @@ void join_thread(L4_ThreadId_t tid)
 {
 	int t = L4_ThreadNo(tid) - base_tnum;
 	assert(t < MAX_THREADS);
-	assert(thread_version[t] == L4_Version(tid));
+	assert(abs(thread_version[t]) == L4_Version(tid));
 
 	L4_MsgTag_t tag = L4_Receive(tid_of(t));
 	if(L4_IpcFailed(tag)) {
@@ -148,6 +147,5 @@ void join_thread(L4_ThreadId_t tid)
 	/* FIXME: do destroying threadcontrol */
 
 	thread_alive[t] = false;
-	thread_version[t] = -thread_version[t];
-	assert(thread_version[t] < 0);
+	thread_version[t] = -abs(thread_version[t]);
 }
