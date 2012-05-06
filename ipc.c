@@ -348,7 +348,7 @@ bool ipc_send_half(struct thread *self)
 				return false;
 			}
 		}
-	} else {
+	} else if(self->send_timeout.raw != L4_ZeroTime.raw) {
 		/* passive send */
 		TRACE("%s: passive send to %d:%d (from %d:%d)\n", __func__,
 			TID_THREADNUM(dest->id), TID_VERSION(dest->id),
@@ -361,11 +361,12 @@ bool ipc_send_half(struct thread *self)
 
 		self->status = TS_SEND_WAIT;
 		thread_sleep(self, self->send_timeout);
-		if(self->status == TS_READY) {
-			/* instant timeout. */
-			set_ipc_error_thread(self, (1 << 1) | 0);
-		}
+		assert(self->status != TS_READY);
 
+		return false;
+	} else {
+		/* instant timeout. */
+		set_ipc_error_thread(self, (1 << 1) | 0);
 		return false;
 	}
 }
