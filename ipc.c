@@ -293,7 +293,20 @@ bool ipc_send_half(struct thread *self)
 		return false;
 	}
 
-	/* TODO: override TS_R_RECV when peer's ipc_from == self->id . */
+	/* override TS_R_RECV? */
+	if(dest->status == TS_R_RECV && dest->ipc_from.raw == self->id
+		&& dest->post_exn_call == NULL)
+	{
+		if(unlikely(read_global_timer() * 1000 >= dest->wakeup_time)) {
+			/* nah, time the peer out instead */
+			set_ipc_error_thread(dest, (1 << 1) | 1);
+			thread_wake(dest);
+		} else {
+			/* yep */
+			dest->status = TS_RECV_WAIT;
+		}
+	}
+
 	if(dest->status == TS_RECV_WAIT
 		&& (dest->ipc_from.raw == L4_anythread.raw
 			|| dest->ipc_from.raw == self->id))
