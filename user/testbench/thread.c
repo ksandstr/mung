@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <stdint.h>
 #include <stdbool.h>
+#include <stdlib.h>
 #include <assert.h>
 #include <ccan/likely/likely.h>
 
@@ -28,8 +29,7 @@ static L4_Word_t utcb_base;
 
 
 static L4_ThreadId_t tid_of(int t) {
-	assert(thread_version[t] > 0);
-	return L4_GlobalId(base_tnum + t, thread_version[t]);
+	return L4_GlobalId(base_tnum + t, abs(thread_version[t]));
 }
 
 
