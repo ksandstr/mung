@@ -204,6 +204,34 @@ struct thread *thread_new(thread_id tid)
 }
 
 
+static void thread_destroy(struct thread *t)
+{
+	assert(t->status == TS_DEAD || t->status == TS_STOPPED);
+	assert(t->post_exn_call == NULL);
+
+	struct space *sp = t->space;
+
+	if(t->utcb_ptr_seg != 0) {
+		release_gdt_ptr_seg(L4_Address(sp->utcb_area)
+			+ t->utcb_pos * UTCB_SIZE + 256 - 4, t->utcb_ptr_seg);
+		t->utcb_ptr_seg = 0;
+	}
+
+	if(t->stack_page != NULL) {
+		free_kern_page(t->stack_page);
+		t->stack_page = NULL;
+	}
+
+	space_remove_thread(sp, t);
+	bool ok = htable_del(&thread_hash, int_hash(TID_THREADNUM(t->id)), t);
+	if(unlikely(!ok)) {
+		printf("WARNING: %s: thread %d:%d not found in thread_hash\n",
+			__func__, TID_THREADNUM(t->id), TID_VERSION(t->id));
+	}
+	kmem_cache_free(thread_slab, t);
+}
+
+
 struct thread *create_kthread(
 	void (*function)(void *),
 	void *parameter)
@@ -325,6 +353,20 @@ void thread_start(struct thread *t)
 void thread_stop(struct thread *t)
 {
 	assert(t->status != TS_STOPPED);
+
+	/* interrupt IPC in progress */
+	switch(t->status) {
+		case TS_R_RECV:
+		case TS_RECV_WAIT:
+		case TS_SEND_WAIT:
+			post_exn_fail(t);
+			break;
+
+		/* TODO: string transfer send/recv states */
+
+		default:
+			break;
+	}
 
 	sq_remove_thread(t);
 	t->status = TS_STOPPED;
@@ -459,7 +501,7 @@ L4_Word_t sys_exregs(
 {
 	struct thread *current = get_current_thread(), *dest_thread = NULL;
 
-#if 1
+#if 0
 	printf("%s: called from %d:%d on %d:%d (state %d); control %#x (", __func__,
 		TID_THREADNUM(current->id), TID_VERSION(current->id),
 		TID_THREADNUM(dest.raw), TID_VERSION(dest.raw), current->status,
@@ -673,7 +715,8 @@ void sys_threadcontrol(struct x86_exregs *regs)
 		space_add_thread(sp, dest);
 	} else if(L4_IsNilThread(spacespec) && dest != NULL) {
 		/* thread/space deletion */
-		ec = 1;
+		thread_stop(dest);
+		thread_destroy(dest);
 	} else if(!L4_IsNilThread(spacespec) && dest != NULL) {
 		/* modification only. (rest shared with creation.) */
 		if(spacespec.raw != dest_tid.raw) {

@@ -126,6 +126,16 @@ void space_add_thread(struct space *sp, struct thread *t)
 }
 
 
+void space_remove_thread(struct space *sp, struct thread *t)
+{
+	assert(t->space == sp);
+	list_del_from(&sp->threads, &t->space_link);
+	t->space = NULL;
+
+	if(list_empty(&sp->threads)) space_free(sp);
+}
+
+
 struct space *space_find(thread_id tid)
 {
 	struct thread *t = thread_find(tid);
