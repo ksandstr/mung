@@ -241,7 +241,7 @@ void thread_set_utcb(struct thread *t, L4_Word_t start)
 
 	if(t->utcb_ptr_seg != 0) {
 		release_gdt_ptr_seg(L4_Address(sp->utcb_area)
-			+ t->utcb_pos * UTCB_SIZE + 256, t->utcb_ptr_seg);
+			+ t->utcb_pos * UTCB_SIZE + 256 - 4, t->utcb_ptr_seg);
 		t->utcb_ptr_seg = 0;
 	}
 
@@ -277,6 +277,7 @@ void thread_set_utcb(struct thread *t, L4_Word_t start)
 	t->utcb_pos = new_pos;
 	assert(start == L4_Address(sp->utcb_area) + UTCB_SIZE * t->utcb_pos);
 	if(likely(sp != kernel_space)) {
+		assert(t->utcb_ptr_seg == 0);
 		t->utcb_ptr_seg = reserve_gdt_ptr_seg(start + 256 - 4);
 	}
 }
@@ -319,7 +320,7 @@ void thread_sleep(struct thread *t, L4_Time_t period)
 	assert(t->status == TS_SEND_WAIT || t->status == TS_RECV_WAIT);
 
 	if(period.raw != L4_ZeroTime.raw && period.raw != L4_Never.raw) {
-		TRACE("%s: sleeping thread %d:%d for %u microseconds\n", __func__,
+		TRACE("%s: sleeping thread %d:%d for %llu microseconds\n", __func__,
 			TID_THREADNUM(t->id), TID_VERSION(t->id), time_in_us(period));
 	}
 	t->wakeup_time = wakeup_at(period);
