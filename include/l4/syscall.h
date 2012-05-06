@@ -222,10 +222,16 @@ static inline L4_Word_t L4_Schedule(
 {
 	extern _C_ void __L4_Schedule(void);
 	L4_Word_t result, dummy;
+#ifdef __pic__
+#error "L4_Schedule stub not PIC compatible (yet? plees.)"
+#else
+	/* NOTE: ths PIC version would just stash %ebx somewhere instead of using
+	 * push and pop
+	 */
 	__asm__ __volatile__ (
-		__L4_SAVE_REGS
 		"\tmovl %%edi, %%ebx\n"
 		"\tmovl %[preemptctl], %%edi\n"
+		__L4_SAVE_REGS
 		"\tcall *%%ebx\n"
 		__L4_RESTORE_REGS
 		: "=a" (result), "=c" (dummy), "=d" (*timectl_out),
@@ -234,6 +240,7 @@ static inline L4_Word_t L4_Schedule(
 		  "S" (procctl), [preemptctl] "m" (preemptctl),
 		  "D" (__L4_Schedule)
 		: __L4_CLOBBER_REGS);
+#endif
 	return result;
 }
 
