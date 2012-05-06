@@ -5,6 +5,9 @@
 #include <ccan/htable/htable.h>
 #include <ccan/likely/likely.h>
 
+#include <l4/types.h>
+#include <l4/thread.h>
+#include <l4/schedule.h>
 #include <l4/vregs.h>
 
 #include <ukernel/rbtree.h>
@@ -347,8 +350,15 @@ void sys_threadswitch(struct x86_exregs *regs)
 }
 
 
+static bool sched_valid_time(L4_Time_t t) {
+	return t.raw == 0xffff || (t.period.a == 0 && t.raw != 0);
+}
+
+
 void sys_schedule(struct x86_exregs *regs)
 {
+	struct thread *current = get_current_thread();
+
 	L4_ThreadId_t dest_tid = { .raw = regs->eax };
 	L4_Word_t timectl = regs->edx, procctl = regs->esi,
 		prioctl = regs->ecx, preemptctl = regs->edi;
@@ -358,11 +368,18 @@ void sys_schedule(struct x86_exregs *regs)
 		(unsigned)procctl, (unsigned)prioctl);
 	printf("%s: ... timectl %#x, preemptctl %#x\n", __func__,
 		(unsigned)timectl, (unsigned)preemptctl);
-	L4_Word_t old_timectl = 0, result = 0;
+
+	L4_Word_t old_timectl = 0, result = L4_SCHEDRESULT_ERROR, ec = 0;
 
 	struct thread *dest = thread_find(dest_tid.raw);
-	if(dest == NULL) result = 1;	/* "dead" */
-	else if(IS_IPC(dest->status)
+	if(dest == NULL || IS_KERNEL_THREAD(dest)) {
+		ec = L4_ERROR_INVALID_THREAD;
+		goto end;
+	}
+	old_timectl = (L4_Word_t)L4_TimePeriod(dest->quantum).raw << 16
+		| L4_TimePeriod(dest->total_quantum).raw;
+
+	if(IS_IPC(dest->status)
 		/* TODO: check flag to see if current IPC is by kernel */
 		&& (dest->post_exn_call != NULL
 			|| dest->saved_mrs > 0 || dest->saved_brs > 0))
@@ -390,16 +407,58 @@ void sys_schedule(struct x86_exregs *regs)
 				printf("WARNING: %s: unknown state %d in thread %d:%d\n",
 					__func__, (int)dest->status, TID_THREADNUM(dest->id),
 					TID_VERSION(dest->id));
-				result = 0;		/* "error" */
-				L4_VREG(thread_get_utcb(get_current_thread()),
-					L4_TCR_ERRORCODE) = 2;	/* "invalid thread ID" */
-				break;
+				ec = L4_ERROR_INVALID_THREAD;
+				goto end;
 		}
 	}
 
-	/* TODO: apply procctl, prioctl, timectl, preemptctl */
+	/* timectl */
+	if(timectl != ~(L4_Word_t)0) {
+		/* TODO: validate parameters somewhere before changes occur, so that
+		 * valid-timectl-but-failing-procctl doesn't write timectl values.
+		 */
+		L4_Time_t ts_len = { .raw = (timectl >> 16) & 0xffff },
+			total_quantum = { .raw = timectl & 0xffff };
+		if(!sched_valid_time(ts_len) || !sched_valid_time(total_quantum)) {
+			ec = L4_ERROR_INVALID_PARAM;
+			goto end;
+		}
+		if(ts_len.raw != 0xffff) {
+			dest->ts_len = ts_len;
+			uint64_t slice = time_in_us(ts_len);
+			if(slice > ~(uint32_t)0) {
+				slice = ~(uint32_t)0;
+				dest->ts_len = ts_len = L4_TimePeriod(slice);
+			}
+			dest->quantum = slice;
+		}
+		if(total_quantum.raw != 0xffff) {
+			dest->total_quantum = time_in_us(total_quantum);
+			dest->quantum = time_in_us(dest->ts_len);
+		}
+	}
 
-	printf("%s: result %d, old_timectl %d\n", __func__, result, old_timectl);
+	/* prioctl */
+	if((prioctl & 0xff) != 0xff) {
+		/* FIXME: verify parameters somewhere up where they're extracted */
+		if((prioctl & 0xff) > current->pri) {
+			ec = L4_ERROR_INVALID_PARAM;
+			goto end;
+		}
+		dest->pri = prioctl & 0xff;
+	}
+
+	/* TODO: apply procctl, preemptctl */
+
+end:
+	printf("%s: result %d, old_timectl %#x, ec %#x\n",
+		__func__, result, old_timectl, ec);
+	if(dest->status != TS_STOPPED) sq_update_thread(dest);
+
+	if(unlikely(ec != 0)) {
+		assert((result & 0xff) == L4_SCHEDRESULT_ERROR);
+		L4_VREG(thread_get_utcb(current), L4_TCR_ERRORCODE) = ec;
+	}
 	regs->eax = result;
 	regs->edx = old_timectl;
 }
