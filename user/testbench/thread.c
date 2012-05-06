@@ -144,7 +144,14 @@ void join_thread(L4_ThreadId_t tid)
 	}
 	/* TODO: verify the exception message (label, GP#) */
 
-	/* FIXME: do destroying threadcontrol */
+	/* destroy the thread. */
+	L4_Word_t res = L4_ThreadControl(tid_of(t), L4_nilthread,
+		L4_nilthread, L4_nilthread, (void *)-1);
+	if(res == 0) {
+		printf("%s: deleting ThreadControl failed, ec %#x\n", __func__,
+			L4_ErrorCode());
+		return;
+	}
 
 	thread_alive[t] = false;
 	thread_version[t] = -abs(thread_version[t]);
