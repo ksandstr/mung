@@ -242,38 +242,6 @@ static L4_Word_t do_ipc_transfer(
 }
 
 
-/* returns false for ordinary IPC (with return values etc), and true for
- * exception IPC (with a full frame restore).
- */
-static bool post_exn_ok(struct thread *t)
-{
-	if(t->post_exn_call != NULL) {
-		(*t->post_exn_call)(t, t->exn_priv);
-		return true;
-	} else {
-		return false;
-	}
-}
-
-
-static bool post_exn_fail(struct thread *t)
-{
-	if(t->post_exn_call != NULL) {
-		if(t->exn_priv != NULL) {
-			/* (this is fancy so that the function doesn't need an exn_priv
-			 * just to clear the callback.)
-			 */
-			void (*fn)(struct thread *, void *) = t->post_exn_call;
-			t->post_exn_call = NULL;
-			(*fn)(NULL, t->exn_priv);
-		}
-		return true;
-	} else {
-		return false;
-	}
-}
-
-
 static void set_ipc_return_regs(
 	struct x86_exregs *regs,
 	struct thread *current,

@@ -178,6 +178,13 @@ extern void thread_wake(struct thread *t);
 extern uint64_t wakeup_at(L4_Time_t period);
 
 extern void save_ipc_regs(struct thread *t, int mrs, int brs);
+/* these return false for ordinary IPC (with return values etc), and true for
+ * exception IPC (with a full frame restore). they don't care about kernel
+ * threads.
+ */
+extern bool post_exn_fail(struct thread *t);
+extern bool post_exn_ok(struct thread *t);
+
 
 /* complicated accessors */
 extern PURE void *thread_get_utcb(struct thread *t);
