@@ -50,7 +50,7 @@ static void thread_wrapper(void)
 {
 	L4_ThreadId_t self = L4_MyGlobalId();
 	L4_ThreadId_t parent = { .raw = L4_UserDefinedHandle() };
-	printf("%s: entered, parent is %#x\n", __func__, parent.raw);
+//	printf("%s: entered, parent is %#x\n", __func__, parent.raw);
 	L4_Set_ExceptionHandler(parent);
 
 	L4_Word_t tnum;
@@ -68,8 +68,10 @@ static void thread_wrapper(void)
 	L4_StoreMR(3, &tnum);
 
 	(*(void (*)(void *))fn)((void *)param);
+#if 0
 	printf("testbench thread %d (%u:%u) terminating\n", (int)tnum,
 		L4_ThreadNo(self), L4_Version(self));
+#endif
 
 end:
 	thread_version[tnum] = -thread_version[tnum];
@@ -97,8 +99,10 @@ L4_ThreadId_t start_thread(void (*fn)(void *param), void *param)
 	if(t == MAX_THREADS) return L4_nilthread;
 
 	L4_ThreadId_t self = L4_Myself(), tid = tid_of(t);
+#if 0
 	printf("%s: creating thread %u:%u, utcb at %#x\n", __func__,
 		L4_ThreadNo(tid), L4_Version(tid), utcb_base + t * 512);
+#endif
 	L4_Word_t r = L4_ThreadControl(tid, self, self, L4_Pager(),
 		(void *)(utcb_base + t * 512));
 	if(r == 0) {

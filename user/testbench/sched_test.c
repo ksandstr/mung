@@ -19,7 +19,8 @@
  */
 static void r_recv_timeout_fn(void *param_ptr)
 {
-	printf("%s: entered; param is %p\n", __func__, param_ptr);
+	printf("%s: entered at %llu; param is %p\n", __func__,
+		L4_SystemClock().raw, param_ptr);
 
 	/* in-parameters: [0] = partner TID, [1] = timeout (L4_Time_t) */
 	L4_Word_t *param = param_ptr;
@@ -34,13 +35,31 @@ static void r_recv_timeout_fn(void *param_ptr)
 		L4_Timeouts(L4_Never, timeout), &dummy);
 	if(L4_IpcSucceeded(tag)) param[0] = 0; else param[0] = L4_ErrorCode();
 
-	printf("%s: exiting (return value %#x)\n", __func__, param[0]);
+	printf("%s: exiting at %llu; return value %#x\n", __func__,
+		L4_SystemClock().raw, param[0]);
+}
+
+
+/* from Linux, via Wikipedia */
+/* simple loop based delay: */
+static void delay_loop(unsigned long loops)
+{
+	int d0;
+
+	__asm__ __volatile__(
+		"\tjmp 1f\n"
+		".align 16\n"
+		"1:\tjmp 2f\n"
+		".align 16\n"
+		"2:\tdecl %0\n\tjns 2b"
+		:"=&a" (d0)
+		:"0" (loops));
 }
 
 
 static L4_Word_t r_recv_timeout_case(int priority, bool spin, bool send)
 {
-	const int timeout_ms = 15;
+	const int timeout_ms = 20;
 
 	static L4_Word_t param[2];
 	param[0] = L4_Myself().raw;
@@ -58,11 +77,10 @@ static L4_Word_t r_recv_timeout_case(int priority, bool spin, bool send)
 
 	if(spin) {
 		L4_Clock_t start = L4_SystemClock();
-		volatile int foo = 0;
 		do {
 			/* ishygddt */
-			for(int i=0; i < 2048; i++) foo += i;
-		} while(L4_SystemClock().raw < start.raw + timeout_ms * 1000);
+			delay_loop(10000000);
+		} while(L4_SystemClock().raw < start.raw + timeout_ms + 1);
 	}
 
 	if(send) {
