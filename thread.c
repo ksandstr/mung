@@ -196,6 +196,11 @@ struct thread *thread_new(thread_id tid)
 		.ts_len = L4_TimePeriod(10000),		/* 10 ms */
 		.quantum = 10000,		/* TODO: time2µs(.ts_len) */
 		.total_quantum = 0,
+
+		/* x86 malarkey. IOPL 3 (peon), interrupts enabled.
+		 * also a reserved, constant bit is set.
+		 */
+		.ctx.regs[9] = (0 << 12) | (1 << 9) | (1 << 1),
 	};
 
 	htable_add(&thread_hash, int_hash(TID_THREADNUM(t->id)), t);
