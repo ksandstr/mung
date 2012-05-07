@@ -183,7 +183,7 @@ static struct thread *schedule_next_thread(struct thread *current)
 			/* FIXME: move this into a timeout_ipc() function */
 			if(CHECK_FLAG(cand->flags, TF_HALT)) thread_stop(cand);
 			else thread_wake(cand);
-			set_ipc_error_thread(cand, (1 << 1) | 0);
+			set_ipc_error_thread(cand, (1 << 1) | 1);
 		}
 
 		if(pick == NULL || pick->pri < cand->pri) pick = cand;
