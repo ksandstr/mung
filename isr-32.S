@@ -16,6 +16,9 @@ isr_\name\()_top:
 	pushl %es
 	pushl $\vecn
 	pushl %esp
+	movl $(SEG_KERNEL_DATA_HIGH << 3), %eax
+	movl %eax, %ds
+	movl %eax, %es
 	jmp isr_irq_common
 	.endm
 
@@ -43,7 +46,14 @@ isr_irq_common:
 	.align 16,0
 isr_\name\()_top:
 	pushal
+	pushl %ds
+	pushl %es
+	movl $(SEG_KERNEL_DATA_HIGH << 3), %eax
+	movl %eax, %ds
+	movl %eax, %es
 	call isr_\name\()_bottom
+	popl %es
+	popl %ds
 	popal
 	iret
 	.endm
