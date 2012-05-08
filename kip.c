@@ -1,6 +1,4 @@
 
-/* compose a 32-bit little-endian kernel interface page. */
-
 #include <stdint.h>
 #include <string.h>
 
@@ -56,24 +54,30 @@ static void make_systemclock_stub(void *start, int *len_p)
 	int p = 0;
 	uint8_t *mem = start;
 	mem[p++] = 0xe8;			/* CALL rel32 */
-	*(uint32_t *)&mem[p] = 6;	/* past the next instructions */
+	*(uint32_t *)&mem[p] = 0xb;	/* past the next instructions */
 	p += 4;
-	mem[p++] = 0x8b;			/* MOV edx, [eax + 4] */
-	mem[p++] = 0x50;
+	mem[p++] = 0x8b;			/* MOV edx, [ecx + 4] */
+	mem[p++] = 0x51;
 	mem[p++] = 0x04;
-	mem[p++] = 0x8b;			/* MOV eax, [eax] */
-	mem[p++] = 0x00;
+	mem[p++] = 0x8b;			/* MOV eax, [ecx] */
+	mem[p++] = 0x01;
+	mem[p++] = 0x39;			/* CMP [ecx + 4], edx */
+	mem[p++] = 0x51;
+	mem[p++] = 0x04;
+	mem[p++] = 0x75;			/* JNE to first mov */
+	mem[p++] = 0xf6;
 	mem[p++] = 0xc3;			/* RET */
 
 	/* the "read & massage EIP" sequence */
-	mem[p++] = 0x8b;			/* MOV eax, [esp] */
-	mem[p++] = 0x04;
+	mem[p++] = 0x8b;			/* MOV ecx, [esp] */
+	mem[p++] = 0x0c;
 	mem[p++] = 0x24;
-	mem[p++] = 0x0d;			/* OR eax, 0xfff */
+	mem[p++] = 0x81;			/* OR ecx, 0xfff */
+	mem[p++] = 0xc9;
 	*(uint32_t *)&mem[p] = 0xfffU;
 	p += 4;
-	mem[p++] = 0x83;			/* AND eax, ~7 */
-	mem[p++] = 0xe0;
+	mem[p++] = 0x83;			/* AND ecx, ~7 */
+	mem[p++] = 0xe1;
 	mem[p++] = 0xf8;
 	mem[p++] = 0xc3;			/* RET */
 
@@ -81,6 +85,7 @@ static void make_systemclock_stub(void *start, int *len_p)
 }
 
 
+/* compose a 32-bit little-endian kernel interface page. */
 void make_kip(void *mem, L4_Word_t kern_start, L4_Word_t kern_end)
 {
 	/* preserve memorydescs */

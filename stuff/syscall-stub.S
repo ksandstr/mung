@@ -12,27 +12,29 @@ regular_syscall:
 
 # this reads the last 8 bytes of the kernel interface page, located via %eip.
 #
-# NOTE: this might end up acting super wonky if a timer interrupt starts right
-# between the instructions that load the clock's halves into eax:edx, and that
-# interrupt causes a carry between the low 32 bits and the high 32 bits. which
-# for a millisecond timer is once about every 49 days. more seriously this
-# segment is not safe against concurrent preemption, a major flaw in system
-# call interface code.
+# NOTE: a simpler version of this syscall would end up acting super wonky if an
+# interrupt started right in between the two instructions that load the clock's
+# halves into eax:edx, and that the process context was only returned into
+# after the high 32 bits had been carried over into. (that occurs for once in
+# about 49 days for the timer interrupt alone.)
 #
-# these cases could be prevented by testing %edx against the original value
-# after reading the less significant half, and restarting if it isn't the same.
-# if it is the same, the lower half will be current even if there was an
-# interrupt or other preemption event in between.
+# this case is remedied by by testing %edx against the original value after
+# reading the less significant half, and restarting if it isn't the same. if it
+# is the same, the lower half will be current even if there was an interrupt or
+# other preemption event in between.
 	.align 16,0
 	.global soft_systemclock
 soft_systemclock:
 	call 1f
-	movl 4(%eax), %edx
-	movl (%eax), %eax
+2:
+	movl 4(%ecx), %edx	# most significant half
+	movl (%ecx), %eax	# least significant half
+	cmpl %edx, 4(%ecx)
+	jne 2b
 	ret
 1:
 	# space the returns apart a bit for some hardware's benefit.
-	movl (%esp), %eax
-	orl $0xfff, %eax
-	andl $~7, %eax
+	movl (%esp), %ecx
+	orl $0xfff, %ecx
+	andl $~7, %ecx
 	ret
