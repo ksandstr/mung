@@ -19,9 +19,6 @@
  */
 static void r_recv_timeout_fn(void *param_ptr)
 {
-	printf("%s: entered at %llu; param is %p\n", __func__,
-		L4_SystemClock().raw, param_ptr);
-
 	/* in-parameters: [0] = partner TID, [1] = timeout (L4_Time_t) */
 	L4_Word_t *param = param_ptr;
 	L4_ThreadId_t partner = { .raw = param[0] };
@@ -34,9 +31,6 @@ static void r_recv_timeout_fn(void *param_ptr)
 	L4_MsgTag_t tag = L4_Ipc(partner, partner,
 		L4_Timeouts(L4_Never, timeout), &dummy);
 	if(L4_IpcSucceeded(tag)) param[0] = 0; else param[0] = L4_ErrorCode();
-
-	printf("%s: exiting at %llu; return value %#x\n", __func__,
-		L4_SystemClock().raw, param[0]);
 }
 
 
@@ -107,16 +101,19 @@ static void r_recv_timeout_test(void)
 }
 
 
+#if 0
 /* TODO: move this into thread_test.c */
 static void helper_fn(void *param)
 {
 	printf("%s: sleeping for 15 ms\n", __func__);
 	L4_Sleep(L4_TimePeriod(15000));
 }
+#endif
 
 
 void sched_test(void)
 {
+#if 0
 	printf("%s: starting helper thread\n", __func__);
 	L4_ThreadId_t tid = start_thread(&helper_fn, NULL);
 	if(L4_IsNilThread(tid)) {
@@ -128,8 +125,7 @@ void sched_test(void)
 
 	join_thread(tid);
 	printf("%s: after helper exit!\n", __func__);
+#endif
 
-
-	/* actual test cases */
 	r_recv_timeout_test();
 }

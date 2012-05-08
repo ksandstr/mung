@@ -158,17 +158,6 @@ static void threadswitch_test(void)
 }
 
 
-static void schedule_test(void)
-{
-	printf("schedule test start.\n");
-	L4_Word_t old_tc;
-	L4_Word_t res = L4_Schedule(L4_Myself(), 1, 2, 3, 4, &old_tc);
-	printf("L4_Schedule() returned %#x (old_timectl %#x)\n",
-		(unsigned)res, (unsigned)old_tc);
-	printf("schedule test end.\n");
-}
-
-
 void sleep_test(void)
 {
 	L4_Time_t t = L4_TimePeriod(500000);
@@ -194,7 +183,6 @@ int main(void)
 	threadswitch_test();
 	sleep_test();
 	unmap_test();
-	schedule_test();
 	spacectl_test();
 
 	printf("testbench completed.\n");
