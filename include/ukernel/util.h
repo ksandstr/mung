@@ -10,6 +10,8 @@
 #include <l4/types.h>
 
 
+#define NUM_ELEMENTS(array) (sizeof((array)) / sizeof((array)[0]))
+
 #define CHECK_FLAG(mask, bit) ({ \
 		assert(__builtin_popcount((bit)) == 1); \
 		((mask) & (bit)) != 0; \
