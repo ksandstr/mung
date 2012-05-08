@@ -359,23 +359,28 @@ void sys_schedule(struct x86_exregs *regs)
 {
 	struct thread *current = get_current_thread();
 
+	/* raw inputs */
 	L4_ThreadId_t dest_tid = { .raw = regs->eax };
 	L4_Word_t timectl = regs->edx, procctl = regs->esi,
 		prioctl = regs->ecx, preemptctl = regs->edi;
-
-	printf("%s: called; dest %d:%d, procctl %#x, prioctl %#x\n", __func__,
-		TID_THREADNUM(dest_tid.raw), TID_VERSION(dest_tid.raw),
-		(unsigned)procctl, (unsigned)prioctl);
-	printf("%s: ... timectl %#x, preemptctl %#x\n", __func__,
-		(unsigned)timectl, (unsigned)preemptctl);
-
+	/* outputs */
 	L4_Word_t old_timectl = 0, result = L4_SCHEDRESULT_ERROR, ec = 0;
 
 	struct thread *dest = thread_find(dest_tid.raw);
-	if(dest == NULL || IS_KERNEL_THREAD(dest)) {
-		ec = L4_ERROR_INVALID_THREAD;
-		goto end;
+	if(dest == NULL || IS_KERNEL_THREAD(dest)) goto inv_param;
+
+	/* cooked inputs */
+	L4_Time_t ts_len = { .raw = (timectl >> 16) & 0xffff },
+		total_quantum = { .raw = timectl & 0xffff };
+	if(!sched_valid_time(ts_len) || !sched_valid_time(total_quantum)) {
+		goto inv_param;
 	}
+	L4_Word_t pri = prioctl & 0xff;
+	if(pri != 0xff && pri > current->pri) goto inv_param;
+	L4_Word_t procnum = procctl & 0xffff,
+		sens_pri = (preemptctl >> 16) & 0xff,
+		max_delay = preemptctl & 0xffff;
+
 	old_timectl = (L4_Word_t)L4_TimePeriod(dest->quantum).raw << 16
 		| L4_TimePeriod(dest->total_quantum).raw;
 
@@ -386,43 +391,31 @@ void sys_schedule(struct x86_exregs *regs)
 	{
 		result = 3;		/* "running", as IPC not by usermode */
 	} else {
-		switch(dest->status) {
-			case TS_STOPPED:
-				result = 2;		/* "inactive" */
-				break;
-			case TS_RUNNING: case TS_READY:
-				result = 3;		/* "running" */
-				break;
-			case TS_SEND_WAIT:
-				result = 4;		/* "pending send" */
-				break;
-			case TS_RECV_WAIT:
-			case TS_R_RECV:
-				result = 6;		/* "waiting to receive" */
-				break;
+		static const uint8_t status_to_schedresult[] = {
+			[TS_STOPPED] = L4_SCHEDRESULT_INACTIVE,
+			[TS_RUNNING] = L4_SCHEDRESULT_RUNNING,
+			[TS_READY] = L4_SCHEDRESULT_RUNNING,
+			[TS_SEND_WAIT] = L4_SCHEDRESULT_PENDING_SEND,
+			[TS_RECV_WAIT] = L4_SCHEDRESULT_WAITING,
+			[TS_R_RECV] = L4_SCHEDRESULT_WAITING,
 			/* TODO: 5 "sending" (in the middle of string transfer, send)
 			 *       7 "receiving" (same, receive)
 			 */
-			default:
-				printf("WARNING: %s: unknown state %d in thread %d:%d\n",
-					__func__, (int)dest->status, TID_THREADNUM(dest->id),
-					TID_VERSION(dest->id));
-				ec = L4_ERROR_INVALID_THREAD;
-				goto end;
+		};
+		int s = dest->status;
+		if(s < 0 || s >= NUM_ELEMENTS(status_to_schedresult)) {
+			printf("WARNING: %s: unknown state %d in thread %d:%d\n",
+				__func__, (int)dest->status, TID_THREADNUM(dest->id),
+				TID_VERSION(dest->id));
+			ec = L4_ERROR_INVALID_THREAD;
+			goto end;
 		}
+
+		result = status_to_schedresult[s];
 	}
 
 	/* timectl */
 	if(timectl != ~(L4_Word_t)0) {
-		/* TODO: validate parameters somewhere before changes occur, so that
-		 * valid-timectl-but-failing-procctl doesn't write timectl values.
-		 */
-		L4_Time_t ts_len = { .raw = (timectl >> 16) & 0xffff },
-			total_quantum = { .raw = timectl & 0xffff };
-		if(!sched_valid_time(ts_len) || !sched_valid_time(total_quantum)) {
-			ec = L4_ERROR_INVALID_PARAM;
-			goto end;
-		}
 		if(ts_len.raw != 0xffff) {
 			dest->ts_len = ts_len;
 			uint64_t slice = time_in_us(ts_len);
@@ -439,21 +432,20 @@ void sys_schedule(struct x86_exregs *regs)
 	}
 
 	/* prioctl */
-	if((prioctl & 0xff) != 0xff) {
-		/* FIXME: verify parameters somewhere up where they're extracted */
-		if((prioctl & 0xff) > current->pri) {
-			ec = L4_ERROR_INVALID_PARAM;
-			goto end;
-		}
-		dest->pri = prioctl & 0xff;
+	if(pri != 0xff) dest->pri = pri;
+
+	/* procctl */
+	/* TODO: check procnum against KIP's max_procs value */
+	if(procnum > 0) {
+		/* ignored. */
 	}
 
-	/* TODO: apply procctl, preemptctl */
+	/* preemptctl */
+	if(sens_pri != 0xff) dest->sens_pri = sens_pri;
+	dest->max_delay = max_delay;
 
 end:
-	printf("%s: result %d, old_timectl %#x, ec %#x\n",
-		__func__, result, old_timectl, ec);
-	if(dest->status != TS_STOPPED) sq_update_thread(dest);
+	if(dest != NULL && dest->status != TS_STOPPED) sq_update_thread(dest);
 
 	if(unlikely(ec != 0)) {
 		assert((result & 0xff) == L4_SCHEDRESULT_ERROR);
@@ -461,4 +453,9 @@ end:
 	}
 	regs->eax = result;
 	regs->edx = old_timectl;
+	return;
+
+inv_param:
+	ec = L4_ERROR_INVALID_PARAM;
+	goto end;
 }
