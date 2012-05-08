@@ -45,11 +45,14 @@ static inline L4_Clock_t L4_SystemClock(void)
 	extern _C_ void __L4_SystemClock(void);
 
 	L4_Clock_t result;
+#ifdef __pic__
+#error "L4_SystemClock() doesn't exist for __pic__"
+#else
 	__asm__ __volatile__ (
-		"\tcall *%%ecx\n"
+		"\tcall __L4_SystemClock\n"
 		: "=A" (result.raw)
-		: "c" (__L4_SystemClock)
-		: "esi", "edi");
+		:: "esi", "edi", "ecx");
+#endif
 	return result;
 }
 
