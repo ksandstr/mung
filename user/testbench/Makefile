@@ -16,7 +16,7 @@ distclean:
 	@rm -rf .deps testbench
 
 
-testbench: testbench.ld crt0.o testbench.o thread.o exn-store.o \
+testbench: testbench.ld crt0.o testbench.o thread.o delay.o exn-store.o \
 		thread_test.o sched_test.o \
 		syscalls.o ccan-list.o
 	@echo "  LD $@"

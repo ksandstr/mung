@@ -51,4 +51,13 @@ extern L4_ThreadId_t start_thread(void (*fn)(void *), void *param);
 extern void join_thread(L4_ThreadId_t tid);
 
 
+/* from delay.c */
+
+extern unsigned long iters_per_tick;
+
+extern void calibrate_delay_loop(void);
+extern void delay_loop(unsigned long iters);
+extern void nsleep(unsigned long nanoseconds);
+extern void usleep(unsigned long microseconds);
+
 #endif

@@ -34,23 +34,6 @@ static void r_recv_timeout_fn(void *param_ptr)
 }
 
 
-/* from Linux, via Wikipedia */
-/* simple loop based delay: */
-static void delay_loop(unsigned long loops)
-{
-	int d0;
-
-	__asm__ __volatile__(
-		"\tjmp 1f\n"
-		".align 16\n"
-		"1:\tjmp 2f\n"
-		".align 16\n"
-		"2:\tdecl %0\n\tjns 2b"
-		:"=&a" (d0)
-		:"0" (loops));
-}
-
-
 static L4_Word_t r_recv_timeout_case(int priority, bool spin, bool send)
 {
 	const int timeout_ms = 20;
@@ -72,9 +55,14 @@ static L4_Word_t r_recv_timeout_case(int priority, bool spin, bool send)
 	if(spin) {
 		L4_Clock_t start = L4_SystemClock();
 		do {
+			delay_loop(iters_per_tick / 100);
+		} while(start.raw == L4_SystemClock().raw);
+
+		start = L4_SystemClock();
+		do {
 			/* ishygddt */
-			delay_loop(10000000);
-		} while(L4_SystemClock().raw < start.raw + timeout_ms + 1);
+			delay_loop(iters_per_tick);
+		} while(start.raw + timeout_ms > L4_SystemClock().raw + 1);
 	}
 
 	if(send) {

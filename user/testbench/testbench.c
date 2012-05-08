@@ -175,6 +175,7 @@ void sleep_test(void)
 int main(void)
 {
 	printf("hello, world!\n");
+	calibrate_delay_loop();
 
 	tid_test();
 	threadctl_test();
