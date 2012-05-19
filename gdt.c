@@ -13,6 +13,8 @@
 #include <ukernel/tss.h>
 #include <ukernel/misc.h>
 #include <ukernel/slab.h>
+#include <ukernel/thread.h>
+#include <ukernel/space.h>
 #include <ukernel/gdt.h>
 
 
@@ -164,13 +166,14 @@ COLD void go_high(void)
 		__func__, KERNEL_SEG_START, KERNEL_SEG_START + KERNEL_SEG_SIZE - 1,
 		KERNEL_SEG_SIZE, KERNEL_SEG_SIZE / (1024 * 1024));
 
-	const int data_sel = SEG_KERNEL_DATA_HIGH << 3;
+	const int data_sel = SEG_KERNEL_DATA_HIGH << 3,
+		code_sel = SEG_KERNEL_CODE_HIGH << 3;
 
 	kernel_tss.ss0 = data_sel;
 	asm volatile (
 		"\tljmp %0,$1f\n"
 		"1:\n"
-		:: "i" (SEG_KERNEL_CODE_HIGH << 3));
+		:: "i" (code_sel));
 	asm volatile (
 		"\tmov %0, %%ds\n"
 		"\tmov %0, %%es\n"
@@ -181,6 +184,19 @@ COLD void go_high(void)
 		: "memory");
 
 	is_kernel_high = true;		/* the muthafuckin' d-a-e */
+
+	/* fix kthread segments, too. */
+	struct htable_iter it;
+	for(struct thread *t = htable_first(&thread_hash, &it);
+		t != NULL;
+		t = htable_next(&thread_hash, &it))
+	{
+		if(!IS_KERNEL_THREAD(t)) continue;
+		t->ctx.ds = data_sel;
+		t->ctx.es = data_sel;
+		t->ctx.ss = data_sel;
+		t->ctx.cs = code_sel;
+	}
 }
 
 

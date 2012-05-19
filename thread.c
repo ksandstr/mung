@@ -42,6 +42,22 @@ static struct kmem_cache *thread_slab = NULL;
 static int next_kthread_num = 24;
 
 
+static void init_kthread_ctx(struct thread *t, L4_Word_t sp, L4_Word_t ip)
+{
+	int dsel = (is_kernel_high ? SEG_KERNEL_DATA_HIGH : SEG_KERNEL_DATA) << 3,
+		csel = (is_kernel_high ? SEG_KERNEL_CODE_HIGH : SEG_KERNEL_CODE) << 3;
+	t->ctx = (struct x86_exregs){
+		.esp = sp, .eip = ip,
+		/* IOPL 0 (supervisor), interrupts enabled. also a reserved, constant
+		 * bit is set.
+		 */
+		.eflags = (0 << 12) | (1 << 9) | (1 << 1),
+		.es = dsel, .ds = dsel, .ss = dsel,
+		.cs = csel,
+	};
+}
+
+
 COLD struct thread *init_threading(thread_id boot_tid)
 {
 	assert(thread_slab == NULL);
@@ -49,6 +65,7 @@ COLD struct thread *init_threading(thread_id boot_tid)
 		ALIGNOF(struct thread), 0, NULL, NULL);
 
 	struct thread *boot = kmem_cache_zalloc(thread_slab);
+	init_kthread_ctx(boot, 0xdeadf123, 0xdeade123);
 	boot->stack_page = NULL;
 	boot->id = boot_tid;
 	boot->status = TS_RUNNING;
@@ -78,23 +95,6 @@ void yield(struct thread *t)
 	/* TODO: switch to "t" */
 
 	schedule();
-}
-
-
-void thread_save_exregs(
-	struct thread *t,
-	const struct x86_exregs *regs)
-{
-	t->ctx.regs[0] = regs->eax;
-	t->ctx.regs[1] = regs->ebx;
-	t->ctx.regs[2] = regs->ecx;
-	t->ctx.regs[3] = regs->edx;
-	t->ctx.regs[4] = regs->esi;
-	t->ctx.regs[5] = regs->edi;
-	t->ctx.regs[6] = regs->ebp;
-	t->ctx.regs[7] = regs->esp;
-	t->ctx.regs[8] = regs->eip;
-	t->ctx.regs[9] = regs->eflags;
 }
 
 
@@ -197,10 +197,17 @@ struct thread *thread_new(thread_id tid)
 		.quantum = 10000,		/* TODO: time2µs(.ts_len) */
 		.total_quantum = 0,
 
-		/* x86 malarkey. IOPL 3 (peon), interrupts enabled.
-		 * also a reserved, constant bit is set.
-		 */
-		.ctx.regs[9] = (0 << 12) | (1 << 9) | (1 << 1),
+		/* x86 malarkey for non-kernel threads. */
+		.ctx = {
+			/* IOPL 3 (peon), interrupts enabled. also a reserved, constant
+			 * bit is set.
+			 */
+			.eflags = (3 << 12) | (1 << 9) | (1 << 1),
+			.es = SEG_USER_DATA << 3 | 0x3,
+			.ds = SEG_USER_DATA << 3 | 0x3,
+			.cs = SEG_USER_CODE << 3 | 0x3,
+			.ss = SEG_USER_DATA << 3 | 0x3,
+		},
 	};
 
 	htable_add(&thread_hash, int_hash(TID_THREADNUM(t->id)), t);
@@ -256,15 +263,21 @@ struct thread *create_kthread(
 	thread_set_utcb(t, L4_Address(kernel_space->utcb_area)
 		+ TID_THREADNUM(tid.raw) * UTCB_SIZE);
 
-	/* switching into kernel threads ignores EIP (ctx.regs[8]) in favour of
-	 * the ones saved on stack.
-	 */
-	void **stk_top = t->stack_page->vm_addr + PAGE_SIZE - 16;
-	stk_top[0] = &thread_wrapper;
-	stk_top[1] = (void *)0xdeadbeef;
-	stk_top[2] = function;
-	stk_top[3] = parameter;
-	t->ctx.regs[7] = (uintptr_t)stk_top;
+	void **stk_top = t->stack_page->vm_addr + PAGE_SIZE - 32;
+	stk_top[0] = function;
+	stk_top[1] = parameter;
+	int dsel = (is_kernel_high ? SEG_KERNEL_DATA_HIGH : SEG_KERNEL_DATA) << 3,
+		csel = (is_kernel_high ? SEG_KERNEL_CODE_HIGH : SEG_KERNEL_CODE) << 3;
+	t->ctx = (struct x86_exregs){
+		.esp = (L4_Word_t)stk_top - 8,	/* fake return address bump, twice */
+		.eip = (L4_Word_t)&thread_wrapper,
+		/* IOPL 0 (supervisor), interrupts enabled. also a reserved, constant
+		 * bit is set.
+		 */
+		.eflags = (0 << 12) | (1 << 9) | (1 << 1),
+		.es = dsel, .ds = dsel, .ss = dsel,
+		.cs = csel,
+	};
 	t->pri = 250;
 	t->sens_pri = 250;
 	thread_start(t);
@@ -288,8 +301,8 @@ void thread_set_spip(struct thread *t, uintptr_t sp, uintptr_t ip)
 	assert(!IS_KERNEL_THREAD(t));
 	assert(t->status != TS_RUNNING);
 
-	t->ctx.regs[7] = sp;
-	t->ctx.regs[8] = ip;
+	t->ctx.esp = sp;
+	t->ctx.eip = ip;
 }
 
 
@@ -633,9 +646,9 @@ L4_Word_t sys_exregs(
 			assert(dest_utcb != NULL);
 			L4_VREG(dest_utcb, L4_TCR_USERDEFINEDHANDLE) = *udh_p;
 		}
-		if(CHECK_FLAG(ctl_in, CTL_f)) dest_thread->ctx.regs[9] = *flags_p;
-		if(CHECK_FLAG(ctl_in, CTL_i)) dest_thread->ctx.regs[8] = *ip_p;
-		if(CHECK_FLAG(ctl_in, CTL_s)) dest_thread->ctx.regs[7] = *sp_p;
+		if(CHECK_FLAG(ctl_in, CTL_f)) dest_thread->ctx.eflags = *flags_p;
+		if(CHECK_FLAG(ctl_in, CTL_i)) dest_thread->ctx.eip = *ip_p;
+		if(CHECK_FLAG(ctl_in, CTL_s)) dest_thread->ctx.esp = *sp_p;
 
 		ctl_in &= ~regset_mask;
 	}

@@ -319,8 +319,8 @@ void return_to_scheduler(struct x86_exregs *regs)
 	sq_update_thread(next);
 	current_thread = next;
 
-	assert((next->ctx.regs[9] & (1 << 14)) == 0);
-	iret_to_scheduler(&next->ctx);
+	assert((next->ctx.eflags & (1 << 14)) == 0);
+	*regs = next->ctx;
 }
 
 
@@ -337,7 +337,7 @@ void return_to_ipc(struct x86_exregs *regs, struct thread *target)
 void sys_threadswitch(struct x86_exregs *regs)
 {
 	struct thread *current = get_current_thread();
-	thread_save_exregs(current, regs);
+	current->ctx = *regs;
 
 	L4_ThreadId_t target = { .raw = regs->eax };
 	struct thread *other = L4_IsNilThread(target) ? NULL : thread_find(target.raw);

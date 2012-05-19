@@ -3,30 +3,34 @@
 	.global swap_context
 	.type swap_context, @function
 
+
 	.align 16,0
 swap_context:
 	movl 4(%esp), %eax
-	movl %ebp, 24(%eax)
-	movl %ebx, 4(%eax)
-	movl %edi, 20(%eax)
+	movl %edi, 12(%eax)
 	movl %esi, 16(%eax)
-	movl %esp, 28(%eax)
+	movl %ebp, 20(%eax)
+	movl %esp, 60(%eax)
+	movl %ebx, 28(%eax)
+	/* these two are for that function that switches back from user
+	 * space. (maybe.)
+	 */
 	movl (%esp), %ebx
-	movl %ebx, 32(%eax)
+	movl %ebx, 48(%eax)
 	pushf
-	popl 36(%eax)
+	popl 56(%eax)
 
 	movl 8(%esp), %eax
-	movl 24(%eax), %ebp
-	movl 4(%eax), %ebx
-	movl 20(%eax), %edi
+	movl 60(%eax), %esp
+	addl $4, %esp
+	movl 12(%eax), %edi
 	movl 16(%eax), %esi
-	movl 28(%eax), %esp
+	movl 20(%eax), %ebp
+	movl 28(%eax), %ebx
 	/* no need to restore flags over swap_context() */
-	xorl %eax, %eax
-
 	/* bombs away! */
-	ret
+	movl 48(%eax), %eax
+	jmp *%eax
 
 
 	.global swap_to_ring3
@@ -37,16 +41,17 @@ swap_context:
 
 	.align 16,0
 swap_to_ring3:
-	movl 4(%esp), %eax	# the kernelspace (function call) context
-	movl %ebp, 24(%eax)
-	movl %ebx, 4(%eax)
-	movl %edi, 20(%eax)
+	movl 4(%esp), %eax
+	movl %edi, 12(%eax)
 	movl %esi, 16(%eax)
-	movl %esp, 28(%eax)
-	movl (%esp), %ebx	# return address
-	movl %ebx, 32(%eax)
+	movl %ebp, 20(%eax)
+	movl %esp, 60(%eax)
+	movl %ebx, 28(%eax)
+	/* eip and eflags for iret_to_scheduler() */
+	movl (%esp), %ebx
+	movl %ebx, 48(%eax)
 	pushf
-	popl 36(%eax)
+	popl 56(%eax)
 	# ... segments, too?
 
 	# %gs
@@ -54,18 +59,19 @@ swap_to_ring3:
 	movl %eax, %gs
 
 	movl 8(%esp), %eax	# the userspace context
-	movl 4(%eax), %ebx
-	movl 8(%eax), %ecx
-	movl 12(%eax), %edx
+	movl 12(%eax), %edi
 	movl 16(%eax), %esi
-	movl 20(%eax), %edi
-	movl 24(%eax), %ebp
+	movl 20(%eax), %ebp
+	movl 28(%eax), %ebx
+	movl 32(%eax), %edx
+	movl 36(%eax), %ecx
+
 	pushl $USER_DATA_SEL	# stack segment, ring 3
-	pushl 28(%eax)		# sp
-	pushl 36(%eax)		# eflags
+	pushl 60(%eax)		# esp
+	pushl 56(%eax)		# eflags
 	pushl $USER_CODE_SEL	# code segment, ring 3
-	pushl 32(%eax)		# ip
-	pushl (%eax)		# eax (temporary)
+	pushl 48(%eax)		# ip
+	pushl 40(%eax)		# eax (temporary)
 	movl $USER_DATA_SEL, %eax
 	movl %eax, %ds
 	movl %eax, %es
@@ -75,6 +81,9 @@ swap_to_ring3:
 
 
 /* NORETURN void iret_to_scheduler(const struct x86_context *sched_ctx) */
+/* this function is called from isr-32.S's macros. it should be renamed to
+ * "iret_to_kthread()" or some such.
+ */
 	.global iret_to_scheduler
 	.type iret_to_scheduler, @function
 
@@ -84,24 +93,22 @@ swap_to_ring3:
 	.align 16,0
 iret_to_scheduler:
 	movl 4(%esp), %eax
-	# switch to the scheduler's stack.
-	movl 28(%eax), %esp
-	addl $4, %esp		# pop return address from swap_to_ring3()
+	# switch to the scheduler's stack and pop the return address
+	movl 60(%eax), %esp
+	addl $4, %esp
 	# restore scheduler frame
-	movl 4(%eax), %ebx
-	movl 8(%eax), %ecx
-	movl 12(%eax), %edx
+	movl 28(%eax), %ebx
+	movl 36(%eax), %ecx
+	movl 32(%eax), %edx
 	movl 16(%eax), %esi
-	movl 20(%eax), %edi
-	movl 24(%eax), %ebp
+	movl 12(%eax), %edi
+	movl 20(%eax), %ebp
 	# prepare intra-PL iret stack
-	pushl 36(%eax)		# eflags
-	pushl $KERNEL_CODE_SEL
-	pushl 32(%eax)
+	pushl 56(%eax)		# eflags
+	pushl 52(%eax)		# cs
+	pushl 48(%eax)		# eip
 	# we can overwrite eax as swap_to_ring3() returns void.
 	movl $KERNEL_DATA_SEL, %eax
 	movl %eax, %ds
 	movl %eax, %es
-	movl %eax, %fs
-	movl %eax, %gs
 	iret

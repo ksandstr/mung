@@ -155,7 +155,7 @@ msgfail:
 
 static void handle_io_fault(struct thread *current, struct x86_exregs *regs)
 {
-	thread_save_exregs(current, regs);
+	current->ctx = *regs;
 
 	uint8_t insn[16];
 	size_t n = space_memcpy_from(current->space, insn, regs->eip, 16);
@@ -246,20 +246,21 @@ static void receive_exn_reply(struct thread *t, void *priv)
 
 	assert(t->post_exn_call == &receive_exn_reply);
 	void *utcb = thread_get_utcb(t);
-	struct x86_exregs regs;
+	struct x86_exregs *regs = &t->ctx;
+	L4_Word_t eflags;
 	L4_Word_t *exvarptrs[] = {
-		&regs.eip,
-		&regs.eflags,
-		&regs.reason,		/* ExceptionNo */
-		&regs.error,
-		&regs.edi,
-		&regs.esi,
-		&regs.ebp,
-		&regs.esp,
-		&regs.ebx,
-		&regs.edx,
-		&regs.ecx,
-		&regs.eax,
+		&regs->eip,
+		&eflags,
+		&regs->reason,		/* ExceptionNo */
+		&regs->error,
+		&regs->edi,
+		&regs->esi,
+		&regs->ebp,
+		&regs->esp,
+		&regs->ebx,
+		&regs->edx,
+		&regs->ecx,
+		&regs->eax,
 	};
 	int num_vars = sizeof(exvarptrs) / sizeof(exvarptrs[0]);
 	assert(num_vars == 12);
@@ -267,17 +268,15 @@ static void receive_exn_reply(struct thread *t, void *priv)
 		*(exvarptrs[i]) = L4_VREG(utcb, L4_TCR_MR(i + 1));
 	}
 	/* retain privileged EFLAGS bits from thread context. */
-	regs.eflags = (t->ctx.regs[9] & 0xffffff00) | (regs.eflags & 0xff);
+	regs->eflags = (regs->eflags & 0xffffff00) | (eflags & 0xff);
 	/* set reserved bits correctly */
-	regs.eflags &= 0xffffffd7;
-	regs.eflags |= 0x00000002;
+	regs->eflags &= 0xffffffd7;
+	regs->eflags |= 0x00000002;
 
-	/* the wrapped handler */
+	/* the wrapped handler. */
 	t->post_exn_call = priv;
 	t->exn_priv = NULL;
 	(*t->post_exn_call)(t, NULL);
-
-	thread_save_exregs(t, &regs);
 }
 
 
@@ -298,7 +297,7 @@ void isr_exn_gp_bottom(struct x86_exregs *regs)
 	} else if(regs->error == 0x1a) {
 		handle_kdb_enter(current, regs);
 	} else {
-		thread_save_exregs(current, regs);
+		current->ctx = *regs;
 
 		printf("#GP(0x%x) at eip 0x%x, esp 0x%x in %d:%d\n", regs->error,
 			regs->eip, regs->esp, TID_THREADNUM(current->id),
@@ -371,9 +370,10 @@ void isr_exn_pf_bottom(struct x86_exregs *regs)
 	if(last_fault == fault_addr && ++repeat_count == 3) {
 		printf("WARNING: faulted many times on the same address %#x\n",
 			fault_addr);
-		thread_save_exregs(current, regs);
+		current->ctx = *regs;
 		thread_stop(current);
 		return_to_scheduler(regs);
+		return;
 	} else if(last_fault != fault_addr) {
 		last_fault = fault_addr;
 		repeat_count = 0;
@@ -391,7 +391,7 @@ void isr_exn_pf_bottom(struct x86_exregs *regs)
 		repeat_count = 0;	/* sufficiently userspacey. */
 #endif
 
-		thread_save_exregs(current, regs);
+		current->ctx = *regs;
 		void *utcb = thread_get_utcb(current);
 		L4_ThreadId_t pager_id = { .raw = L4_VREG(utcb, L4_TCR_PAGER) };
 		struct thread *pager = likely(!L4_IsNilThread(pager_id))

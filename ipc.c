@@ -258,12 +258,7 @@ static void set_ipc_return_regs(
 static void set_ipc_return_thread(struct thread *t)
 {
 	if(likely(!IS_KERNEL_THREAD(t))) {
-		struct x86_exregs regs;
-		set_ipc_return_regs(&regs, t, thread_get_utcb(t));
-		t->ctx.regs[0] = regs.eax;
-		t->ctx.regs[1] = regs.ebx;
-		t->ctx.regs[4] = regs.esi;
-		t->ctx.regs[6] = regs.ebp;
+		set_ipc_return_regs(&t->ctx, t, thread_get_utcb(t));
 	}
 }
 
@@ -579,7 +574,7 @@ void sys_ipc(struct x86_exregs *regs)
 
 	ipc(current, utcb);
 	if(current->status == TS_SEND_WAIT || current->status == TS_RECV_WAIT) {
-		thread_save_exregs(current, regs);
+		current->ctx = *regs;
 		/* TODO: schedule the partner thread */
 		return_to_scheduler(regs);
 	} else {

@@ -76,7 +76,7 @@ isr_exn_\name\()_top:
 	# interrupt trap), which has the effect of triple-faulting the CPU.
 	# load data segments redundantly to avoid this.
 .ifnb \ecval
-	pushl $\ecval
+	pushl $\ecval		# used for exceptions that don't push a code
 .endif
 	pushl %eax
 	movl $(SEG_KERNEL_DATA_HIGH << 3), %eax
@@ -85,17 +85,20 @@ isr_exn_\name\()_top:
 	movl %eax, %fs
 	popl %eax
 	pushal
-	pushl $USER_DATA_SEL	# ds
-	pushl $USER_DATA_SEL	# es
+	pushl $USER_DATA_SEL	# ds (surrogate)
+	pushl $USER_DATA_SEL	# es (surrogate)
 	pushl $\vecn
 	pushl %esp
 	call isr_exn_\name\()_bottom
-	addl $8, %esp
+	testl $0x3000, 60(%esp)	# test for return to kthread (&eflags + 4)
+	jz 1f			# outgoing IOPL is 0 -> yes, kth it is
+	addl $8, %esp		# pop vecn, regs parameter
 	popl %es
 	popl %ds
 	popal
 	addl $4, %esp		# the error code
 	iret
+1:	call iret_to_scheduler	# kth path (no return)
 	.endm
 
 	ISR_EXN 0, de, 0	# divide error

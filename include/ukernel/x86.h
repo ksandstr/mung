@@ -17,24 +17,29 @@
 /* courtesy of L4Ka::pistachio */
 struct x86_exregs {
 	uint32_t reason;
-	uint32_t es;
-	uint32_t ds;
-	uint32_t edi;
-	uint32_t esi;
-	uint32_t ebp;
-	uint32_t __esp;
-	uint32_t ebx;
-	uint32_t edx;
-	uint32_t ecx;
-	uint32_t eax;
+	/* actual process state */
+	uint32_t es;		/* 4 */
+	uint32_t ds;		/* 8 */
+	uint32_t edi;		/* 12 */
+	uint32_t esi;		/* 16 */
+	uint32_t ebp;		/* 20 */
+	/* (->__esp is just a control field. it isn't the storage location for a
+	 * thread's ESP register; that's ->esp . generally exception bottom
+	 * routines transfer ->esp to ->__esp as appropriate.)
+	 */
+	uint32_t __esp;		/* 24: trapgate ESP on exn entry; dest ESP on exit */
+	uint32_t ebx;		/* 28 */
+	uint32_t edx;		/* 32 */
+	uint32_t ecx;		/* 36 */
+	uint32_t eax;		/* 40 */
 	/* trapgate frame */
-	uint32_t error;
-	uint32_t eip;
-	uint32_t cs;
-	uint32_t eflags;
-	uint32_t esp;
-	uint32_t ss;
-};
+	uint32_t error;		/* 44 */
+	uint32_t eip;		/* 48 */
+	uint32_t cs;		/* 52 */
+	uint32_t eflags;	/* 56 */
+	uint32_t esp;		/* 60: process ESP (r/w by swap_context()) */
+	uint32_t ss;		/* 64 */
+} __attribute__((packed));
 
 
 static inline void x86_flush_tlbs(void) {

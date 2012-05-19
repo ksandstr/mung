@@ -51,17 +51,6 @@ typedef uint32_t thread_id;
 
 struct space;
 
-/* swap_context() is the soft yield. it re-/stores only those registers
- * that're preserved over a SysV x86 function call.
- */
-struct x86_context
-{
-	/* eax, ebx, ecx, edx, esi, edi, ebp, esp, eip, eflags */
-	uint32_t regs[10];
-	/* TODO: others? */
-} __attribute__((packed));
-
-
 struct thread
 {
 	/* sched_rb is in a scheduling queue whenever the thread is not TS_STOPPED
@@ -107,11 +96,10 @@ struct thread
 
 	struct page *stack_page;
 
-	struct x86_context ctx;
+	struct x86_exregs ctx;
 
-	/* saved IPC registers. restored by a cold path in return_to_ipc(). at
-	 * most 13 (acceptor, tag, 12 MRs for exception message) for x86.
-	 * (would be 22 for amd64.)
+	/* saved IPC registers. at most 14 (acceptor, tag, 12 MRs for exception
+	 * message) for x86.
 	 */
 	uint8_t saved_mrs, saved_brs;
 	L4_Word_t saved_regs[14];
@@ -119,6 +107,9 @@ struct thread
 	struct list_node dead_link;	/* link in dead_thread_list */
 };
 
+
+/* keyed by int_hash(thread->id), members are <struct thread *> */
+extern struct htable thread_hash;
 
 extern struct thread *init_threading(thread_id boot_tid);
 extern struct thread *create_kthread(
@@ -128,22 +119,18 @@ extern struct thread *create_kthread(
 /* NOTE: doesn't yield */
 extern void yield(struct thread *to);
 
-/* alters the x86 exception frame to return to the scheduler rather than
- * userspace or a kernel thread.
+/* the "return_to_*" family alters the x86 exception frame to return to the
+ * scheduler's context rather than userspace or a kernel thread. the exception
+ * handler should arrange to return immediately afterward.
  */
 struct x86_exregs;
-extern NORETURN void return_to_scheduler(struct x86_exregs *regs);
+extern void return_to_scheduler(struct x86_exregs *regs);
 /* same, but invokes send-and-wait ipc first and if successful, schedules the
  * target. source is the current thread.
  */
-extern NORETURN void return_to_ipc(
+extern void return_to_ipc(
 	struct x86_exregs *regs,
 	struct thread *target);
-
-
-extern void thread_save_exregs(
-	struct thread *t,
-	const struct x86_exregs *regs);
 
 extern struct thread *get_current_thread(void);
 
@@ -221,15 +208,20 @@ extern NORETURN void end_kthread(void);
 
 /* defined in context-32.S etc. */
 
+/* swap_context() is the soft yield. it re-/stores only those registers
+ * that're preserved over a SysV x86 function call.
+ */
 extern void swap_context(
-	struct x86_context *store,
-	const struct x86_context *load);
+	struct x86_exregs *store,
+	const struct x86_exregs *load);
 
 extern void swap_to_ring3(
-	struct x86_context *store,
-	const struct x86_context *load,
+	struct x86_exregs *store,
+	const struct x86_exregs *load,
 	int gs_selector);
 
+#if 0
 extern NORETURN void iret_to_scheduler(const struct x86_context *sched_ctx);
+#endif
 
 #endif
