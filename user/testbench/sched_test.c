@@ -89,6 +89,47 @@ static void r_recv_timeout_test(void)
 }
 
 
+static void spinner_fn(void *param_ptr)
+{
+	const L4_Word_t *param = param_ptr;
+	printf("spinner spins for %u ms...\n", param[1]);
+
+	L4_Clock_t start = L4_SystemClock();
+	do {
+		delay_loop(iters_per_tick / 4);
+	} while(start.raw + param[1] > L4_SystemClock().raw);
+
+	printf("spinner thread exiting.\n");
+
+	L4_LoadMR(0, 0);
+	L4_Reply((L4_ThreadId_t){ .raw = param[0] });
+}
+
+
+static void preempt_test(void)
+{
+	static L4_Word_t param[2];
+	param[0] = L4_Myself().raw;
+	param[1] = 15;		/* # of ms to spin */
+	L4_ThreadId_t spinner = start_thread(&spinner_fn, param);
+	fail_if(L4_IsNilThread(spinner), "can't start spinner thread");
+
+	/* give it a 5ms slice, and a neverending total quantum */
+	L4_Word_t res = L4_Set_Timeslice(spinner, L4_TimePeriod(5 * 1000),
+		L4_Never);
+	if(res == L4_SCHEDRESULT_ERROR) {
+		printf("%s: L4_Set_Timeslice() failed; errorcode %u\n", __func__,
+			L4_ErrorCode());
+		return;
+	}
+	printf("spinner thread state is %u\n", res);
+
+	/* now wait until the preemption thing happens. */
+	L4_MsgTag_t tag = L4_Receive(spinner);
+	fail_if(L4_IpcFailed(tag));
+}
+
+
 #if 0
 /* TODO: move this into thread_test.c */
 static void helper_fn(void *param)
@@ -116,4 +157,5 @@ void sched_test(void)
 #endif
 
 	r_recv_timeout_test();
+	preempt_test();
 }
