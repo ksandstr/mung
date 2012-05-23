@@ -220,8 +220,7 @@ extern void swap_to_ring3(
 	const struct x86_exregs *load,
 	int gs_selector);
 
-#if 0
-extern NORETURN void iret_to_scheduler(const struct x86_context *sched_ctx);
-#endif
+extern NORETURN void iret_to_scheduler(
+	const struct x86_exregs *sched_ctx);
 
 #endif

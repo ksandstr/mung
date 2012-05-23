@@ -63,6 +63,9 @@ uint8_t syscall_stack[PAGE_SIZE] PAGE_ALIGN;
 uint8_t kcp_copy[PAGE_SIZE] PAGE_ALIGN;
 
 uint64_t *global_timer_count = NULL;
+uint64_t preempt_timer_count = ~(uint64_t)0;
+uint64_t task_switch_time = 0;
+L4_Word_t *scheduler_mr1 = NULL;
 
 
 /* rudimentary serial port output from µiX */
@@ -610,11 +613,16 @@ void kmain(void *bigp, unsigned int magic)
 	first_thread->total_quantum = 0;
 	first_thread->quantum = 10000;
 	first_thread->ts_len = L4_TimePeriod(10000);
+	scheduler_mr1 = &L4_VREG(thread_get_utcb(first_thread), L4_TCR_MR(1));
 	while(true) {
 		first_thread->status = TS_READY;
 		sq_update_thread(first_thread);
+		*scheduler_mr1 = L4_nilthread.raw;
 		if(!schedule()) {
 			asm volatile ("hlt");
+		}
+		if(*scheduler_mr1 != L4_nilthread.raw) {
+			panic("preempt hit! whee!");
 		}
 	}
 }

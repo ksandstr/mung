@@ -399,6 +399,7 @@ void isr_exn_pf_bottom(struct x86_exregs *regs)
 		if(unlikely(pager == NULL)) {
 			printf("thread %d:%d has no pager, stopping it\n",
 				TID_THREADNUM(current->id), TID_VERSION(current->id));
+			printf("  (fault was at %#x, ip %#x)\n", fault_addr, regs->eip);
 			thread_stop(current);
 			return_to_scheduler(regs);
 		} else {

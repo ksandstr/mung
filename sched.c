@@ -238,9 +238,23 @@ bool schedule(void)
 	assert(self->space != NULL);
 	assert(next->space != NULL);
 
+	/* TODO: find the clock tick when this thread'll be pre-empted due to
+	 * exhausted quantum; or when the total quantum exhausted message will be
+	 * triggered (XXX: what is that?); or when a higher-priority thread's IPC
+	 * wakeup time occurs before the quantum expires.
+	 *
+	 * it's a simple enough walk through the sched tree _before_
+	 * sq_update_thread() is called on "next".
+	 */
+	assert(next->quantum > 0);
 	next->status = TS_RUNNING;
 	sq_update_thread(next);
+	task_switch_time = read_global_timer();
+	x86_irq_disable();
 	current_thread = next;
+	preempt_timer_count = task_switch_time + (next->quantum + 999) / 1000;
+	x86_irq_enable();
+
 	if(self->space != next->space) {
 		if(self->space->tss != next->space->tss) {
 			int slot = next->space->tss_seg;
@@ -313,6 +327,12 @@ void return_to_scheduler(struct x86_exregs *regs)
 		TID_THREADNUM(self->id), TID_VERSION(self->id),
 		TID_THREADNUM(next->id), TID_VERSION(next->id));
 
+	uint32_t passed = (read_global_timer() - task_switch_time) * 1000;
+	if(passed > self->quantum) self->quantum = 0;
+	else self->quantum -= passed;
+	TRACE("%s: previous thread's quantum is now %u µs\n", __func__,
+		self->quantum);
+
 	assert(self->status != TS_RUNNING);
 	assert(next->status != TS_RUNNING);
 	next->status = TS_RUNNING;
@@ -351,7 +371,8 @@ void sys_threadswitch(struct x86_exregs *regs)
 
 
 static bool sched_valid_time(L4_Time_t t) {
-	return t.raw == 0xffff || (t.period.a == 0 && t.raw != 0);
+	return t.raw == 0xffff || (t.period.a == 0 && t.raw != 0)
+		|| t.raw == L4_Never.raw;
 }
 
 

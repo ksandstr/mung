@@ -5,6 +5,8 @@
 #include <ccan/compiler/compiler.h>
 
 #include <ukernel/misc.h>
+#include <ukernel/thread.h>
+#include <ukernel/space.h>
 #include <ukernel/x86.h>
 #include <ukernel/interrupt.h>
 
@@ -13,7 +15,7 @@ static void *irq_stack[16];
 static uint32_t irq_pending[16];
 
 
-static void isr_irq_bottom_soft(int irq)
+static void isr_irq_bottom_soft(int irq, struct x86_exregs *regs)
 {
 	assert(irq >= 0 && irq <= 15);
 	if(irq == 1) {
@@ -30,10 +32,10 @@ static void isr_irq_bottom_soft(int irq)
 
 static void isr_irq_bottom_wrap(void *parameter)
 {
-	volatile struct x86_exregs *regs = parameter;
-	const int irq = regs->reason - 0x20;
+	struct x86_exregs *regs = parameter;
+	int irq = regs->reason - 0x20;
 	x86_irq_enable();
-	isr_irq_bottom_soft(irq);
+	isr_irq_bottom_soft(irq, regs);
 	x86_irq_disable();
 	if(unlikely(irq_pending[irq] > 1)) {
 		irq_pending[irq] = 1;
@@ -96,11 +98,37 @@ void isr_irq_bottom(struct x86_exregs *regs)
 }
 
 
-/* the timer interrupt. runs with interrupts disabled by design. */
-void isr_irq0_bottom(void)
+/* the timer interrupt. runs with interrupts disabled by design. returns 0 on
+ * all-clear, nonzero on preemption; in the latter case the ISR wrapper will
+ * prepare a set of exception registers and call isr_[NAME]_bottom_long() on
+ * them. the long half indicates scheduler exit with an eflags field under the
+ * regs parameter with an IOPL value of 0; this causes the ISR routine to call
+ * iret_to_scheduler().
+ */
+int isr_irq0_bottom(void)
 {
 	(*global_timer_count)++;
+	int preempt = *global_timer_count == preempt_timer_count;
 	pic_send_eoi(0);
+
+	return preempt;
+}
+
+
+void isr_irq0_bottom_long(struct x86_exregs *regs)
+{
+	preempt_timer_count = ~(uint64_t)0;
+	if((regs->eflags & 0x3000) == 0) {
+		assert(IS_KERNEL_THREAD(get_current_thread()));
+		/* no preemption for kernel threads (quite yet.) */
+	} else {
+		struct thread *current = get_current_thread();
+		assert(current->status == TS_RUNNING);
+		current->ctx = *regs;
+		current->status = TS_READY;
+		*scheduler_mr1 = current->id;
+		return_to_scheduler(regs);
+	}
 }
 
 
