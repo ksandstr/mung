@@ -194,7 +194,7 @@ struct thread *thread_new(thread_id tid)
 		.pri = 100, .sens_pri = 100,
 		.max_delay = 0,
 		.ts_len = L4_TimePeriod(10000),		/* 10 ms */
-		.quantum = 10000,		/* TODO: time2µs(.ts_len) */
+		.quantum = 0,
 		.total_quantum = 0,
 
 		/* x86 malarkey for non-kernel threads. */

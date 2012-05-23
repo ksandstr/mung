@@ -35,6 +35,7 @@ typedef uint32_t thread_id;
 #define TS_RECV_WAIT 6
 
 
+/* TODO: clean these up. */
 #define IS_READY(st) (st == TS_READY || st == TS_R_RECV)
 #define IS_IPC_WAIT(st) (st == TS_SEND_WAIT || st == TS_RECV_WAIT)
 #define IS_IPC(st) (IS_IPC_WAIT(st) || st == TS_R_RECV)
@@ -57,7 +58,7 @@ struct thread
 	 * or TS_DEAD. this can be tested with IS_SCHED().
 	 */
 	struct rb_node sched_rb;
-	uint64_t wakeup_time;		/* absolute seconds, 44:20 fixed point */
+	uint64_t wakeup_time;		/* absolute microseconds since epoch */
 
 	thread_id id;
 	/* TODO: alter ipc.c to go to TS_STOPPED after IPC completion when TF_HALT

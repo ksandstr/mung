@@ -4,6 +4,7 @@
 #include <ccan/likely/likely.h>
 #include <ccan/compiler/compiler.h>
 
+#include <ukernel/thread.h>
 #include <ukernel/misc.h>
 #include <ukernel/thread.h>
 #include <ukernel/space.h>
@@ -101,10 +102,10 @@ void isr_irq_bottom(struct x86_exregs *regs)
 /* the timer interrupt. runs with interrupts disabled by design. */
 void isr_irq0_bottom(struct x86_exregs *regs)
 {
-	(*global_timer_count)++;
+	uint64_t now = ++(*global_timer_count);
 	pic_send_eoi(0);
 
-	if(*global_timer_count == preempt_timer_count) {
+	if(now == preempt_timer_count) {
 		preempt_timer_count = ~(uint64_t)0;
 		if(x86_frame_len(regs) < sizeof(*regs)) {
 			/* no preemption in kernel code. (quite yet. kernel threads could
@@ -112,6 +113,10 @@ void isr_irq0_bottom(struct x86_exregs *regs)
 			 * of string transfers are uninterruptable.)
 			 */
 		} else {
+			/* (this segment seems long for a timer interrupt. then again, a
+			 * timer interrupt occurs at the start of each tick, which was
+			 * just observed.)
+			 */
 			struct thread *current = get_current_thread();
 			assert(current->status == TS_RUNNING);
 			thread_save_ctx(current, regs);

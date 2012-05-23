@@ -144,11 +144,19 @@ void sq_remove_thread(struct thread *t)
 }
 
 
-static struct thread *schedule_next_thread(struct thread *current)
+/* when this function returns NULL and *saw_zero_p is set to true, the
+ * scheduler should grant all ready threads another timeslice and redo from
+ * start. (the flag indicates that a thread with a zero quantum was skipped
+ * over.)
+ */
+static struct thread *schedule_next_thread(
+	struct thread *current,
+	bool *saw_zero_p)
 {
 	uint64_t now = read_global_timer() * 1000;
 
 	struct thread *pick = NULL;
+	bool saw_zero = false;
 	TRACE("%s: called in %d:%d at %#llx\n", __func__,
 		TID_THREADNUM(current->id), TID_VERSION(current->id), now);
 	for(struct rb_node *cur = rb_first(&sched_tree), *next;
@@ -189,7 +197,8 @@ static struct thread *schedule_next_thread(struct thread *current)
 			set_ipc_error_thread(cand, (1 << 1) | 1);
 		}
 
-		if(pick == NULL || pick->pri < cand->pri) pick = cand;
+		if(cand->quantum == 0) saw_zero = true;
+		else if(pick == NULL || pick->pri < cand->pri) pick = cand;
 	}
 
 #if TRACE_VERBOSE && 0
@@ -202,6 +211,7 @@ static struct thread *schedule_next_thread(struct thread *current)
 	}
 #endif
 
+	*saw_zero_p = saw_zero;
 	return pick;
 }
 
@@ -213,12 +223,32 @@ bool schedule(void)
 	assert(self->status != TS_RUNNING);
 
 	/* find next ready thread. */
-	struct thread *next = schedule_next_thread(self);
+	bool new_slices;
+	struct thread *next = schedule_next_thread(self, &new_slices);
 	assert(next != self);		/* by schedule_next_thread() def */
-	if(unlikely(next == NULL)) {
+	if(next == NULL && !new_slices) {
 		assert(scheduler_thread == NULL
 			|| scheduler_thread == self);
 		return false;
+	} else if(next == NULL) {
+		/* add timeslices to threads that're ready and have none. */
+		uint64_t now = read_global_timer() * 1000;
+		RB_FOREACH(node, &sched_tree) {
+			struct thread *t = rb_entry(node, struct thread, sched_rb);
+			if(IS_READY(t->status) && t->quantum == 0
+				&& t->ts_len.raw != L4_ZeroTime.raw)
+			{
+				/* just take a slice, you, you, double thread */
+				t->quantum = time_in_us(t->ts_len);
+				printf("%s: quantum for %d:%d is now %u µs\n", __func__,
+					TID_THREADNUM(t->id), TID_VERSION(t->id),
+					t->quantum);
+			} else if(IS_IPC_WAIT(t->status) && t->wakeup_time > now) {
+				/* no need to advance past this point. */
+				break;
+			}
+		}
+		return schedule();
 	}
 
 	if(next->status == TS_R_RECV) {
@@ -250,6 +280,7 @@ bool schedule(void)
 	next->status = TS_RUNNING;
 	sq_update_thread(next);
 	task_switch_time = read_global_timer();
+	/* write parameters used by the irq0 handler */
 	x86_irq_disable();
 	current_thread = next;
 	preempt_timer_count = task_switch_time + (next->quantum + 999) / 1000;
@@ -336,13 +367,10 @@ void return_to_scheduler(void)
 	uint32_t passed = (read_global_timer() - task_switch_time) * 1000;
 	if(passed > self->quantum) self->quantum = 0;
 	else self->quantum -= passed;
-	TRACE("%s: previous thread's quantum is now %u µs\n", __func__,
-		self->quantum);
 
 	assert(self->status != TS_RUNNING);
 	assert(next->status != TS_RUNNING);
 	next->status = TS_RUNNING;
-	sq_update_thread(next);
 	current_thread = next;
 
 	assert((next->ctx.eflags & (1 << 14)) == 0);
