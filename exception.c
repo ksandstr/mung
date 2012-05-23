@@ -155,7 +155,8 @@ msgfail:
 
 static void handle_io_fault(struct thread *current, struct x86_exregs *regs)
 {
-	current->ctx = *regs;
+	if(IS_KERNEL_THREAD(current)) panic("kernel IO fault!");
+	thread_save_ctx(current, regs);
 
 	uint8_t insn[16];
 	size_t n = space_memcpy_from(current->space, insn, regs->eip, 16);
@@ -297,7 +298,7 @@ void isr_exn_gp_bottom(struct x86_exregs *regs)
 	} else if(regs->error == 0x1a) {
 		handle_kdb_enter(current, regs);
 	} else {
-		current->ctx = *regs;
+		thread_save_ctx(current, regs);
 
 		printf("#GP(0x%x) at eip 0x%x, esp 0x%x in %d:%d\n", regs->error,
 			regs->eip, regs->esp, TID_THREADNUM(current->id),
@@ -370,7 +371,7 @@ void isr_exn_pf_bottom(struct x86_exregs *regs)
 	if(last_fault == fault_addr && ++repeat_count == 3) {
 		printf("WARNING: faulted many times on the same address %#x\n",
 			fault_addr);
-		current->ctx = *regs;
+		thread_save_ctx(current, regs);
 		thread_stop(current);
 		return_to_scheduler(regs);
 		return;
@@ -391,7 +392,7 @@ void isr_exn_pf_bottom(struct x86_exregs *regs)
 		repeat_count = 0;	/* sufficiently userspacey. */
 #endif
 
-		current->ctx = *regs;
+		thread_save_ctx(current, regs);
 		void *utcb = thread_get_utcb(current);
 		L4_ThreadId_t pager_id = { .raw = L4_VREG(utcb, L4_TCR_PAGER) };
 		struct thread *pager = likely(!L4_IsNilThread(pager_id))

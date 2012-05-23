@@ -316,6 +316,12 @@ NORETURN void end_kthread(void)
 
 void return_to_scheduler(struct x86_exregs *regs)
 {
+	/* FIXME: this procedure should be specified to conditionally perform a
+	 * nonlocal exit to the other thread, abandoning the interrupt handler
+	 * frame. instead of blowing an assert, that is.
+	 */
+	assert(x86_frame_len(regs) == sizeof(*regs));
+
 	struct thread *self = get_current_thread(),
 		*next = scheduler_thread;
 	assert(scheduler_thread != NULL);
@@ -357,7 +363,7 @@ void return_to_ipc(struct x86_exregs *regs, struct thread *target)
 void sys_threadswitch(struct x86_exregs *regs)
 {
 	struct thread *current = get_current_thread();
-	current->ctx = *regs;
+	thread_save_ctx(current, regs);
 
 	L4_ThreadId_t target = { .raw = regs->eax };
 	struct thread *other = L4_IsNilThread(target) ? NULL : thread_find(target.raw);

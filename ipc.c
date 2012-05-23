@@ -574,7 +574,7 @@ void sys_ipc(struct x86_exregs *regs)
 
 	ipc(current, utcb);
 	if(current->status == TS_SEND_WAIT || current->status == TS_RECV_WAIT) {
-		current->ctx = *regs;
+		thread_save_ctx(current, regs);
 		/* TODO: schedule the partner thread */
 		return_to_scheduler(regs);
 	} else {

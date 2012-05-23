@@ -175,6 +175,7 @@ extern bool post_exn_ok(struct thread *t);
 
 /* complicated accessors */
 extern PURE void *thread_get_utcb(struct thread *t);
+extern void thread_save_ctx(struct thread *t, const struct x86_exregs *regs);
 
 
 /* for htable */

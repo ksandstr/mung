@@ -449,6 +449,20 @@ void *thread_get_utcb(struct thread *t)
 }
 
 
+void thread_save_ctx(struct thread *t, const struct x86_exregs *regs)
+{
+	size_t flen = x86_frame_len(regs);
+	memcpy(&t->ctx, regs, flen);
+	if(flen < sizeof(*regs)) {
+		assert(IS_KERNEL_THREAD(t));
+		t->ctx.ss = regs->ds;
+		t->ctx.esp = (L4_Word_t)regs + flen;
+	} else {
+		assert(!IS_KERNEL_THREAD(t));
+	}
+}
+
+
 static bool cmp_thread_to_id(const void *cand, void *ptr)
 {
 	const struct thread *t = cand;

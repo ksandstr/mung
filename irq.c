@@ -124,7 +124,7 @@ void isr_irq0_bottom_long(struct x86_exregs *regs)
 	} else {
 		struct thread *current = get_current_thread();
 		assert(current->status == TS_RUNNING);
-		current->ctx = *regs;
+		thread_save_ctx(current, regs);
 		current->status = TS_READY;
 		*scheduler_mr1 = current->id;
 		return_to_scheduler(regs);

@@ -7,6 +7,8 @@
 #define SEEN_UKERNEL_X86_H
 
 #include <stdint.h>
+#include <stdlib.h>
+#include <stdbool.h>
 
 #include <ukernel/tss.h>
 #include <ukernel/ioport.h>
@@ -40,6 +42,14 @@ struct x86_exregs {
 	uint32_t esp;		/* 60: process ESP (r/w by swap_context()) */
 	uint32_t ss;		/* 64 */
 } __attribute__((packed));
+
+
+static inline size_t x86_frame_len(const struct x86_exregs *frame)
+{
+	bool is_short = (frame->eflags & 0x3000) == 0;
+	if(is_short) return sizeof(*frame) - sizeof(uint32_t) * 2;
+	else return sizeof(*frame);
+}
 
 
 static inline void x86_flush_tlbs(void) {
