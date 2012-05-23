@@ -255,6 +255,8 @@ bool schedule(void)
 	preempt_timer_count = task_switch_time + (next->quantum + 999) / 1000;
 	x86_irq_enable();
 
+	TRACE("%s: next context: eip %#x, esp %#x\n", __func__,
+		next->ctx.eip, next->ctx.esp);
 	if(self->space != next->space) {
 		if(self->space->tss != next->space->tss) {
 			int slot = next->space->tss_seg;
@@ -314,14 +316,12 @@ NORETURN void end_kthread(void)
 }
 
 
-void return_to_scheduler(struct x86_exregs *regs)
+/* this function must always perform a nonlocal exit, because it'll always
+ * represent an intra-privilege control transfer (user thread in kernel mode
+ * to kernel thread). so it's a stack exiting thing.
+ */
+void return_to_scheduler(void)
 {
-	/* FIXME: this procedure should be specified to conditionally perform a
-	 * nonlocal exit to the other thread, abandoning the interrupt handler
-	 * frame. instead of blowing an assert, that is.
-	 */
-	assert(x86_frame_len(regs) == sizeof(*regs));
-
 	struct thread *self = get_current_thread(),
 		*next = scheduler_thread;
 	assert(scheduler_thread != NULL);
@@ -346,17 +346,17 @@ void return_to_scheduler(struct x86_exregs *regs)
 	current_thread = next;
 
 	assert((next->ctx.eflags & (1 << 14)) == 0);
-	*regs = next->ctx;
+	iret_to_scheduler(&next->ctx);
 }
 
 
-void return_to_ipc(struct x86_exregs *regs, struct thread *target)
+void return_to_ipc(struct thread *target)
 {
 	ipc_simple(target);
 
 	/* TODO: schedule the target thread next */
 
-	return_to_scheduler(regs);
+	return_to_scheduler();
 }
 
 
@@ -372,7 +372,7 @@ void sys_threadswitch(struct x86_exregs *regs)
 	}
 
 	current->status = TS_READY;
-	return_to_scheduler(regs);
+	return_to_scheduler();
 }
 
 

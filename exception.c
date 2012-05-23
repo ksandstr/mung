@@ -63,7 +63,7 @@ void isr_exn_ud_bottom(struct x86_exregs *regs)
 		printf("#UD at eip 0x%x, esp 0x%x\n", regs->eip, regs->esp);
 		/* TODO: pop an "invalid opcode" exception. */
 		thread_stop(current);
-		return_to_scheduler(regs);
+		return_to_scheduler();
 	}
 }
 
@@ -88,8 +88,9 @@ void isr_exn_basic_sc_bottom(struct x86_exregs *regs)
 		struct thread *current = get_current_thread();
 		printf("unknown basic syscall %d (caller stopped)\n", regs->eax);
 		thread_stop(current);
-		return_to_scheduler(regs);
+		return_to_scheduler();
 	} else {
+		assert(x86_frame_len(regs) == sizeof(*regs));
 		(*fn[sc_num])(regs);
 	}
 }
@@ -149,7 +150,7 @@ static void handle_kdb_enter(struct thread *current, struct x86_exregs *regs)
 
 msgfail:
 	thread_stop(current);
-	return_to_scheduler(regs);
+	return_to_scheduler();
 }
 
 
@@ -230,14 +231,14 @@ static void handle_io_fault(struct thread *current, struct x86_exregs *regs)
 	L4_VREG(utcb, L4_TCR_MR(0)) = ((-8) & 0xfff) << 20 | 0x6 << 16 | 2;
 	L4_VREG(utcb, L4_TCR_MR(1)) = L4_IoFpage(port, size).raw;
 	L4_VREG(utcb, L4_TCR_MR(2)) = regs->eip;
-	return_to_ipc(regs, pager);
+	return_to_ipc(pager);
 #endif
 
 	return;
 
 fail:
 	thread_stop(current);
-	return_to_scheduler(regs);
+	return_to_scheduler();
 }
 
 
@@ -290,7 +291,8 @@ void isr_exn_gp_bottom(struct x86_exregs *regs)
 			regs->error, regs->eip, regs->esp,
 			TID_THREADNUM(current->id), TID_VERSION(current->id));
 		thread_stop(current);
-		return_to_scheduler(regs);
+		return_to_scheduler();
+		assert(false);
 	}
 
 	if(regs->error == 0) {
@@ -336,10 +338,10 @@ void isr_exn_gp_bottom(struct x86_exregs *regs)
 			current->exn_priv = current->post_exn_call;
 			current->post_exn_call = &receive_exn_reply;
 
-			return_to_ipc(regs, exh);
+			return_to_ipc(exh);
 		} else {
 			thread_stop(current);
-			return_to_scheduler(regs);
+			return_to_scheduler();
 		}
 	}
 }
@@ -373,8 +375,8 @@ void isr_exn_pf_bottom(struct x86_exregs *regs)
 			fault_addr);
 		thread_save_ctx(current, regs);
 		thread_stop(current);
-		return_to_scheduler(regs);
-		return;
+		return_to_scheduler();
+		assert(false);
 	} else if(last_fault != fault_addr) {
 		last_fault = fault_addr;
 		repeat_count = 0;
@@ -402,7 +404,7 @@ void isr_exn_pf_bottom(struct x86_exregs *regs)
 				TID_THREADNUM(current->id), TID_VERSION(current->id));
 			printf("  (fault was at %#x, ip %#x)\n", fault_addr, regs->eip);
 			thread_stop(current);
-			return_to_scheduler(regs);
+			return_to_scheduler();
 		} else {
 			save_ipc_regs(current, 3, 1);
 			L4_VREG(utcb, L4_TCR_BR(0)) = L4_CompleteAddressSpace.raw;
@@ -411,7 +413,7 @@ void isr_exn_pf_bottom(struct x86_exregs *regs)
 				| 2;		/* "u" for msgtag */
 			L4_VREG(utcb, L4_TCR_MR(1)) = fault_addr;
 			L4_VREG(utcb, L4_TCR_MR(2)) = regs->eip;
-			return_to_ipc(regs, pager);
+			return_to_ipc(pager);
 		}
 	}
 }

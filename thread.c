@@ -457,6 +457,11 @@ void thread_save_ctx(struct thread *t, const struct x86_exregs *regs)
 		assert(IS_KERNEL_THREAD(t));
 		t->ctx.ss = regs->ds;
 		t->ctx.esp = (L4_Word_t)regs + flen;
+#if 0
+		printf("%s: saved kernel thread %d:%d: eip %#x, esp %#x\n", __func__,
+			TID_THREADNUM(t->id), TID_VERSION(t->id),
+			t->ctx.eip, t->ctx.esp);
+#endif
 	} else {
 		assert(!IS_KERNEL_THREAD(t));
 	}

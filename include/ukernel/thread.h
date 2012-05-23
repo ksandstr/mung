@@ -119,18 +119,15 @@ extern struct thread *create_kthread(
 /* NOTE: doesn't yield */
 extern void yield(struct thread *to);
 
-/* the "return_to_*" family alters the x86 exception frame to return to the
- * scheduler's context rather than userspace or a kernel thread. the exception
- * handler should arrange to return immediately afterward.
+/* the "return_to_*" family exits the current interrupt or exception context
+ * and resumes execution in the x86 frame given. "current_thread" is updated.
  */
 struct x86_exregs;
-extern void return_to_scheduler(struct x86_exregs *regs);
+extern NORETURN void return_to_scheduler(void);
 /* same, but invokes send-and-wait ipc first and if successful, schedules the
  * target. source is the current thread.
  */
-extern void return_to_ipc(
-	struct x86_exregs *regs,
-	struct thread *target);
+extern NORETURN void return_to_ipc(struct thread *target);
 
 extern struct thread *get_current_thread(void);
 

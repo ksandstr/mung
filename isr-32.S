@@ -7,7 +7,10 @@
 
 	/* ISR_IRQ produces IRQ interrupt handlers that call a common bottom
 	 * half while pushing $vecn as the "reason" field in the parameter
-	 * <struct x86_exregs *>.
+	 * <struct x86_exregs *>. this is useful in the common case because
+	 * non-fast IRQs being caught generally indicates that a device driver,
+	 * running at a higher priority than the current thread, will
+	 * immediately pre-empt the running thread.
 	 */
 	.macro ISR_IRQ vecn, name
 	.global isr_\name\()_top
@@ -41,8 +44,7 @@ isr_irq_common:
 
 
 	/* ISR_IRQ_FAST produces the same as ISR_IRQ, but calls a specific
-	 * bottom half without an exregs parameter, calling a long-half with an
-	 * exregs parameter if the prior handler returns with a nonzero value.
+	 * bottom half.
 	 */
 	.macro ISR_IRQ_FAST vecn, name
 	.global isr_\name\()_top
@@ -52,46 +54,17 @@ isr_\name\()_top:
 	pushal
 	pushl %ds
 	pushl %es
+	pushl $\vecn
+	pushl %esp
 	movl $(SEG_KERNEL_DATA_HIGH << 3), %eax
 	movl %eax, %ds
 	movl %eax, %es
 	call isr_\name\()_bottom
-	popl %es
-	popl %ds
-	testl %eax, %eax
-	jnz 1f
-	popal
-	iret
-	.align 16
-1:	# the "long" path.
-	popal
-	# set data segs
-	pushl %eax
-	movl $(SEG_KERNEL_DATA_HIGH << 3), %eax
-	movl %eax, %ds
-	movl %eax, %es
-	popl %eax
-	# build exregs
-	pushl $0		# code filler
-	pushal
-	pushl $USER_DATA_SEL	# ds (surrogate)
-	pushl $USER_DATA_SEL	# es (surrogate)
-	pushl $\vecn		# reason
-	pushl %esp
-	movl 60(%esp), %esi	# callee-saves register: old eflags
-	call isr_\name\()_bottom_long
-	testl $0x3000, %esi
-	jz 3f			# on the kernel stack; do nothing.
-	testl $0x3000, 60(%esp)	# test for return to kthread (&eflags + 4)
-	jz 2f			# outgoing IOPL is 0 -> yes, kth it is
-3:	addl $8, %esp		# pop regs, reason parameters
+	addl $8, %esp
 	popl %es
 	popl %ds
 	popal
-	addl $4, %esp		# the error code
 	iret
-	.align 16
-2:	call iret_to_scheduler	# kth path (no return)
 	.endm
 
 	ISR_IRQ_FAST 0x20, irq0
@@ -125,16 +98,12 @@ isr_exn_\name\()_top:
 	pushl $\vecn
 	pushl %esp
 	call isr_exn_\name\()_bottom
-	testl $0x3000, 60(%esp)	# test for return to kthread (&eflags + 4)
-	jz 1f			# outgoing IOPL is 0 -> yes, kth it is
 	addl $8, %esp		# pop regs, reason parameters
 	popl %es
 	popl %ds
 	popal
 	addl $4, %esp		# the error code
 	iret
-	.align 16
-1:	call iret_to_scheduler	# kth path (no return)
 	.endm
 
 	ISR_EXN 0, de, 0	# divide error
