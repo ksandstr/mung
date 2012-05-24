@@ -620,9 +620,16 @@ void kmain(void *bigp, unsigned int magic)
 		*scheduler_mr1 = L4_nilthread.raw;
 		if(!schedule()) {
 			asm volatile ("hlt");
-		}
-		if(*scheduler_mr1 != L4_nilthread.raw) {
-			panic("preempt hit! whee!");
+		} else if(*scheduler_mr1 != L4_nilthread.raw) {
+			struct thread *prev = thread_find(*scheduler_mr1);
+			if(prev != NULL) {
+				printf("*** thread %d:%d was preempted (remaining quantum %u µs)\n",
+					TID_THREADNUM(prev->id), TID_VERSION(prev->id),
+					prev->quantum);
+				/* TODO: send preemption faults, total quantum exhaustion message,
+				 * etc, as appropriate
+				 */
+			}
 		}
 	}
 }
