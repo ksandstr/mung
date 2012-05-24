@@ -239,10 +239,16 @@ bool schedule(void)
 				&& t->ts_len.raw != L4_ZeroTime.raw)
 			{
 				/* just take a slice, you, you, double thread */
-				t->quantum = time_in_us(t->ts_len);
+				if(t->ts_len.raw == L4_Never.raw) {
+					t->quantum = 60000000;	/* a minute */
+				} else {
+					t->quantum = time_in_us(t->ts_len);
+				}
+#if 0
 				printf("%s: quantum for %d:%d is now %u µs\n", __func__,
 					TID_THREADNUM(t->id), TID_VERSION(t->id),
 					t->quantum);
+#endif
 			} else if(IS_IPC_WAIT(t->status) && t->wakeup_time > now) {
 				/* no need to advance past this point. */
 				break;
@@ -280,10 +286,16 @@ bool schedule(void)
 	next->status = TS_RUNNING;
 	sq_update_thread(next);
 	task_switch_time = read_global_timer();
+	uint64_t preempt_at;
+	if(next->ts_len.raw != L4_Never.raw) {
+		preempt_at = task_switch_time + (next->quantum + 999) / 1000;
+	} else {
+		preempt_at = 0;
+	}
 	/* write parameters used by the irq0 handler */
 	x86_irq_disable();
 	current_thread = next;
-	preempt_timer_count = task_switch_time + (next->quantum + 999) / 1000;
+	preempt_timer_count = preempt_at;
 	x86_irq_enable();
 
 	TRACE("%s: next context: eip %#x, esp %#x\n", __func__,
