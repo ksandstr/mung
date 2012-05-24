@@ -25,11 +25,7 @@ struct x86_exregs {
 	uint32_t edi;		/* 12 */
 	uint32_t esi;		/* 16 */
 	uint32_t ebp;		/* 20 */
-	/* (->__esp is just a control field. it isn't the storage location for a
-	 * thread's ESP register; that's ->esp . generally exception bottom
-	 * routines transfer ->esp to ->__esp as appropriate.)
-	 */
-	uint32_t __esp;		/* 24: trapgate ESP on exn entry; dest ESP on exit */
+	uint32_t __esp;		/* 24: trapgate ESP on exn entry */
 	uint32_t ebx;		/* 28 */
 	uint32_t edx;		/* 32 */
 	uint32_t ecx;		/* 36 */
