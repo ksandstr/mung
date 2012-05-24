@@ -17,6 +17,7 @@
 	.type isr_\name\()_top, @function
 	.align 16,0
 isr_\name\()_top:
+	subl $4, %esp		# trash error
 	pushal
 	pushl %ds
 	pushl %es
@@ -40,6 +41,7 @@ isr_irq_common:
 	popl %es
 	popl %ds
 	popal
+	addl $4, %esp		# pop trash error
 	iret
 
 
@@ -51,6 +53,7 @@ isr_irq_common:
 	.type isr_\name\()_top, @function
 	.align 16,0
 isr_\name\()_top:
+	subl $4, %esp		# trash errorcode
 	pushal
 	pushl %ds
 	pushl %es
@@ -64,6 +67,7 @@ isr_\name\()_top:
 	popl %es
 	popl %ds
 	popal
+	addl $4, %esp		# pop errorcode
 	iret
 	.endm
 
