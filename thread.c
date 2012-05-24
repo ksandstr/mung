@@ -436,7 +436,7 @@ void *thread_get_utcb(struct thread *t)
 {
 	assert(t->space != NULL);
 	assert(t->utcb_pos >= 0);
-	assert(t->utcb_pos < NUM_UTCB_PAGES(t->space->utcb_area));
+	assert(t->utcb_pos < NUM_UTCB_PAGES(t->space->utcb_area) * UTCB_PER_PAGE);
 
 	int page_ix = t->utcb_pos / UTCB_PER_PAGE,
 		offset = t->utcb_pos & (UTCB_PER_PAGE - 1);
@@ -464,6 +464,11 @@ void thread_save_ctx(struct thread *t, const struct x86_exregs *regs)
 #endif
 	} else {
 		assert(!IS_KERNEL_THREAD(t));
+#if 0
+		printf("%s: saved user thread %d:%d: eip %#x, esp %#x\n", __func__,
+			TID_THREADNUM(t->id), TID_VERSION(t->id),
+			t->ctx.eip, t->ctx.esp);
+#endif
 	}
 }
 
