@@ -92,14 +92,16 @@ static void r_recv_timeout_test(void)
 static void spinner_fn(void *param_ptr)
 {
 	const L4_Word_t *param = param_ptr;
-	printf("spinner spins for %u ms...\n", param[1]);
+	printf("spinner spins for %u ms from %llu...\n", param[1],
+		L4_SystemClock().raw);
 
 	L4_Clock_t start = L4_SystemClock();
 	do {
 		delay_loop(iters_per_tick / 4);
 	} while(start.raw + param[1] > L4_SystemClock().raw);
 
-	printf("spinner thread exiting.\n");
+	printf("spinner thread exiting at %llu.\n",
+		L4_SystemClock().raw);
 
 	L4_LoadMR(0, 0);
 	L4_Reply((L4_ThreadId_t){ .raw = param[0] });
@@ -136,9 +138,18 @@ static void preempt_test(void)
 	printf("spinner thread state is %u; has %u µs quantum\n",
 		res, (unsigned)time_in_us(ts));
 
-	/* now wait until the preemption thing happens. */
-	L4_MsgTag_t tag = L4_Receive(spinner);
-	fail_if(L4_IpcFailed(tag));
+	/* now wait until the preemption thing happens, but wake up every 3 ms
+	 * just to cause preemptions in the spinner thread.
+	 */
+	L4_Clock_t start = L4_SystemClock();
+	L4_MsgTag_t tag;
+	do {
+		tag = L4_Receive_Timeout(spinner, L4_TimePeriod(3 * 1000));
+		if(L4_IpcFailed(tag)) {
+			printf("spinner didn't send yet at %llu\n",
+				L4_SystemClock().raw);
+		}
+	} while(!L4_IpcSucceeded(tag) && start.raw + 500 > L4_SystemClock().raw);
 }
 
 
