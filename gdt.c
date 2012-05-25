@@ -285,8 +285,10 @@ int reserve_gdt_ptr_seg(uintptr_t l_addr)
 		}
 		r->use_count = 0;
 
+#if 0
 		printf("allocated GDT slot %d for linear 0x%x\n", r->gdt_slot,
 			r->l_addr);
+#endif
 		gdt_array[r->gdt_slot] = GDT_ENTRY(r->l_addr, 4,
 			DESC_A_PRESENT | DESC_A_PRIV_MASK | DESC_A_SYSTEM,
 			DESC_F_SZ);
