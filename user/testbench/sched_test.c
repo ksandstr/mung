@@ -106,23 +106,35 @@ static void spinner_fn(void *param_ptr)
 }
 
 
+/* NOTE: copypasta'd from <ukernel/util.h> */
+static uint64_t time_in_us(L4_Time_t t)
+{
+	/* only defined for periods. c'mon. that's what "in" means. */
+	assert(t.period.a == 0);
+	if(t.raw == L4_ZeroTime.raw) return 0;
+	else return (uint32_t)t.period.m * (1u << t.period.e);
+}
+
+
 static void preempt_test(void)
 {
 	static L4_Word_t param[2];
 	param[0] = L4_Myself().raw;
 	param[1] = 15;		/* # of ms to spin */
-	L4_ThreadId_t spinner = start_thread(&spinner_fn, param);
+	L4_ThreadId_t spinner = start_thread_long(&spinner_fn, param,
+		2, L4_TimePeriod(5 * 1000), L4_Never);
+	printf("returned to %s after spinner start\n", __func__);
 	fail_if(L4_IsNilThread(spinner), "can't start spinner thread");
 
-	/* give it a 5ms slice, and a neverending total quantum */
-	L4_Word_t res = L4_Set_Timeslice(spinner, L4_TimePeriod(5 * 1000),
-		L4_Never);
+	L4_Time_t ts, tq;
+	L4_Word_t res = L4_Timeslice(spinner, &ts, &tq);
 	if(res == L4_SCHEDRESULT_ERROR) {
-		printf("%s: L4_Set_Timeslice() failed; errorcode %u\n", __func__,
+		printf("%s: L4_Timeslice() failed; errorcode %u\n", __func__,
 			L4_ErrorCode());
 		return;
 	}
-	printf("spinner thread state is %u\n", res);
+	printf("spinner thread state is %u; has %u µs quantum\n",
+		res, (unsigned)time_in_us(ts));
 
 	/* now wait until the preemption thing happens. */
 	L4_MsgTag_t tag = L4_Receive(spinner);
