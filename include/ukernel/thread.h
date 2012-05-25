@@ -193,6 +193,13 @@ static inline void sq_update_thread(struct thread *t) {
 }
 
 extern const char *sched_status_str(struct thread *t);
+/* returns true if "other" will preempt "self"'s current quantum, counted from
+ * switch_time_us.
+ */
+extern bool preempted_by(
+	struct thread *self,
+	uint64_t switch_at_us,
+	struct thread *other);
 
 extern void sys_schedule(struct x86_exregs *regs);
 extern void sys_threadswitch(struct x86_exregs *regs);

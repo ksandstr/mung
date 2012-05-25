@@ -57,6 +57,8 @@ static inline uint64_t runnable_at(const struct thread *t) {
  */
 static inline int sq_cmp(const struct thread *a, const struct thread *b)
 {
+	if(a == b) return 0;
+
 	uint64_t wa = runnable_at(a), wb = runnable_at(b);
 	if(wa < wb) return -1;
 	else if(wa > wb) return 1;
@@ -141,6 +143,20 @@ void sq_remove_thread(struct thread *t)
 #endif
 
 	rb_erase(&t->sched_rb, &sched_tree);
+}
+
+
+bool preempted_by(
+	struct thread *self,
+	uint64_t switch_at_us,
+	struct thread *other)
+{
+	/* TODO: implement checking of the delayed preemption. this requires UTCB
+	 * access, so take one of those for "self" too.
+	 */
+	return IS_READY(other->status) && other->pri > self->pri		/* basics */
+		/* timeslice without delay */
+		&& other->wakeup_time <= switch_at_us + self->quantum;
 }
 
 
@@ -259,8 +275,11 @@ bool schedule(void)
 
 	if(next->status == TS_R_RECV) {
 		assert(!IS_KERNEL_THREAD(next));
-		if(!ipc_recv_half(next) && next->status == TS_RECV_WAIT) {
-			/* try again (passive receive) */
+		bool preempt = false, r_done = ipc_recv_half(next, &preempt);
+		if((!r_done && next->status == TS_RECV_WAIT) || (r_done && preempt)) {
+			/* either entered passive receive (and not eligible to run
+			 * anymore), or preempted by the sender. try again.
+			 */
 			return schedule();
 		}
 	}

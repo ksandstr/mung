@@ -33,8 +33,12 @@ extern void sys_ipc(struct x86_exregs *regs);
  * when these return false, and thread status is not the corresponding
  * TS_{RECV,SEND}_WAIT, the IPC operation should return. the thread's
  * ErrorCode will have been set.
+ *
+ * when ipc_recv_half() returns true, and the thread status is TS_READY, and
+ * *preempt_p is returned as true, the caller should preempt the current
+ * receiver thread if it is currently executing.
  */
-extern bool ipc_recv_half(struct thread *receiver);
+extern bool ipc_recv_half(struct thread *receiver, bool *preempt_p);
 extern bool ipc_send_half(struct thread *sender);
 
 /* used by the scheduler */
