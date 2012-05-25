@@ -48,6 +48,13 @@ extern void sched_test(void);
 /* from thread.c */
 
 extern L4_ThreadId_t start_thread(void (*fn)(void *), void *param);
+extern L4_ThreadId_t start_thread_long(
+	void (*fn)(void *),
+	void *param,
+	int priority,
+	L4_Time_t ts_len,
+	L4_Time_t total_quantum);
+
 extern void join_thread(L4_ThreadId_t tid);
 
 

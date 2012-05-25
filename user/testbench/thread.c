@@ -11,6 +11,7 @@
 #include <l4/types.h>
 #include <l4/thread.h>
 #include <l4/ipc.h>
+#include <l4/schedule.h>
 #include <l4/syscall.h>
 
 #include "defs.h"
@@ -81,6 +82,19 @@ end:
 
 L4_ThreadId_t start_thread(void (*fn)(void *param), void *param)
 {
+	/* default timeslice is 50 ms just to avoid preemptions. */
+	return start_thread_long(fn, param, -1, L4_TimePeriod(3 * 1000),
+		L4_Never);
+}
+
+
+L4_ThreadId_t start_thread_long(
+	void (*fn)(void *param),
+	void *param,
+	int priority,
+	L4_Time_t ts_len,
+	L4_Time_t total_quantum)
+{
 	static bool first = true;
 	if(unlikely(first)) {
 		init_threading();
@@ -117,6 +131,16 @@ L4_ThreadId_t start_thread(void (*fn)(void *param), void *param)
 	uint8_t *stack = &thread_stack_mem[t * THREAD_STACK_SIZE];
 	L4_Word_t stk_top = (L4_Word_t)stack + THREAD_STACK_SIZE - 16;
 	L4_Set_UserDefinedHandleOf(tid, self.raw);
+	if(priority != -1) {
+		L4_Word_t r = L4_Set_Priority(tid, priority);
+		if(r == L4_SCHEDRESULT_ERROR) {
+			printf("%s: L4_Set_Priority() failed: errorcode %u\n",
+				__func__, L4_ErrorCode());
+			/* TODO: cleanups? */
+			return L4_nilthread;
+		}
+	}
+	L4_Set_Timeslice(tid, ts_len, total_quantum);
 	L4_Start_SpIp(tid, stk_top, (L4_Word_t)&thread_wrapper);
 	L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 3 }.raw);
 	L4_LoadMR(1, (L4_Word_t)fn);
