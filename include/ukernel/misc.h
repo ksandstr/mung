@@ -23,7 +23,7 @@ extern uint8_t syscall_stack[];
 /* should only be read with interrupts disabled! */
 extern uint64_t *global_timer_count;
 extern uint64_t preempt_timer_count;	/* likewise only r/w with ints off */
-extern uint64_t task_switch_time;
+extern uint64_t task_switch_time;		/* ms */
 /* set per CPU rather early, used to signal preemption scheduling */
 extern L4_Word_t *scheduler_mr1;
 
