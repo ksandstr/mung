@@ -487,6 +487,7 @@ bool ipc_recv_half(struct thread *self, bool *preempt_p)
 		}
 		post_exn_ok(self);
 
+		assert(IS_READY(from->status));
 		*preempt_p = self == get_current_thread()
 			&& preempted_by(self, task_switch_time * 1000, from);
 		if(*preempt_p) {

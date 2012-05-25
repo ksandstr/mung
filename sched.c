@@ -154,9 +154,45 @@ bool preempted_by(
 	/* TODO: implement checking of the delayed preemption. this requires UTCB
 	 * access, so take one of those for "self" too.
 	 */
-	return IS_READY(other->status) && other->pri > self->pri		/* basics */
+	return other->pri > self->pri		/* basics */
 		/* timeslice without delay */
 		&& other->wakeup_time <= switch_at_us + self->quantum;
+}
+
+
+static uint64_t next_preempt_at(
+	struct thread *self,
+	uint64_t switch_at_us)
+{
+	uint64_t at = ~(uint64_t)0;
+
+	struct rb_node *pos = &self->sched_rb;
+	pos = rb_next(pos);		/* skip self. */
+	/* skip over threads with equal priority. */
+	while(pos != NULL) {
+		struct thread *other = container_of(pos, struct thread, sched_rb);
+		if(other->pri > self->pri) break;
+		pos = rb_next(pos);
+	}
+	/* out of the ones that preempt this thread, choose the closest.
+	 * (FIXME: doesn't account for preemption delay.)
+	 */
+	bool got = false;
+	uint64_t q_end = switch_at_us + self->quantum;
+	while(pos != NULL) {
+		struct thread *other = container_of(pos, struct thread, sched_rb);
+		assert(other->wakeup_time > switch_at_us);
+		if(preempted_by(self, switch_at_us, other)) {
+			at = MIN(uint64_t, other->wakeup_time, at);
+			got = true;
+		} else if(other->wakeup_time > q_end) {
+			/* early exit */
+			break;
+		}
+		pos = rb_next(pos);
+	}
+
+	return got ? at : 0;
 }
 
 
@@ -303,15 +339,22 @@ bool schedule(void)
 	 */
 	assert(next->quantum > 0);
 	next->status = TS_RUNNING;
-	sq_update_thread(next);
 	task_switch_time = read_global_timer();
-	uint64_t preempt_at;
+	uint64_t preempt_at = next_preempt_at(next, task_switch_time * 1000);
 	if(next->ts_len.raw != L4_Never.raw) {
-		preempt_at = task_switch_time + (next->quantum + 999) / 1000;
-	} else {
-		preempt_at = 0;
+		uint64_t q_end = task_switch_time * 1000 + next->quantum;
+#if 0
+		/* this block's print statements screw with the timing. that's bad. */
+		if(TID_THREADNUM(next->id) == 162 && TID_VERSION(next->id) == 5) {
+			printf("next preempt at %llu; quantum ends at %llu\n",
+				preempt_at, q_end);
+		}
+#endif
+		if(preempt_at == 0 || preempt_at > q_end) preempt_at = q_end;
 	}
+
 	/* write parameters used by the irq0 handler */
+	preempt_at = (preempt_at + 999) / 1000;
 	x86_irq_disable();
 	current_thread = next;
 	preempt_timer_count = preempt_at;

@@ -624,9 +624,11 @@ void kmain(void *bigp, unsigned int magic)
 		} else if(*scheduler_mr1 != L4_nilthread.raw) {
 			struct thread *prev = thread_find(*scheduler_mr1);
 			if(prev != NULL) {
+	#if 0
 				printf("*** thread %d:%d was preempted (remaining quantum %u µs)\n",
 					TID_THREADNUM(prev->id), TID_VERSION(prev->id),
 					prev->quantum);
+	#endif
 				/* TODO: send preemption faults, total quantum exhaustion message,
 				 * etc, as appropriate
 				 */
