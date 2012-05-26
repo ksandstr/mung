@@ -609,31 +609,14 @@ void kmain(void *bigp, unsigned int magic)
 	setup_timer_ch0();
 	pic_clear_mask(0x01, 0x00);
 
-	printf("kmain() entering halt-schedule loop.\n");
 	first_thread->pri = 0;
 	first_thread->sens_pri = 0;
 	first_thread->total_quantum = 0;
 	first_thread->quantum = 10000;
 	first_thread->ts_len = L4_TimePeriod(10000);
-	scheduler_mr1 = &L4_VREG(thread_get_utcb(first_thread), L4_TCR_MR(1));
-	while(true) {
-		first_thread->status = TS_READY;
-		sq_update_thread(first_thread);
-		*scheduler_mr1 = L4_nilthread.raw;
-		if(!schedule()) {
-			asm volatile ("hlt");
-		} else if(*scheduler_mr1 != L4_nilthread.raw) {
-			struct thread *prev = thread_find(*scheduler_mr1);
-			if(prev != NULL) {
-#if 0
-				printf("*** thread %d:%d was preempted (remaining quantum %u µs)\n",
-					TID_THREADNUM(prev->id), TID_VERSION(prev->id),
-					prev->quantum);
-#endif
-				/* TODO: send preemption faults, total quantum exhaustion message,
-				 * etc, as appropriate
-				 */
-			}
-		}
-	}
+	sq_update_thread(first_thread);
+
+	printf("kmain() entering halt-schedule loop.\n");
+	scheduler_loop(first_thread);
+	assert(false);
 }

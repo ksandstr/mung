@@ -422,6 +422,32 @@ NORETURN void end_kthread(void)
 }
 
 
+NORETURN void scheduler_loop(struct thread *self)
+{
+	assert(scheduler_mr1 == NULL);
+	scheduler_mr1 = &L4_VREG(thread_get_utcb(self), L4_TCR_MR(1));
+	while(true) {
+		*scheduler_mr1 = L4_nilthread.raw;
+		self->status = TS_READY;
+		if(!schedule()) {
+			asm volatile ("hlt");
+		} else if(*scheduler_mr1 != L4_nilthread.raw) {
+			struct thread *prev = thread_find(*scheduler_mr1);
+			if(prev != NULL) {
+#if 0
+				printf("*** thread %d:%d was preempted (remaining quantum %u µs)\n",
+					TID_THREADNUM(prev->id), TID_VERSION(prev->id),
+					prev->quantum);
+#endif
+				/* TODO: send preemption faults, total quantum exhaustion message,
+				 * etc, as appropriate
+				 */
+			}
+		}
+	}
+}
+
+
 /* this function must always perform a nonlocal exit, because it'll always
  * represent an intra-privilege control transfer (user thread in kernel mode
  * to kernel thread). so it's a stack exiting thing.

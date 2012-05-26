@@ -57,4 +57,8 @@ extern bool schedule(void);
 extern NORETURN void end_kthread(void);
 
 
+/* where CPU-starting threads go to cause proper scheduling */
+extern NORETURN void scheduler_loop(struct thread *self);
+
+
 #endif
