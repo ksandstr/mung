@@ -4,6 +4,8 @@
 #ifndef __L4__VREGS_H__
 #define __L4__VREGS_H__
 
+#include <stdbool.h>
+
 #include <ccan/compiler/compiler.h>
 #include <l4/types.h>
 
@@ -97,6 +99,67 @@ static inline void L4_StoreBRs(int i, int num, L4_Word_t *ptr)
 	for(int c = 0; c < num; c++, i++) {
 		ptr[c] = L4_VREG(utcb, L4_TCR_BR(i));
 	}
+}
+
+
+/* "bit test and set" */
+#define __BTAS(bit, word) ({ \
+		uint8_t _v = 0; \
+		__asm__ __volatile__ ("bts %1, %2; setc %0" \
+			: "=r" (_v) \
+			: "i" ((bit)), "m" ((word))); \
+		_v; \
+	})
+/* "bit test and clear" */
+#define __BTAC(bit, word) ({ \
+		uint8_t _v = 0; \
+		__asm__ __volatile__ ("btr %1, %2; setc %0" \
+			: "=r" (_v) \
+			: "i" ((bit)), "m" ((word))); \
+		_v; \
+	})
+
+
+/* CopFlags access. entirely untested. */
+
+static inline void L4_Set_CopFlag(L4_Word_t n)
+{
+	__asm__ __volatile__ ("orl %0, %1"
+		:: "ir" (1 << (8 + n)),
+		   "m" (L4_VREG(__L4_Get_UtcbAddress(), L4_TCR_COP_PREEMPT)));
+}
+
+
+static inline void L4_Clr_CopFlag(L4_Word_t n)
+{
+	__asm__ __volatile__ ("andl %0, %1"
+		:: "ir" (~(1 << (8 + n))),
+		   "m" (L4_VREG(__L4_Get_UtcbAddress(), L4_TCR_COP_PREEMPT)));
+}
+
+
+static inline bool L4_EnablePreemptionFaultException(void) {
+	return (bool)__BTAS(5, L4_VREG(__L4_Get_UtcbAddress(), L4_TCR_COP_PREEMPT));
+}
+
+
+static inline bool L4_DisablePreemptionFaultException(void) {
+	return (bool)__BTAC(5, L4_VREG(__L4_Get_UtcbAddress(), L4_TCR_COP_PREEMPT));
+}
+
+
+static inline bool L4_EnablePreemption(void) {
+	return (bool)__BTAS(6, L4_VREG(__L4_Get_UtcbAddress(), L4_TCR_COP_PREEMPT));
+}
+
+
+static inline bool L4_DisablePreemption(void) {
+	return (bool)__BTAC(6, L4_VREG(__L4_Get_UtcbAddress(), L4_TCR_COP_PREEMPT));
+}
+
+
+static inline bool L4_PreemptionPending(void) {
+	return (bool)__BTAC(7, L4_VREG(__L4_Get_UtcbAddress(), L4_TCR_COP_PREEMPT));
 }
 
 
