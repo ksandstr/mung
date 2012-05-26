@@ -18,6 +18,7 @@
 #include <ukernel/misc.h>
 #include <ukernel/space.h>
 #include <ukernel/gdt.h>
+#include <ukernel/sched.h>
 #include <ukernel/thread.h>
 
 

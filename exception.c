@@ -8,6 +8,7 @@
 
 #include <ukernel/x86.h>
 #include <ukernel/thread.h>
+#include <ukernel/sched.h>
 #include <ukernel/space.h>
 #include <ukernel/ipc.h>
 #include <ukernel/syscall.h>

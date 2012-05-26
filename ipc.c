@@ -17,6 +17,7 @@
 #include <ukernel/misc.h>
 #include <ukernel/slab.h>
 #include <ukernel/thread.h>
+#include <ukernel/sched.h>
 #include <ukernel/space.h>
 #include <ukernel/ipc.h>
 

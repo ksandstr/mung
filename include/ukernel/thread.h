@@ -117,21 +117,6 @@ extern struct thread *create_kthread(
 	void (*function)(void *),
 	void *parameter);
 
-/* NOTE: doesn't yield */
-extern void yield(struct thread *to);
-
-/* the "return_to_*" family exits the current interrupt or exception context
- * and resumes execution in the x86 frame given. "current_thread" is updated.
- */
-struct x86_exregs;
-extern NORETURN void return_to_scheduler(void);
-/* same, but invokes send-and-wait ipc first and if successful, schedules the
- * target. source is the current thread.
- */
-extern NORETURN void return_to_ipc(struct thread *target);
-
-extern struct thread *get_current_thread(void);
-
 extern void thread_set_space(struct thread *t, struct space *sp);
 /* finds by thread ID, ignores version. */
 extern struct thread *thread_find(thread_id tid);
@@ -159,9 +144,6 @@ extern void thread_stop(struct thread *t);
 extern void thread_sleep(struct thread *t, L4_Time_t period);
 extern void thread_wake(struct thread *t);
 
-/* returns clock value that fits thread->wakeup_time */
-extern uint64_t wakeup_at(L4_Time_t period);
-
 extern void save_ipc_regs(struct thread *t, int mrs, int brs);
 /* these return false for ordinary IPC (with return values etc), and true for
  * exception IPC (with a full frame restore). they don't care about kernel
@@ -182,34 +164,6 @@ extern size_t hash_thread_by_id(const void *threadptr, void *dataptr);
 
 /* defined in sched.c */
 extern struct thread *current_thread, *scheduler_thread;
-
-/* scheduling queues */
-extern void sq_insert_thread(struct thread *t);
-extern void sq_remove_thread(struct thread *t);
-
-static inline void sq_update_thread(struct thread *t) {
-	sq_remove_thread(t);
-	sq_insert_thread(t);
-}
-
-extern const char *sched_status_str(struct thread *t);
-/* returns true if "other" will preempt "self"'s current quantum, counted from
- * switch_time_us.
- */
-extern bool preempted_by(
-	struct thread *self,
-	uint64_t switch_at_us,
-	struct thread *other);
-
-extern void sys_schedule(struct x86_exregs *regs);
-extern void sys_threadswitch(struct x86_exregs *regs);
-
-/* switches away from a kernel thread.
- * returns false when no thread was activated.
- */
-extern bool schedule(void);
-
-extern NORETURN void end_kthread(void);
 
 
 /* defined in context-32.S etc. */

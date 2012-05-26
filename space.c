@@ -19,6 +19,7 @@
 #include <ukernel/slab.h>
 #include <ukernel/misc.h>
 #include <ukernel/thread.h>
+#include <ukernel/sched.h>
 #include <ukernel/mapdb.h>
 #include <ukernel/kip.h>
 #include <ukernel/space.h>

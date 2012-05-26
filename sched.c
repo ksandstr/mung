@@ -16,6 +16,7 @@
 #include <ukernel/space.h>
 #include <ukernel/misc.h>
 #include <ukernel/thread.h>
+#include <ukernel/sched.h>
 
 
 #define TRACE_VERBOSE 0		/* 1 for "[KU]-[KU]: %d:%d -> %d:%d" prints */
