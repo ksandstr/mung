@@ -91,6 +91,8 @@ static void r_recv_timeout_test(void)
 
 static void spinner_fn(void *param_ptr)
 {
+	L4_EnablePreemptionFaultException();
+
 	const L4_Word_t *param = param_ptr;
 	printf("spinner spins for %u ms from %llu...\n", param[1],
 		L4_SystemClock().raw);
@@ -148,8 +150,27 @@ static void preempt_test(void)
 		if(L4_IpcFailed(tag)) {
 			printf("spinner didn't send yet at %llu\n",
 				L4_SystemClock().raw);
+		} else if(tag.X.label == (-4u & 0xfff)) {
+			L4_Word_t words[63];
+			int num = tag.X.u + tag.X.t;
+			if(num > 64) num = 64;
+			L4_StoreMRs(1, num, words);
+			printf("got exception of %u words: ip %#x\n", tag.X.u, words[0]);
+
+			/* should reply, or the spinner will stop. */
+			tag.X.label = 0;
+			L4_LoadMR(0, tag.raw);
+			L4_LoadMRs(1, num, words);
+			tag = L4_Reply(spinner);
+			if(L4_IpcFailed(tag)) {
+				printf("spinner preempt reply failed: ec %#x\n",
+					L4_ErrorCode());
+			}
+		} else if(tag.X.u == 0) {
+			printf("got regular spinner exit\n");
+			break;
 		}
-	} while(!L4_IpcSucceeded(tag) && start.raw + 500 > L4_SystemClock().raw);
+	} while(start.raw + 500 > L4_SystemClock().raw);
 }
 
 
