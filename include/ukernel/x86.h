@@ -42,7 +42,7 @@ struct x86_exregs {
 
 static inline size_t x86_frame_len(const struct x86_exregs *frame)
 {
-	bool is_short = (frame->eflags & 0x3000) == 0;
+	bool is_short = frame->cs == (SEG_KERNEL_CODE_HIGH << 3 | 0);
 	if(is_short) return sizeof(*frame) - sizeof(uint32_t) * 2;
 	else return sizeof(*frame);
 }
