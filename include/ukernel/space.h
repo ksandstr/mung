@@ -60,6 +60,7 @@ extern struct space *space_new(void);
 extern void space_free(struct space *sp);
 extern void space_add_thread(struct space *sp, struct thread *t);
 extern void space_remove_thread(struct space *sp, struct thread *t);
+extern void space_switch(struct space *sp);
 /* (this only finds spaces that've got at least one thread associated with
  * them.)
  */

@@ -269,6 +269,25 @@ static struct thread *schedule_next_thread(
 }
 
 
+/* saves scheduler context into *prev. loads space and thread context for
+ * *next.
+ */
+static void switch_thread(struct thread *prev, struct thread *next)
+{
+	space_switch(next->space);
+
+	/* load the new context */
+	if(IS_KERNEL_THREAD(next)) {
+		/* zomg optimized */
+		swap_context(&prev->ctx, &next->ctx);
+	} else {
+		/* go go goblin balls! */
+		assert(next->utcb_ptr_seg != 0);
+		swap_to_ring3(&prev->ctx, &next->ctx, next->utcb_ptr_seg << 3 | 3);
+	}
+}
+
+
 bool schedule(void)
 {
 	struct thread *self = get_current_thread();
@@ -363,33 +382,7 @@ bool schedule(void)
 
 	TRACE("%s: next context: eip %#x, esp %#x\n", __func__,
 		next->ctx.eip, next->ctx.esp);
-	if(self->space != next->space) {
-		if(self->space->tss != next->space->tss) {
-			int slot = next->space->tss_seg;
-			if(slot == 0) slot = SEG_KERNEL_TSS;
-			unbusy_tss(slot);
-			set_current_tss(slot);
-		}
-		if(self->space == kernel_space) {
-			/* switch from kernel initial space */
-			asm volatile ("movl %0, %%cr3"
-				:: "a" (next->space->pdirs->id << 12)
-				: "memory");
-			/* go go goblin balls! */
-			assert(next->utcb_ptr_seg != 0);
-			swap_to_ring3(&self->ctx, &next->ctx, next->utcb_ptr_seg << 3 | 3);
-		} else {
-			/* from one userspace process to another */
-			panic("WORP");
-		}
-	} else {
-		/* intra-space switch. */
-		if(self->space == kernel_space) {
-			swap_context(&self->ctx, &next->ctx);
-		} else {
-			panic("WNAR");
-		}
-	}
+	switch_thread(self, next);
 
 	TRACE("%s: returned to %d:%d from going to %d:%d; (current_thread is %d:%d)\n",
 		__func__,

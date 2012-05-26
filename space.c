@@ -30,6 +30,7 @@ static struct space kernel_space_mem;
 
 static struct kmem_cache *space_slab = NULL;
 static struct list_head space_list = LIST_HEAD_INIT(space_list);
+static struct space *current_space = NULL;
 
 
 static size_t hash_page_by_id(const void *page_ptr, void *priv)
@@ -134,6 +135,33 @@ void space_remove_thread(struct space *sp, struct thread *t)
 	t->space = NULL;
 
 	if(list_empty(&sp->threads)) space_free(sp);
+}
+
+
+void space_switch(struct space *next)
+{
+	struct space *old = current_space;
+	if(unlikely(old == NULL)) old = kernel_space;
+
+	if(old == next) return;
+
+	if(old->tss != next->tss) {
+		int slot = next->tss_seg;
+		/* (XXX what is this for anyway?) */
+		if(slot == 0) slot = SEG_KERNEL_TSS;
+		unbusy_tss(slot);
+		set_current_tss(slot);
+	}
+
+	/* page directory base register */
+	asm volatile ("movl %0, %%cr3"
+		:: "a" (next->pdirs->id << 12)
+		: "memory");
+	/* (TODO: if interrupted here, current_space won't correspond to the page
+	 * tables. unlikely to be an issue unless schedule() is called within an
+	 * interrupt handler.)
+	 */
+	current_space = next;
 }
 
 
