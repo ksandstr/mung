@@ -7,6 +7,7 @@
 #include <ukernel/thread.h>
 #include <ukernel/misc.h>
 #include <ukernel/thread.h>
+#include <ukernel/sched.h>
 #include <ukernel/space.h>
 #include <ukernel/x86.h>
 #include <ukernel/interrupt.h>
