@@ -80,9 +80,6 @@ COLD struct thread *init_threading(thread_id boot_tid)
 	htable_add(&thread_hash, int_hash(TID_THREADNUM(boot->id)), boot);
 	sq_insert_thread(boot);
 
-	current_thread = boot;
-	scheduler_thread = boot;
-
 	return boot;
 }
 

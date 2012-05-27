@@ -29,13 +29,16 @@
 #endif
 
 
-struct thread *current_thread = NULL;
-struct thread *scheduler_thread = NULL;
-
+static struct thread *current_thread = NULL, *scheduler_thread = NULL;
 static struct rb_root sched_tree = { };
-
 extern struct list_head thread_list, dead_thread_list;
 extern struct htable thread_hash;
+
+
+COLD void init_sched(struct thread *current)
+{
+	current_thread = current;
+}
 
 
 struct thread *get_current_thread(void) {
@@ -264,6 +267,7 @@ static struct thread *schedule_next_thread(
 	}
 #endif
 
+	assert(pick != current);
 	*saw_zero_p = saw_zero;
 	return pick;
 }
@@ -290,14 +294,14 @@ static void switch_thread(struct thread *prev, struct thread *next)
 
 bool schedule(void)
 {
+	/* "self" is the kthread that calls schedule(). */
 	struct thread *self = get_current_thread();
-	assert(self->space == kernel_space);
+	assert(IS_KERNEL_THREAD(self));
 	assert(self->status != TS_RUNNING);
 
 	/* find next ready thread. */
 	bool new_slices;
 	struct thread *next = schedule_next_thread(self, &new_slices);
-	assert(next != self);		/* by schedule_next_thread() def */
 	if(next == NULL && !new_slices) {
 		assert(scheduler_thread == NULL
 			|| scheduler_thread == self);
@@ -340,9 +344,6 @@ bool schedule(void)
 		next->space == kernel_space ? 'K' : 'U',
 		TID_THREADNUM(self->id), TID_VERSION(self->id),
 		TID_THREADNUM(next->id), TID_VERSION(next->id));
-
-	assert(self->space != NULL);
-	assert(next->space != NULL);
 
 	/* TODO: find the clock tick when this thread'll be pre-empted due to
 	 * exhausted quantum; or when the total quantum exhausted message will be
@@ -404,6 +405,7 @@ NORETURN void end_kthread(void)
 NORETURN void scheduler_loop(struct thread *self)
 {
 	assert(scheduler_mr1 == NULL);
+	scheduler_thread = self;
 	scheduler_mr1 = &L4_VREG(thread_get_utcb(self), L4_TCR_MR(1));
 	while(true) {
 		*scheduler_mr1 = L4_nilthread.raw;

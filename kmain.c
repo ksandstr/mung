@@ -571,6 +571,7 @@ void kmain(void *bigp, unsigned int magic)
 
 	struct thread *first_thread = init_threading(THREAD_ID(17, 1));
 	space_add_thread(kernel_space, first_thread);
+	init_sched(first_thread);
 
 	/* this creates a pager for the s0, s1 processes. it isn't necessary, but
 	 * in development it functions as a printf() output path and for catching

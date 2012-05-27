@@ -10,6 +10,13 @@
 #include <ukernel/thread.h>
 
 
+/* initializes the scheduler.
+ *
+ * TODO: should be generalized to accept a per-CPU structure, and initialize
+ * the scheduling bits in that.
+ */
+extern void init_sched(struct thread *current);
+
 /* the "return_to_*" family exits the current interrupt or exception context
  * and resumes execution in the x86 frame given. "current_thread" is updated.
  */
@@ -56,9 +63,7 @@ extern bool schedule(void);
 /* called by the kthread wrapper function. */
 extern NORETURN void end_kthread(void);
 
-
 /* where CPU-starting threads go to cause proper scheduling */
 extern NORETURN void scheduler_loop(struct thread *self);
-
 
 #endif

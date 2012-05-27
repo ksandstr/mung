@@ -162,10 +162,6 @@ extern void thread_save_ctx(struct thread *t, const struct x86_exregs *regs);
 extern size_t hash_thread_by_id(const void *threadptr, void *dataptr);
 
 
-/* defined in sched.c */
-extern struct thread *current_thread, *scheduler_thread;
-
-
 /* defined in context-32.S etc. */
 
 /* swap_context() is the soft yield. it re-/stores only those registers
