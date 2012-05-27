@@ -492,10 +492,12 @@ bool ipc_recv_half(struct thread *self, bool *preempt_p)
 		*preempt_p = self == get_current_thread()
 			&& preempted_by(self, task_switch_time * 1000, from);
 		if(*preempt_p) {
+#if 0
 			printf("%s: thread %u:%u (pri %d) was preempted by partner %u:%u (pri %d)\n",
 				__func__, TID_THREADNUM(self->id), TID_VERSION(self->id),
 				(int)self->pri, TID_THREADNUM(from->id), TID_VERSION(from->id),
 				(int)from->pri);
+#endif
 			assert(self->status == TS_RUNNING || self->status == TS_R_RECV
 				|| self->status == TS_READY);
 			self->status = TS_READY;

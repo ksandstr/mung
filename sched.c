@@ -316,11 +316,6 @@ bool schedule(void)
 				} else {
 					t->quantum = time_in_us(t->ts_len);
 				}
-#if 0
-				printf("%s: quantum for %d:%d is now %u µs\n", __func__,
-					TID_THREADNUM(t->id), TID_VERSION(t->id),
-					t->quantum);
-#endif
 			} else if(IS_IPC_WAIT(t->status) && t->wakeup_time > now) {
 				/* no need to advance past this point. */
 				break;
@@ -363,13 +358,6 @@ bool schedule(void)
 	uint64_t preempt_at = next_preempt_at(next, task_switch_time * 1000);
 	if(next->ts_len.raw != L4_Never.raw) {
 		uint64_t q_end = task_switch_time * 1000 + next->quantum;
-#if 0
-		/* this block's print statements screw with the timing. that's bad. */
-		if(TID_THREADNUM(next->id) == 162 && TID_VERSION(next->id) == 5) {
-			printf("next preempt at %llu; quantum ends at %llu\n",
-				preempt_at, q_end);
-		}
-#endif
 		if(preempt_at == 0 || preempt_at > q_end) preempt_at = q_end;
 	}
 
@@ -380,8 +368,6 @@ bool schedule(void)
 	preempt_timer_count = preempt_at;
 	x86_irq_enable();
 
-	TRACE("%s: next context: eip %#x, esp %#x\n", __func__,
-		next->ctx.eip, next->ctx.esp);
 	switch_thread(self, next);
 
 	TRACE("%s: returned to %d:%d from going to %d:%d; (current_thread is %d:%d)\n",
