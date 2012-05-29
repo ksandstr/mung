@@ -36,7 +36,7 @@ void nsleep(unsigned long nanoseconds)
 	int nano_per_hz = 1000000000 / hz,
 		ticks = nanoseconds / nano_per_hz;
 	if(ticks > 2 && false) {
-		/* FIXME */
+		/* FIXME: this doesn't work, does it... */
 		L4_Clock_t start = L4_SystemClock();
 		do {
 			delay_loop(iters_per_tick / hz);
@@ -52,7 +52,7 @@ void nsleep(unsigned long nanoseconds)
 
 void usleep(unsigned long microseconds)
 {
-	/* FIXME: implement */
+	/* TODO: proper implementation */
 	nsleep(microseconds * 1000);
 }
 

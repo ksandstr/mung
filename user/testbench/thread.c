@@ -42,7 +42,7 @@ static void init_threading(void)
 	}
 
 	base_tnum = L4_ThreadNo(L4_Myself()) + 2;
-	/* FIXME: pull mask, UTCB size from KIP */
+	/* TODO: pull mask, UTCB size from KIP */
 	utcb_base = (L4_MyLocalId().raw & ~511ul) + 512 + 512;
 }
 
@@ -51,7 +51,6 @@ static void thread_wrapper(void)
 {
 	L4_ThreadId_t self = L4_MyGlobalId();
 	L4_ThreadId_t parent = { .raw = L4_UserDefinedHandle() };
-//	printf("%s: entered, parent is %#x\n", __func__, parent.raw);
 	L4_Set_ExceptionHandler(parent);
 
 	L4_Word_t tnum;
@@ -150,7 +149,7 @@ L4_ThreadId_t start_thread_long(
 	if(L4_IpcFailed(tag)) {
 		printf("%s: initial IPC failed, ErrorCode %#x\n", __func__,
 			L4_ErrorCode());
-		/* FIXME: destroy the thread */
+		/* TODO: cleanups! */
 		return L4_nilthread;
 	}
 
