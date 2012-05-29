@@ -27,6 +27,8 @@
 
 #define MSB(x) (sizeof((x)) * 8 - __builtin_clzl((x)) - 1)
 
+#define WORD_BITS (sizeof(L4_Word_t) * 8)
+
 
 /* usage:
  *
