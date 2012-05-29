@@ -224,7 +224,7 @@ static bool cmp_gdt_resv_addr(const void *cand, void *key) {
 
 int set_gdt_slot(L4_Word_t base, L4_Word_t limit, int access, int flags)
 {
-	/* FIXME: use a bitmap for allocating the free segments. */
+	/* TODO: use a bitmap for allocating the free segments. */
 	int slot = 0;
 	for(int i=N_KERNEL_SEGS; i < NUM_GDT_ENTRIES; i++) {
 		if(gdt_array[i].flags_limit1 == 0) {
@@ -270,9 +270,7 @@ int reserve_gdt_ptr_seg(uintptr_t l_addr)
 	if(r == NULL) {
 		r = kmem_cache_alloc(gdt_resv_slab);
 		r->l_addr = l_addr;
-		/* FIXME: use something prettier than a linear search that usually
-		 * fails.
-		 */
+		/* TODO: use the same allocator as set_gdt_slot() */
 		r->gdt_slot = 0;
 		for(int i=N_KERNEL_SEGS; i < NUM_GDT_ENTRIES; i++) {
 			if(gdt_array[i].flags_limit1 == 0) {

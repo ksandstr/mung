@@ -57,11 +57,19 @@ extern void go_high(void);
  */
 extern void init_gdt_resv(void);
 
+/* sharing of pointer segments, i.e. the base thing for values in
+ * %fs and %gs .
+ */
 extern int reserve_gdt_ptr_seg(uintptr_t l_addr);
 extern void release_gdt_ptr_seg(uintptr_t l_addr, int slot);
 
+/* set_gdt_slot() reserves a free GDT slot exclusively. used by space.c to
+ * allocate TSS segment descriptors.
+ */
 extern int set_gdt_slot(L4_Word_t base, L4_Word_t limit, int access, int flags);
 extern void free_gdt_slot(int slot);
+
+/* TSS mangling */
 extern void unbusy_tss(int slot);
 extern void set_current_tss(int slot);
 
