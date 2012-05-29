@@ -160,8 +160,8 @@ static void handle_io_fault(struct thread *current, struct x86_exregs *regs)
 	if(IS_KERNEL_THREAD(current)) panic("kernel IO fault!");
 	thread_save_ctx(current, regs);
 
-	uint8_t insn[16];
-	size_t n = space_memcpy_from(current->space, insn, regs->eip, 16);
+	uint8_t insn_buf[16], *insn = insn_buf;
+	size_t n = space_memcpy_from(current->space, insn_buf, regs->eip, 16);
 #if 0
 	printf("insn bytes [%u]:", (unsigned)n);
 	for(int i=0; i < n; i++) printf(" %#02x", insn[i]);
@@ -174,40 +174,53 @@ static void handle_io_fault(struct thread *current, struct x86_exregs *regs)
 	}
 
 	__attribute__((unused)) bool in = true;
-	int port, size = 1;
+	int port, size = 4;
+	if(insn[0] == 0x66) {
+		/* the "word-size" prefix */
+		size = 2;
+		insn++;
+	}
 	switch(insn[0]) {
 		case 0xe4:	/* IN AL, imm8 */
 			port = insn[1];
+			size = 1;
 			break;
 
-		case 0xe5:	/* IN AX, imm8 */
+		case 0xe5:	/* IN [E]AX, imm8 */
 			port = insn[1];
-			size = 2;
-			/* FIXME: recognize IN EAX, imm8 also! */
+			break;
+
+		case 0xe6:	/* OUT imm8, AL */
+			port = insn[1];
+			size = 1;
+			in = false;
+			break;
+
+		case 0xe7:	/* OUT imm8, [E]AX */
+			port = insn[1];
+			in = false;
 			break;
 
 		case 0xec:	/* IN AL, DX */
 			port = regs->edx & 0xffff;
+			size = 1;
 			break;
 
-		case 0xed:	/* IN AX, DX */
+		case 0xed:	/* IN [E]AX, DX */
 			port = regs->edx & 0xffff;
-			size = 2;
-			/* FIXME: recognize IN EAX, DX also! */
 			break;
 
 		case 0xee:	/* OUT DX, AL */
 			port = regs->edx & 0xffff;
+			size = 1;
 			in = false;
 			break;
 
-		case 0xef:	/* OUT DX, AX */
+		case 0xef:	/* OUT DX, [E]AX */
 			port = regs->edx & 0xffff;
 			in = false;
-			/* FIXME: recognize OUT DX, EAX also! */
 			break;
 
-		/* TODO: OUT imm8, AL; OUT imm8, [E]AX */
 		/* TODO: string variants */
 
 		default:
