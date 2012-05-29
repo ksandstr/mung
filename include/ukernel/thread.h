@@ -138,7 +138,8 @@ extern void sys_threadcontrol(struct x86_exregs *regs);
 extern struct thread *thread_new(thread_id tid);
 
 extern void thread_set_spip(struct thread *t, L4_Word_t sp, L4_Word_t ip);
-extern void thread_set_utcb(struct thread *t, L4_Word_t start);
+/* returns false on some error (generally when out of GDT slots). */
+extern bool thread_set_utcb(struct thread *t, L4_Word_t start);
 extern void thread_start(struct thread *t);
 extern void thread_stop(struct thread *t);
 extern void thread_sleep(struct thread *t, L4_Time_t period);

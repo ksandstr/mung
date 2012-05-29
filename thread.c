@@ -258,8 +258,14 @@ struct thread *create_kthread(
 		panic("arrrrrgggghhhh!");
 	}
 	space_add_thread(kernel_space, t);
-	thread_set_utcb(t, L4_Address(kernel_space->utcb_area)
+	bool ok = thread_set_utcb(t, L4_Address(kernel_space->utcb_area)
 		+ TID_THREADNUM(tid.raw) * UTCB_SIZE);
+	if(unlikely(!ok)) {
+		/* TODO: free t->stack_page */
+		space_remove_thread(kernel_space, t);
+		kmem_cache_free(thread_slab, t);
+		return NULL;
+	}
 
 	void **stk_top = t->stack_page->vm_addr + PAGE_SIZE - 32;
 	stk_top[0] = function;
@@ -304,7 +310,8 @@ void thread_set_spip(struct thread *t, uintptr_t sp, uintptr_t ip)
 }
 
 
-void thread_set_utcb(struct thread *t, L4_Word_t start)
+/* FIXME: check return values from calloc(), mapdb_add_map(), etc */
+bool thread_set_utcb(struct thread *t, L4_Word_t start)
 {
 	assert(t->space != NULL);
 	assert(!L4_IsNilFpage(t->space->utcb_area));
@@ -352,7 +359,13 @@ void thread_set_utcb(struct thread *t, L4_Word_t start)
 	if(likely(sp != kernel_space)) {
 		assert(t->utcb_ptr_seg == 0);
 		t->utcb_ptr_seg = reserve_gdt_ptr_seg(start + 256 - 4);
+		if(unlikely(t->utcb_ptr_seg < 0)) {
+			t->utcb_ptr_seg = 0;
+			return false;
+		}
 	}
+
+	return true;
 }
 
 
@@ -699,6 +712,9 @@ fail:
 }
 
 
+/* TODO: make this function atomic on error? it seems a proper microkernel
+ * should be like that.
+ */
 void sys_threadcontrol(struct x86_exregs *regs)
 {
 	L4_ThreadId_t dest_tid = { .raw = regs->eax },
@@ -786,7 +802,11 @@ void sys_threadcontrol(struct x86_exregs *regs)
 			ec = 6;
 			goto end;
 		}
-		thread_set_utcb(dest, utcb_loc);
+		bool ok = thread_set_utcb(dest, utcb_loc);
+		if(unlikely(!ok)) {
+			ec = 8;		/* "out of memory" */
+			goto end;
+		}
 	}
 
 	if(!L4_IsNilThread(scheduler)) dest->scheduler = scheduler;

@@ -8,6 +8,7 @@
 #include <assert.h>
 #include <ccan/compiler/compiler.h>
 #include <ccan/alignof/alignof.h>
+#include <ccan/likely/likely.h>
 #include <ccan/htable/htable.h>
 
 #include <ukernel/mm.h>
@@ -296,11 +297,15 @@ int reserve_gdt_ptr_seg(uintptr_t l_addr)
 		&cmp_gdt_resv_addr, &l_addr);
 	if(r == NULL) {
 		r = kmem_cache_alloc(gdt_resv_slab);
-		r->l_addr = l_addr;
-		/* TODO: use the same allocator as set_gdt_slot() */
+		if(unlikely(r == NULL)) return -1;
+
 		r->gdt_slot = alloc_gdt_slot();
-		/* FIXME: add failure result */
-		if(r->gdt_slot < 0) panic("ran out of GDT slots!");
+		if(unlikely(r->gdt_slot < 0)) {
+			kmem_cache_free(gdt_resv_slab, r);
+			return -1;
+		}
+
+		r->l_addr = l_addr;
 		r->use_count = 0;
 
 		gdt_array[r->gdt_slot] = GDT_ENTRY(r->l_addr, 4,
