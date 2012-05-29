@@ -49,7 +49,7 @@ void isr_exn_ud_bottom(struct x86_exregs *regs)
 	}
 	if(buf[0] == 0xf0 && buf[1] == 0x90) {
 		/* it is L4_KernelInterface().
-		 * FIXME: proper values
+		 * TODO: proper values
 		 */
 		regs->eip += 2;
 		regs->eax = L4_Address(current->space->kip_area);
@@ -57,7 +57,7 @@ void isr_exn_ud_bottom(struct x86_exregs *regs)
 		regs->ecx = *(L4_Word_t *)(kip_mem + 0x04);		/* API VERSION */
 		regs->edx = *(L4_Word_t *)(kip_mem + 0x08);		/* API FLAGS */
 		/* id = 23 (because 2 + 3 = 5); subid = 17
-		 * FIXME: get proper values at some point.
+		 * TODO: get proper values at some point.
 		 */
 		regs->esi = (23 << 24) | (17 << 16);	/* KERNEL ID */
 	} else {
@@ -173,7 +173,7 @@ static void handle_io_fault(struct thread *current, struct x86_exregs *regs)
 		goto fail;
 	}
 
-	bool in = true;
+	__attribute__((unused)) bool in = true;
 	int port, size = 1;
 	switch(insn[0]) {
 		case 0xe4:	/* IN AL, imm8 */
@@ -208,6 +208,7 @@ static void handle_io_fault(struct thread *current, struct x86_exregs *regs)
 			break;
 
 		/* TODO: OUT imm8, AL; OUT imm8, [E]AX */
+		/* TODO: string variants */
 
 		default:
 			printf("unknown instruction %#02x in I/O fault at %#x\n",
@@ -215,9 +216,12 @@ static void handle_io_fault(struct thread *current, struct x86_exregs *regs)
 			goto fail;
 	}
 
+#if 0
 	/* TODO: make this a TRACE() */
 	printf("#GP(IO): I/O fault; %s size %d in port %#x at eip %#x\n",
 		in ? "in" : "out", size, port, regs->eip);
+#endif
+
 #if 0
 	/* debugging aid for space_add_ioperm() */
 	if(!space_add_ioperm(current->space, port, size)) {
