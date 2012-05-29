@@ -61,7 +61,11 @@ static L4_Word_t send_test(L4_Word_t payload)
 	L4_LoadMR(1, payload);
 	L4_MsgTag_t tag = L4_Call(L4_Pager());
 	if(L4_IpcFailed(tag)) return 0;
-	else return L4_VREG(__L4_Get_UtcbAddress(), L4_TCR_MR(1));
+	else {
+		L4_Word_t val;
+		L4_StoreMR(1, &val);
+		return val;
+	}
 }
 
 
@@ -102,8 +106,6 @@ static int sigma0_ipc_loop(void *kip_base)
 {
 	printf("entering IPC loop\n");
 
-	/* FIXME: add "proper" L4_LoadMR(), L4_StoreMR() functions */
-	void *utcb = __L4_Get_UtcbAddress();
 	for(;;) {
 		L4_ThreadId_t from;
 		L4_MsgTag_t tag = L4_Wait(&from);
@@ -118,8 +120,9 @@ static int sigma0_ipc_loop(void *kip_base)
 			if((tag.X.label & 0xfff0) == 0xffe0
 				&& tag.X.u == 2 && tag.X.t == 0)
 			{
-				L4_Word_t ip = L4_VREG(utcb, L4_TCR_MR(2)),
-					addr = L4_VREG(utcb, L4_TCR_MR(1));
+				L4_Word_t ip, addr;
+				L4_StoreMR(1, &addr);
+				L4_StoreMR(2, &ip);
 				printf("pf in %d:%d (ip %#x, addr %#x)\n",
 					from.global.X.thread_no, from.global.X.version,
 					ip, addr);
@@ -147,8 +150,10 @@ static int sigma0_ipc_loop(void *kip_base)
 				&& tag.X.u == 2 && tag.X.t == 0)
 			{
 				/* s0 user protocol: fpage request */
-				L4_Fpage_t req_fpage = { .raw = L4_VREG(utcb, L4_TCR_MR(1)) };
-				L4_Word_t req_attr = L4_VREG(utcb, L4_TCR_MR(2));
+				L4_Fpage_t req_fpage;
+				L4_Word_t req_attr;
+				L4_StoreMR(1, &req_fpage.raw);
+				L4_StoreMR(2, &req_attr);
 				printf("roottask (tid %d:%d) requested page %#x:%#x attr %#x\n",
 					sender.global.X.thread_no, sender.global.X.version,
 					L4_Address(req_fpage), L4_Size(req_fpage), req_attr);
@@ -177,7 +182,8 @@ static int sigma0_ipc_loop(void *kip_base)
 				&& tag.X.u == 2 && tag.X.t == 0)
 			{
 				/* I/O faults (ia32, amd64) */
-				L4_Fpage_t iofp = { .raw = L4_VREG(utcb, L4_TCR_MR(1)) };
+				L4_Fpage_t iofp;
+				L4_StoreMR(1, &iofp.raw);
 				if(!L4_IsIoFpage(iofp)) {
 					printf("I/O fault didn't deliver I/O fpage? what.\n");
 					break;
