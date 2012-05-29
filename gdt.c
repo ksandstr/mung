@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <stdint.h>
 #include <stdbool.h>
+#include <string.h>
 #include <assert.h>
 #include <ccan/compiler/compiler.h>
 #include <ccan/alignof/alignof.h>
@@ -45,6 +46,7 @@ struct gdt_resv
 
 
 #define NUM_GDT_ENTRIES 1024	/* max 8191 */
+#define GDT_FREEMAP_LEN ((NUM_GDT_ENTRIES + WORD_BITS - 1) / WORD_BITS)
 
 
 #define GDT_ENTRY(base, limit, access_, flags) \
@@ -64,6 +66,7 @@ static size_t rehash_gdt_resv_addr(const void *elem, void *priv);
 bool is_kernel_high = false;
 
 static struct gdt_entry gdt_array[NUM_GDT_ENTRIES] PAGE_ALIGN;
+static L4_Word_t gdt_free_map[GDT_FREEMAP_LEN];
 static struct kmem_cache *gdt_resv_slab = NULL;
 static struct htable gdt_addr_hash = HTABLE_INITIALIZER(
 	gdt_addr_hash, &rehash_gdt_resv_addr, NULL);
@@ -207,6 +210,12 @@ COLD void init_gdt_resv(void)
 	gdt_resv_slab = kmem_cache_create("gdt_resv_slab",
 		sizeof(struct gdt_resv), ALIGNOF(struct gdt_resv),
 		0, NULL, NULL);
+	memset(gdt_free_map, ~0, sizeof(gdt_free_map));
+	gdt_free_map[0] &= ~1ul;		/* seg0 is always invalid */
+	for(int i=1; i < N_KERNEL_SEGS; i++) {
+		int limb = i / WORD_BITS, ix = i % WORD_BITS;
+		gdt_free_map[limb] &= ~(1ul << ix);
+	}
 }
 
 
@@ -222,29 +231,47 @@ static bool cmp_gdt_resv_addr(const void *cand, void *key) {
 }
 
 
-int set_gdt_slot(L4_Word_t base, L4_Word_t limit, int access, int flags)
+static int alloc_gdt_slot(void)
 {
-	/* TODO: use a bitmap for allocating the free segments. */
-	int slot = 0;
-	for(int i=N_KERNEL_SEGS; i < NUM_GDT_ENTRIES; i++) {
-		if(gdt_array[i].flags_limit1 == 0) {
-			slot = i;
-			break;
+	/* TODO: could store the currently known nonzero limb's index in a
+	 * variable, too. the free-function could move the variable back as
+	 * multiple slots become available. in that case this search should also
+	 * wrap.
+	 */
+	for(int i=0; i < GDT_FREEMAP_LEN; i++) {
+		if(gdt_free_map[i] != 0) {
+			int bit = ffsl(gdt_free_map[i]) - 1;
+			assert(CHECK_FLAG(gdt_free_map[i], 1ul << bit));
+			gdt_free_map[i] &= ~(1ul << bit);
+			int slot = i * WORD_BITS + bit;
+			assert(gdt_array[slot].flags_limit1 == 0);
+			return slot;
 		}
 	}
-	if(slot != 0) {
-		gdt_array[slot] = GDT_ENTRY(base, limit, access, flags);
-		assert(gdt_array[slot].flags_limit1 != 0);
-	}
-	return slot;
+
+	return -1;
 }
 
 
 void free_gdt_slot(int slot)
 {
 	assert(slot >= N_KERNEL_SEGS);
-	assert(gdt_array[slot].flags_limit1 != 0);
+
 	gdt_array[slot].flags_limit1 = 0;
+	int limb = slot / WORD_BITS, ix = slot % WORD_BITS;
+	assert(!CHECK_FLAG(gdt_free_map[limb], 1ul << ix));
+	gdt_free_map[limb] |= 1ul << ix;
+}
+
+
+int set_gdt_slot(L4_Word_t base, L4_Word_t limit, int access, int flags)
+{
+	int slot = alloc_gdt_slot();
+	if(slot >= 0) {
+		gdt_array[slot] = GDT_ENTRY(base, limit, access, flags);
+		assert(gdt_array[slot].flags_limit1 != 0);
+	}
+	return slot;
 }
 
 
@@ -271,22 +298,11 @@ int reserve_gdt_ptr_seg(uintptr_t l_addr)
 		r = kmem_cache_alloc(gdt_resv_slab);
 		r->l_addr = l_addr;
 		/* TODO: use the same allocator as set_gdt_slot() */
-		r->gdt_slot = 0;
-		for(int i=N_KERNEL_SEGS; i < NUM_GDT_ENTRIES; i++) {
-			if(gdt_array[i].flags_limit1 == 0) {
-				r->gdt_slot = i;
-				break;
-			}
-		}
-		if(r->gdt_slot == 0) {
-			panic("ran out of GDT slots!");
-		}
+		r->gdt_slot = alloc_gdt_slot();
+		/* FIXME: add failure result */
+		if(r->gdt_slot < 0) panic("ran out of GDT slots!");
 		r->use_count = 0;
 
-#if 0
-		printf("allocated GDT slot %d for linear 0x%x\n", r->gdt_slot,
-			r->l_addr);
-#endif
 		gdt_array[r->gdt_slot] = GDT_ENTRY(r->l_addr, 4,
 			DESC_A_PRESENT | DESC_A_PRIV_MASK | DESC_A_SYSTEM,
 			DESC_F_SZ);
@@ -312,7 +328,7 @@ void release_gdt_ptr_seg(uintptr_t l_addr, int slot)
 
 	if(--r->use_count == 0) {
 		htable_del(&gdt_addr_hash, hashval, r);
-		gdt_array[r->gdt_slot] = (struct gdt_entry){ };
+		free_gdt_slot(r->gdt_slot);
 		kmem_cache_free(gdt_resv_slab, r);
 	}
 }
