@@ -164,6 +164,14 @@ bool preempted_by(
 }
 
 
+static void timeout_ipc(struct thread *t)
+{
+	bool is_send = t->status == TS_SEND_WAIT;
+	if(CHECK_FLAG(t->flags, TF_HALT)) thread_stop(t); else thread_wake(t);
+	set_ipc_error_thread(t, (1 << 1) | (is_send ? 0 : 1));
+}
+
+
 static uint64_t next_preempt_at(
 	struct thread *self,
 	uint64_t switch_at_us)
@@ -234,10 +242,7 @@ static struct thread *schedule_next_thread(
 			if(cand->wakeup_time > now) break;
 
 			/* timed out. */
-			const bool send = cand->status == TS_SEND_WAIT;
-			if(CHECK_FLAG(cand->flags, TF_HALT)) thread_stop(cand);
-			else thread_wake(cand);
-			set_ipc_error_thread(cand, (1 << 1) | (send ? 0 : 1));
+			timeout_ipc(cand);
 		} else if(cand->status == TS_R_RECV
 			&& cand->recv_timeout.raw != L4_ZeroTime.raw
 			&& cand->wakeup_time < now)
@@ -247,10 +252,7 @@ static struct thread *schedule_next_thread(
 			 * active receive does even if the timeout is caused by scheduling
 			 * delay.
 			 */
-			/* FIXME: move this into a timeout_ipc() function */
-			if(CHECK_FLAG(cand->flags, TF_HALT)) thread_stop(cand);
-			else thread_wake(cand);
-			set_ipc_error_thread(cand, (1 << 1) | 1);
+			timeout_ipc(cand);
 		}
 
 		if(cand->quantum == 0) saw_zero = true;
