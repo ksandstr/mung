@@ -186,9 +186,7 @@ static uint64_t next_preempt_at(
 		if(other->pri > self->pri) break;
 		pos = rb_next(pos);
 	}
-	/* out of the ones that preempt this thread, choose the closest.
-	 * (FIXME: doesn't account for preemption delay.)
-	 */
+	/* out of the ones that preempt this thread, choose the closest. */
 	bool got = false;
 	uint64_t q_end = switch_at_us + self->quantum;
 	while(pos != NULL) {
@@ -258,16 +256,6 @@ static struct thread *schedule_next_thread(
 		if(cand->quantum == 0) saw_zero = true;
 		else if(pick == NULL || pick->pri < cand->pri) pick = cand;
 	}
-
-#if TRACE_VERBOSE && 0
-	if(pick == NULL) {
-		static int blargh = 0;
-		if(++blargh == 5) panic("foo!");
-	} else {
-		TRACE("%s: picked %d:%d\n",
-			__func__, TID_THREADNUM(pick->id), TID_VERSION(pick->id));
-	}
-#endif
 
 	assert(pick != current);
 	*saw_zero_p = saw_zero;
