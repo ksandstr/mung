@@ -206,6 +206,44 @@ static uint64_t next_preempt_at(
 }
 
 
+/* dock a thread's quantum */
+static void leaving_thread(struct thread *self)
+{
+	uint32_t passed = (read_global_timer() - task_switch_time) * 1000;
+	if(passed > self->quantum) self->quantum = 0;
+	else self->quantum -= passed;
+}
+
+
+/* set preemption parameters, current_thread */
+static void entering_thread(struct thread *next)
+{
+	/* TODO: find the clock tick when this thread'll be pre-empted due to
+	 * exhausted quantum; or when the total quantum exhausted message will be
+	 * triggered (XXX: what is that?); or when a higher-priority thread's IPC
+	 * wakeup time occurs before the quantum expires.
+	 *
+	 * it's a simple enough walk through the sched tree _before_
+	 * sq_update_thread() is called on "next".
+	 */
+	assert(next->quantum > 0);
+	next->status = TS_RUNNING;
+	task_switch_time = read_global_timer();
+	uint64_t preempt_at = next_preempt_at(next, task_switch_time * 1000);
+	if(next->ts_len.raw != L4_Never.raw) {
+		uint64_t q_end = task_switch_time * 1000 + next->quantum;
+		if(preempt_at == 0 || preempt_at > q_end) preempt_at = q_end;
+	}
+
+	/* write parameters used by the irq0 handler */
+	preempt_at = (preempt_at + 999) / 1000;
+	x86_irq_disable();
+	current_thread = next;
+	preempt_timer_count = preempt_at;
+	x86_irq_enable();
+}
+
+
 /* when this function returns NULL and *saw_zero_p is set to true, the
  * scheduler should grant all ready threads another timeslice and redo from
  * start. (the flag indicates that a thread with a zero quantum was skipped
@@ -268,6 +306,8 @@ static struct thread *schedule_next_thread(
  */
 static void switch_thread(struct thread *prev, struct thread *next)
 {
+	assert(IS_KERNEL_THREAD(prev));
+
 	space_switch(next->space);
 
 	/* load the new context */
@@ -279,6 +319,19 @@ static void switch_thread(struct thread *prev, struct thread *next)
 		assert(next->utcb_ptr_seg != 0);
 		swap_to_ring3(&prev->ctx, &next->ctx, next->utcb_ptr_seg << 3 | 3);
 	}
+}
+
+
+NORETURN void switch_thread_u2u(struct thread *next)
+{
+	assert(!IS_KERNEL_THREAD(get_current_thread()));
+	assert(!IS_KERNEL_THREAD(next));
+
+	assert(next->utcb_ptr_seg != 0);
+	struct x86_exregs dummy;
+	swap_to_ring3(&dummy, &next->ctx, next->utcb_ptr_seg << 3 | 3);
+
+	panic("switch_thread_u2u(): returned from swap_to_ring3()!");
 }
 
 
@@ -335,30 +388,7 @@ bool schedule(void)
 		TID_THREADNUM(self->id), TID_VERSION(self->id),
 		TID_THREADNUM(next->id), TID_VERSION(next->id));
 
-	/* TODO: find the clock tick when this thread'll be pre-empted due to
-	 * exhausted quantum; or when the total quantum exhausted message will be
-	 * triggered (XXX: what is that?); or when a higher-priority thread's IPC
-	 * wakeup time occurs before the quantum expires.
-	 *
-	 * it's a simple enough walk through the sched tree _before_
-	 * sq_update_thread() is called on "next".
-	 */
-	assert(next->quantum > 0);
-	next->status = TS_RUNNING;
-	task_switch_time = read_global_timer();
-	uint64_t preempt_at = next_preempt_at(next, task_switch_time * 1000);
-	if(next->ts_len.raw != L4_Never.raw) {
-		uint64_t q_end = task_switch_time * 1000 + next->quantum;
-		if(preempt_at == 0 || preempt_at > q_end) preempt_at = q_end;
-	}
-
-	/* write parameters used by the irq0 handler */
-	preempt_at = (preempt_at + 999) / 1000;
-	x86_irq_disable();
-	current_thread = next;
-	preempt_timer_count = preempt_at;
-	x86_irq_enable();
-
+	entering_thread(next);
 	switch_thread(self, next);
 
 	TRACE("%s: returned to %d:%d from going to %d:%d; (current_thread is %d:%d)\n",
@@ -436,9 +466,7 @@ void return_to_scheduler(void)
 		TID_THREADNUM(self->id), TID_VERSION(self->id),
 		TID_THREADNUM(next->id), TID_VERSION(next->id));
 
-	uint32_t passed = (read_global_timer() - task_switch_time) * 1000;
-	if(passed > self->quantum) self->quantum = 0;
-	else self->quantum -= passed;
+	leaving_thread(self);
 
 	assert(self->status != TS_RUNNING);
 	assert(next->status != TS_RUNNING);
@@ -447,6 +475,31 @@ void return_to_scheduler(void)
 
 	assert((next->ctx.eflags & (1 << 14)) == 0);
 	iret_to_scheduler(&next->ctx);
+}
+
+
+/* returns on failure. caller should fall back to return_to_scheduler(). */
+static void return_to_other(struct thread *current, struct thread *other)
+{
+	if(other->status != TS_READY) return;
+
+	leaving_thread(current);
+
+	/* TODO: add priority boosting so that the other thread doesn't get
+	 * immediately pre-empted, like it does right now
+	 */
+
+	/* donate remaining timeslice */
+	uint32_t new_ts = other->quantum + current->quantum;
+	if(new_ts < other->quantum) new_ts = ~(uint32_t)0;
+	current->quantum = 0;
+	other->quantum = new_ts;
+	current->status = TS_READY;
+	sq_update_thread(other);
+	sq_update_thread(current);
+
+	entering_thread(other);
+	switch_thread_u2u(other);
 }
 
 
@@ -467,9 +520,7 @@ void sys_threadswitch(struct x86_exregs *regs)
 
 	L4_ThreadId_t target = { .raw = regs->eax };
 	struct thread *other = L4_IsNilThread(target) ? NULL : thread_find(target.raw);
-	if(other != NULL && IS_READY(other->status)) {
-		/* TODO: cause switch to "other" */
-	}
+	if(other != NULL) return_to_other(current, other);
 
 	current->status = TS_READY;
 	return_to_scheduler();

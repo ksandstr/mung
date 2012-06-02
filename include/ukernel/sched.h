@@ -31,6 +31,11 @@ extern void yield(struct thread *to);
 
 extern struct thread *get_current_thread(void);
 
+/* switches from current thread, which must be an userspace thread. caller
+ * should save the exception context.
+ */
+extern NORETURN void switch_thread_u2u(struct thread *next);
+
 /* returns clock value that fits thread->wakeup_time */
 extern uint64_t wakeup_at(L4_Time_t period);
 
