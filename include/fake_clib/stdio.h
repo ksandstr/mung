@@ -21,6 +21,9 @@ extern int printf(const char *fmt, ...)
 extern int fprintf(FILE *stream, const char *fmt, ...)
 	__attribute__((format(printf, 2, 3)));
 
+extern int snprintf(char *buf, size_t size, const char *fmt, ...)
+	__attribute__((format(printf, 3, 4)));
+
 extern int vsnprintf(
 	char *buf,
 	size_t size,

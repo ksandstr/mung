@@ -40,3 +40,13 @@ int printf(const char *fmt, ...)
 	va_end(al);
 	return n;
 }
+
+
+int snprintf(char *buf, size_t size, const char *fmt, ...)
+{
+	va_list al;
+	va_start(al, fmt);
+	int n = vsnprintf(buf, size, fmt, al);
+	va_end(al);
+	return n;
+}
