@@ -106,7 +106,7 @@ void isr_irq0_bottom(struct x86_exregs *regs)
 	uint64_t now = ++(*global_timer_count);
 	pic_send_eoi(0);
 
-	if(now == preempt_timer_count) {
+	if(now >= preempt_timer_count) {
 		preempt_timer_count = ~(uint64_t)0;
 		if(x86_frame_len(regs) < sizeof(*regs)) {
 			/* no preemption in kernel code. (quite yet. kernel threads could
