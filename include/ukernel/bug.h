@@ -24,7 +24,7 @@
 #define BUG_ON(cond, ...) \
 	do { \
 		int _cond = !!(cond); \
-		if(unlikely(!_cond)) { \
+		if(unlikely(_cond)) { \
 			bug(__FILE__, __LINE__, __func__, ##__VA_ARGS__); \
 		} \
 	} while(0)
