@@ -91,9 +91,13 @@ static void r_recv_timeout_test(void)
 
 static void spinner_fn(void *param_ptr)
 {
-	L4_EnablePreemptionFaultException();
-
 	const L4_Word_t *param = param_ptr;
+
+#if 0
+	/* TODO: enable this when preemption faults can be tested properly. */
+	L4_EnablePreemptionFaultException();
+#endif
+
 	printf("spinner spins for %u ms from %llu...\n", param[1],
 		L4_SystemClock().raw);
 
@@ -105,8 +109,11 @@ static void spinner_fn(void *param_ptr)
 	printf("spinner thread exiting at %llu.\n",
 		L4_SystemClock().raw);
 
-	L4_LoadMR(0, 0);
-	L4_Reply((L4_ThreadId_t){ .raw = param[0] });
+	if(param[0] != L4_nilthread.raw) {
+		L4_LoadMR(0, 0);
+		L4_Send_Timeout((L4_ThreadId_t){ .raw = param[0] },
+			L4_TimePeriod(5 * 1000));
+	}
 }
 
 
@@ -176,6 +183,50 @@ static void preempt_test(void)
 }
 
 
+/* feh. */
+static int find_own_priority(void)
+{
+	int pri = 254;
+	L4_ThreadId_t self = L4_Myself();
+	while(pri > 0 && (L4_Set_Priority(self, pri) & 0xff) == 0
+		&& L4_ErrorCode() == 5)
+	{
+		/* invalid parameter means the priority was too high. this loop stops
+		 * when "pri" is the actual priority of this thread, without altering
+		 * the kernel setting.
+		 */
+		pri--;
+	}
+	if(pri == 0) {
+		printf("%s: found zero? wtf.\n", __func__);
+		pri = 100;		/* make shit up! */
+	}
+	return pri;
+}
+
+
+static void yield_timeslice_test(void)
+{
+	int my_pri = find_own_priority();
+	printf("%s: starting, my_pri is %d\n", __func__, my_pri);
+
+	static L4_Word_t param[2];
+	param[0] = L4_Myself().raw;
+	param[1] = 15;
+	L4_ThreadId_t spinner = start_thread_long(&spinner_fn, param,
+		my_pri, L4_TimePeriod(2 * 1000), L4_Never);
+	printf("%s: returned after spinner start\n", __func__);
+	L4_Clock_t start = L4_SystemClock();
+	L4_ThreadSwitch(spinner);
+	L4_Clock_t end = L4_SystemClock();
+	printf("%s: switched to spinner at %llu, returned at %llu\n", __func__,
+		start.raw, end.raw);
+
+	L4_Receive_Timeout(spinner, L4_TimePeriod(45 * 1000));
+	join_thread(spinner);
+}
+
+
 #if 0
 /* TODO: move this into thread_test.c */
 static void helper_fn(void *param)
@@ -204,4 +255,5 @@ void sched_test(void)
 
 	r_recv_timeout_test();
 	preempt_test();
+	yield_timeslice_test();
 }
