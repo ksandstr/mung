@@ -62,6 +62,7 @@ struct page
 extern void add_supervisor_pages(intptr_t heap_pos, int num_pages);
 
 extern uintptr_t reserve_heap_page(void);
+extern void free_heap_page(uintptr_t address);
 
 
 /* kernel heap initialization. the caller must identitymap between *resv_start

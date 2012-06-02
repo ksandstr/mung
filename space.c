@@ -306,7 +306,7 @@ size_t space_memcpy_from(
 		assert(pos >= size || (address & PAGE_MASK) == 0);
 	}
 	put_supervisor_page(heap_addr, 0);
-	/* TODO: release heap_addr */
+	free_heap_page(heap_addr);
 
 	return pos;
 }
@@ -449,9 +449,10 @@ void sys_spacecontrol(struct x86_exregs *regs)
 }
 
 
-/* NOTE: this runs in the pre-heap environment. so htable ops aren't
- * available; instead the pages end up in the list given as parameter.
- * likewise kernel_space->mapdb is left uninitialized.
+/* NOTE: this runs in the pre-heap environment, so htable ops aren't
+ * available. instead, the pages that init_spaces() reserves are added to the
+ * list given as parameter. kernel_space->mapdb is left uninitialized for the
+ * same reason.
  */
 COLD void init_spaces(struct list_head *resv_list)
 {

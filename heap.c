@@ -21,12 +21,20 @@
 #define N_FIRST_PAGES (2 * 1024 * 1024 / PAGE_SIZE)
 
 
+/* a page of free address space in kernel memory. */
+struct as_free {
+	struct list_node link;
+	L4_Word_t address;
+};
+
+
 static struct list_head k_free_pages = LIST_HEAD_INIT(k_free_pages),
 	k_slab_pages = LIST_HEAD_INIT(k_slab_pages),
-	k_heap_pages = LIST_HEAD_INIT(k_heap_pages);
+	k_heap_pages = LIST_HEAD_INIT(k_heap_pages),
+	free_as_list = LIST_HEAD_INIT(free_as_list);
 
-/* allocates <struct page> */
-static struct kmem_cache *mm_page_cache = NULL;
+static struct kmem_cache *mm_page_cache = NULL,	/* <struct page> */
+	*free_as_cache = NULL;		/* <struct as_free> */
 
 static uintptr_t heap_pos = KERNEL_HEAP_TOP;
 
@@ -47,11 +55,43 @@ void *sbrk(intptr_t increment)
 }
 
 
-/* reserves address space in the sbrk()-style heap. */
+/* reserves address space in the sbrk()-style heap, and from the list of
+ * pages released with free_heap_page(), preferring the latter.
+ *
+ * NB: disabling recycling of old heap addresses makes for an interesting
+ * one-bit way to debug kernel-space page table weirdness.
+ *
+ * FIXME: add tracing
+ */
 uintptr_t reserve_heap_page(void)
 {
-	heap_pos -= PAGE_SIZE;
-	return heap_pos;
+	if(!list_empty(&free_as_list)) {
+		struct as_free *f = container_of(free_as_list.n.next,
+			struct as_free, link);
+		list_del_from(&free_as_list, &f->link);
+		uintptr_t addr = f->address;
+		kmem_cache_free(free_as_cache, f);
+		// printf("%s: took old address %#x\n", __func__, addr);
+		assert((addr & PAGE_MASK) == 0);
+		return addr;
+	} else {
+		heap_pos -= PAGE_SIZE;
+		// printf("%s: took new address %#x\n", __func__, heap_pos);
+		assert((heap_pos & PAGE_MASK) == 0);
+		return heap_pos;
+	}
+}
+
+
+void free_heap_page(uintptr_t addr)
+{
+	assert((addr & PAGE_MASK) == 0);
+
+	struct as_free *f = kmem_cache_alloc(free_as_cache);
+	f->address = addr;
+	list_add(&free_as_list, &f->link);
+
+	/* FIXME: unmap it as well */
 }
 
 
@@ -132,6 +172,8 @@ void init_kernel_heap(
 	/* initialize page slab & return. */
 	mm_page_cache = kmem_cache_create("mm_page_cache", sizeof(struct page),
 		ALIGNOF(struct page), 0, NULL, NULL);
+	free_as_cache = kmem_cache_create("free_as_cache", sizeof(struct as_free),
+		ALIGNOF(struct as_free), 0, NULL, NULL);
 	*resv_start = MIN(uintptr_t, (uintptr_t)&_start, *resv_start);
 	*resv_end = MAX(uintptr_t, next_addr - 1, *resv_end);	/* (inclusive.) */
 }
@@ -171,8 +213,9 @@ struct page *get_kern_page(uintptr_t vm_addr)
 	} else {
 		if(p->vm_addr != NULL) {
 			/* remove the heap reservation. */
-			put_supervisor_page((uintptr_t)p->vm_addr, 0);
-			/* TODO: call a release_heap_page() or some such */
+			uintptr_t addr = (uintptr_t)p->vm_addr;
+			put_supervisor_page(addr, 0);
+			free_heap_page(addr);
 			p->vm_addr = NULL;
 		}
 
@@ -190,6 +233,13 @@ void free_kern_page(struct page *page)
 	/* better here than at the call sites. */
 	if(page == NULL) return;
 
+	/* NOTE: this may be too eager. it could be a good thing if pages weren't
+	 * unmapped early.
+	 */
+	if(page->vm_addr != NULL) {
+		free_heap_page((uintptr_t)page->vm_addr);
+		page->vm_addr = NULL;
+	}
 	list_add(&k_free_pages, &page->link);
 }
 
