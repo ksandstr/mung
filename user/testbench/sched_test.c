@@ -171,6 +171,8 @@ static void preempt_test(void)
 			break;
 		}
 	} while(start.raw + 500 > L4_SystemClock().raw);
+
+	join_thread(spinner);
 }
 
 
