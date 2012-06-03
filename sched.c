@@ -209,6 +209,8 @@ static uint64_t next_preempt_at(
 /* dock a thread's quantum */
 static void leaving_thread(struct thread *self)
 {
+	assert(self->status != TS_RUNNING);
+
 	uint32_t passed = (read_global_timer() - task_switch_time) * 1000;
 	if(passed > self->quantum) self->quantum = 0;
 	else self->quantum -= passed;
@@ -483,20 +485,23 @@ static void return_to_other(struct thread *current, struct thread *other)
 {
 	if(other->status != TS_READY) return;
 
+	current->status = TS_READY;
 	leaving_thread(current);
 
-	/* TODO: add priority boosting so that the other thread doesn't get
-	 * immediately pre-empted, like it does right now
+	/* donate remaining timeslice, but only to a thread of equal or lower
+	 * priority. this prevents quantums from being leaked to higher-priority
+	 * threads.
+	 *
+	 * note that this mechanism effectively overrides regular scheduling until
+	 * the other thread is preempted by another process, or by its quantum
+	 * running out.
 	 */
-
-	/* donate remaining timeslice */
-	uint32_t new_ts = other->quantum + current->quantum;
-	if(new_ts < other->quantum) new_ts = ~(uint32_t)0;
-	current->quantum = 0;
-	other->quantum = new_ts;
-	current->status = TS_READY;
-	sq_update_thread(other);
-	sq_update_thread(current);
+	if(current->pri >= other->pri) {
+		uint32_t new_ts = other->quantum + current->quantum;
+		if(new_ts < other->quantum) new_ts = ~(uint32_t)0;
+		current->quantum = 0;
+		other->quantum = new_ts;
+	}
 
 	entering_thread(other);
 	switch_thread_u2u(other);
