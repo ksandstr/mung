@@ -111,6 +111,9 @@ L4_ThreadId_t start_thread_long(
 	}
 	if(t == MAX_THREADS) return L4_nilthread;
 
+	thread_alive[t] = true;
+	assert(thread_version[t] > 0);
+
 	L4_ThreadId_t self = L4_Myself(), tid = tid_of(t);
 #if 0
 	printf("%s: creating thread %u:%u, utcb at %#x\n", __func__,
