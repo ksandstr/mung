@@ -205,7 +205,17 @@ static int find_own_priority(void)
 }
 
 
-static void yield_timeslice_test(void)
+static void preempt_fn(void *param_ptr)
+{
+	L4_Word_t sleep_ms = (L4_Word_t)param_ptr;
+	L4_Sleep(L4_TimePeriod(sleep_ms * 1000));
+
+	printf("%s: woke up after sleeping %d ms\n", __func__, (int)sleep_ms);
+}
+
+
+/* returns the difference between spinner switch and return therefrom. */
+static int yield_timeslice_case(bool preempt_spinner)
 {
 	int my_pri = find_own_priority();
 	printf("%s: starting, my_pri is %d\n", __func__, my_pri);
@@ -214,8 +224,16 @@ static void yield_timeslice_test(void)
 	param[0] = L4_Myself().raw;
 	param[1] = 15;
 	L4_ThreadId_t spinner = start_thread_long(&spinner_fn, param,
-		my_pri - 1, L4_TimePeriod(2 * 1000), L4_Never);
+		my_pri - 2, L4_TimePeriod(2 * 1000), L4_Never);
 	printf("%s: returned after spinner start\n", __func__);
+
+	L4_ThreadId_t preempt = L4_nilthread;
+	if(preempt_spinner) {
+		preempt = start_thread_long(&preempt_fn, (void *)4,
+			my_pri - 1, L4_TimePeriod(2 * 1000), L4_Never);
+		L4_ThreadSwitch(preempt);
+	}
+
 	L4_Clock_t start = L4_SystemClock();
 	L4_ThreadSwitch(spinner);
 	L4_Clock_t end = L4_SystemClock();
@@ -224,6 +242,19 @@ static void yield_timeslice_test(void)
 
 	L4_Receive_Timeout(spinner, L4_TimePeriod(45 * 1000));
 	join_thread(spinner);
+
+	if(preempt_spinner) join_thread(preempt);
+
+	return end.raw - start.raw;
+}
+
+
+static void yield_timeslice_test(void)
+{
+	fail_if(yield_timeslice_case(false) < 10,
+		"expected yield would schedule out for at least 10 ms");
+	fail_if(yield_timeslice_case(true) > 5,
+		"expected extraordinary scheduling to be preempted within 5 ms");
 }
 
 
