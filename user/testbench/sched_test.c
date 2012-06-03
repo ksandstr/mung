@@ -214,7 +214,7 @@ static void yield_timeslice_test(void)
 	param[0] = L4_Myself().raw;
 	param[1] = 15;
 	L4_ThreadId_t spinner = start_thread_long(&spinner_fn, param,
-		my_pri, L4_TimePeriod(2 * 1000), L4_Never);
+		my_pri - 1, L4_TimePeriod(2 * 1000), L4_Never);
 	printf("%s: returned after spinner start\n", __func__);
 	L4_Clock_t start = L4_SystemClock();
 	L4_ThreadSwitch(spinner);
