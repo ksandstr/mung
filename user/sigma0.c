@@ -233,7 +233,6 @@ static void *get_free_page_at(L4_Word_t address, int size_log2)
 		list_del_from(&free_pages[size_log2 - PAGE_BITS], &pg->link);
 	}
 	kmem_cache_free(track_page_slab, pg);
-	pg = (void *)0xdeadbeef;
 
 	if(L4_Address(page) != address || L4_SizeLog2(page) != size_log2) {
 		/* complex case. */
@@ -388,6 +387,10 @@ static void build_heap(void *kip_base)
 	 * are added to the free lists and the AVL tree. ranges that further
 	 * overlap dedicated memory are added only to the AVL tree but not the
 	 * freelists.
+	 *
+	 * FIXME: hurr durr apparently v_start and v_end aren't used after the for
+	 * loop. the assignments in the if-clause are dead according to the clang
+	 * static analyzer.
 	 */
 	L4_Word_t v_start = 0, v_end = 0;
 	int v_at = -1;
