@@ -207,10 +207,9 @@ static int find_own_priority(void)
 
 static void preempt_fn(void *param_ptr)
 {
-	L4_Word_t sleep_ms = (L4_Word_t)param_ptr;
+	unsigned int sleep_ms = (L4_Word_t)param_ptr;
+	printf("%s: sleeping for %u ms\n", __func__, sleep_ms);
 	L4_Sleep(L4_TimePeriod(sleep_ms * 1000));
-
-	printf("%s: woke up after sleeping %d ms\n", __func__, (int)sleep_ms);
 }
 
 

@@ -23,7 +23,8 @@
 
 
 #if TRACE_VERBOSE
-#define TRACE(fmt, ...) printf(fmt, __VA_ARGS__)
+bool sched_trace_on = true;
+#define TRACE(fmt, ...) do { if(sched_trace_on) printf(fmt, __VA_ARGS__); } while(0)
 #else
 #define TRACE(fmt, ...)
 #endif
@@ -259,6 +260,7 @@ static struct thread *schedule_next_thread(
 
 	struct thread *pick = NULL;
 	bool saw_zero = false;
+	int last_pri = 255;
 	TRACE("%s: called in %d:%d at %#llx\n", __func__,
 		TID_THREADNUM(current->id), TID_VERSION(current->id), now);
 	for(struct rb_node *cur = rb_first(&sched_tree), *next;
@@ -269,9 +271,16 @@ static struct thread *schedule_next_thread(
 
 		struct thread *cand = rb_entry(cur, struct thread, sched_rb);
 		if(cand == current) continue;
-		TRACE("%s: candidate %d:%d (status %s, wakeup_time %#llx, pri %d)\n",
+
+		/* hard priority slices on bands of equal wakeup_time. */
+		if(cand->pri < last_pri) {
+			if(saw_zero) break; else last_pri = cand->pri;
+		}
+
+		TRACE("%s: cand %d:%d (st %s, wk@ %#llx, pri %d, q %u)\n",
 			__func__, TID_THREADNUM(cand->id), TID_VERSION(cand->id),
-			sched_status_str(cand), cand->wakeup_time, (int)cand->pri);
+			sched_status_str(cand), cand->wakeup_time, (int)cand->pri,
+			cand->quantum / 1000);
 
 		assert(cand->status != TS_DEAD);
 		assert(cand->status != TS_STOPPED);
@@ -484,6 +493,12 @@ void return_to_scheduler(void)
 static void return_to_other(struct thread *current, struct thread *other)
 {
 	if(other->status != TS_READY) return;
+
+	TRACE("%s: %c-%c: %d:%d -> %d:%d\n", __func__,
+		current->space == kernel_space ? 'K' : 'U',
+		other->space == kernel_space ? 'K' : 'U',
+		TID_THREADNUM(current->id), TID_VERSION(current->id),
+		TID_THREADNUM(other->id), TID_VERSION(other->id));
 
 	current->status = TS_READY;
 	leaving_thread(current);
