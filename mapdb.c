@@ -13,16 +13,12 @@
 #include <l4/types.h>
 #include <ukernel/misc.h>
 #include <ukernel/slab.h>
+#include <ukernel/trace.h>
 #include <ukernel/mapdb.h>
 
 
-#define TRACE_VERBOSE 0		/* 1 for mapdb dumps on add/remove */
-
-#if TRACE_VERBOSE
-#define TRACE(fmt, ...) printf(fmt, __VA_ARGS__)
-#else
-#define TRACE(fmt, ...)
-#endif
+/* for mapdb dumps on add/remove */
+#define TRACE(fmt, ...) TRACE_MSG(TRID_MAPDB, fmt, __VA_ARGS__)
 
 
 #define GROUP_SIZE (PAGE_SIZE * MAX_ENTRIES_PER_GROUP)

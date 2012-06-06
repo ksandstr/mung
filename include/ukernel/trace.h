@@ -24,7 +24,11 @@ extern bool trace_is_enabled(int id);
 
 /* directory of trace IDs */
 
-#define TRID_SCHED 1		/* everything in sched.c */
-
+enum trace_id {
+	TRID_SCHED = 1,		/* everything in sched.c */
+	TRID_THREAD,		/* everything in thread.c */
+	TRID_MAPDB,
+	TRID_IPC,
+};
 
 #endif

@@ -15,6 +15,7 @@
 #include <l4/ipc.h>
 
 #include <ukernel/misc.h>
+#include <ukernel/trace.h>
 #include <ukernel/slab.h>
 #include <ukernel/thread.h>
 #include <ukernel/sched.h>
@@ -22,14 +23,8 @@
 #include <ukernel/ipc.h>
 
 
-#define TRACE_VERBOSE 0		/* 1 for "active/passive send/receive" prints */
-
-
-#if TRACE_VERBOSE
-#define TRACE(fmt, ...) printf(fmt, __VA_ARGS__)
-#else
-#define TRACE(fmt, ...)
-#endif
+/* for "active/passive send/receive" prints */
+#define TRACE(fmt, ...) TRACE_MSG(TRID_IPC, fmt, __VA_ARGS__)
 
 
 /* these are kept in sendwait_hash in a multiset way, i.e. use

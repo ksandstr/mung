@@ -19,16 +19,12 @@
 #include <ukernel/space.h>
 #include <ukernel/gdt.h>
 #include <ukernel/sched.h>
+#include <ukernel/trace.h>
 #include <ukernel/thread.h>
 
 
-#define TRACE_VERBOSE 0		/* 1 for exregs, threadctl, threadswitch prints */
-
-#if TRACE_VERBOSE
-#define TRACE(fmt, ...) printf(fmt, __VA_ARGS__)
-#else
-#define TRACE(fmt, ...)
-#endif
+/* for exregs, threadctl, threadswitch prints */
+#define TRACE(fmt, ...) TRACE_MSG(TRID_THREAD, fmt, __VA_ARGS__)
 
 
 struct htable thread_hash = HTABLE_INITIALIZER(thread_hash,
