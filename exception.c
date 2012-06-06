@@ -324,11 +324,6 @@ void isr_exn_gp_bottom(struct x86_exregs *regs)
 			regs->eip, regs->esp, TID_THREADNUM(current->id),
 			TID_VERSION(current->id));
 
-#if 0
-		extern bool sched_trace_on;
-		sched_trace_on = TID_THREADNUM(current->id) == 163 && TID_VERSION(current->id) == 1;
-#endif
-
 		/* TODO: try to emit an exception message to the thread's exception
 		 * handler
 		 */

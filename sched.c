@@ -16,18 +16,12 @@
 #include <ukernel/space.h>
 #include <ukernel/misc.h>
 #include <ukernel/thread.h>
+#include <ukernel/trace.h>
 #include <ukernel/sched.h>
 
 
-#define TRACE_VERBOSE 0		/* 1 for "[KU]-[KU]: %d:%d -> %d:%d" prints */
-
-
-#if TRACE_VERBOSE
-bool sched_trace_on = true;
-#define TRACE(fmt, ...) do { if(sched_trace_on) printf(fmt, __VA_ARGS__); } while(0)
-#else
-#define TRACE(fmt, ...)
-#endif
+/* for "[KU]-[KU]: %d:%d -> %d:%d" prints */
+#define TRACE(fmt, ...) TRACE_MSG(TRID_SCHED, fmt, __VA_ARGS__)
 
 
 static struct thread *current_thread = NULL, *scheduler_thread = NULL;

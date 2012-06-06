@@ -31,7 +31,7 @@ tags: $(shell find . -iname "*.[ch]" -print)
 
 # TODO: remove the GCC-ism for compatiblity with clang. (ha ha ha ha ha ha)
 ia32-kernel: linker.ld loader.o isr.o kmain.o kip.o cpu.o \
-		dlmalloc.o heap.o pic.o timer.o thread.o context.o \
+		dlmalloc.o heap.o pic.o timer.o thread.o context.o trace.o \
 		sched.o gdt.o idt.o exception.o irq.o space.o ipc.o mapdb.o \
 		ccan-htable.o ccan-list.o
 	@echo "  LD $@"
