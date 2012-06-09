@@ -285,20 +285,19 @@ bool ipc_send_half(struct thread *self)
 	}
 
 	/* override TS_R_RECV? */
-	if(dest->status == TS_R_RECV && dest->ipc_from.raw == self->id
-		&& dest->post_exn_call == NULL)
-	{
+	int status = dest->status;
+	if(status == TS_R_RECV && dest->ipc_from.raw == self->id) {
 		if(read_global_timer() * 1000 >= dest->wakeup_time) {
 			/* nah, time the peer out instead */
 			set_ipc_error_thread(dest, (1 << 1) | 1);
 			thread_wake(dest);
 		} else {
 			/* yep */
-			dest->status = TS_RECV_WAIT;
+			status = TS_RECV_WAIT;
 		}
 	}
 
-	if(dest->status == TS_RECV_WAIT
+	if(status == TS_RECV_WAIT
 		&& (dest->ipc_from.raw == L4_anythread.raw
 			|| dest->ipc_from.raw == self->id))
 	{
