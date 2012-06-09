@@ -112,7 +112,7 @@ static int sigma0_ipc_loop(void *kip_base)
 
 		for(;;) {
 			if(L4_IpcFailed(tag)) {
-				printf("pager ipc failed (errorcode %#x)\n", L4_ErrorCode());
+				printf("pager ipc failed (errorcode %#lx)\n", L4_ErrorCode());
 				break;
 			}
 
@@ -123,7 +123,7 @@ static int sigma0_ipc_loop(void *kip_base)
 				L4_Word_t ip, addr;
 				L4_StoreMR(1, &addr);
 				L4_StoreMR(2, &ip);
-				printf("pf in %d:%d (ip %#x, addr %#x)\n",
+				printf("pf in %d:%d (ip %#lx, addr %#lx)\n",
 					from.global.X.thread_no, from.global.X.version,
 					ip, addr);
 				static L4_Word_t last_fault = 0;
@@ -135,7 +135,7 @@ static int sigma0_ipc_loop(void *kip_base)
 				}
 				void *ptr = get_free_page_at(addr & ~PAGE_MASK, 12);
 				if(ptr == NULL) {
-					printf("page at %#x unavailable in fault handler\n",
+					printf("page at %#lx unavailable in fault handler\n",
 						addr);
 					break;
 				}
@@ -154,7 +154,7 @@ static int sigma0_ipc_loop(void *kip_base)
 				L4_Word_t req_attr;
 				L4_StoreMR(1, &req_fpage.raw);
 				L4_StoreMR(2, &req_attr);
-				printf("roottask (tid %d:%d) requested page %#x:%#x attr %#x\n",
+				printf("roottask (tid %d:%d) requested page %#lx:%#lx attr %#lx\n",
 					sender.global.X.thread_no, sender.global.X.version,
 					L4_Address(req_fpage), L4_Size(req_fpage), req_attr);
 				void *ptr;
@@ -201,8 +201,8 @@ static int sigma0_ipc_loop(void *kip_base)
 				L4_LoadMR(1, map.raw[0]);
 				L4_LoadMR(2, map.raw[1]);
 			} else {
-				printf("unknown IPC label %#x (u %d, t %d) from %u:%u\n",
-					tag.X.label, tag.X.u, tag.X.t, from.global.X.thread_no,
+				printf("unknown IPC label %#lx (u %d, t %d) from %u:%u\n",
+					(L4_Word_t)tag.X.label, tag.X.u, tag.X.t, from.global.X.thread_no,
 					from.global.X.version);
 				break;
 			}
@@ -267,7 +267,7 @@ static void *get_free_page(int size_log2)
 		ret = (void *)L4_Address(pg->page);
 	} else {
 		/* FIXME: implement splitting for propers */
-		printf("can't handle complex get_free_page() yet! %#x:%#x dropped.\n",
+		printf("can't handle complex get_free_page() yet! %#lx:%#lx dropped.\n",
 			L4_Address(pg->page), L4_Size(pg->page));
 		return get_free_page(size_log2);
 	}
@@ -290,8 +290,8 @@ static void free_phys_page(void *ptr, int size_log2, bool dedicate)
 
 	struct track_page *pg = kmem_cache_alloc(track_page_slab);
 	if(pg == NULL) {
-		printf("warning: can't allocate track_page for %#x:%#x; memory was lost\n",
-			(unsigned)ptr, (unsigned)(1 << size_log2));
+		printf("warning: can't allocate track_page for %#lx:%#lx; memory was lost\n",
+			(L4_Word_t)ptr, 1ul << size_log2);
 		return;
 	}
 
@@ -410,7 +410,7 @@ static void build_heap(void *kip_base)
 		v_end = 0xc0000000ul - 1;
 	}
 	for(int i = v_at + 1; i < num_mds; i++) {
-		printf("range %#x .. %#x: type %d, virtual %d\n",
+		printf("range %#lx .. %#lx: type %lu, virtual %d\n",
 			L4_MemoryDescLow(&mds[i]), L4_MemoryDescHigh(&mds[i]),
 			L4_MemoryDescType(&mds[i]), L4_IsMemoryDescVirtual(&mds[i]));
 

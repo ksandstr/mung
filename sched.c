@@ -116,13 +116,13 @@ void sq_insert_thread(struct thread *t)
 
 	struct thread *dupe = sq_insert_thread_helper(&sched_tree, t);
 	if(unlikely(dupe != NULL)) {
-		printf("%s: thread %d:%d already in tree\n", __func__,
+		printf("%s: thread %lu:%lu already in tree\n", __func__,
 			TID_THREADNUM(t->id), TID_VERSION(t->id));
 		return;
 	}
 	rb_insert_color(&t->sched_rb, &sched_tree);
 
-	TRACE("%s: inserted %d:%d (status %s, wakeup %#llx, pri %d)\n", __func__,
+	TRACE("%s: inserted %lu:%lu (status %s, wakeup %#llx, pri %d)\n", __func__,
 		TID_THREADNUM(t->id), TID_VERSION(t->id), sched_status_str(t),
 		t->wakeup_time, (int)t->pri);
 }
@@ -255,7 +255,7 @@ static struct thread *schedule_next_thread(
 	struct thread *pick = NULL;
 	bool saw_zero = false;
 	int last_pri = 255;
-	TRACE("%s: called in %d:%d at %#llx\n", __func__,
+	TRACE("%s: called in %lu:%lu at %#llx\n", __func__,
 		TID_THREADNUM(current->id), TID_VERSION(current->id), now);
 	for(struct rb_node *cur = rb_first(&sched_tree), *next;
 		cur != NULL;
@@ -266,7 +266,7 @@ static struct thread *schedule_next_thread(
 		struct thread *cand = rb_entry(cur, struct thread, sched_rb);
 		if(cand == current) continue;
 
-		TRACE("%s: cand %d:%d (st %s, wk@ %#llx, pri %d, q %u)\n",
+		TRACE("%s: cand %lu:%lu (st %s, wk@ %#llx, pri %d, q %u)\n",
 			__func__, TID_THREADNUM(cand->id), TID_VERSION(cand->id),
 			sched_status_str(cand), cand->wakeup_time, (int)cand->pri,
 			cand->quantum / 1000);
@@ -394,7 +394,7 @@ bool schedule(void)
 		}
 	}
 
-	TRACE("%s: %c-%c: %d:%d -> %d:%d\n", __func__,
+	TRACE("%s: %c-%c: %lu:%lu -> %lu:%lu\n", __func__,
 		self->space == kernel_space ? 'K' : 'U',
 		next->space == kernel_space ? 'K' : 'U',
 		TID_THREADNUM(self->id), TID_VERSION(self->id),
@@ -403,7 +403,7 @@ bool schedule(void)
 	entering_thread(next);
 	switch_thread(self, next);
 
-	TRACE("%s: returned to %d:%d from going to %d:%d; (current_thread is %d:%d)\n",
+	TRACE("%s: returned to %lu:%lu from going to %lu:%lu; (current_thread is %lu:%lu)\n",
 		__func__,
 		TID_THREADNUM(self->id), TID_VERSION(self->id),
 		TID_THREADNUM(next->id), TID_VERSION(next->id),
@@ -419,8 +419,8 @@ bool schedule(void)
 NORETURN void end_kthread(void)
 {
 	struct thread *self = get_current_thread();
-	printf("%s: kthread %d:%d terminating\n", __func__, TID_THREADNUM(self->id),
-		TID_VERSION(self->id));
+	printf("%s: kthread %lu:%lu terminating\n", __func__,
+		TID_THREADNUM(self->id), TID_VERSION(self->id));
 
 	assert(self->space == kernel_space);
 	list_del_from(&self->space->threads, &self->space_link);
@@ -489,7 +489,7 @@ void return_to_scheduler(void)
 	assert(scheduler_thread != NULL);
 	assert(self != scheduler_thread);
 
-	TRACE("%s: %c-%c: %d:%d -> %d:%d\n", __func__,
+	TRACE("%s: %c-%c: %lu:%lu -> %lu:%lu\n", __func__,
 		self->space == kernel_space ? 'K' : 'U',
 		next->space == kernel_space ? 'K' : 'U',
 		TID_THREADNUM(self->id), TID_VERSION(self->id),
@@ -512,7 +512,7 @@ static void return_to_other(struct thread *current, struct thread *other)
 {
 	if(other->status != TS_READY) return;
 
-	TRACE("%s: %c-%c: %d:%d -> %d:%d\n", __func__,
+	TRACE("%s: %c-%c: %lu:%lu -> %lu:%lu\n", __func__,
 		current->space == kernel_space ? 'K' : 'U',
 		other->space == kernel_space ? 'K' : 'U',
 		TID_THREADNUM(current->id), TID_VERSION(current->id),
@@ -620,7 +620,7 @@ void sys_schedule(struct x86_exregs *regs)
 		};
 		int s = dest->status;
 		if(s < 0 || s >= NUM_ELEMENTS(status_to_schedresult)) {
-			printf("WARNING: %s: unknown state %d in thread %d:%d\n",
+			printf("WARNING: %s: unknown state %d in thread %lu:%lu\n",
 				__func__, (int)dest->status, TID_THREADNUM(dest->id),
 				TID_VERSION(dest->id));
 			ec = L4_ERROR_INVALID_THREAD;

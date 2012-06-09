@@ -98,7 +98,7 @@ static void spinner_fn(void *param_ptr)
 	L4_EnablePreemptionFaultException();
 #endif
 
-	printf("spinner spins for %u ms from %llu...\n", param[1],
+	printf("spinner spins for %lu ms from %llu...\n", param[1],
 		L4_SystemClock().raw);
 
 	L4_Clock_t start = L4_SystemClock();
@@ -140,11 +140,11 @@ static void preempt_test(void)
 	L4_Time_t ts, tq;
 	L4_Word_t res = L4_Timeslice(spinner, &ts, &tq);
 	if(res == L4_SCHEDRESULT_ERROR) {
-		printf("%s: L4_Timeslice() failed; errorcode %u\n", __func__,
+		printf("%s: L4_Timeslice() failed; errorcode %#lx\n", __func__,
 			L4_ErrorCode());
 		return;
 	}
-	printf("spinner thread state is %u; has %u µs quantum\n",
+	printf("spinner thread state is %lu; has %u µs quantum\n",
 		res, (unsigned)time_in_us(ts));
 
 	/* now wait until the preemption thing happens, but wake up every 3 ms
@@ -162,7 +162,7 @@ static void preempt_test(void)
 			int num = tag.X.u + tag.X.t;
 			if(num > 64) num = 64;
 			L4_StoreMRs(1, num, words);
-			printf("got exception of %u words: ip %#x\n", tag.X.u, words[0]);
+			printf("got exception of %d words: ip %#lx\n", num, words[0]);
 
 			/* should reply, or the spinner will stop. */
 			tag.X.label = 0;
@@ -170,15 +170,16 @@ static void preempt_test(void)
 			L4_LoadMRs(1, num, words);
 			tag = L4_Reply(spinner);
 			if(L4_IpcFailed(tag)) {
-				printf("spinner preempt reply failed: ec %#x\n",
+				printf("spinner preempt reply failed: ec %#lx\n",
 					L4_ErrorCode());
 			}
 		} else if(tag.X.u == 0) {
 			printf("got regular spinner exit\n");
 			break;
 		} else {
-			printf("%s: got unexpected message (label %#x, u %#x, t %#x)\n",
-				__func__, tag.X.label, tag.X.u, tag.X.t);
+			printf("%s: got unexpected message (label %#lx, u %#lx, t %#lx)\n",
+				__func__, (L4_Word_t)tag.X.label, (L4_Word_t)tag.X.u,
+				(L4_Word_t)tag.X.t);
 		}
 	} while(start.raw + 100 > L4_SystemClock().raw);
 

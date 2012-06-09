@@ -141,7 +141,7 @@ static int apply_mapitem(
 	}
 
 #if 0
-	printf("mapping 0x%x:0x%x, sndbase 0x%x, rcvwindow %#x:%#x (%s)\n",
+	printf("mapping 0x%lx:0x%lx, sndbase 0x%lx, rcvwindow %#lx:%#lx (%s)\n",
 		L4_Address(map_page), L4_Size(map_page),
 		L4_MapItemSndBase(m), L4_Address(wnd), L4_Size(wnd),
 		wnd.raw == L4_CompleteAddressSpace.raw ? "CompleteAddressSpace" : "<- that");
@@ -278,7 +278,7 @@ bool ipc_send_half(struct thread *self)
 
 	struct thread *dest = thread_find(self->ipc_to.raw);
 	if(unlikely(dest == NULL)) {
-		TRACE("%s: can't find peer %d:%d\n", __func__,
+		TRACE("%s: can't find peer %lu:%lu\n", __func__,
 			TID_THREADNUM(self->ipc_to.raw), TID_VERSION(self->ipc_to.raw));
 		set_ipc_error(thread_get_utcb(self), 2 << 1 | 0);
 		return false;
@@ -303,13 +303,13 @@ bool ipc_send_half(struct thread *self)
 			|| dest->ipc_from.raw == self->id))
 	{
 		/* active send */
-		TRACE("%s: active send to %d:%d (from %d:%d)\n", __func__,
+		TRACE("%s: active send to %lu:%lu (from %lu:%lu)\n", __func__,
 			TID_THREADNUM(dest->id), TID_VERSION(dest->id),
 			TID_THREADNUM(self->id), TID_VERSION(self->id));
 
 		L4_Word_t error = do_ipc_transfer(self, dest);
 		if(unlikely(error != 0)) {
-			TRACE("%s: active send caused errorcode %#x\n", __func__, error);
+			TRACE("%s: active send caused errorcode %#lx\n", __func__, error);
 			int code = (error & 0xe) >> 1;
 			if(code >= 4) {
 				/* mutual error; signal to partner also. */
@@ -357,7 +357,7 @@ bool ipc_send_half(struct thread *self)
 		}
 	} else if(self->send_timeout.raw != L4_ZeroTime.raw) {
 		/* passive send */
-		TRACE("%s: passive send to %d:%d (from %d:%d)\n", __func__,
+		TRACE("%s: passive send to %lu:%lu (from %lu:%lu)\n", __func__,
 			TID_THREADNUM(dest->id), TID_VERSION(dest->id),
 			TID_THREADNUM(self->id), TID_VERSION(self->id));
 		struct ipc_wait *w = kmem_cache_alloc(ipc_wait_slab);
@@ -431,7 +431,7 @@ bool ipc_recv_half(struct thread *self, bool *preempt_p)
 	}
 
 	if(from == NULL) {
-		TRACE("%s: passive receive to %d:%d (waiting on %d:%d)\n", __func__,
+		TRACE("%s: passive receive to %lu:%lu (waiting on %lu:%lu)\n", __func__,
 			TID_THREADNUM(self->id), TID_VERSION(self->id),
 			TID_THREADNUM(self->ipc_from.raw), TID_VERSION(self->ipc_from.raw));
 		self->status = TS_RECV_WAIT;
@@ -443,14 +443,14 @@ bool ipc_recv_half(struct thread *self, bool *preempt_p)
 		return false;
 	} else {
 		/* active receive */
-		TRACE("%s: active receive from %d:%d (to %d:%d)\n", __func__,
+		TRACE("%s: active receive from %lu:%lu (to %lu:%lu)\n", __func__,
 			TID_THREADNUM(from->id), TID_VERSION(from->id),
 			TID_THREADNUM(self->id), TID_VERSION(self->id));
 		assert(from->status == TS_SEND_WAIT);
 
 		L4_Word_t error = do_ipc_transfer(from, self);
 		if(unlikely(error != 0)) {
-			TRACE("%s: active receive caused errorcode %#x\n",
+			TRACE("%s: active receive caused errorcode %#lx\n",
 				__func__, error);
 			int code = (error & 0xe) >> 1;
 			if(code >= 4) {
@@ -587,7 +587,7 @@ void sys_ipc(struct x86_exregs *regs)
 	current->ipc_to.raw = regs->eax;
 	current->ipc_from.raw = regs->edx;
 	L4_Word_t timeouts = regs->ecx;
-	TRACE("%s: ipc_to %#x, ipc_from %#x, timeouts %#x\n", __func__,
+	TRACE("%s: ipc_to %#lx, ipc_from %#lx, timeouts %#lx\n", __func__,
 		regs->eax, regs->edx, regs->ecx);
 	current->send_timeout.raw = timeouts >> 16;
 	current->recv_timeout.raw = timeouts & 0xffff;

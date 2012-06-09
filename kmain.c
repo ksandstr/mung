@@ -120,9 +120,8 @@ void abort(void)
 	/* NOTE: this may crap out if the stack is fucked. the net effect is the
 	 * same.
 	 */
-	printf("abort(3) called from 0x%x via 0x%x\n",
-		(unsigned)__builtin_return_address(0),
-		(unsigned)__builtin_return_address(1));
+	printf("abort(3) called from %p via %p\n",
+		__builtin_return_address(0), __builtin_return_address(1));
 	panic("aborted");
 }
 
@@ -195,7 +194,7 @@ void put_supervisor_page(uintptr_t addr, uint32_t page_id)
 
 		/* reflect directory allocation in the kernel's high segment */
 		if(unlikely(!is_kernel_high) && addr < KERNEL_SEG_SIZE) {
-			printf("reflecting directory for 0x%x to 0x%x\n",
+			printf("reflecting directory for %#x to %#x\n",
 				(unsigned)addr, (unsigned)addr + KERNEL_SEG_START);
 			pdir_t *high = &kernel_pdirs[(addr + KERNEL_SEG_START) >> 22];
 			*high = *dir;
@@ -289,7 +288,7 @@ static void add_s0_pages(L4_Word_t start, L4_Word_t end)
 {
 	uint32_t ids[128];
 	int count = (end - start + 1) >> PAGE_BITS, done = 0;
-	printf("adding %#x .. %#x to sigma0 (%d pages)\n", start, end, count);
+	printf("adding %#lx .. %#lx to sigma0 (%d pages)\n", start, end, count);
 	while(done < count) {
 		int seg = MIN(int, 128, count - done);
 		for(int i=0; i < seg; i++) ids[i] = (start >> PAGE_BITS) + done + i;
@@ -309,8 +308,8 @@ static void add_mem_to_sigma0(
 	L4_Word_t excl_start,
 	L4_Word_t excl_end)
 {
-	printf("%s: excl_start 0x%x, excl_end 0x%x\n", __func__,
-		(unsigned)excl_start, (unsigned)excl_end);
+	printf("%s: excl_start %#lx, excl_end %#lx\n", __func__,
+		excl_start, excl_end);
 	const L4_MemoryDesc_t *mds = (void *)kcp + kcp->MemoryInfo.MemDescPtr;
 	int md_count = kcp->MemoryInfo.n;
 	for(int i=0; i < md_count; i++) {
@@ -363,7 +362,7 @@ static void pager_thread(void *parameter)
 			if((tag.X.label & 0xfff0) == 0xffe0) {
 				L4_Word_t fault_addr = L4_VREG(utcb, L4_TCR_MR(1)),
 					fault_ip = L4_VREG(utcb, L4_TCR_MR(2));
-				printf("%s: pagefault from %d:%d at 0x%x (ip 0x%x)\n",
+				printf("%s: pagefault from %lu:%lu at %#lx (ip %#lx)\n",
 					__func__, TID_THREADNUM(from.raw), TID_VERSION(from.raw),
 					fault_addr, fault_ip);
 
@@ -385,14 +384,14 @@ static void pager_thread(void *parameter)
 				L4_VREG(utcb, L4_TCR_MR(0)) = 0;
 			} else if(tag.X.label == 0x2369) {
 				/* respond, to test out ReplyWait. */
-				printf("%s: got test message at %llu, mr1 is %#x\n", __func__,
+				printf("%s: got test message at %llu, mr1 is %#lx\n", __func__,
 					read_global_timer(), L4_VREG(utcb, L4_TCR_MR(1)));
 				L4_VREG(utcb, L4_TCR_MR(0)) = ((L4_MsgTag_t){ .X.u = 1 }).raw;
 				L4_VREG(utcb, L4_TCR_MR(1)) = 0xc0def00d;
 			} else {
-				printf("%s: unknown IPC label 0x%x (u %d, t %d) from %d:%d\n",
-					__func__, tag.X.label, tag.X.u, tag.X.t,
-					TID_THREADNUM(from.raw), TID_VERSION(from.raw));
+				printf("%s: unknown IPC label %#lx (u %lu, t %lu) from %lu:%lu\n",
+					__func__, (L4_Word_t)tag.X.label, (L4_Word_t)tag.X.u,
+					(L4_Word_t)tag.X.t, TID_THREADNUM(from.raw), TID_VERSION(from.raw));
 				break;
 			}
 
@@ -520,8 +519,8 @@ void kmain(void *bigp, unsigned int magic)
 
 	x86_irq_enable();
 
-	printf("setting up paging (id maps between 0x%x and 0x%x)...\n",
-		(unsigned)resv_start, (unsigned)resv_end);
+	printf("setting up paging (id maps between %#lx and %#lx)...\n",
+		(L4_Word_t)resv_start, (L4_Word_t)resv_end);
 	struct list_head ksp_resv = LIST_HEAD_INIT(ksp_resv);
 	init_spaces(&ksp_resv);
 	setup_paging(resv_start, resv_end);
@@ -543,7 +542,7 @@ void kmain(void *bigp, unsigned int magic)
 	make_kip(kip_mem, resv_start & ~PAGE_MASK, resv_end | PAGE_MASK);
 	global_timer_count = kip_mem + PAGE_SIZE - sizeof(uint64_t);
 	*global_timer_count = 0;
-	printf("KIP on page id %d\n", (L4_Word_t)kip_mem >> PAGE_BITS);
+	printf("KIP on page id %lu\n", (L4_Word_t)kip_mem >> PAGE_BITS);
 	kcp_base = (void *)0xdeadbeef;
 
 	/* move the kernel to a high linear address, and change its segments so
@@ -587,7 +586,7 @@ void kmain(void *bigp, unsigned int magic)
 	if(roottask_mod.high >= PAGE_SIZE) {
 		roottask = spawn_kernel_server(THREAD_ID(160, 1), &roottask_mod,
 			s0_thread, 16, false);
-		printf("roottask [%#x .. %#x] created as %d:%d.\n",
+		printf("roottask [%#lx .. %#lx] created as %lu:%lu.\n",
 			roottask_mod.low, roottask_mod.high,
 			TID_THREADNUM(roottask->id), TID_VERSION(roottask->id));
 	}

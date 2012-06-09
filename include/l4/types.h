@@ -8,10 +8,7 @@
 #include <stdbool.h>
 
 
-
-/* hardcoded for ia32. bitfields not properly endianized. */
-
-typedef uint32_t L4_Word_t;
+typedef unsigned long L4_Word_t;
 typedef uint8_t L4_Word8_t;
 typedef uint16_t L4_Word16_t;
 typedef uint32_t L4_Word32_t;
@@ -20,6 +17,10 @@ typedef uint64_t L4_Word64_t;
 
 typedef L4_Word_t L4_Bool_t;
 
+
+/* hardcoded for ia32. bitfields not properly endianized, nor padded for
+ * 64-bit targets.
+ */
 
 typedef union {
 	L4_Word_t raw;

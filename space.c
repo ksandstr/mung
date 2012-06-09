@@ -411,7 +411,7 @@ void sys_unmap(struct x86_exregs *regs)
 	if((control & 0x3f) > 0) L4_VREG(utcb, L4_TCR_MR(0)) = regs->esi;
 	for(int i=0; i <= (control & 0x3f); i++) {
 		L4_Fpage_t fp = { .raw = L4_VREG(utcb, L4_TCR_MR(i)) };
-		printf("  would %s %#x:%#x (%c%c%c) for thread %d:%d\n",
+		printf("  would %s %#x:%#x (%c%c%c) for thread %lu:%lu\n",
 			CHECK_FLAG(control, 0x40) ? "flush" : "unmap",
 			(unsigned)L4_Address(fp), (unsigned)L4_Size(fp),
 			CHECK_FLAG(L4_Rights(fp), L4_Readable) ? 'r' : '-',
@@ -434,12 +434,12 @@ void sys_spacecontrol(struct x86_exregs *regs)
 		utcb_area = { .raw = regs->esi },
 		redirector = { .raw = regs->edi };
 
-	printf("%s: called; ctl %#x, spacespec %d:%d, kip_area %#x:%#x\n",
+	printf("%s: called; ctl %#lx, spacespec %lu:%lu, kip_area %#lx:%#lx\n",
 		__func__, control,
 		TID_THREADNUM(spacespec.raw), TID_VERSION(spacespec.raw),
-		(unsigned)L4_Address(kip_area), (unsigned)L4_Size(kip_area));
-	printf("%s: ... utcb_area %#x:%#x, redirector %d:%d\n", __func__,
-		(unsigned)L4_Address(utcb_area), (unsigned)L4_Size(utcb_area),
+		L4_Address(kip_area), L4_Size(kip_area));
+	printf("%s: ... utcb_area %#lx:%#lx, redirector %lu:%lu\n", __func__,
+		L4_Address(utcb_area), L4_Size(utcb_area),
 		TID_THREADNUM(redirector.raw), TID_VERSION(redirector.raw));
 	result = 0xdeadbeef;
 	old_ctl = 0x42424242;

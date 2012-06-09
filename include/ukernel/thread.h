@@ -14,7 +14,7 @@
 #include <ukernel/x86.h>
 
 
-typedef uint32_t thread_id;
+typedef L4_Word_t thread_id;
 
 #define TID_VERSION_BITS 14
 #define TID_VERSION_MASK ((1 << TID_VERSION_BITS) - 1)

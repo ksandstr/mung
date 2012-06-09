@@ -20,25 +20,25 @@ struct thread;
 
 /* courtesy of L4Ka::pistachio */
 struct x86_exregs {
-	uint32_t reason;
+	L4_Word_t reason;
 	/* actual process state */
-	uint32_t es;		/* 4 */
-	uint32_t ds;		/* 8 */
-	uint32_t edi;		/* 12 */
-	uint32_t esi;		/* 16 */
-	uint32_t ebp;		/* 20 */
-	uint32_t __esp;		/* 24: trapgate ESP on exn entry */
-	uint32_t ebx;		/* 28 */
-	uint32_t edx;		/* 32 */
-	uint32_t ecx;		/* 36 */
-	uint32_t eax;		/* 40 */
+	L4_Word_t es;		/* 4 */
+	L4_Word_t ds;		/* 8 */
+	L4_Word_t edi;		/* 12 */
+	L4_Word_t esi;		/* 16 */
+	L4_Word_t ebp;		/* 20 */
+	L4_Word_t __esp;	/* 24: trapgate ESP on exn entry */
+	L4_Word_t ebx;		/* 28 */
+	L4_Word_t edx;		/* 32 */
+	L4_Word_t ecx;		/* 36 */
+	L4_Word_t eax;		/* 40 */
 	/* trapgate frame */
-	uint32_t error;		/* 44 */
-	uint32_t eip;		/* 48 */
-	uint32_t cs;		/* 52 */
-	uint32_t eflags;	/* 56 */
-	uint32_t esp;		/* 60: process ESP (r/w by swap_context()) */
-	uint32_t ss;		/* 64 */
+	L4_Word_t error;	/* 44 */
+	L4_Word_t eip;		/* 48 */
+	L4_Word_t cs;		/* 52 */
+	L4_Word_t eflags;	/* 56 */
+	L4_Word_t esp;		/* 60: process ESP (r/w by swap_context()) */
+	L4_Word_t ss;		/* 64 */
 } __attribute__((packed));
 
 

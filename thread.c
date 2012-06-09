@@ -231,7 +231,7 @@ static void thread_destroy(struct thread *t)
 	space_remove_thread(sp, t);
 	bool ok = htable_del(&thread_hash, int_hash(TID_THREADNUM(t->id)), t);
 	if(unlikely(!ok)) {
-		printf("WARNING: %s: thread %d:%d not found in thread_hash\n",
+		printf("WARNING: %s: thread %lu:%lu not found in thread_hash\n",
 			__func__, TID_THREADNUM(t->id), TID_VERSION(t->id));
 	}
 	kmem_cache_free(thread_slab, t);
@@ -296,7 +296,7 @@ void thread_set_space(struct thread *t, struct space *sp)
 }
 
 
-void thread_set_spip(struct thread *t, uintptr_t sp, uintptr_t ip)
+void thread_set_spip(struct thread *t, L4_Word_t sp, L4_Word_t ip)
 {
 	assert(!IS_KERNEL_THREAD(t));
 	assert(t->status != TS_RUNNING);
@@ -416,7 +416,7 @@ void thread_sleep(struct thread *t, L4_Time_t period)
 	assert(t->status == TS_SEND_WAIT || t->status == TS_RECV_WAIT);
 
 	if(period.raw != L4_ZeroTime.raw && period.raw != L4_Never.raw) {
-		TRACE("%s: sleeping thread %d:%d for %llu microseconds\n", __func__,
+		TRACE("%s: sleeping thread %lu:%lu for %llu microseconds\n", __func__,
 			TID_THREADNUM(t->id), TID_VERSION(t->id), time_in_us(period));
 	}
 	t->wakeup_time = wakeup_at(period);
@@ -465,14 +465,14 @@ void thread_save_ctx(struct thread *t, const struct x86_exregs *regs)
 		t->ctx.ss = regs->ds;
 		t->ctx.esp = (L4_Word_t)regs + flen;
 #if 0
-		printf("%s: saved kernel thread %d:%d: eip %#x, esp %#x\n", __func__,
+		printf("%s: saved kernel thread %d:%d: eip %#lx, esp %#lx\n", __func__,
 			TID_THREADNUM(t->id), TID_VERSION(t->id),
 			t->ctx.eip, t->ctx.esp);
 #endif
 	} else {
 		assert(!IS_KERNEL_THREAD(t));
 #if 0
-		printf("%s: saved user thread %d:%d: eip %#x, esp %#x\n", __func__,
+		printf("%s: saved user thread %d:%d: eip %#lx, esp %#lx\n", __func__,
 			TID_THREADNUM(t->id), TID_VERSION(t->id),
 			t->ctx.eip, t->ctx.esp);
 #endif
@@ -512,14 +512,14 @@ static void receive_breath_of_life(struct thread *t, void *priv)
 
 	void *utcb = thread_get_utcb(t);
 	L4_MsgTag_t tag = { .raw = L4_VREG(utcb, L4_TCR_MR(0)) };
-	TRACE("%s: in thread %d:%d, tag %#x\n", __func__,
+	TRACE("%s: in thread %lu:%lu, tag %#lx\n", __func__,
 		TID_THREADNUM(t->id), TID_VERSION(t->id),
 		tag.raw);
 	if(tag.X.u != 2 || tag.X.t != 0) return;
 
 	L4_Word_t ip = L4_VREG(utcb, L4_TCR_MR(1)),
 		sp = L4_VREG(utcb, L4_TCR_MR(2));
-	TRACE("%s: setting sp %#x, ip %#x\n", __func__, sp, ip);
+	TRACE("%s: setting sp %#lx, ip %#lx\n", __func__, sp, ip);
 	thread_set_spip(t, sp, ip);
 	/* the exception IPC mechanism starts the thread. */
 }
@@ -551,7 +551,7 @@ L4_Word_t sys_exregs(
 	struct thread *current = get_current_thread(), *dest_thread = NULL;
 
 #if 0
-	printf("%s: called from %d:%d on %d:%d (state %d); control %#x (", __func__,
+	printf("%s: called from %d:%d on %d:%d (state %d); control %#lx (", __func__,
 		TID_THREADNUM(current->id), TID_VERSION(current->id),
 		TID_THREADNUM(dest.raw), TID_VERSION(dest.raw), current->status,
 		*control_p);
@@ -692,7 +692,7 @@ L4_Word_t sys_exregs(
 	}
 
 	if(unlikely(ctl_in != 0)) {
-		printf("%s: unhandled ExchangeRegister control bits %#x\n",
+		printf("%s: unhandled ExchangeRegister control bits %#lx\n",
 			__func__, ctl_in);
 		goto fail;
 	}
@@ -722,7 +722,7 @@ void sys_threadcontrol(struct x86_exregs *regs)
 	/* TODO: check thread privilege */
 	void *utcb = thread_get_utcb(current);
 
-	TRACE("%s: called; dest %d:%d, pager %d:%d, scheduler %d:%d, space %d:%d\n",
+	TRACE("%s: called; dest %lu:%lu, pager %lu:%lu, scheduler %lu:%lu, space %lu:%lu\n",
 		__func__,
 		TID_THREADNUM(dest_tid.raw), TID_VERSION(dest_tid.raw),
 		TID_THREADNUM(pager.raw), TID_VERSION(pager.raw),
@@ -755,7 +755,7 @@ void sys_threadcontrol(struct x86_exregs *regs)
 			goto end;
 		}
 
-		TRACE("%s: creating thread %d:%d\n", __func__,
+		TRACE("%s: creating thread %lu:%lu\n", __func__,
 			TID_THREADNUM(dest_tid.raw), TID_VERSION(dest_tid.raw));
 		dest = thread_new(dest_tid.raw);
 		if(dest == NULL) {

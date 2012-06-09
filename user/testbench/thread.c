@@ -56,7 +56,7 @@ static void thread_wrapper(void)
 	L4_Word_t tnum;
 	L4_MsgTag_t tag = L4_Receive(parent);
 	if(L4_IpcFailed(tag)) {
-		printf("%s: initial IPC failed (ec %#x), doing early exit\n",
+		printf("%s: initial IPC failed (ec %#lx), doing early exit\n",
 			__func__, L4_ErrorCode());
 		tnum = L4_ThreadNo(self) - base_tnum;
 		assert(tnum < MAX_THREADS);
@@ -116,13 +116,13 @@ L4_ThreadId_t start_thread_long(
 
 	L4_ThreadId_t self = L4_Myself(), tid = tid_of(t);
 #if 0
-	printf("%s: creating thread %u:%u, utcb at %#x\n", __func__,
+	printf("%s: creating thread %u:%u, utcb at %#lx\n", __func__,
 		L4_ThreadNo(tid), L4_Version(tid), utcb_base + t * 512);
 #endif
 	L4_Word_t r = L4_ThreadControl(tid, self, self, L4_Pager(),
 		(void *)(utcb_base + t * 512));
 	if(r == 0) {
-		printf("%s: ThreadControl failed, ErrorCode %#x\n", __func__,
+		printf("%s: ThreadControl failed, ErrorCode %#lx\n", __func__,
 			L4_ErrorCode());
 		thread_version[t] = -thread_version[t];
 		assert(!thread_alive[t]);
@@ -136,7 +136,7 @@ L4_ThreadId_t start_thread_long(
 	if(priority != -1) {
 		L4_Word_t r = L4_Set_Priority(tid, priority);
 		if(r == L4_SCHEDRESULT_ERROR) {
-			printf("%s: L4_Set_Priority() failed: errorcode %u\n",
+			printf("%s: L4_Set_Priority() failed: errorcode %lu\n",
 				__func__, L4_ErrorCode());
 			/* TODO: cleanups? */
 			return L4_nilthread;
@@ -150,7 +150,7 @@ L4_ThreadId_t start_thread_long(
 	L4_LoadMR(3, t);
 	L4_MsgTag_t tag = L4_Send(tid);
 	if(L4_IpcFailed(tag)) {
-		printf("%s: initial IPC failed, ErrorCode %#x\n", __func__,
+		printf("%s: initial IPC failed, ErrorCode %#lx\n", __func__,
 			L4_ErrorCode());
 		/* TODO: cleanups! */
 		return L4_nilthread;
@@ -168,7 +168,7 @@ void join_thread(L4_ThreadId_t tid)
 
 	L4_MsgTag_t tag = L4_Receive(tid_of(t));
 	if(L4_IpcFailed(tag)) {
-		printf("%s: receive from thread failed, ec %#x\n", __func__,
+		printf("%s: receive from thread failed, ec %#lx\n", __func__,
 			L4_ErrorCode());
 		return;
 	}
@@ -178,7 +178,7 @@ void join_thread(L4_ThreadId_t tid)
 	L4_Word_t res = L4_ThreadControl(tid_of(t), L4_nilthread,
 		L4_nilthread, L4_nilthread, (void *)-1);
 	if(res == 0) {
-		printf("%s: deleting ThreadControl failed, ec %#x\n", __func__,
+		printf("%s: deleting ThreadControl failed, ec %#lx\n", __func__,
 			L4_ErrorCode());
 		return;
 	}

@@ -27,7 +27,7 @@ static struct thread *get_thread_pager(struct thread *t, void *utcb)
 
 void isr_exn_de_bottom(struct x86_exregs *regs)
 {
-	printf("#DE(0x%x) at eip 0x%x, esp 0x%x\n", regs->error,
+	printf("#DE(0x%lx) at eip 0x%lx, esp 0x%lx\n", regs->error,
 		regs->eip, regs->esp);
 	panic("#DE");
 }
@@ -61,7 +61,7 @@ void isr_exn_ud_bottom(struct x86_exregs *regs)
 		 */
 		regs->esi = (23 << 24) | (17 << 16);	/* KERNEL ID */
 	} else {
-		printf("#UD at eip 0x%x, esp 0x%x\n", regs->eip, regs->esp);
+		printf("#UD at eip 0x%lx, esp 0x%lx\n", regs->eip, regs->esp);
 		/* TODO: pop an "invalid opcode" exception. */
 		thread_stop(current);
 		return_to_scheduler();
@@ -87,7 +87,7 @@ void isr_exn_basic_sc_bottom(struct x86_exregs *regs)
 	const int num_sc = sizeof(fn) / sizeof(fn[0]);
 	if(unlikely(sc_num >= num_sc) || unlikely(fn[sc_num] == NULL)) {
 		struct thread *current = get_current_thread();
-		printf("unknown basic syscall %d (caller stopped)\n", regs->eax);
+		printf("unknown basic syscall %lu (caller stopped)\n", regs->eax);
 		thread_stop(current);
 		return_to_scheduler();
 	} else {
@@ -99,8 +99,8 @@ void isr_exn_basic_sc_bottom(struct x86_exregs *regs)
 
 void isr_exn_exregs_sc_bottom(struct x86_exregs *regs)
 {
-	regs->eax = sys_exregs((L4_ThreadId_t)regs->eax, &regs->ecx,
-		&regs->edx, &regs->esi, &regs->edi, &regs->ebx,
+	regs->eax = sys_exregs((L4_ThreadId_t){ .raw = regs->eax },
+		&regs->ecx, &regs->edx, &regs->esi, &regs->edi, &regs->ebx,
 		(L4_ThreadId_t *)&regs->ebp);
 }
 
@@ -147,7 +147,7 @@ static void handle_kdb_enter(struct thread *current, struct x86_exregs *regs)
 	char buf[257];
 	memset(buf, 0, sizeof(buf));
 	strlcpy(buf, str, MIN(size_t, 256, PAGE_SIZE - (strptr & PAGE_MASK)));
-	printf("#KDB (eip %#x): [%#x] %s\n", regs->eip, strptr, buf);
+	printf("#KDB (eip %#lx): [%#lx] %s\n", regs->eip, strptr, buf);
 
 msgfail:
 	thread_stop(current);
@@ -168,7 +168,7 @@ static void handle_io_fault(struct thread *current, struct x86_exregs *regs)
 	printf("\n");
 #endif
 	if(n == 0) {
-		printf("can't read instructions at %#x; stopping thread\n",
+		printf("can't read instructions at %#lx; stopping thread\n",
 			regs->eip);
 		goto fail;
 	}
@@ -224,14 +224,14 @@ static void handle_io_fault(struct thread *current, struct x86_exregs *regs)
 		/* TODO: string variants */
 
 		default:
-			printf("unknown instruction %#02x in I/O fault at %#x\n",
+			printf("unknown instruction %#02x in I/O fault at %#lx\n",
 				insn[0], regs->eip);
 			goto fail;
 	}
 
 #if 0
 	/* TODO: make this a TRACE() */
-	printf("#GP(IO): I/O fault; %s size %d in port %#x at eip %#x\n",
+	printf("#GP(IO): I/O fault; %s size %d in port %#lx at eip %#lx\n",
 		in ? "in" : "out", size, port, regs->eip);
 #endif
 
@@ -355,7 +355,7 @@ void isr_exn_gp_bottom(struct x86_exregs *regs)
 	struct thread *current = get_current_thread();
 
 	if(IS_KERNEL_THREAD(current)) {
-		printf("KERNEL #GP(0x%x) at eip 0x%x, esp 0x%x in %d:%d\n",
+		printf("KERNEL #GP(%#lx) at eip %#lx, esp %#lx in %lu:%lu\n",
 			regs->error, regs->eip, regs->esp,
 			TID_THREADNUM(current->id), TID_VERSION(current->id));
 		thread_stop(current);
@@ -370,7 +370,7 @@ void isr_exn_gp_bottom(struct x86_exregs *regs)
 	} else {
 		thread_save_ctx(current, regs);
 
-		printf("#GP(0x%x) at eip 0x%x, esp 0x%x in %d:%d\n", regs->error,
+		printf("#GP(%#lx) at eip %#lx, esp %#lx in %lu:%lu\n", regs->error,
 			regs->eip, regs->esp, TID_THREADNUM(current->id),
 			TID_VERSION(current->id));
 
@@ -389,7 +389,7 @@ void isr_exn_gp_bottom(struct x86_exregs *regs)
 
 void isr_exn_pf_bottom(struct x86_exregs *regs)
 {
-	uint32_t fault_addr;
+	L4_Word_t fault_addr;
 	__asm__ __volatile__("\tmovl %%cr2, %0\n" : "=r" (fault_addr)
 		:: "memory");
 
@@ -398,7 +398,7 @@ void isr_exn_pf_bottom(struct x86_exregs *regs)
 	if(unlikely(!CHECK_FLAG(regs->error, 4))
 		&& fault_addr >= KERNEL_SEG_START)
 	{
-		printf("KERNEL #PF (%s, %s, %s) @ 0x%x (eip 0x%x); current thread %d:%d\n",
+		printf("KERNEL #PF (%s, %s, %s) @ %#lx (eip %#lx); current thread %lu:%lu\n",
 			CHECK_FLAG(regs->error, 4) ? "user" : "super",
 			CHECK_FLAG(regs->error, 2) ? "write" : "read",
 			CHECK_FLAG(regs->error, 1) ? "access" : "presence",
@@ -411,7 +411,7 @@ void isr_exn_pf_bottom(struct x86_exregs *regs)
 	static uintptr_t last_fault = ~0;
 	static int repeat_count = 0;
 	if(last_fault == fault_addr && ++repeat_count == 3) {
-		printf("WARNING: faulted many times on the same address %#x\n",
+		printf("WARNING: faulted many times on the same address %#lx\n",
 			fault_addr);
 		thread_save_ctx(current, regs);
 		thread_stop(current);
@@ -440,9 +440,9 @@ void isr_exn_pf_bottom(struct x86_exregs *regs)
 		struct thread *pager = likely(!L4_IsNilThread(pager_id))
 			? thread_find(pager_id.raw) : NULL;
 		if(unlikely(pager == NULL)) {
-			printf("thread %d:%d has no pager, stopping it\n",
+			printf("thread %lu:%lu has no pager, stopping it\n",
 				TID_THREADNUM(current->id), TID_VERSION(current->id));
-			printf("  (fault was at %#x, ip %#x)\n", fault_addr, regs->eip);
+			printf("  (fault was at %#lx, ip %#lx)\n", fault_addr, regs->eip);
 			thread_stop(current);
 			return_to_scheduler();
 		} else {

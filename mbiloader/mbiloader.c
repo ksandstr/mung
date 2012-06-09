@@ -25,9 +25,9 @@
 
 struct boot_module
 {
-	uintptr_t start, end;
-	uintptr_t load_start, load_end;
-	uintptr_t sp, ip;
+	L4_Word_t start, end;
+	L4_Word_t load_start, load_end;
+	L4_Word_t sp, ip;
 	char cmdline[128];
 } __attribute__((packed));
 
@@ -192,7 +192,7 @@ static void fill_kcp(
 	for(int i=0; i < sizeof(bms) / sizeof(bms[0]); i++) {
 		struct boot_module *m = bms[i];
 		if(m != NULL && m->end > 0) {
-			printf("dedicating %#x .. %#x for boot module %d\n",
+			printf("dedicating %#lx .. %#lx for boot module %d\n",
 				m->load_start, m->load_end, i);
 			mdbuf[p++] = (L4_MemoryDesc_t){
 				.x.type = L4_DedicatedMemoryType, .x.v = 0,
@@ -211,7 +211,7 @@ static void fill_kcp(
 			}
 		}
 		if(!found) {
-			printf("dedicating %#x .. %#x for module `%s'\n",
+			printf("dedicating %#lx .. %#lx for module `%s'\n",
 				m->start & ~PAGE_MASK, m->end | PAGE_MASK, m->cmdline);
 			mdbuf[p++] = (L4_MemoryDesc_t){
 				.x.type = L4_DedicatedMemoryType, .x.v = 0,
@@ -277,7 +277,7 @@ static void load_elf_module(struct boot_module *mod)
  *
  * in the second case affected modules are moved to after reloc_addr.
  */
-static void check_boot_modules(uintptr_t *reloc_addr)
+static void check_boot_modules(L4_Word_t *reloc_addr)
 {
 	extern char _start, _end;
 	const L4_Word_t this_start = (L4_Word_t)&_start,
@@ -287,8 +287,8 @@ static void check_boot_modules(uintptr_t *reloc_addr)
 
 		/* check for overlap with mbiloader. */
 		if(RANGE_OVERLAP(m->load_start, m->load_end, this_start, this_end)) {
-			printf("mbiloader: module %d's load range [%#x..%#x] overlaps mbiloader!\n"
-				"  (mbiloader is at [%#x..%#x])\n",
+			printf("mbiloader: module %d's load range [%#lx..%#lx] overlaps mbiloader!\n"
+				"  (mbiloader is at [%#lx..%#lx])\n",
 				i, m->load_start, m->load_end, this_start, this_end);
 			panic("mbiloader: boot module overlaps with loader");
 		}
@@ -301,7 +301,7 @@ static void check_boot_modules(uintptr_t *reloc_addr)
 			{
 				printf("mbiloader: modules %d and %d overlap per ELF headers:\n",
 					i, j);
-				printf("  load ranges [0x%x .. 0x%x] and [0x%x .. 0x%x] respectively\n",
+				printf("  load ranges [0x%lx .. 0x%lx] and [0x%lx .. 0x%lx] respectively\n",
 					m->load_start, m->load_end, o->load_start, o->load_end);
 				panic("boot module ranges overlap!");
 			}
@@ -314,7 +314,7 @@ static void check_boot_modules(uintptr_t *reloc_addr)
 			if(RANGE_OVERLAP(m->load_start, m->load_end,
 				boot_mods[j].start, boot_mods[j].end - 1))
 			{
-				printf("moving module %d (`%s') to 0x%x\n",
+				printf("moving module %d (`%s') to %#lx\n",
 					j, boot_mods[j].cmdline, *reloc_addr);
 				size_t length = boot_mods[j].end - boot_mods[j].start + 1;
 				memcpy((void *)*reloc_addr, (void *)boot_mods[j].start, length);
@@ -346,7 +346,7 @@ int bootmain(multiboot_info_t *mbi, uint32_t magic)
 			mmap_count * sizeof(struct multiboot_mmap_entry));
 		struct multiboot_mmap_entry *mme = (void *)mbi->mmap_addr;
 		for(int i=0; i < mmap_count; i++) {
-			printf("  %s: addr 0x%x, len 0x%x (%d MiB)\n",
+			printf("  %s: addr %#x, len %#x (%d MiB)\n",
 				mme[i].type == MULTIBOOT_MEMORY_AVAILABLE
 					? "available" : "reserved",
 				(unsigned)mme[i].addr, (unsigned)mme[i].len,
@@ -394,7 +394,7 @@ int bootmain(multiboot_info_t *mbi, uint32_t magic)
 				sizeof(bm->cmdline));
 			/* TODO: allow for non-ELF modules (initrd, etc) */
 			parse_elf_range(bm);
-			printf("  mod %d = [%#x .. %#x] -> [%#x .. %#x] `%s'\n", i,
+			printf("  mod %d = [%#lx .. %#lx] -> [%#lx .. %#lx] `%s'\n", i,
 				bm->start, bm->end, bm->load_start, bm->load_end,
 				bm->cmdline);
 			r_start = MIN(uintptr_t, bm->start, r_start);
@@ -407,12 +407,12 @@ int bootmain(multiboot_info_t *mbi, uint32_t magic)
 	printf("multiboot modules are between %#x and %#x inclusive.\n",
 		r_start, r_end);
 
-	uintptr_t heap_start = r_end;
+	L4_Word_t heap_start = r_end;
 	for(int i=0; i < num_boot_mods; i++) {
 		heap_start = MAX(uintptr_t, heap_start, boot_mods[i].load_end + 1);
 	}
 	heap_start = (heap_start + PAGE_SIZE - 1) & ~PAGE_MASK;
-	printf("relocation heap starts at 0x%x\n", heap_start);
+	printf("relocation heap starts at %#lx\n", heap_start);
 	check_boot_modules(&heap_start);
 
 	/* locate kernel, sigma0, sigma1, roottask modules.

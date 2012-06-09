@@ -47,7 +47,7 @@ static struct htable ref_hash = HTABLE_INITIALIZER(ref_hash,
 /* returns true if the entry was cleared. */
 static bool flush_entry(struct map_entry *e, int access)
 {
-	const uintptr_t *children = e->num_children > 1 ? e->children : &e->child;
+	const L4_Word_t *children = e->num_children > 1 ? e->children : &e->child;
 	for(int j=0; j < e->num_children && REF_DEFINED(children[j]); j++) {
 		/* TODO: deref children[j], recur */
 	}
@@ -252,7 +252,7 @@ static struct map_entry *probe_group_bitmap(
 		int pos = (L4_Address(fpage) - g->start) >> (PAGE_BITS + 2),
 			limb = pos >> 5, offset = pos & 0x1f;
 #if 0
-		TRACE("probing pos %d (limb %d, offset %d) in %#x; occ[%d] = %#x\n",
+		TRACE("probing pos %d (limb %d, offset %d) in %#lx; occ[%d] = %#lx\n",
 			pos, limb, offset, g->start, limb, g->occ[limb]);
 #endif
 		if((g->occ[limb] & (1 << offset)) != 0) {
@@ -312,7 +312,7 @@ static void coalesce_entries(
 	if(LAST_PAGE_ID(oth) + 1 == ent->first_page_id
 		&& L4_Address(oth->range) + L4_Size(oth->range) == L4_Address(ent->range))
 	{
-		TRACE("%s: hit between %#x:%#x and %#x:%#x\n",
+		TRACE("%s: hit between %#lx:%#lx and %#lx:%#lx\n",
 			__func__, L4_Address(oth->range), L4_Size(oth->range),
 			L4_Address(ent->range), L4_Size(ent->range));
 
@@ -382,7 +382,7 @@ int mapdb_add_map(
 	uint32_t first_page_id)
 {
 	L4_Word_t addr = L4_Address(fpage);
-	TRACE("%s: adding fpage at %#x, size %#x\n", __func__, addr,
+	TRACE("%s: adding fpage at %#lx, size %#lx\n", __func__, addr,
 		L4_Size(fpage));
 
 	struct map_group *g = group_for_addr(db, addr);
@@ -483,13 +483,13 @@ int mapdb_add_map(
 	}
 
 #ifndef NDEBUG
-	TRACE("%s: group %#x .. %#x contains (%d ents, %d alloc):\n",
+	TRACE("%s: group %#lx .. %#lx contains (%d ents, %d alloc):\n",
 		__func__, g->start, g->start + GROUP_SIZE - 1,
 		g->num_entries, g->num_alloc);
 	for(int i=0; i < g->num_entries; i++) {
 		struct map_entry *e = &g->entries[i];
 		assert(!L4_IsNilFpage(e->range));
-		TRACE("  %d: [%#x .. %#x], pages [%u .. %u]\n", i,
+		TRACE("  %d: [%#lx .. %#lx], pages [%u .. %lu]\n", i,
 			L4_Address(e->range), L4_Address(e->range) + L4_Size(e->range) - 1,
 			e->first_page_id,
 			e->first_page_id + L4_Size(e->range) / PAGE_SIZE - 1);
@@ -554,7 +554,7 @@ int mapdb_map_pages(
 		return L4_Rights(p);
 	} else {
 #if 0
-		printf("%s: first->range %#x:%#x; map_page %#x:%#x\n", __func__,
+		printf("%s: first->range %#lx:%#lx; map_page %#lx:%#lx\n", __func__,
 			L4_Address(first->range), L4_Size(first->range),
 			L4_Address(map_page), L4_Size(map_page));
 #endif
@@ -639,8 +639,8 @@ COLD void mapdb_init_range(
 	int entry_flags)
 {
 #if 1
-	TRACE("%s: start_addr %#x, num_pages %u (%#x bytes)\n", __func__,
-		start_addr, num_pages, num_pages * PAGE_SIZE);
+	TRACE("%s: start_addr %#lx, num_pages %u (%#x bytes)\n", __func__,
+		(L4_Word_t)start_addr, num_pages, num_pages * PAGE_SIZE);
 #endif
 #ifndef NDEBUG
 	unsigned int done = 0;
@@ -676,7 +676,7 @@ COLD void mapdb_init_range(
 		int range_len = (range_end - range_start + 1) >> PAGE_BITS;
 		while(range_pos <= range_end) {
 			int b = ffsl(range_pos);
-//			TRACE("%s: range_pos %#x, b %d\n", __func__, range_pos, b);
+//			TRACE("%s: range_pos %#lx, b %d\n", __func__, range_pos, b);
 			assert(b == 0
 				|| __builtin_popcount(range_pos) == 1
 				|| ffsl(range_pos & ~(1 << (b - 1))) > b);
