@@ -446,15 +446,32 @@ NORETURN void scheduler_loop(struct thread *self)
 			asm volatile ("hlt");
 		} else if(*scheduler_mr1 != L4_nilthread.raw) {
 			struct thread *prev = thread_find(*scheduler_mr1);
-			if(prev != NULL) {
-#if 0
-				printf("*** thread %d:%d was preempted (remaining quantum %u µs)\n",
-					TID_THREADNUM(prev->id), TID_VERSION(prev->id),
-					prev->quantum);
-#endif
-				/* TODO: send preemption faults, total quantum exhaustion message,
-				 * etc, as appropriate
-				 */
+			if(prev == NULL) continue;
+
+			void *utcb = thread_get_utcb(prev);
+			L4_Word_t *preempt_p = &L4_VREG(utcb, L4_TCR_COP_PREEMPT),
+				preempt = *preempt_p;
+			bool signal_preempt = CHECK_FLAG(preempt, 0x20),
+				delay = CHECK_FLAG(preempt, 0x40);
+				// pending = CHECK_FLAG(preempt, 0x80);
+			if(delay) {
+				printf("%s: preemption delay not implemented\n", __func__);
+				*preempt_p &= ~0x40;
+				delay = false;
+			}
+			if(signal_preempt) {
+				assert(!delay);
+				/* send an immediate preemption exception. */
+				struct thread *exh = get_thread_exh(prev, utcb);
+				if(exh != NULL) {
+					build_exn_ipc(prev, utcb, -4, &prev->ctx);
+					ipc_user(prev, exh);
+					if(!IS_IPC_WAIT(prev->status)) {
+						assert(L4_VREG(utcb, L4_TCR_ERRORCODE) != 0);
+						thread_stop(prev);
+					}
+				}
+				*preempt_p &= ~0x80;
 			}
 		}
 	}

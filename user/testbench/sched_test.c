@@ -94,7 +94,7 @@ static void spinner_fn(void *param_ptr)
 	const L4_Word_t *param = param_ptr;
 
 #if 0
-	/* TODO: enable this when preemption faults can be tested properly. */
+	/* TODO: enable this with a parameter */
 	L4_EnablePreemptionFaultException();
 #endif
 
@@ -157,7 +157,7 @@ static void preempt_test(void)
 		if(L4_IpcFailed(tag)) {
 			printf("spinner didn't send yet at %llu\n",
 				L4_SystemClock().raw);
-		} else if(tag.X.label == (-4u & 0xfff)) {
+		} else if(tag.X.label >> 4 == (-4u & 0xfff)) {
 			L4_Word_t words[63];
 			int num = tag.X.u + tag.X.t;
 			if(num > 64) num = 64;
@@ -176,8 +176,11 @@ static void preempt_test(void)
 		} else if(tag.X.u == 0) {
 			printf("got regular spinner exit\n");
 			break;
+		} else {
+			printf("%s: got unexpected message (label %#x, u %#x, t %#x)\n",
+				__func__, tag.X.label, tag.X.u, tag.X.t);
 		}
-	} while(start.raw + 500 > L4_SystemClock().raw);
+	} while(start.raw + 100 > L4_SystemClock().raw);
 
 	join_thread(spinner);
 }
