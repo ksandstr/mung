@@ -387,12 +387,18 @@ void ipc_simple(struct thread *dest)
 	struct thread *current = get_current_thread();
 	assert(current->saved_mrs != 0 || current->saved_brs != 0);
 
-	current->ipc_to.raw = dest->id;
-	current->ipc_from.raw = dest->id;
-	current->send_timeout = L4_Never;
-	current->recv_timeout = L4_Never;
+	ipc_user(current, dest);
+}
 
-	ipc_send_half(current);
+
+void ipc_user(struct thread *from, struct thread *to)
+{
+	from->ipc_to.raw = to->id;
+	from->ipc_from.raw = to->id;
+	from->send_timeout = L4_Never;
+	from->recv_timeout = L4_Never;
+
+	ipc_send_half(from);
 }
 
 

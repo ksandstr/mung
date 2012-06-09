@@ -19,6 +19,10 @@ extern void init_ipc(void);
  */
 extern void ipc_simple(struct thread *dest);
 
+/* same, but for "from" */
+extern void ipc_user(struct thread *from, struct thread *to);
+
+
 extern L4_MsgTag_t kipc(
 	L4_ThreadId_t to,
 	L4_ThreadId_t *from_p,
