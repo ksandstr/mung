@@ -314,12 +314,18 @@ void build_exn_ipc(
 	L4_VREG(utcb, L4_TCR_MR(0)) = (L4_MsgTag_t){
 		.X.label = (label & 0xfff) << 4, .X.u = 12 }.raw;
 	L4_Word_t exvars[] = {
-		regs->eip, regs->eflags,
+		regs->eip,
+		regs->eflags,
 		regs->reason,		/* ExceptionNo */
 		regs->error,
-		regs->edi, regs->esp, regs->ebp,
-		regs->__esp, regs->ebx, regs->edx,
-		regs->ecx, regs->eax,
+		regs->edi,
+		regs->esi,
+		regs->ebp,
+		regs->esp,
+		regs->ebx,
+		regs->edx,
+		regs->ecx,
+		regs->eax,
 	};
 	int num_vars = sizeof(exvars) / sizeof(exvars[0]);
 	assert(num_vars == 12);
