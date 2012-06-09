@@ -272,8 +272,8 @@ void set_ipc_error_thread(struct thread *t, L4_Word_t ec)
  */
 bool ipc_send_half(struct thread *self)
 {
-	assert(!L4_IsNilThread(self->ipc_to));
-	assert(self->ipc_to.raw != L4_anylocalthread.raw
+	assert(!L4_IsNilThread(self->ipc_to)
+		&& self->ipc_to.raw != L4_anylocalthread.raw
 		&& self->ipc_to.raw != L4_anythread.raw);
 
 	struct thread *dest = thread_find(self->ipc_to.raw);
@@ -286,8 +286,9 @@ bool ipc_send_half(struct thread *self)
 
 	/* override TS_R_RECV? */
 	int status = dest->status;
+	uint64_t now_us = read_global_timer() * 1000;
 	if(status == TS_R_RECV && dest->ipc_from.raw == self->id) {
-		if(read_global_timer() * 1000 >= dest->wakeup_time) {
+		if(now_us >= dest->wakeup_time) {
 			/* nah, time the peer out instead */
 			set_ipc_error_thread(dest, (1 << 1) | 1);
 			thread_wake(dest);
@@ -301,7 +302,7 @@ bool ipc_send_half(struct thread *self)
 		&& (dest->ipc_from.raw == L4_anythread.raw
 			|| dest->ipc_from.raw == self->id)
 		&& (dest->wakeup_time == ~(uint64_t)0u
-			|| dest->wakeup_time > read_global_timer() * 1000))
+			|| dest->wakeup_time > now_us))
 	{
 		/* active send */
 		TRACE("%s: active send to %lu:%lu (from %lu:%lu)\n", __func__,
