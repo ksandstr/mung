@@ -16,6 +16,8 @@
 #include <ukernel/idt.h>
 
 
+struct thread;
+
 /* courtesy of L4Ka::pistachio */
 struct x86_exregs {
 	uint32_t reason;
@@ -38,6 +40,26 @@ struct x86_exregs {
 	uint32_t esp;		/* 60: process ESP (r/w by swap_context()) */
 	uint32_t ss;		/* 64 */
 } __attribute__((packed));
+
+
+/* constructs a per-architecture exception message using the given context
+ * while saving prior message registers. doesn't perform IPC or set the
+ * message tag's label field. sets up a reply handler that stores the message
+ * in "t"'s context.
+ *
+ * implemented in exception.c .
+ */
+extern void build_exn_ipc(
+	struct thread *t,
+	void *utcb,
+	int label,
+	const struct x86_exregs *regs);
+
+/* (TODO: this should be moved into an architecture-independent header, like
+ * build_exn_ipc(); and the x86_exregs structure should be made opaque to
+ * portable code.)
+ */
+extern struct thread *get_thread_exh(struct thread *t, void *utcb);
 
 
 static inline size_t x86_frame_len(const struct x86_exregs *frame)

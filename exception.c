@@ -300,6 +300,50 @@ static void receive_exn_reply(struct thread *t, void *priv)
 }
 
 
+void build_exn_ipc(
+	struct thread *t,
+	void *utcb,
+	int label,
+	const struct x86_exregs *regs)
+{
+	assert(label < 0);
+	assert(utcb != NULL);
+
+	save_ipc_regs(t, 13, 1);
+	L4_VREG(utcb, L4_TCR_BR(0)) = 0;
+	L4_VREG(utcb, L4_TCR_MR(0)) = (L4_MsgTag_t){
+		.X.label = (label & 0xfff) << 4, .X.u = 12 }.raw;
+	L4_Word_t exvars[] = {
+		regs->eip, regs->eflags,
+		regs->reason,		/* ExceptionNo */
+		regs->error,
+		regs->edi, regs->esp, regs->ebp,
+		regs->__esp, regs->ebx, regs->edx,
+		regs->ecx, regs->eax,
+	};
+	int num_vars = sizeof(exvars) / sizeof(exvars[0]);
+	assert(num_vars == 12);
+	for(int i=0; i < num_vars; i++) {
+		L4_VREG(utcb, L4_TCR_MR(i + 1)) = exvars[i];
+	}
+
+	assert(t->exn_priv == NULL);
+	t->exn_priv = t->post_exn_call;
+	t->post_exn_call = &receive_exn_reply;
+}
+
+
+struct thread *get_thread_exh(struct thread *t, void *utcb)
+{
+	assert(utcb != NULL);
+
+	L4_ThreadId_t exh_tid = {
+		.raw = L4_VREG(utcb, L4_TCR_EXCEPTIONHANDLER),
+	};
+	return L4_IsNilThread(exh_tid) ? NULL : thread_find(exh_tid.raw);
+}
+
+
 void isr_exn_gp_bottom(struct x86_exregs *regs)
 {
 	struct thread *current = get_current_thread();
@@ -324,38 +368,10 @@ void isr_exn_gp_bottom(struct x86_exregs *regs)
 			regs->eip, regs->esp, TID_THREADNUM(current->id),
 			TID_VERSION(current->id));
 
-		/* TODO: try to emit an exception message to the thread's exception
-		 * handler
-		 */
 		void *utcb = thread_get_utcb(current);
-		L4_ThreadId_t exh_tid = {
-			.raw = L4_VREG(utcb, L4_TCR_EXCEPTIONHANDLER),
-		};
-		struct thread *exh = L4_IsNilThread(exh_tid) ? NULL
-			: thread_find(exh_tid.raw);
+		struct thread *exh = get_thread_exh(current, utcb);
 		if(exh != NULL) {
-			save_ipc_regs(current, 13, 1);
-			L4_VREG(utcb, L4_TCR_BR(0)) = 0;
-			L4_VREG(utcb, L4_TCR_MR(0)) = (L4_MsgTag_t){
-				.X.label = ((-5) & 0xfff) << 4, .X.u = 12 }.raw;
-			L4_Word_t exvars[] = {
-				regs->eip, regs->eflags,
-				regs->reason,		/* ExceptionNo */
-				regs->error,
-				regs->edi, regs->esp, regs->ebp,
-				regs->__esp, regs->ebx, regs->edx,
-				regs->ecx, regs->eax,
-			};
-			int num_vars = sizeof(exvars) / sizeof(exvars[0]);
-			assert(num_vars == 12);
-			for(int i=0; i < num_vars; i++) {
-				L4_VREG(utcb, L4_TCR_MR(i + 1)) = exvars[i];
-			}
-
-			assert(current->exn_priv == NULL);
-			current->exn_priv = current->post_exn_call;
-			current->post_exn_call = &receive_exn_reply;
-
+			build_exn_ipc(current, utcb, -5, regs);
 			return_to_ipc(exh);
 		} else {
 			thread_stop(current);
