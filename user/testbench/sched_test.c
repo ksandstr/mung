@@ -89,30 +89,36 @@ static void r_recv_timeout_test(void)
 }
 
 
+struct spinner_param
+{
+	L4_ThreadId_t parent;
+	L4_Word_t spin_ms;
+	bool signal_preempt;
+};
+
+
 static void spinner_fn(void *param_ptr)
 {
-	const L4_Word_t *param = param_ptr;
+	const struct spinner_param *param = param_ptr;
 
-#if 0
-	/* TODO: enable this with a parameter */
-	L4_EnablePreemptionFaultException();
-#endif
+	if(param->signal_preempt) {
+		L4_EnablePreemptionFaultException();
+	}
 
-	printf("spinner spins for %lu ms from %llu...\n", param[1],
+	printf("spinner spins for %lu ms from %llu...\n", param->spin_ms,
 		L4_SystemClock().raw);
 
 	L4_Clock_t start = L4_SystemClock();
 	do {
 		delay_loop(iters_per_tick / 4);
-	} while(start.raw + param[1] > L4_SystemClock().raw);
+	} while(start.raw + param->spin_ms > L4_SystemClock().raw);
 
 	printf("spinner thread exiting at %llu.\n",
 		L4_SystemClock().raw);
 
-	if(param[0] != L4_nilthread.raw) {
+	if(!L4_IsNilThread(param->parent)) {
 		L4_LoadMR(0, 0);
-		L4_Send_Timeout((L4_ThreadId_t){ .raw = param[0] },
-			L4_TimePeriod(5 * 1000));
+		L4_Send_Timeout(param->parent, L4_TimePeriod(5 * 1000));
 	}
 }
 
@@ -129,10 +135,14 @@ static uint64_t time_in_us(L4_Time_t t)
 
 static void preempt_test(void)
 {
-	static L4_Word_t param[2];
-	param[0] = L4_Myself().raw;
-	param[1] = 15;		/* # of ms to spin */
-	L4_ThreadId_t spinner = start_thread_long(&spinner_fn, param,
+	static struct spinner_param param;
+	param = (struct spinner_param){
+		.parent = L4_Myself(),
+		.spin_ms = 15,
+		.signal_preempt = false,
+	};
+
+	L4_ThreadId_t spinner = start_thread_long(&spinner_fn, &param,
 		2, L4_TimePeriod(5 * 1000), L4_Never);
 	printf("returned to %s after spinner start\n", __func__);
 	fail_if(L4_IsNilThread(spinner), "can't start spinner thread");
