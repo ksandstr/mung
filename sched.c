@@ -266,11 +266,6 @@ static struct thread *schedule_next_thread(
 		struct thread *cand = rb_entry(cur, struct thread, sched_rb);
 		if(cand == current) continue;
 
-		/* hard priority slices on bands of equal wakeup_time. */
-		if(cand->pri < last_pri) {
-			if(saw_zero) break; else last_pri = cand->pri;
-		}
-
 		TRACE("%s: cand %d:%d (st %s, wk@ %#llx, pri %d, q %u)\n",
 			__func__, TID_THREADNUM(cand->id), TID_VERSION(cand->id),
 			sched_status_str(cand), cand->wakeup_time, (int)cand->pri,
@@ -284,6 +279,7 @@ static struct thread *schedule_next_thread(
 
 			/* timed out. */
 			timeout_ipc(cand);
+			if(cand->status != TS_READY) continue;
 		} else if(cand->status == TS_R_RECV
 			&& cand->recv_timeout.raw != L4_ZeroTime.raw
 			&& cand->wakeup_time < now)
@@ -294,6 +290,14 @@ static struct thread *schedule_next_thread(
 			 * delay.
 			 */
 			timeout_ipc(cand);
+			if(cand->status != TS_READY) continue;
+		}
+
+		/* ignore lower-priority threads if a zero-quantum thread was seen
+		 * with a higher priority.
+		 */
+		if(cand->pri < last_pri) {
+			if(saw_zero) continue; else last_pri = cand->pri;
 		}
 
 		if(cand->quantum == 0) saw_zero = true;
@@ -377,6 +381,9 @@ bool schedule(void)
 	}
 
 	if(next->status == TS_R_RECV) {
+		/* FIXME: handle halted threads properly; they should leave the
+		 * scheduling queue after the receive phase.
+		 */
 		assert(!IS_KERNEL_THREAD(next));
 		bool preempt = false, r_done = ipc_recv_half(next, &preempt);
 		if((!r_done && next->status == TS_RECV_WAIT) || (r_done && preempt)) {
