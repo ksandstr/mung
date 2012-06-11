@@ -45,12 +45,6 @@ static inline bool L4_ThreadWasIpcing(L4_ThreadState_t st) {
 }
 
 
-static inline L4_ThreadId_t L4_GlobalId(L4_Word_t tnum, L4_Word_t vers) {
-	return (L4_ThreadId_t){ .global = {
-		.X.thread_no = tnum, .X.version = vers } };
-}
-
-
 static inline L4_ThreadId_t L4_GlobalIdOf(L4_ThreadId_t tid)
 {
 	if(L4_IsGlobalId(tid)) return tid;
