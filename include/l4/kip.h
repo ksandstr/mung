@@ -3,6 +3,7 @@
 #define __L4__KERNEL_IFACE_PAGE_H__
 
 #include <l4/types.h>
+#include <l4/syscall.h>
 
 
 /* MemoryDesc, adapted from L4Ka::Pistachio <l4/kip.h> */
@@ -29,6 +30,143 @@ typedef union {
 #define L4_SharedMemoryType 4
 #define L4_BootLoaderSpecificMemoryType 14
 #define L4_ArchitectureSpecificMemoryType 15
+
+
+typedef union {
+	L4_Word_t raw;
+	struct {
+		L4_Word_t __padding:16;
+		L4_Word_t subid:8;
+		L4_Word_t id:8;
+	} X;
+} L4_KernelId_t;
+
+
+typedef union {
+	L4_Word_t raw;
+	struct {
+		L4_Word_t __padding:16;
+		L4_Word_t subversion:8;
+		L4_Word_t version:8;
+	} X;
+} L4_ApiVersion_t;
+
+
+typedef union {
+	L4_Word_t raw;
+	struct {
+		L4_Word_t ee:2;
+		L4_Word_t ww:2;
+		L4_Word_t __padding:28;
+	} X;
+} L4_ApiFlags_t;
+
+
+typedef struct {
+	L4_Word_t magic;
+	L4_ApiVersion_t ApiVersion;
+	L4_ApiFlags_t ApiFlags;
+	L4_Word_t KernelVerPtr;
+
+	/* 0x10 */
+	L4_Word_t __padding10[17];
+	L4_Word_t MemoryInfo;
+	L4_Word_t __padding58[2];
+
+	/* 0x60 */
+	L4_Word_t __padding60[16];
+
+	/* 0xA0 */
+	L4_Word_t __paddingA0[2];
+	union {
+		L4_Word_t raw;
+		struct {
+			L4_Word_t m:10;
+			L4_Word_t a:6;
+			L4_Word_t s:6;
+			L4_Word_t __padding:10;
+		} X;
+	} UtcbAreaInfo;
+	union {
+		L4_Word_t raw;
+		struct {
+			L4_Word_t s:6;
+			L4_Word_t __padding:26;
+		} X;
+	} KipAreaInfo;
+
+	/* 0xB0 */
+	L4_Word_t __paddingB0[2];
+	L4_Word_t BootInfo;
+	L4_Word_t ProcDescPtr;
+
+	/* 0xC0 */
+	union {
+		L4_Word_t raw;
+		struct {
+			L4_Word_t ReadPrecision:16;
+			L4_Word_t SchedulePrecision:16;
+		} X;
+	} ClockInfo;
+	union {
+		L4_Word_t raw;
+		struct {
+			L4_Word_t t:8;
+			L4_Word_t SystemBase:12;
+			L4_Word_t UserBase:12;
+		} X;
+	} ThreadInfo;
+	union {
+		L4_Word_t raw;
+		struct {
+			L4_Word_t rwx:3;
+			L4_Word_t __padding:7;
+			L4_Word_t page_size_mask:22;
+		} X;
+	} PageInfo;
+	union {
+		L4_Word_t raw;
+		struct {
+			L4_Word_t processors:16;
+			L4_Word_t __padding:12;
+			L4_Word_t s:4;
+		} X;
+	} ProcessorInfo;
+
+	/* 0xD0 */
+	L4_Word_t SpaceControl;
+	L4_Word_t ThreadControl;
+	L4_Word_t ProcessorControl;
+	L4_Word_t MemoryControl;
+
+	/* 0xE0 */
+	L4_Word_t Ipc;
+	L4_Word_t Lipc;
+	L4_Word_t Unmap;
+	L4_Word_t ExchangeRegisters;
+
+	/* 0xF0 */
+	L4_Word_t SystemClock;
+	L4_Word_t ThreadSwitch;
+	L4_Word_t Schedule;
+	L4_Word_t __paddingF0;
+
+	/* 0x100 */
+	L4_Word_t __padding100[4];
+
+	/* 0x110 */
+	L4_Word_t ArchSyscall0;
+	L4_Word_t ArchSyscall1;
+	L4_Word_t ArchSyscall2;
+	L4_Word_t ArchSyscall3;
+} __attribute__((__packed__)) L4_KernelInterfacePage_t;
+
+
+static inline void *L4_GetKernelInterface(void)
+{
+	L4_Word_t dummy;
+	return L4_KernelInterface(&dummy, &dummy, &dummy);
+}
 
 
 static inline L4_MemoryDesc_t *L4_MemoryDesc(void *kip, L4_Word_t num)
