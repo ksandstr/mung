@@ -17,7 +17,7 @@ CFLAGS=-O2 -Wall -march=native -mno-sse -mno-avx -std=gnu99 -m32 \
 # build CCAN sources as though they were in the kernel tree.
 ccan-%.o ::
 	@echo "  CC $@ <ccan>"
-	@$(CC) -m32 -c -o $@ $(CCAN_DIR)/ccan/$*/$*.c $(CFLAGS) -nostartfiles -nodefaultlibs
+	@$(CC) -c -o $@ $(CCAN_DIR)/ccan/$*/$*.c $(CFLAGS) -nostartfiles -nodefaultlibs
 
 
 %.o: %-32.S
