@@ -5,6 +5,8 @@
  */
 
 #include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 #include <assert.h>
 
 #include <l4/types.h>
@@ -27,6 +29,12 @@ void abort(void)
 		L4_Ipc(L4_nilthread, L4_nilthread, L4_Timeouts(L4_Never, L4_Never),
 			&dummy);
 	}
+}
+
+
+void malloc_panic(void) {
+	printf("%s: called!\n", __func__);
+	abort();
 }
 
 
@@ -69,12 +77,6 @@ void con_putstr(const char *str) {
 }
 
 
-void *malloc(size_t size)
-{
-	return NULL;
-}
-
-
 void __assert_failure(
 	const char *condition,
 	const char *file,
@@ -85,6 +87,20 @@ void __assert_failure(
 		condition, file, line, function);
 	abort();
 	for(;;) { }
+}
+
+
+static void malloc_test(void)
+{
+	void *ptr = malloc(66);
+	if(ptr != NULL) {
+		printf("%s: allocated memory at %p\n", __func__, ptr);
+		strlcpy(ptr, "hello, malloc!", 66);
+		free(ptr);
+	} else {
+		printf("%s: malloc failed!\n", __func__);
+	}
+	fail_if(ptr == NULL);
 }
 
 
@@ -176,6 +192,8 @@ int main(void)
 {
 	printf("hello, world!\n");
 	calibrate_delay_loop();
+
+	malloc_test();
 
 	tid_test();
 	threadctl_test();
