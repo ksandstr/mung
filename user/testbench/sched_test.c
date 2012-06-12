@@ -1,5 +1,6 @@
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <assert.h>
 
 #include <l4/types.h>
@@ -99,7 +100,7 @@ struct spinner_param
 
 static void spinner_fn(void *param_ptr)
 {
-	const struct spinner_param *param = param_ptr;
+	struct spinner_param *param = param_ptr;
 
 	if(param->signal_preempt) {
 		L4_EnablePreemptionFaultException();
@@ -120,6 +121,8 @@ static void spinner_fn(void *param_ptr)
 		L4_LoadMR(0, 0);
 		L4_Send_Timeout(param->parent, L4_TimePeriod(5 * 1000));
 	}
+
+	free(param);
 }
 
 
@@ -133,17 +136,35 @@ static uint64_t time_in_us(L4_Time_t t)
 }
 
 
+static L4_ThreadId_t start_spinner(
+	int priority,
+	int spin_ms,
+	L4_Time_t timeslice,
+	bool signal_preempt)
+{
+	assert(spin_ms > 0);
+	assert(time_in_us(timeslice) >= 1000);
+	assert(priority >= 0 && priority <= 0xff);
+
+	struct spinner_param *p = malloc(sizeof(*p));
+	if(p == NULL) return L4_nilthread;
+
+	*p = (struct spinner_param){
+		.parent = L4_Myself(),
+		.spin_ms = spin_ms,
+		.signal_preempt = signal_preempt,
+	};
+	L4_ThreadId_t spinner = start_thread_long(&spinner_fn, p,
+		priority, timeslice, L4_Never);
+	if(L4_IsNilThread(spinner)) free(p);
+	return spinner;
+}
+
+
 static void preempt_test(void)
 {
-	static struct spinner_param param;
-	param = (struct spinner_param){
-		.parent = L4_Myself(),
-		.spin_ms = 15,
-		.signal_preempt = false,
-	};
-
-	L4_ThreadId_t spinner = start_thread_long(&spinner_fn, &param,
-		2, L4_TimePeriod(5 * 1000), L4_Never);
+	L4_ThreadId_t spinner = start_spinner(2, 15,
+		L4_TimePeriod(5 * 1000), false);
 	printf("returned to %s after spinner start\n", __func__);
 	fail_if(L4_IsNilThread(spinner), "can't start spinner thread");
 
@@ -233,11 +254,8 @@ static int yield_timeslice_case(bool preempt_spinner)
 	int my_pri = find_own_priority();
 	printf("%s: starting, my_pri is %d\n", __func__, my_pri);
 
-	static L4_Word_t param[2];
-	param[0] = L4_Myself().raw;
-	param[1] = 15;
-	L4_ThreadId_t spinner = start_thread_long(&spinner_fn, param,
-		my_pri - 2, L4_TimePeriod(2 * 1000), L4_Never);
+	L4_ThreadId_t spinner = start_spinner(my_pri - 2, 15,
+		L4_TimePeriod(2 * 1000), false);
 	printf("%s: returned after spinner start\n", __func__);
 
 	L4_ThreadId_t preempt = L4_nilthread;
