@@ -173,7 +173,7 @@ static int sigma0_ipc_loop(void *kip_base)
 					L4_Fpage_t map_page = L4_FpageLog2((L4_Word_t)ptr,
 						L4_SizeLog2(req_fpage));
 					L4_Set_Rights(&map_page, L4_FullyAccessible);
-					L4_MapItem_t map = L4_MapItem(map_page, 0);
+					L4_MapItem_t map = L4_MapItem(map_page, (L4_Word_t)ptr);
 					L4_LoadMR(0, (L4_MsgTag_t){ .X.t = 2 }.raw);
 					L4_LoadMR(1, map.raw[0]);
 					L4_LoadMR(2, map.raw[1]);
