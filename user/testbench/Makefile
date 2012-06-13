@@ -28,7 +28,7 @@ testbench: testbench.ld crt0.o testbench.o heap.o thread.o delay.o \
 
 %.o: ../../%.c
 	@echo "  CC $@ <toplevel>"
-	@$(CC) -c -o $@ $< $(CFLAGS) -Wno-unused
+	@$(CC) -c -o $@ $< $(CFLAGS) -DUSE_LOCKS=1 -Wno-unused
 
 
 include $(wildcard .deps/*.d)

@@ -541,6 +541,9 @@ extern void malloc_panic(void);
 
 #include <errno.h>
 
+/* for when USE_LOCKS is defined */
+extern int sched_yield(void);
+
 
 /* Version identifier to allow people to support multiple versions */
 #ifndef DLMALLOC_VERSION

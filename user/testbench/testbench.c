@@ -38,6 +38,12 @@ void malloc_panic(void) {
 }
 
 
+int sched_yield(void) {
+	L4_ThreadSwitch(L4_nilthread);
+	return 0;
+}
+
+
 /* XXX this code is copypasta'd from kmain.c, and should be moved into a
  * common "ser_io.c" or some such.
  */
