@@ -2,9 +2,9 @@
 /* simple threading for the purposes of the testbench personality. */
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <stdint.h>
 #include <stdbool.h>
-#include <stdlib.h>
 #include <assert.h>
 #include <ccan/likely/likely.h>
 
@@ -17,12 +17,11 @@
 #include "defs.h"
 
 
-#define THREAD_STACK_SIZE (8 * 1024)
+#define THREAD_STACK_SIZE (32 * 1024)
 #define MAX_THREADS 12
 
 
-static uint8_t thread_stack_mem[THREAD_STACK_SIZE * MAX_THREADS]
-	__attribute__((aligned(4096)));
+static uint8_t *thread_stack[MAX_THREADS];
 static int thread_version[MAX_THREADS];
 static bool thread_alive[MAX_THREADS];
 static int base_tnum;
@@ -39,6 +38,7 @@ static void init_threading(void)
 	for(int i=0; i < MAX_THREADS; i++) {
 		thread_version[i] = 0;
 		thread_alive[i] = false;
+		thread_stack[i] = NULL;
 	}
 
 	base_tnum = L4_ThreadNo(L4_Myself()) + 2;
@@ -130,7 +130,12 @@ L4_ThreadId_t start_thread_long(
 		return L4_nilthread;
 	}
 
-	uint8_t *stack = &thread_stack_mem[t * THREAD_STACK_SIZE];
+	uint8_t *stack = malloc(THREAD_STACK_SIZE);
+	if(stack == NULL) {
+		printf("%s: can't allocate stack for thread!\n", __func__);
+		abort();
+	}
+	thread_stack[t] = stack;
 	L4_Word_t stk_top = (L4_Word_t)stack + THREAD_STACK_SIZE - 16;
 	L4_Set_UserDefinedHandleOf(tid, self.raw);
 	if(priority != -1) {
@@ -185,4 +190,6 @@ void join_thread(L4_ThreadId_t tid)
 
 	thread_alive[t] = false;
 	thread_version[t] = -abs(thread_version[t]);
+	free(thread_stack[t]);
+	thread_stack[t] = NULL;
 }
