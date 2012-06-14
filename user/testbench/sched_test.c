@@ -106,16 +106,20 @@ static void spinner_fn(void *param_ptr)
 		L4_EnablePreemptionFaultException();
 	}
 
+#if 0
 	printf("spinner spins for %lu ms from %llu...\n", param->spin_ms,
 		L4_SystemClock().raw);
+#endif
 
 	L4_Clock_t start = L4_SystemClock();
 	do {
 		delay_loop(iters_per_tick / 4);
 	} while(start.raw + param->spin_ms > L4_SystemClock().raw);
 
+#if 0
 	printf("spinner thread exiting at %llu.\n",
 		L4_SystemClock().raw);
+#endif
 
 	if(!L4_IsNilThread(param->parent)) {
 		L4_LoadMR(0, 0);
@@ -243,8 +247,163 @@ static int find_own_priority(void)
 static void preempt_fn(void *param_ptr)
 {
 	unsigned int sleep_ms = (L4_Word_t)param_ptr;
+#if 0
 	printf("%s: sleeping for %u ms\n", __func__, sleep_ms);
+#endif
 	L4_Sleep(L4_TimePeriod(sleep_ms * 1000));
+}
+
+
+#define start_preempt(sleep_ms) \
+	start_thread(&preempt_fn, (void *)((L4_Word_t)(sleep_ms)))
+
+
+struct preempt_exn_result
+{
+	L4_Clock_t loop_start, first_preempt;
+	int num;
+};
+
+
+/* test preemption exceptions. records just their time of occurrence, which
+ * should coincide with preempt_fn's sleep or the thread's timeslice ending.
+ */
+static bool preempt_exn_case(
+	struct preempt_exn_result *r,
+	L4_Time_t spinner_ts,
+	bool signal_preempt,
+	int preempt_delay)
+{
+	bool ok = true;
+	int my_pri = find_own_priority();
+	L4_ThreadId_t spinner = start_spinner(my_pri - 2, 25, spinner_ts,
+		signal_preempt);
+	fail_if(L4_IsNilThread(spinner));
+
+	L4_ThreadId_t preempt;
+	if(preempt_delay > 0) {
+		preempt = start_preempt(preempt_delay);
+		fail_if(L4_IsNilThread(preempt));
+	} else {
+		preempt = L4_nilthread;
+	}
+
+	r->num = 0;
+	r->first_preempt.raw = 0;
+
+	r->loop_start = L4_SystemClock();
+	L4_MsgTag_t tag;
+	do {
+		/* the timeout is long enough to preempt the spinner just once toward
+		 * the end.
+		 */
+		tag = L4_Receive_Timeout(spinner, L4_TimePeriod(22 * 1000));
+		if(L4_IpcFailed(tag)) {
+			if(L4_ErrorCode() != 0x3) {
+				printf("%s: ipc error (code %#lx)\n", __func__,
+					L4_ErrorCode());
+				ok = false;
+				break;
+			}
+		} else if(tag.X.label >> 4 == (-4u & 0xfff)) {
+			L4_Word_t words[63];
+			int num = tag.X.u + tag.X.t;
+			if(num > 64) num = 64;
+			L4_StoreMRs(1, num, words);
+
+			/* should reply or the thread will stop. */
+			tag.X.label = 0;
+			L4_LoadMR(0, tag.raw);
+			L4_LoadMRs(1, num, words);
+			tag = L4_Reply(spinner);
+			if(L4_IpcFailed(tag)) {
+				printf("spinner preempt reply failed: ec %#lx\n",
+					L4_ErrorCode());
+				ok = false;
+				break;
+			}
+			if(r->num == 0) r->first_preempt = L4_SystemClock();
+			r->num++;
+		} else if(tag.X.u == 0) {
+			/* ordinary regular spinner exit */
+			break;
+		} else {
+			printf("%s: got unexpected message (label %#lx, u %#lx, t %#lx)\n",
+				__func__, (L4_Word_t)tag.X.label, (L4_Word_t)tag.X.u,
+				(L4_Word_t)tag.X.t);
+		}
+	} while(r->loop_start.raw + 100 > L4_SystemClock().raw);
+
+	join_thread(spinner);
+	join_thread(preempt);
+
+	return ok;
+}
+
+
+static void preempt_exn_test(void)
+{
+	struct preempt_exn_result *res = malloc(sizeof(*res));
+	printf("%s: started\n", __func__);
+
+	/* there are three boolean variables here. the first is the timeslice
+	 * length, the second is the preemption signaling switch, and the third is
+	 * whether there'll be a higher-priority wakeup 10 ms in.
+	 */
+	for(int t=0; t < 8; t++) {
+		bool big_ts = (t & 0x01) != 0,
+			sig_pe = (t & 0x02) != 0,
+			has_pe = (t & 0x04) != 0;
+
+		fail_if(!preempt_exn_case(res,
+			L4_TimePeriod((big_ts ? 120 : 4) * 1000),
+			sig_pe, has_pe ? 10 : 0));
+
+		/* no preemption signaling implies no preemptions were signaled,
+		 * regardless of the other variables.
+		 */
+		if(!sig_pe) {
+			fail_unless(res->num == 0);
+			continue;
+		}
+
+		fail_unless(res->num > 0);
+		uint32_t diff = res->first_preempt.raw - res->loop_start.raw;
+#if 0
+		printf("started at %llu, first preempt at %llu (diff %u), preempted %d time(s)\n",
+			res->loop_start.raw, res->first_preempt.raw, diff, res->num);
+#endif
+		if(big_ts && has_pe) {
+			/* the preempt_fn causes a preemption, which satisifes the 22-ms
+			 * receive function, which then doesn't preempt the thread again.
+			 *
+			 * it's conceivable this might cause two preemptions, though.
+			 */
+			fail_unless(res->num == 1 || res->num == 2,
+				"spinner should be preempted once or twice");
+			fail_unless(diff >= 10 && diff <= 13,
+				"first spinner preempt should occur at between 10..13 ms");
+		} else if(big_ts && !has_pe) {
+			fail_unless(res->num == 1,
+				"spinner should be preempted once");
+			fail_unless(diff >= 20,
+				"first spinner preempt should occur at 20 ms or later");
+		} else if(!big_ts && has_pe) {
+			/* six times for timeslice (25 / 4 = 6.25) and once for
+			 * preempt_fn.
+			 */
+			fail_unless(res->num == 7);
+			fail_unless(diff < 8,
+				"short timeslice should cause preemption before 10 ms");
+		} else {
+			assert(!big_ts && !has_pe);
+			fail_unless(res->num == 6);		/* see above */
+			fail_unless(diff < 8);
+		}
+	}
+
+	printf("%s: ending\n", __func__);
+	free(res);
 }
 
 
@@ -317,5 +476,6 @@ void sched_test(void)
 
 	r_recv_timeout_test();
 	preempt_test();
+	preempt_exn_test();
 	yield_timeslice_test();
 }
