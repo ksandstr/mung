@@ -167,6 +167,8 @@ L4_ThreadId_t start_thread_long(
 
 void join_thread(L4_ThreadId_t tid)
 {
+	if(L4_IsNilThread(tid)) return;
+
 	int t = L4_ThreadNo(tid) - base_tnum;
 	assert(t < MAX_THREADS);
 	assert(abs(thread_version[t]) == L4_Version(tid));
