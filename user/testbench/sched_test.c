@@ -11,6 +11,9 @@
 #include "defs.h"
 
 
+#define printf(fmt, ...) log_f(fmt, ##__VA_ARGS__)
+
+
 /* test case for the correct ipc error result in threads that time out in the
  * TS_R_RECV state.
  *
@@ -475,7 +478,11 @@ void sched_test(void)
 #endif
 
 	r_recv_timeout_test();
+	flush_log(false);
 	preempt_test();
+	flush_log(false);
 	preempt_exn_test();
+	flush_log(false);
 	yield_timeslice_test();
+	flush_log(false);
 }

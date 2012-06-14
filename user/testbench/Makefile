@@ -17,7 +17,7 @@ distclean:
 
 
 testbench: testbench.ld crt0.o testbench.o heap.o thread.o delay.o \
-		exn-store.o \
+		exn-store.o log.o tap.o \
 		thread_test.o sched_test.o \
 		syscalls.o ccan-list.o dlmalloc.o
 	@echo "  LD $@"

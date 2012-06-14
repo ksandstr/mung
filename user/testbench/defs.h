@@ -4,6 +4,9 @@
 
 #include <stdio.h>
 #include <stdarg.h>
+#include <stdbool.h>
+
+#include <l4/types.h>
 
 
 /* unit testing things */
@@ -17,28 +20,6 @@
 	_fail_unless(!(expr), __FILE__, __LINE__, \
 		"Failure `" #expr "' occurred", ## __VA_ARGS__, NULL)
 
-/* (this could live in a module.) */
-static inline void _fail_unless(
-	int result,
-	const char *file,
-	int line,
-	const char *expr,
-	...)
-{
-	if(!result) {
-		va_list ap;
-		char buf[512];
-		va_start(ap, expr);
-		const char *msg = va_arg(ap, char *);
-		if(msg == NULL) msg = expr;
-		vsnprintf(buf, sizeof(buf), msg, ap);
-		va_end(ap);
-		printf("FAIL: %s\n", buf);
-
-		/* meh */
-		asm volatile ("int $1");
-	}
-}
 
 
 extern void threadctl_test(void);
@@ -66,5 +47,21 @@ extern void calibrate_delay_loop(void);
 extern void delay_loop(unsigned long iters);
 extern void nsleep(unsigned long nanoseconds);
 extern void usleep(unsigned long microseconds);
+
+
+/* from log.c */
+
+extern int log_f(const char *fmt, ...);
+extern void flush_log(bool print);
+
+
+/* from tap.c */
+
+extern void _fail_unless(
+	int result,
+	const char *file,
+	int line,
+	const char *expr,
+	...);
 
 #endif
