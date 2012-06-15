@@ -19,6 +19,7 @@
 #include <ukernel/util.h>
 
 #include "defs.h"
+#include "test.h"
 
 
 void abort(void)

@@ -8,6 +8,7 @@
 #include <ccan/likely/likely.h>
 
 #include "defs.h"
+#include "test.h"
 
 
 void _fail_unless(

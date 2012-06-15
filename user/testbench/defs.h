@@ -9,18 +9,7 @@
 #include <l4/types.h>
 
 
-/* unit testing things */
-#define fail(...) _fail_unless(0, __FILE__, __LINE__, "Failed", ## __VA_ARGS__, NULL)
-
-#define fail_unless(expr, ...) \
-	_fail_unless(expr, __FILE__, __LINE__, \
-		"Assertion `" #expr "' failed", ## __VA_ARGS__, NULL)
-
-#define fail_if(expr, ...) \
-	_fail_unless(!(expr), __FILE__, __LINE__, \
-		"Failure `" #expr "' occurred", ## __VA_ARGS__, NULL)
-
-
+/* various test suites */
 
 extern void threadctl_test(void);
 extern void sched_test(void);
@@ -53,15 +42,5 @@ extern void usleep(unsigned long microseconds);
 
 extern int log_f(const char *fmt, ...);
 extern void flush_log(bool print);
-
-
-/* from tap.c */
-
-extern void _fail_unless(
-	int result,
-	const char *file,
-	int line,
-	const char *expr,
-	...);
 
 #endif

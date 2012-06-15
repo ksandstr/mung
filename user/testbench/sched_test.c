@@ -9,6 +9,7 @@
 #include <l4/schedule.h>
 
 #include "defs.h"
+#include "test.h"
 
 
 #define printf(fmt, ...) log_f(fmt, ##__VA_ARGS__)

@@ -8,6 +8,7 @@
 #include <l4/syscall.h>
 
 #include "defs.h"
+#include "test.h"
 
 
 static void test_thread_fn(void)
