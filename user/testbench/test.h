@@ -30,7 +30,17 @@
 	} while(false)
 
 
-/* Check-style unit testing asserts */
+/* Check-style unit testing things */
+
+struct Suite;
+typedef struct Suite Suite;
+struct TCase;
+typedef struct TCase TCase;
+struct SRunner;
+typedef struct SRunner SRunner;
+
+#define START_TEST(name) static void name (int _i)
+#define END_TEST
 
 /* fail() inherited from the libtap imitation */
 
@@ -41,6 +51,14 @@
 #define fail_if(expr, ...) \
 	_fail_unless(!(expr), __FILE__, __LINE__, \
 		"Failure `" #expr "' occurred", ## __VA_ARGS__, NULL)
+
+extern Suite *suite_create(const char *name);
+extern void suite_add_tcase(Suite *s, TCase *tc);
+extern TCase *tcase_create(const char *name);
+extern void tcase_add_test(TCase *tc, void (*t_fun)(int));
+extern SRunner *srunner_create(Suite *first_suite);
+extern void srunner_add_suite(SRunner *run, Suite *s);
+extern void srunner_run_all(SRunner *sr, int report_mode);
 
 
 /* from tap.c */

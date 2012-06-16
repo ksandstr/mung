@@ -81,8 +81,10 @@ static L4_Word_t r_recv_timeout_case(int priority, bool spin, bool send)
 }
 
 
-static void r_recv_timeout_test(void)
+START_TEST(r_recv_timeout_test)
 {
+	plan_no_plan();
+
 	fail_if(r_recv_timeout_case(98, false, false) != 0x3,
 		"expected timeout in immediate nosend");
 	fail_if(r_recv_timeout_case(98, false, true) != 0,
@@ -92,6 +94,7 @@ static void r_recv_timeout_test(void)
 	fail_if(r_recv_timeout_case(98, true, true) != 0x3,
 		"expected timeout in spin, send");
 }
+END_TEST
 
 
 struct spinner_param
@@ -169,8 +172,10 @@ static L4_ThreadId_t start_spinner(
 }
 
 
-static void preempt_test(void)
+START_TEST(preempt_test)
 {
+	plan_no_plan();
+
 	L4_ThreadId_t spinner = start_spinner(2, 15,
 		L4_TimePeriod(5 * 1000), false);
 	printf("returned to %s after spinner start\n", __func__);
@@ -224,6 +229,7 @@ static void preempt_test(void)
 
 	join_thread(spinner);
 }
+END_TEST
 
 
 /* feh. */
@@ -345,7 +351,7 @@ static bool preempt_exn_case(
 }
 
 
-static void preempt_exn_test(void)
+START_TEST(preempt_exn_test)
 {
 	/* one test for !sig_pe, each; three for the others. */
 	plan_tests(4 * 1 + 4 * 3);
@@ -416,6 +422,7 @@ static void preempt_exn_test(void)
 	printf("%s: ending\n", __func__);
 	free(res);
 }
+END_TEST
 
 
 /* returns the difference between spinner switch and return therefrom. */
@@ -450,13 +457,16 @@ static int yield_timeslice_case(bool preempt_spinner)
 }
 
 
-static void yield_timeslice_test(void)
+START_TEST(yield_timeslice_test)
 {
+	plan_no_plan();
+
 	fail_if(yield_timeslice_case(false) < 10,
 		"expected yield would schedule out for at least 10 ms");
 	fail_if(yield_timeslice_case(true) > 5,
 		"expected extraordinary scheduling to be preempted within 5 ms");
 }
+END_TEST
 
 
 #if 0
@@ -469,7 +479,7 @@ static void helper_fn(void *param)
 #endif
 
 
-void sched_test(void)
+Suite *sched_suite(void)
 {
 #if 0
 	printf("%s: starting helper thread\n", __func__);
@@ -485,17 +495,20 @@ void sched_test(void)
 	printf("%s: after helper exit!\n", __func__);
 #endif
 
-	r_recv_timeout_test();
-	flush_log(false);
-	preempt_test();
-	flush_log(false);
+	Suite *s = suite_create("sched");
 
-	printf("*** TAP output start [\n");
-	preempt_exn_test();
-	tap_reset();
-	flush_log(false);
-	printf("*** TAP output ends ]\n");
+	TCase *ipc_case = tcase_create("ipc");
+	tcase_add_test(ipc_case, r_recv_timeout_test);
+	suite_add_tcase(s, ipc_case);
 
-	yield_timeslice_test();
-	flush_log(false);
+	TCase *preempt_case = tcase_create("preempt");
+	tcase_add_test(preempt_case, preempt_test);
+	tcase_add_test(preempt_case, preempt_exn_test);
+	suite_add_tcase(s, preempt_case);
+
+	TCase *yield_case = tcase_create("yield");
+	tcase_add_test(yield_case, yield_timeslice_test);
+	suite_add_tcase(s, yield_case);
+
+	return s;
 }

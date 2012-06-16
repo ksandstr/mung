@@ -9,10 +9,13 @@
 #include <l4/types.h>
 
 
+struct Suite;
+
+
 /* various test suites */
 
 extern void threadctl_test(void);
-extern void sched_test(void);
+extern struct Suite *sched_suite(void);
 
 
 /* from thread.c */

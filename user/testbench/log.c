@@ -95,7 +95,7 @@ void flush_log(bool print)
 	struct log_entry *next, *child;
 	list_for_each_safe(&log_list, child, next, link) {
 		list_del(&child->link);
-		if(print) printf("test log: %s\n", child->str);
+		if(print) printf("*** test log: %s\n", child->str);
 		free(child);
 	}
 	assert(list_empty(&log_list));

@@ -200,18 +200,29 @@ int main(void)
 	printf("hello, world!\n");
 	calibrate_delay_loop();
 
+	static Suite *(* const suites[])(void) = {
+		&sched_suite,
+	};
+	SRunner *run = srunner_create(NULL);
+	for(int i=0; i < sizeof(suites) / sizeof(suites[0]); i++) {
+		Suite *s = (*suites[i])();
+		srunner_add_suite(run, s);
+	}
+	srunner_run_all(run, 0);
+
+	printf("*** crude tests follow\n");
+
 	malloc_test();
 
 	tid_test();
 	threadctl_test();
-	sched_test();
 
 	threadswitch_test();
 	sleep_test();
 	unmap_test();
 	spacectl_test();
 
-	printf("testbench completed.\n");
+	printf("*** testbench completed.\n");
 
 	return 0;
 }
