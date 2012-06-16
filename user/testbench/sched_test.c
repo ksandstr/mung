@@ -351,39 +351,37 @@ static bool preempt_exn_case(
 }
 
 
-START_TEST(preempt_exn_test)
+START_LOOP_TEST(preempt_exn_test, t)
 {
-	/* one test for !sig_pe, each; three for the others. */
-	plan_tests(4 * 1 + 4 * 3);
+	assert(t >= 0 && t < 8);
+
+	/* there are three boolean variables here. the first is timeslice length,
+	 * the second is the preemption signaling switch, and the third is whether
+	 * there'll be a higher-priority wakeup 10 ms in.
+	 */
+	bool big_ts = (t & 0x01) != 0,
+		sig_pe = (t & 0x02) != 0,
+		has_pe = (t & 0x04) != 0;
+
+	plan_tests(sig_pe ? 1 : 3);
 
 	struct preempt_exn_result *res = malloc(sizeof(*res));
+	if(!preempt_exn_case(res, L4_TimePeriod((big_ts ? 120 : 4) * 1000),
+		sig_pe, has_pe ? 10 : 0))
+	{
+		/* TODO: replace with skip_all() once nonlocal exits have been
+		 * implemented
+		 */
+		skip(!sig_pe ? 1 : 3, "preempt_exn_case() failed in iter %d", t);
+		return;
+	}
 
-	/* there are three boolean variables here. the first is the timeslice
-	 * length, the second is the preemption signaling switch, and the third is
-	 * whether there'll be a higher-priority wakeup 10 ms in.
-	 */
-	for(int t=0; t < 8; t++) {
-		bool big_ts = (t & 0x01) != 0,
-			sig_pe = (t & 0x02) != 0,
-			has_pe = (t & 0x04) != 0;
-
-		if(!preempt_exn_case(res,
-			L4_TimePeriod((big_ts ? 120 : 4) * 1000),
-			sig_pe, has_pe ? 10 : 0))
-		{
-			skip(!sig_pe ? 1 : 3,
-				"preempt_exn_case() failed in iter %d", t);
-			continue;
-		}
-
+	if(!sig_pe) {
 		/* no preemption signaling implies no preemptions were signaled,
 		 * regardless of the other variables.
 		 */
-		if(!sig_pe) {
-			ok1(res->num == 0);
-			continue;
-		}
-
+		ok1(res->num == 0);
+	} else {
 		ok1(res->num > 0);
 		uint32_t diff = res->first_preempt.raw - res->loop_start.raw;
 #if 0
@@ -419,7 +417,6 @@ START_TEST(preempt_exn_test)
 		}
 	}
 
-	printf("%s: ending\n", __func__);
 	free(res);
 }
 END_TEST

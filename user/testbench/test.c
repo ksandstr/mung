@@ -6,6 +6,7 @@
 #include <stdarg.h>
 #include <assert.h>
 #include <ccan/list/list.h>
+#include <ccan/container_of/container_of.h>
 
 #include "defs.h"
 #include "test.h"
@@ -37,6 +38,7 @@ struct test
 {
 	struct list_node tcase_link;
 	void (*t_fun)(int);
+	int low, high;
 };
 
 
@@ -69,9 +71,20 @@ TCase *tcase_create(const char *name)
 /* TODO: add testcase ranges */
 void tcase_add_test(TCase *tc, void (*t_fun)(int))
 {
-	struct test *t = malloc(sizeof(struct test));
+	struct test *t = calloc(1, sizeof(struct test));
 	t->t_fun = t_fun;
 	list_add_tail(&tc->tests, &t->tcase_link);
+}
+
+
+void tcase_add_loop_test(TCase *tc, void (*t_fun)(int), int low, int high)
+{
+	tcase_add_test(tc, t_fun);
+	struct test *t = container_of(tc->tests.n.prev, struct test,
+		tcase_link);
+	assert(t->t_fun == t_fun);
+	t->low = low;
+	t->high = high;
 }
 
 
@@ -92,8 +105,6 @@ static bool run_test(Suite *s, TCase *tc, struct test *t)
 	param[0] = s;
 	param[1] = tc;
 	param[2] = t;
-	tap_reset();
-	flush_log(false);
 	L4_ThreadId_t thread = start_thread(&test_wrapper_fn, param);
 	if(L4_IsNilThread(thread)) {
 		printf("*** %s: start_thread() failed\n", __func__);
@@ -134,17 +145,25 @@ void srunner_run_all(SRunner *sr, int report_mode)
 		TCase *tc;
 		list_for_each(&s->cases, tc, suite_link) {
 			printf("*** begin tcase `%s'\n", tc->name);
+			flush_log(false);
 			struct test *t;
 			list_for_each(&tc->tests, t, tcase_link) {
-				if(!run_test(s, tc, t)) {
-					/* FIXME: handle this somehow */
-					printf("*** the gait of the least graceful hippopotamus\n");
-					return;
+				int high = t->high;
+				if(high < t->low) high = t->low;
+				int rc_tot = 0;
+				for(int val = t->low; val <= high; val++) {
+					tap_reset();
+					if(!run_test(s, tc, t)) {
+						/* FIXME: handle this somehow */
+						printf("*** the gait of the least graceful hippopotamus\n");
+						return;
+					}
+					/* TODO: gather results */
+					int rc = exit_status();
+					if(rc > 0) rc_tot += rc;
 				}
-				/* TODO: gather results */
-				int rc = exit_status();
-				if(rc > 0) {
-					printf("*** %d failed or anomalous tests\n", rc);
+				if(rc_tot > 0) {
+					printf("*** %d failed or anomalous tests\n", rc_tot);
 					flush_log(true);
 				}
 			}

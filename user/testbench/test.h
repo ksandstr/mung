@@ -39,8 +39,12 @@ typedef struct TCase TCase;
 struct SRunner;
 typedef struct SRunner SRunner;
 
-#define START_TEST(name) static void name (int _i)
-#define END_TEST
+#define START_TEST(name) \
+	static void name (int _i) {
+#define START_LOOP_TEST(name, _var) \
+	static void name (int _i) { \
+		int _var = _i;
+#define END_TEST }
 
 /* fail() inherited from the libtap imitation */
 
@@ -56,6 +60,11 @@ extern Suite *suite_create(const char *name);
 extern void suite_add_tcase(Suite *s, TCase *tc);
 extern TCase *tcase_create(const char *name);
 extern void tcase_add_test(TCase *tc, void (*t_fun)(int));
+extern void tcase_add_loop_test(
+	TCase *tc,
+	void (*t_fun)(int),
+	int low,
+	int high);
 extern SRunner *srunner_create(Suite *first_suite);
 extern void srunner_add_suite(SRunner *run, Suite *s);
 extern void srunner_run_all(SRunner *sr, int report_mode);
