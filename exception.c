@@ -370,9 +370,11 @@ void isr_exn_gp_bottom(struct x86_exregs *regs)
 	} else {
 		thread_save_ctx(current, regs);
 
+#if 0
 		printf("#GP(%#lx) at eip %#lx, esp %#lx in %lu:%lu\n", regs->error,
 			regs->eip, regs->esp, TID_THREADNUM(current->id),
 			TID_VERSION(current->id));
+#endif
 
 		void *utcb = thread_get_utcb(current);
 		struct thread *exh = get_thread_exh(current, utcb);
