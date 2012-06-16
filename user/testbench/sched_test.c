@@ -347,8 +347,10 @@ static bool preempt_exn_case(
 
 static void preempt_exn_test(void)
 {
+	/* one test for !sig_pe, each; three for the others. */
+	plan_tests(4 * 1 + 4 * 3);
+
 	struct preempt_exn_result *res = malloc(sizeof(*res));
-	printf("%s: started\n", __func__);
 
 	/* there are three boolean variables here. the first is the timeslice
 	 * length, the second is the preemption signaling switch, and the third is
@@ -359,19 +361,24 @@ static void preempt_exn_test(void)
 			sig_pe = (t & 0x02) != 0,
 			has_pe = (t & 0x04) != 0;
 
-		fail_if(!preempt_exn_case(res,
+		if(!preempt_exn_case(res,
 			L4_TimePeriod((big_ts ? 120 : 4) * 1000),
-			sig_pe, has_pe ? 10 : 0));
+			sig_pe, has_pe ? 10 : 0))
+		{
+			skip(!sig_pe ? 1 : 3,
+				"preempt_exn_case() failed in iter %d", t);
+			continue;
+		}
 
 		/* no preemption signaling implies no preemptions were signaled,
 		 * regardless of the other variables.
 		 */
 		if(!sig_pe) {
-			fail_unless(res->num == 0);
+			ok1(res->num == 0);
 			continue;
 		}
 
-		fail_unless(res->num > 0);
+		ok1(res->num > 0);
 		uint32_t diff = res->first_preempt.raw - res->loop_start.raw;
 #if 0
 		printf("started at %llu, first preempt at %llu (diff %u), preempted %d time(s)\n",
@@ -383,26 +390,26 @@ static void preempt_exn_test(void)
 			 *
 			 * it's conceivable this might cause two preemptions, though.
 			 */
-			fail_unless(res->num == 1 || res->num == 2,
+			ok(res->num == 1 || res->num == 2,
 				"spinner should be preempted once or twice");
-			fail_unless(diff >= 10 && diff <= 13,
+			ok(diff >= 10 && diff <= 13,
 				"first spinner preempt should occur at between 10..13 ms");
 		} else if(big_ts && !has_pe) {
-			fail_unless(res->num == 1,
+			ok(res->num == 1,
 				"spinner should be preempted once");
-			fail_unless(diff >= 20,
+			ok(diff >= 20,
 				"first spinner preempt should occur at 20 ms or later");
 		} else if(!big_ts && has_pe) {
 			/* six times for timeslice (25 / 4 = 6.25) and once for
 			 * preempt_fn.
 			 */
-			fail_unless(res->num == 7);
-			fail_unless(diff < 8,
+			ok1(res->num == 7);
+			ok(diff < 8,
 				"short timeslice should cause preemption before 10 ms");
 		} else {
 			assert(!big_ts && !has_pe);
-			fail_unless(res->num == 6);		/* see above */
-			fail_unless(diff < 8);
+			ok1(res->num == 6);		/* see above */
+			ok1(diff < 8);
 		}
 	}
 
@@ -482,8 +489,13 @@ void sched_test(void)
 	flush_log(false);
 	preempt_test();
 	flush_log(false);
+
+	printf("*** TAP output start [\n");
 	preempt_exn_test();
+	tap_reset();
 	flush_log(false);
+	printf("*** TAP output ends ]\n");
+
 	yield_timeslice_test();
 	flush_log(false);
 }
