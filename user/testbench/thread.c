@@ -82,8 +82,8 @@ end:
 L4_ThreadId_t start_thread(void (*fn)(void *param), void *param)
 {
 	/* default timeslice is 50 ms just to avoid preemptions. */
-	return start_thread_long(fn, param, -1, L4_TimePeriod(3 * 1000),
-		L4_Never);
+	return start_thread_long(fn, param, -1,
+		L4_TimePeriod(50 * 1000), L4_Never);
 }
 
 
