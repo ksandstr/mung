@@ -200,6 +200,10 @@ int main(void)
 	printf("hello, world!\n");
 	calibrate_delay_loop();
 
+	/* informal & runtime tests */
+	malloc_test();
+
+	/* proper test suite */
 	static Suite *(* const suites[])(void) = {
 		&sched_suite,
 	};
@@ -210,9 +214,7 @@ int main(void)
 	}
 	srunner_run_all(run, 0);
 
-	printf("*** crude tests follow\n");
-
-	malloc_test();
+	printf("*** legacy tests follow\n");
 
 	tid_test();
 	threadctl_test();
