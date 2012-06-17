@@ -47,15 +47,14 @@ static L4_Word_t r_recv_timeout_case(int priority, bool spin, bool send)
 	param[0] = L4_Myself().raw;
 	param[1] = L4_TimePeriod(timeout_ms * 1000).raw;
 	L4_ThreadId_t helper = start_thread(&r_recv_timeout_fn, param);
-	fail_if(L4_IsNilThread(helper), "can't start helper thread");
+	/* FIXME: replace these with nonlocal, diag()-printing exits */
+	assert(!L4_IsNilThread(helper));
 
 	L4_Word_t res = L4_Set_Priority(helper, priority);
-	fail_if((res & 0xff) == 0, "L4_Set_Priority(..., %d) failed: ec %#lx",
-		priority, L4_ErrorCode());
+	assert((res & 0xff) != 0);
 
 	L4_MsgTag_t tag = L4_Receive(helper);
-	fail_if(L4_IpcFailed(tag), "error in receive from helper: ec %#lx",
-		L4_ErrorCode());
+	assert(L4_IpcSucceeded(tag));
 
 	if(spin) {
 		L4_Clock_t start = L4_SystemClock();
@@ -83,16 +82,16 @@ static L4_Word_t r_recv_timeout_case(int priority, bool spin, bool send)
 
 START_TEST(r_recv_timeout_test)
 {
-	plan_no_plan();
+	plan_tests(4);
 
-	fail_if(r_recv_timeout_case(98, false, false) != 0x3,
-		"expected timeout in immediate nosend");
-	fail_if(r_recv_timeout_case(98, false, true) != 0,
-		"expected successful immediate send");
-	fail_if(r_recv_timeout_case(98, true, false) != 0x3,
-		"expected timeout in spin, nosend");
-	fail_if(r_recv_timeout_case(98, true, true) != 0x3,
-		"expected timeout in spin, send");
+	ok(r_recv_timeout_case(98, false, false) == 0x3,
+		"timeout in immediate nosend");
+	ok(r_recv_timeout_case(98, false, true) == 0,
+		"successful immediate send");
+	ok(r_recv_timeout_case(98, true, false) == 0x3,
+		"timeout in spin, nosend");
+	ok(r_recv_timeout_case(98, true, true) == 0x3,
+		"timeout in spin, send");
 }
 END_TEST
 
@@ -172,66 +171,6 @@ static L4_ThreadId_t start_spinner(
 }
 
 
-START_TEST(preempt_test)
-{
-	plan_no_plan();
-
-	L4_ThreadId_t spinner = start_spinner(2, 15,
-		L4_TimePeriod(5 * 1000), false);
-	printf("returned to %s after spinner start\n", __func__);
-	fail_if(L4_IsNilThread(spinner), "can't start spinner thread");
-
-	L4_Time_t ts, tq;
-	L4_Word_t res = L4_Timeslice(spinner, &ts, &tq);
-	if(res == L4_SCHEDRESULT_ERROR) {
-		printf("%s: L4_Timeslice() failed; errorcode %#lx\n", __func__,
-			L4_ErrorCode());
-		return;
-	}
-	printf("spinner thread state is %lu; has %u µs quantum\n",
-		res, (unsigned)time_in_us(ts));
-
-	/* now wait until the preemption thing happens, but wake up every 3 ms
-	 * just to cause preemptions in the spinner thread.
-	 */
-	L4_Clock_t start = L4_SystemClock();
-	L4_MsgTag_t tag;
-	do {
-		tag = L4_Receive_Timeout(spinner, L4_TimePeriod(3 * 1000));
-		if(L4_IpcFailed(tag)) {
-			printf("spinner didn't send yet at %llu\n",
-				L4_SystemClock().raw);
-		} else if(tag.X.label >> 4 == (-4u & 0xfff)) {
-			L4_Word_t words[63];
-			int num = tag.X.u + tag.X.t;
-			if(num > 64) num = 64;
-			L4_StoreMRs(1, num, words);
-			printf("got exception of %d words: ip %#lx\n", num, words[0]);
-
-			/* should reply, or the spinner will stop. */
-			tag.X.label = 0;
-			L4_LoadMR(0, tag.raw);
-			L4_LoadMRs(1, num, words);
-			tag = L4_Reply(spinner);
-			if(L4_IpcFailed(tag)) {
-				printf("spinner preempt reply failed: ec %#lx\n",
-					L4_ErrorCode());
-			}
-		} else if(tag.X.u == 0) {
-			printf("got regular spinner exit\n");
-			break;
-		} else {
-			printf("%s: got unexpected message (label %#lx, u %#lx, t %#lx)\n",
-				__func__, (L4_Word_t)tag.X.label, (L4_Word_t)tag.X.u,
-				(L4_Word_t)tag.X.t);
-		}
-	} while(start.raw + 100 > L4_SystemClock().raw);
-
-	join_thread(spinner);
-}
-END_TEST
-
-
 /* feh. */
 static int find_own_priority(void)
 {
@@ -257,9 +196,7 @@ static int find_own_priority(void)
 static void preempt_fn(void *param_ptr)
 {
 	unsigned int sleep_ms = (L4_Word_t)param_ptr;
-#if 0
 	printf("%s: sleeping for %u ms\n", __func__, sleep_ms);
-#endif
 	L4_Sleep(L4_TimePeriod(sleep_ms * 1000));
 }
 
@@ -288,12 +225,12 @@ static bool preempt_exn_case(
 	int my_pri = find_own_priority();
 	L4_ThreadId_t spinner = start_spinner(my_pri - 2, 25, spinner_ts,
 		signal_preempt);
-	fail_if(L4_IsNilThread(spinner));
+	assert(!L4_IsNilThread(spinner));
 
 	L4_ThreadId_t preempt;
 	if(preempt_delay > 0) {
 		preempt = start_preempt(preempt_delay);
-		fail_if(L4_IsNilThread(preempt));
+		assert(!L4_IsNilThread(preempt));
 	} else {
 		preempt = L4_nilthread;
 	}
@@ -384,7 +321,7 @@ START_LOOP_TEST(preempt_exn_test, t)
 	} else {
 		ok1(res->num > 0);
 		uint32_t diff = res->first_preempt.raw - res->loop_start.raw;
-#if 0
+#if 1
 		printf("started at %llu, first preempt at %llu (diff %u), preempted %d time(s)\n",
 			res->loop_start.raw, res->first_preempt.raw, diff, res->num);
 #endif
@@ -456,12 +393,12 @@ static int yield_timeslice_case(bool preempt_spinner)
 
 START_TEST(yield_timeslice_test)
 {
-	plan_no_plan();
+	plan_tests(2);
 
-	fail_if(yield_timeslice_case(false) < 10,
-		"expected yield would schedule out for at least 10 ms");
-	fail_if(yield_timeslice_case(true) > 5,
-		"expected extraordinary scheduling to be preempted within 5 ms");
+	ok(yield_timeslice_case(false) >= 10,
+		"yield should schedule out for at least 10 ms");
+	ok(yield_timeslice_case(true) <= 5,
+		"extraordinary scheduling should be preempted within 5 ms");
 }
 END_TEST
 
@@ -499,7 +436,6 @@ Suite *sched_suite(void)
 	suite_add_tcase(s, ipc_case);
 
 	TCase *preempt_case = tcase_create("preempt");
-	tcase_add_test(preempt_case, preempt_test);
 	tcase_add_loop_test(preempt_case, preempt_exn_test, 0, 7);
 	suite_add_tcase(s, preempt_case);
 
