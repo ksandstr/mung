@@ -363,7 +363,7 @@ START_LOOP_TEST(preempt_exn_test, t)
 		sig_pe = (t & 0x02) != 0,
 		has_pe = (t & 0x04) != 0;
 
-	plan_tests(sig_pe ? 1 : 3);
+	plan_tests(!sig_pe ? 1 : 3);
 
 	struct preempt_exn_result *res = malloc(sizeof(*res));
 	if(!preempt_exn_case(res, L4_TimePeriod((big_ts ? 120 : 4) * 1000),
@@ -500,7 +500,7 @@ Suite *sched_suite(void)
 
 	TCase *preempt_case = tcase_create("preempt");
 	tcase_add_test(preempt_case, preempt_test);
-	tcase_add_test(preempt_case, preempt_exn_test);
+	tcase_add_loop_test(preempt_case, preempt_exn_test, 0, 7);
 	suite_add_tcase(s, preempt_case);
 
 	TCase *yield_case = tcase_create("yield");
