@@ -71,40 +71,47 @@ TCase *tcase_create(const char *name)
 /* TODO: add testcase ranges */
 void tcase_add_test(TCase *tc, void (*t_fun)(int))
 {
-	struct test *t = calloc(1, sizeof(struct test));
-	t->t_fun = t_fun;
+	struct test *t = malloc(sizeof(struct test));
+	*t = (struct test){ .t_fun = t_fun };
 	list_add_tail(&tc->tests, &t->tcase_link);
 }
 
 
 void tcase_add_loop_test(TCase *tc, void (*t_fun)(int), int low, int high)
 {
-	tcase_add_test(tc, t_fun);
-	struct test *t = container_of(tc->tests.n.prev, struct test,
-		tcase_link);
-	assert(t->t_fun == t_fun);
-	t->low = low;
-	t->high = high;
+	struct test *t = malloc(sizeof(struct test));
+	*t = (struct test){
+		.t_fun = t_fun, .low = low, .high = high,
+	};
+	list_add_tail(&tc->tests, &t->tcase_link);
 }
+
+
+struct test_thread_param
+{
+	Suite *s;
+	TCase *tc;
+	struct test *t;
+	int val;
+};
 
 
 /* TODO: set up a mechanism for nonlocal exits */
 static void test_wrapper_fn(void *param_ptr)
 {
-	void **param = param_ptr;
-	const struct test *t = param[2];
-	(*t->t_fun)(0);
+	const struct test_thread_param *p = param_ptr;
+	(*p->t->t_fun)(p->val);
 }
 
 
-static bool run_test(Suite *s, TCase *tc, struct test *t)
+static bool run_test(Suite *s, TCase *tc, struct test *t, int test_value)
 {
 	bool rc = true;
 
-	void **param = calloc(3, sizeof(void *));
-	param[0] = s;
-	param[1] = tc;
-	param[2] = t;
+	struct test_thread_param *param = malloc(sizeof(*param));
+	*param = (struct test_thread_param){
+		.s = s, .tc = tc, .t = t, .val = test_value,
+	};
 	L4_ThreadId_t thread = start_thread(&test_wrapper_fn, param);
 	if(L4_IsNilThread(thread)) {
 		printf("*** %s: start_thread() failed\n", __func__);
@@ -153,7 +160,7 @@ void srunner_run_all(SRunner *sr, int report_mode)
 				int rc_tot = 0;
 				for(int val = t->low; val <= high; val++) {
 					tap_reset();
-					if(!run_test(s, tc, t)) {
+					if(!run_test(s, tc, t, val)) {
 						/* FIXME: handle this somehow */
 						printf("*** the gait of the least graceful hippopotamus\n");
 						return;
