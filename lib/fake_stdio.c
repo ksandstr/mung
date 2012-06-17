@@ -1,6 +1,7 @@
 
 #include <stdio.h>
 #include <stdarg.h>
+#include <stdbool.h>
 #include <string.h>
 
 
@@ -11,12 +12,16 @@ FILE *stdout = &stdout_file, *stderr = &stderr_file;
 
 int vfprintf(FILE *stream, const char *fmt, va_list args)
 {
-	if(stream == stderr) {
-		printf("[ERR]: ");
-	}
-
 	char buffer[256];
 	int n = vsnprintf(buffer, sizeof(buffer), fmt, args);
+	if(stream == stderr && n > 0) {
+		static bool is_first = true;
+		if(is_first) {
+			printf("[ERR]: ");
+			is_first = false;
+		}
+		if(buffer[n - 1] == '\n') is_first = true;
+	}
 	con_putstr(buffer);
 	return n;
 }
