@@ -11,6 +11,7 @@ my $TOPLEVEL = ".";
 -f "$TOPLEVEL/run.sh" || die "can't find run.sh in path `$TOPLEVEL'";
 
 $SIG{PIPE} = "IGNORE";		# and smoke it.
+$SIG{INT} = "IGNORE";		# my regards to 007
 
 
 sub start_test {
