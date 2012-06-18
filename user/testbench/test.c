@@ -39,6 +39,7 @@ struct test
 	struct list_node tcase_link;
 	void (*t_fun)(int);
 	int low, high;
+	char name[];
 };
 
 
@@ -68,21 +69,18 @@ TCase *tcase_create(const char *name)
 }
 
 
-/* TODO: add testcase ranges */
-void tcase_add_test(TCase *tc, void (*t_fun)(int))
+void tcase_add_test_full(
+	TCase *tc,
+	void (*t_fun)(int),
+	const char *name,
+	int low, int high)
 {
-	struct test *t = malloc(sizeof(struct test));
-	*t = (struct test){ .t_fun = t_fun };
-	list_add_tail(&tc->tests, &t->tcase_link);
-}
-
-
-void tcase_add_loop_test(TCase *tc, void (*t_fun)(int), int low, int high)
-{
-	struct test *t = malloc(sizeof(struct test));
+	int len = strlen(name);
+	struct test *t = malloc(sizeof(struct test) + len + 1);
 	*t = (struct test){
 		.t_fun = t_fun, .low = low, .high = high,
 	};
+	memcpy(t->name, name, len + 1);
 	list_add_tail(&tc->tests, &t->tcase_link);
 }
 
@@ -157,6 +155,7 @@ void srunner_run_all(SRunner *sr, int report_mode)
 			list_for_each(&tc->tests, t, tcase_link) {
 				int high = t->high;
 				if(high < t->low) high = t->low;
+				printf("*** begin test `%s'\n", t->name);
 				int rc_tot = 0;
 				for(int val = t->low; val <= high; val++) {
 					tap_reset();
@@ -167,11 +166,19 @@ void srunner_run_all(SRunner *sr, int report_mode)
 					}
 					/* TODO: gather results */
 					int rc = exit_status();
-					if(rc > 0) rc_tot += rc;
+					if(rc > 0) {
+						if(t->low != high) {
+							printf("*** loop %d had %d failures\n", val, rc);
+						}
+						rc_tot += rc;
+					}
 				}
 				if(rc_tot > 0) {
-					printf("*** %d failed or anomalous tests\n", rc_tot);
+					printf("*** end test `%s' (%d failed or anomalous; log follows)\n",
+						t->name, rc_tot);
 					flush_log(true);
+				} else {
+					printf("*** end test `%s'\n", t->name);
 				}
 			}
 			printf("*** end tcase `%s'\n", tc->name);

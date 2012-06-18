@@ -59,12 +59,17 @@ typedef struct SRunner SRunner;
 extern Suite *suite_create(const char *name);
 extern void suite_add_tcase(Suite *s, TCase *tc);
 extern TCase *tcase_create(const char *name);
-extern void tcase_add_test(TCase *tc, void (*t_fun)(int));
-extern void tcase_add_loop_test(
+
+extern void tcase_add_test_full(
 	TCase *tc,
 	void (*t_fun)(int),
-	int low,
-	int high);
+	const char *name,
+	int low, int high);
+
+#define tcase_add_test(tc, tfun) tcase_add_test_full((tc), (tfun), #tfun, 0, 0)
+#define tcase_add_loop_test(tc, tfun, lo, hi) \
+	tcase_add_test_full((tc), (tfun), #tfun, (lo), (hi))
+
 extern SRunner *srunner_create(Suite *first_suite);
 extern void srunner_add_suite(SRunner *run, Suite *s);
 extern void srunner_run_all(SRunner *sr, int report_mode);
