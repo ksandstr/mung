@@ -25,6 +25,10 @@ distclean: clean
 	@find . -name ".deps" -type d -print|xargs rm -rf
 
 
+check: all
+	@user/testbench/report.pl
+
+
 tags: $(shell find . -iname "*.[ch]" -print)
 	@ctags -R *
 
