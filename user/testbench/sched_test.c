@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <assert.h>
+#include <ccan/list/list.h>
 
 #include <l4/types.h>
 #include <l4/thread.h>
@@ -208,7 +209,14 @@ static void preempt_fn(void *param_ptr)
 struct preempt_exn_result
 {
 	L4_Clock_t loop_start, first_preempt;
-	int num;
+	int num_exn, num_wake;
+	struct list_head wakeups;
+};
+
+
+struct preempt_wakeup {
+	struct list_node result_link;
+	L4_Clock_t clock;
 };
 
 
@@ -219,12 +227,14 @@ static bool preempt_exn_case(
 	struct preempt_exn_result *r,
 	L4_Time_t spinner_ts,
 	bool signal_preempt,
-	int preempt_delay)
+	int preempt_delay,
+	int spin_time_ms,
+	int receive_wait_ms)
 {
 	bool ok = true;
 	int my_pri = find_own_priority();
-	L4_ThreadId_t spinner = start_spinner(my_pri - 2, 25, spinner_ts,
-		signal_preempt);
+	L4_ThreadId_t spinner = start_spinner(my_pri - 2, spin_time_ms,
+		spinner_ts, signal_preempt);
 	assert(!L4_IsNilThread(spinner));
 
 	L4_ThreadId_t preempt;
@@ -235,16 +245,32 @@ static bool preempt_exn_case(
 		preempt = L4_nilthread;
 	}
 
-	r->num = 0;
+	r->num_exn = 0;
+	r->num_wake = 0;
 	r->first_preempt.raw = 0;
 
 	r->loop_start = L4_SystemClock();
+	L4_Clock_t now;
 	L4_MsgTag_t tag;
 	do {
-		/* the timeout is long enough to preempt the spinner just once toward
-		 * the end.
-		 */
-		tag = L4_Receive_Timeout(spinner, L4_TimePeriod(22 * 1000));
+		tag = L4_Receive_Timeout(spinner,
+			L4_TimePeriod(receive_wait_ms * 1000));
+		L4_Word_t mrs[64];
+		int num_words = tag.X.u + tag.X.t;
+		if(num_words > 63) num_words = 63;
+		if(L4_IpcSucceeded(tag)) L4_StoreMRs(0, num_words + 1, mrs);
+
+		r->num_wake++;
+		now = L4_SystemClock();
+		struct preempt_wakeup *w = malloc(sizeof(*w));
+		if(w != NULL) {
+			w->clock = now;
+			list_add_tail(&r->wakeups, &w->result_link);
+		} else {
+			printf("wakeup at %llu not recorded due to malloc() issue",
+				now.raw);
+		}
+
 		if(L4_IpcFailed(tag)) {
 			if(L4_ErrorCode() != 0x3) {
 				printf("%s: ipc error (code %#lx)\n", __func__,
@@ -253,15 +279,12 @@ static bool preempt_exn_case(
 				break;
 			}
 		} else if(tag.X.label >> 4 == (-4u & 0xfff)) {
-			L4_Word_t words[63];
-			int num = tag.X.u + tag.X.t;
-			if(num > 64) num = 64;
-			L4_StoreMRs(1, num, words);
+			const L4_Word_t *words = &mrs[1];
 
 			/* should reply or the thread will stop. */
 			tag.X.label = 0;
 			L4_LoadMR(0, tag.raw);
-			L4_LoadMRs(1, num, words);
+			L4_LoadMRs(1, num_words, words);
 			tag = L4_Reply(spinner);
 			if(L4_IpcFailed(tag)) {
 				printf("spinner preempt reply failed: ec %#lx\n",
@@ -269,8 +292,8 @@ static bool preempt_exn_case(
 				ok = false;
 				break;
 			}
-			if(r->num == 0) r->first_preempt = L4_SystemClock();
-			r->num++;
+			if(r->num_exn == 0) r->first_preempt = L4_SystemClock();
+			r->num_exn++;
 		} else if(tag.X.u == 0) {
 			/* ordinary regular spinner exit */
 			break;
@@ -279,13 +302,64 @@ static bool preempt_exn_case(
 				__func__, (L4_Word_t)tag.X.label, (L4_Word_t)tag.X.u,
 				(L4_Word_t)tag.X.t);
 		}
-	} while(r->loop_start.raw + 100 > L4_SystemClock().raw);
+	} while(r->loop_start.raw + 100 > now.raw);
 
 	join_thread(spinner);
 	join_thread(preempt);
 
 	return ok;
 }
+
+
+static void free_preempt_exn_result(struct preempt_exn_result *res)
+{
+	struct preempt_wakeup *w, *w_next;
+	list_for_each_safe(&res->wakeups, w, w_next, result_link) {
+		list_del_from(&res->wakeups, &w->result_link);
+		free(w);
+	}
+	assert(list_empty(&res->wakeups));
+	free(res);
+}
+
+
+START_TEST(simple_preempt_test)
+{
+	plan_tests(6);
+
+	struct preempt_exn_result *res = malloc(sizeof(*res));
+	list_head_init(&res->wakeups);
+	if(!preempt_exn_case(res, L4_TimePeriod(120 * 1000),
+		false, 0, 25, 4))
+	{
+		skip(666, "preempt_exn_case() failed");
+		goto end;
+	}
+
+	/* the result should be at least five wakeups with at least three ms in
+	 * between.
+	 */
+	ok1(res->num_wake >= 5);
+
+	uint64_t prev = 0;
+	int count = 0;	/* # of intervals seen */
+	struct preempt_wakeup *w;
+	list_for_each(&res->wakeups, w, result_link) {
+		if(prev == 0) {
+			assert(w == list_top(&res->wakeups, struct preempt_wakeup,
+				result_link));
+			prev = w->clock.raw;
+		} else {
+			ok1(w->clock.raw - prev >= 3);
+			if(++count == 4) break;
+		}
+	}
+	ok1(count >= 4);
+
+end:
+	free_preempt_exn_result(res);
+}
+END_TEST
 
 
 START_LOOP_TEST(preempt_exn_test, t)
@@ -300,30 +374,37 @@ START_LOOP_TEST(preempt_exn_test, t)
 		sig_pe = (t & 0x02) != 0,
 		has_pe = (t & 0x04) != 0;
 
-	plan_tests(!sig_pe ? 1 : 3);
+	plan_tests(!sig_pe ? 2 : 3);
 
-	struct preempt_exn_result *res = malloc(sizeof(*res));
+	struct preempt_exn_result *res = calloc(1, sizeof(*res));
+	list_head_init(&res->wakeups);
+	/* receive preempts the spinner once towards the end. */
 	if(!preempt_exn_case(res, L4_TimePeriod((big_ts ? 120 : 4) * 1000),
-		sig_pe, has_pe ? 10 : 0))
+		sig_pe, has_pe ? 10 : 0, 25, 22))
 	{
 		/* TODO: replace with skip_all() once nonlocal exits have been
 		 * implemented
 		 */
-		skip(!sig_pe ? 1 : 3, "preempt_exn_case() failed in iter %d", t);
-		return;
+		skip(!sig_pe ? 2 : 3, "preempt_exn_case() failed in iter %d", t);
+		goto end;
 	}
 
+	assert(res->num_exn <= res->num_wake);
 	if(!sig_pe) {
 		/* no preemption signaling implies no preemptions were signaled,
 		 * regardless of the other variables.
 		 */
-		ok1(res->num == 0);
+		ok(res->num_exn == 0, "only signal exceptions on request");
+		/* should wake up once due to the receive timeout at 22ms, and another
+		 * time when the spinner exits.
+		 */
+		ok(res->num_wake == 2, "exn wrapper should return from ipc twice");
 	} else {
-		ok1(res->num > 0);
+		ok1(res->num_exn > 0);
 		uint32_t diff = res->first_preempt.raw - res->loop_start.raw;
 #if 1
 		printf("started at %llu, first preempt at %llu (diff %u), preempted %d time(s)\n",
-			res->loop_start.raw, res->first_preempt.raw, diff, res->num);
+			res->loop_start.raw, res->first_preempt.raw, diff, res->num_exn);
 #endif
 		if(big_ts && has_pe) {
 			/* the preempt_fn causes a preemption, which satisifes the 22-ms
@@ -331,12 +412,12 @@ START_LOOP_TEST(preempt_exn_test, t)
 			 *
 			 * it's conceivable this might cause two preemptions, though.
 			 */
-			ok(res->num == 1 || res->num == 2,
+			ok(res->num_exn == 1 || res->num_exn == 2,
 				"spinner should be preempted once or twice");
 			ok(diff >= 10 && diff <= 13,
 				"first spinner preempt should occur at between 10..13 ms");
 		} else if(big_ts && !has_pe) {
-			ok(res->num == 1,
+			ok(res->num_exn == 1,
 				"spinner should be preempted once");
 			ok(diff >= 20,
 				"first spinner preempt should occur at 20 ms or later");
@@ -344,17 +425,18 @@ START_LOOP_TEST(preempt_exn_test, t)
 			/* six times for timeslice (25 / 4 = 6.25) and once for
 			 * preempt_fn.
 			 */
-			ok1(res->num == 7);
+			ok1(res->num_exn == 7);
 			ok(diff < 8,
 				"short timeslice should cause preemption before 10 ms");
 		} else {
 			assert(!big_ts && !has_pe);
-			ok1(res->num == 6);		/* see above */
+			ok1(res->num_exn == 6);		/* see above */
 			ok1(diff < 8);
 		}
 	}
 
-	free(res);
+end:
+	free_preempt_exn_result(res);
 }
 END_TEST
 
@@ -436,6 +518,7 @@ Suite *sched_suite(void)
 	suite_add_tcase(s, ipc_case);
 
 	TCase *preempt_case = tcase_create("preempt");
+	tcase_add_test(preempt_case, simple_preempt_test);
 	tcase_add_loop_test(preempt_case, preempt_exn_test, 0, 7);
 	suite_add_tcase(s, preempt_case);
 
