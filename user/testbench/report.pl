@@ -117,9 +117,10 @@ my %end_table = (
 );
 
 
-my $test = start_test();
+my $test_pipe = start_test();
 my $i = 0;
-while(<$test>) {
+my $status = 0;
+while(<$test_pipe>) {
 	chomp;
 	s/^\s+//;	# apparently sometimes there are carriage returns.
 
@@ -137,6 +138,11 @@ while(<$test>) {
 		} else {
 			print STDERR "unknown control message `$_'\n";
 		}
+	} elsif(/^testbench abort.*called/) {
+		print "\n";
+		print STDERR "premature test abort!\n";
+		$status = 1;
+		last;
 	} else {
 		next if is_kmsg($_);
 		eval {
@@ -149,4 +155,5 @@ while(<$test>) {
 	}
 }
 kill "INT", -getpgrp(0);
-$test->close;
+$test_pipe->close;
+exit $status;
