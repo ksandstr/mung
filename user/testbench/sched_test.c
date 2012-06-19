@@ -441,6 +441,46 @@ end:
 END_TEST
 
 
+/* setup: spinner thread at priority P-2 for 25 ms; preempt thread at P-1 to
+ * interrupt at 5ms. spinner thread set to signal preemptions. spinner
+ * thread's maximum delay set to 10 ms.
+ *
+ * variables:
+ *   - spinner thread set to delay preemptions, or not
+ *   - spinner thread's sens_pri set to level of preempt thread, or not
+ *   - whether spinner thread is polite (i.e. yields on first observation of
+ *     pending interrupt), or not
+ *   - whether the spinner thread's quantum runs out during the preemption
+ *     delay time, or not
+ *
+ * observe: times when preemptions occur. these should cover:
+ *   1) whether preemption by higher-priority thread occurs
+ *   2) time until preempted by higher-priority thread
+ *   3) whether preemption by quantum works despite delay on priority
+ *      preemption
+ *
+ * requisite: when the microkernel preempts a lower-priority thread and this
+ * causes it to do IPC to a thread with higher priority than the preemptor's,
+ * the IPC recipient should be scheduled first. any selection of preemptor,
+ * such as for checking against sens_pri, may not result in a switch to the
+ * preemptor thread until after the higher-or-equal priority exception handler
+ * has switched off.
+ */
+START_LOOP_TEST(delay_preempt, t)
+{
+	bool delay_pe = (t & 0x1) != 0,
+		high_sens_pri = (t & 0x2) != 0,
+		polite = (t & 0x4) != 0,
+		small_ts = (t & 0x8) != 0;
+
+	plan_skip_all("nothing is implemented");
+	return;
+
+	/* TODO: everything specified above */
+}
+END_TEST
+
+
 /* returns the difference between spinner switch and return therefrom. */
 static int yield_timeslice_case(bool preempt_spinner)
 {
@@ -520,6 +560,7 @@ Suite *sched_suite(void)
 	TCase *preempt_case = tcase_create("preempt");
 	tcase_add_test(preempt_case, simple_preempt_test);
 	tcase_add_loop_test(preempt_case, preempt_exn_test, 0, 7);
+	tcase_add_loop_test(preempt_case, delay_preempt, 0, 15);
 	suite_add_tcase(s, preempt_case);
 
 	TCase *yield_case = tcase_create("yield");
