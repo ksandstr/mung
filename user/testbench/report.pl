@@ -28,27 +28,38 @@ sub is_kmsg {
 my ($suite, $tcase);
 my ($tap_low, $tap_high, $tap_next, $no_plan);
 
+# TODO: skip stderr outputs, log diag() messages, report failed tests
 sub tap_line {
 	my $line = shift;
 	return unless $suite;
 
-	if(!defined($tap_low)) {
-		$line =~ /^(\d+)\.\.(\d+)$/ || die "plan expected";
+	if($line =~ /^(\d+)\.\.(\d+)$/) {
+		if(defined $tap_low && !$no_plan) {
+			# $tap_high - $tap_next + 1 planned tests went unexecuted.
+			# TODO: count and report this.
+		}
 		$tap_low = int($1);
 		$tap_high = int($2);
-		$tap_next = $tap_low;
 		$no_plan = $tap_high < $tap_low;
-		$suite->{planned} += $tap_high - $tap_low + 1 unless $no_plan;
+		if($no_plan) {
+			$tap_next = 1;
+		} else {
+			$tap_next = $tap_low;
+			$suite->{planned} += $tap_high - $tap_low + 1;
+		}
 	} elsif($line =~ /^(not\s+)?ok\s+(\d+)\s+-\s+(.+)$/) {
+		die "plan expected" unless defined $tap_low;
 		my $fail = defined($1);
 		my $id = int($2);
 		my $desc = $3;
 		if($id != $tap_next) {
+			# TODO: is this the proper way to handle invalid streams? toss an
+			# error and not try to recover in any way?
 			die "identifier $id out of order (expected $tap_next)";
 		}
 		$suite->{planned}++ if $no_plan;
 		$suite->{passed}++ unless $fail;
-		if(++$tap_next > $tap_high) {
+		if(++$tap_next > $tap_high && !$no_plan) {
 			# end of test
 			undef $tap_low;
 		}
