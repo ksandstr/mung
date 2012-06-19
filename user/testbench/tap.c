@@ -204,7 +204,6 @@ void plan_skip_all(const char *reason)
 	/* FIXME: do a longjmp-equivalent to the top level. or exit the thread. or
 	 * something.
 	 */
-	abort();
 }
 
 
