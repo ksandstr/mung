@@ -38,24 +38,28 @@ sub tap_line {
 			# $tap_high - $tap_next + 1 planned tests went unexecuted.
 			# TODO: count and report this.
 		}
+		$no_plan = 0;
 		$tap_low = int($1);
 		$tap_high = int($2);
-		$no_plan = $tap_high < $tap_low;
-		if($no_plan) {
-			$tap_next = 1;
-		} else {
-			$tap_next = $tap_low;
-			$suite->{planned} += $tap_high - $tap_low + 1;
-		}
+		$tap_next = $tap_low;
+		$suite->{planned} += $tap_high - $tap_low + 1;
 	} elsif($line =~ /^(not\s+)?ok\s+(\d+)\s+-\s+(.+)$/) {
-		die "plan expected" unless defined $tap_low;
 		my $fail = defined($1);
 		my $id = int($2);
 		my $desc = $3;
 		if($id != $tap_next) {
-			# TODO: is this the proper way to handle invalid streams? toss an
-			# error and not try to recover in any way?
-			die "identifier $id out of order (expected $tap_next)";
+			if($id == 1) {
+				# take this as an implicit start of a new plan_no_plan() style
+				# substream
+				$tap_low = 0;
+				$tap_high = 1;
+				$no_plan = 1;
+				$tap_next = 1;
+			} else {
+				# TODO: could invalid streams be handled in a nicer way?
+				die "plan expected" unless defined $tap_low;
+				die "identifier $id out of order (expected $tap_next, or 1)";
+			}
 		}
 		$suite->{planned}++ if $no_plan;
 		$suite->{passed}++ unless $fail;
