@@ -5,6 +5,7 @@ use utf8;
 
 use IO::File;
 use IO::Pipe;
+use List::Util qw/sum/;
 
 
 my $TOPLEVEL = ".";
@@ -25,7 +26,7 @@ sub is_kmsg {
 }
 
 
-my ($suite, $tcase);
+my ($suite, $tcase, $test);
 my ($tap_low, $tap_high, $tap_next, $no_plan);
 
 # TODO: skip stderr outputs, log diag() messages, report failed tests
@@ -42,7 +43,7 @@ sub tap_line {
 		$tap_low = int($1);
 		$tap_high = int($2);
 		$tap_next = $tap_low;
-		$suite->{planned} += $tap_high - $tap_low + 1;
+		$test->{planned} += $tap_high - $tap_low + 1;
 
 		my $rem = $3;
 		if($rem =~ /\s*#\s+Skip\s*(.*)$/) {
@@ -67,8 +68,8 @@ sub tap_line {
 				die "identifier $id out of order (expected $tap_next, or 1)";
 			}
 		}
-		$suite->{planned}++ if $no_plan;
-		$suite->{passed}++ unless $fail;
+		$test->{planned}++ if $no_plan;
+		$test->{passed}++ unless $fail;
 		if(++$tap_next > $tap_high && !$no_plan) {
 			# end of test
 			undef $tap_low;
@@ -84,9 +85,7 @@ my %begin_table = (
 		print "Suite $name: ";
 		$suite = {
 			name => $name,
-			planned => 0,		# of test points
-			passed => 0,
-			skipped => 0,
+			cases => [],
 		};
 	},
 	tcase => sub {
@@ -95,25 +94,41 @@ my %begin_table = (
 		$tcase = {
 			name => $name,
 			tests_skipped => 0,	# of test runs (incl. loop iters)
+			tests => [],
 		};
 	},
 	test => sub {
-		# don't report individual tests
+		my $name = shift;
+		$test = {
+			name => $name,
+			planned => 0,		# of test points
+			passed => 0,
+			skipped => 0,
+		};
 	},
 );
 
 my %end_table = (
 	suite => sub {
-		print "[" . $suite->{passed} . "/" . $suite->{planned} . " OK]";
+		my @tests = map { @{$_->{tests}} } @{$suite->{cases}};
+		my %summary;
+		foreach my $key (qw/planned passed skipped/) {
+			$summary{$key} = sum(map { $_->{$key} } @tests);
+		}
+		print "[" . $summary{passed} . "/" . $summary{planned} . " OK]";
 		print "\n";
 		undef $suite;
 	},
 	tcase => sub {
 		my $tskip = $tcase->{tests_skipped};
 		print "<skipped $tskip plans> " if $tskip > 0;
+		push @{$suite->{cases}}, $tcase;
 		undef $tcase;
 	},
-	test => sub { },
+	test => sub {
+		push @{$tcase->{tests}}, $test;
+		undef $test;
+	},
 );
 
 
