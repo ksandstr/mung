@@ -33,7 +33,7 @@ sub tap_line {
 	my $line = shift;
 	return unless $suite;
 
-	if($line =~ /^(\d+)\.\.(\d+)$/) {
+	if($line =~ /^(\d+)\.\.(\d+)(.*)$/) {
 		if(defined $tap_low && !$no_plan) {
 			# $tap_high - $tap_next + 1 planned tests went unexecuted.
 			# TODO: count and report this.
@@ -43,6 +43,12 @@ sub tap_line {
 		$tap_high = int($2);
 		$tap_next = $tap_low;
 		$suite->{planned} += $tap_high - $tap_low + 1;
+
+		my $rem = $3;
+		if($rem =~ /\s*#\s+Skip\s*(.*)$/) {
+			die "malformed skip plan" unless $tap_low > $tap_high;
+			$tcase->{tests_skipped}++;
+		}
 	} elsif($line =~ /^(not\s+)?ok\s+(\d+)\s+-\s+(.+)$/) {
 		my $fail = defined($1);
 		my $id = int($2);
@@ -76,12 +82,20 @@ my %begin_table = (
 	suite => sub {
 		my $name = shift;
 		print "Suite $name: ";
-		$suite = { name => $name, planned => 0, passed => 0 };
+		$suite = {
+			name => $name,
+			planned => 0,		# of test points
+			passed => 0,
+			skipped => 0,
+		};
 	},
 	tcase => sub {
 		my $name = shift;
 		print "$name ";
-		$tcase = { name => $name };
+		$tcase = {
+			name => $name,
+			tests_skipped => 0,	# of test runs (incl. loop iters)
+		};
 	},
 	test => sub {
 		# don't report individual tests
@@ -95,6 +109,8 @@ my %end_table = (
 		undef $suite;
 	},
 	tcase => sub {
+		my $tskip = $tcase->{tests_skipped};
+		print "<skipped $tskip plans> " if $tskip > 0;
 		undef $tcase;
 	},
 	test => sub { },
