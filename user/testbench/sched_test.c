@@ -473,8 +473,13 @@ START_LOOP_TEST(delay_preempt, t)
 		polite = (t & 0x4) != 0,
 		small_ts = (t & 0x8) != 0;
 
-	plan_skip_all("nothing is implemented");
-	return;
+	if(t == 4) {
+		plan_no_plan();
+		fail("we're going down");
+	} else {
+		plan_skip_all("nothing is implemented");
+		return;
+	}
 
 	/* TODO: everything specified above */
 }

@@ -150,35 +150,31 @@ void srunner_run_all(SRunner *sr, int report_mode)
 		TCase *tc;
 		list_for_each(&s->cases, tc, suite_link) {
 			printf("*** begin tcase `%s'\n", tc->name);
-			flush_log(false);
 			struct test *t;
 			list_for_each(&tc->tests, t, tcase_link) {
 				int high = t->high;
 				if(high < t->low) high = t->low;
-				printf("*** begin test `%s'\n", t->name);
-				int rc_tot = 0;
 				for(int val = t->low; val <= high; val++) {
+					printf("*** begin test `%s'", t->name);
+					if(t->low < high) printf(" iter %d", val);
+					printf("\n");
+
+					flush_log(false);
 					tap_reset();
 					if(!run_test(s, tc, t, val)) {
 						/* FIXME: handle this somehow */
 						printf("*** the gait of the least graceful hippopotamus\n");
 						return;
 					}
-					/* TODO: gather results */
+
 					int rc = exit_status();
 					if(rc > 0) {
-						if(t->low != high) {
-							printf("*** loop %d had %d failures\n", val, rc);
-						}
-						rc_tot += rc;
+						/* TODO: gather results for unplanned and unexecuted
+						 * test points.
+						 */
+						flush_log(true);
 					}
-				}
-				if(rc_tot > 0) {
-					printf("*** end test `%s' (%d failed or anomalous; log follows)\n",
-						t->name, rc_tot);
-					flush_log(true);
-				} else {
-					printf("*** end test `%s'\n", t->name);
+					printf("*** end test `%s' rc %d\n", t->name, rc);
 				}
 			}
 			printf("*** end tcase `%s'\n", tc->name);

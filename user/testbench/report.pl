@@ -28,11 +28,26 @@ sub is_kmsg {
 
 my ($suite, $tcase, $test);
 my ($tap_low, $tap_high, $tap_next, $no_plan);
+my $msg_break;
+
+sub report_msg {
+	my $str = shift;
+	if(!$msg_break) {
+		print "\n";
+		$msg_break = 1;
+	}
+
+	print "$str\n";
+}
+
 
 # TODO: skip stderr outputs, log diag() messages, report failed tests
 sub tap_line {
-	my $line = shift;
 	return unless $suite;
+	my $line = shift;
+
+	$line =~ s/^\[ERR\]: //;
+	my $diag = $1 if $line =~ s/#\s*(.+)$//;
 
 	if($line =~ /^(\d+)\.\.(\d+)(.*)$/) {
 		if(defined $tap_low && !$no_plan) {
@@ -45,15 +60,22 @@ sub tap_line {
 		$tap_next = $tap_low;
 		$test->{planned} += $tap_high - $tap_low + 1;
 
-		my $rem = $3;
-		if($rem =~ /\s*#\s+Skip\s*(.*)$/) {
+		if($diag && $diag =~ s/Skip //) {
 			die "malformed skip plan" unless $tap_low > $tap_high;
 			$tcase->{tests_skipped}++;
+			my $tname = $test->{name};
+			report_msg("test plan `$tname' skipped: $diag");
+			$diag = '';
 		}
 	} elsif($line =~ /^(not\s+)?ok\s+(\d+)\s+-\s+(.+)$/) {
+		# FIXME: the regexp above is too strict. it should have the test
+		# number and description as optional. (though testbench's tap.c
+		# doesn't output any other format.)
 		my $fail = defined($1);
 		my $id = int($2);
 		my $desc = $3;
+		# (the test boundary resets $tap_next to -1, so that new unplanned
+		# streams can be recognized.)
 		if($id != $tap_next) {
 			if($id == 1) {
 				# take this as an implicit start of a new plan_no_plan() style
@@ -70,14 +92,26 @@ sub tap_line {
 		}
 		$test->{planned}++ if $no_plan;
 		$test->{passed}++ unless $fail;
+		my $tname = $test->{name};
+		report_msg("test `$tname' failed: $desc") if $fail;
 		if(++$tap_next > $tap_high && !$no_plan) {
 			# end of test
 			undef $tap_low;
 		}
-	} else {
+	} elsif($line !~ /^\s*$/) {
 		die "unrecognized line";
 	}
+
+	report_msg("diag: $diag") if $diag;
 }
+
+
+sub restore_header {
+	return if !$msg_break;
+	print "Suite " . $suite->{name} . ": ";
+	$msg_break = 0;
+}
+
 
 my %begin_table = (
 	suite => sub {
@@ -90,6 +124,7 @@ my %begin_table = (
 	},
 	tcase => sub {
 		my $name = shift;
+		restore_header() if $msg_break;
 		print "$name ";
 		$tcase = {
 			name => $name,
@@ -104,6 +139,7 @@ my %begin_table = (
 			planned => 0,		# of test points
 			passed => 0,
 			skipped => 0,
+			log => [],
 		};
 	},
 );
@@ -115,19 +151,29 @@ my %end_table = (
 		foreach my $key (qw/planned passed skipped/) {
 			$summary{$key} = sum(map { $_->{$key} } @tests);
 		}
+		restore_header() if $msg_break;
 		print "[" . $summary{passed} . "/" . $summary{planned} . " OK]";
 		print "\n";
 		undef $suite;
 	},
 	tcase => sub {
 		my $tskip = $tcase->{tests_skipped};
+		if($msg_break) {
+			restore_header();
+			print $tcase->{name} . " ";
+		}
 		print "<skipped $tskip plans> " if $tskip > 0;
 		push @{$suite->{cases}}, $tcase;
 		undef $tcase;
 	},
 	test => sub {
+		my $name = shift;
+		my $tag = shift;
+		my $val = shift;
+		$test->{rc} = $val if $tag eq 'rc';
 		push @{$tcase->{tests}}, $test;
 		undef $test;
+		$tap_next = -1;
 	},
 );
 
@@ -143,10 +189,15 @@ while(<$test_pipe>) {
 
 	if(/^\*\*\*\s+(.+)$/) {
 		my $msg = $1;
-		if($msg =~ /(begin|end) (suite|tcase|test) [`'](\w+)'/) {
+		if($msg =~ /(begin|end) (suite|tcase|test) [`'](\w+)'(\s+(\w+)\s+(\d+))?/) {
 			my $tab = $1 eq 'begin' ? \%begin_table : \%end_table;
 			my $fn = $tab->{$2};
-			&$fn($3) if $fn;
+			my $tag = $5 || '';
+			my $val = $6 && int($6);
+			&$fn($3, $tag, $val) if $fn;
+		} elsif($msg =~ /test\s+log:\s*(.+)$/) {
+			# capture test log output
+			push @{$test->{log}}, $1;
 		} elsif($msg =~ /(.+) follow/) {
 			# NOTE: should ignore from here until the next valid control
 			# message & possibly log into a hash keyed with $1
