@@ -90,6 +90,7 @@ sub tap_line {
 				die "identifier $id out of order (expected $tap_next, or 1)";
 			}
 		}
+		$test->{seen}++;
 		$test->{planned}++ if $no_plan;
 		$test->{passed}++ unless $fail;
 		my $tname = $test->{name};
@@ -137,6 +138,7 @@ my %begin_table = (
 		$test = {
 			name => $name,
 			planned => 0,		# of test points
+			seen => 0,
 			passed => 0,
 			skipped => 0,
 			log => [],
@@ -171,6 +173,10 @@ my %end_table = (
 		my $tag = shift;
 		my $val = shift;
 		$test->{rc} = $val if $tag eq 'rc';
+		if($test->{planned} > $test->{seen}) {
+			report_msg("planned " . $test->{planned}
+				. " test(s), but executed only " . $test->{seen});
+		}
 		push @{$tcase->{tests}}, $test;
 		undef $test;
 		$tap_next = -1;
