@@ -32,8 +32,9 @@ extern struct htable thread_hash;
 /* these control the timer interrupt. write with irqs disabled only. */
 uint64_t preempt_timer_count = ~(uint64_t)0;
 uint64_t task_switch_time = 0;
-int preempt_task_pri = 0;
 L4_Word_t *scheduler_mr1 = NULL;
+int preempt_task_pri = 0;
+bool preempt_delayed = false;
 
 
 
@@ -175,9 +176,11 @@ static void timeout_ipc(struct thread *t)
 
 
 static uint64_t next_preempt_at(
+	int *preempt_pri,
 	struct thread *self,
 	uint64_t switch_at_us)
 {
+	*preempt_pri = -1;
 	uint64_t at = ~(uint64_t)0;
 
 	struct rb_node *pos = &self->sched_rb;
@@ -195,7 +198,10 @@ static uint64_t next_preempt_at(
 		struct thread *other = container_of(pos, struct thread, sched_rb);
 		assert(other->wakeup_time > switch_at_us);
 		if(preempted_by(self, switch_at_us, other)) {
-			at = MIN(uint64_t, other->wakeup_time, at);
+			if(other->wakeup_time < at) {
+				*preempt_pri = other->pri;
+				at = other->wakeup_time;
+			}
 			got = true;
 		} else if(other->wakeup_time > q_end) {
 			/* early exit */
@@ -233,7 +239,9 @@ static void entering_thread(struct thread *next)
 	assert(next->quantum > 0);
 	next->status = TS_RUNNING;
 	task_switch_time = read_global_timer();
-	uint64_t preempt_at = next_preempt_at(next, task_switch_time * 1000);
+	int preempt_pri;
+	uint64_t preempt_at = next_preempt_at(&preempt_pri, next,
+		task_switch_time * 1000);
 	if(next->ts_len.raw != L4_Never.raw) {
 		uint64_t q_end = task_switch_time * 1000 + next->quantum;
 		if(preempt_at == 0 || preempt_at > q_end) preempt_at = q_end;
@@ -244,6 +252,8 @@ static void entering_thread(struct thread *next)
 	x86_irq_disable();
 	current_thread = next;
 	preempt_timer_count = preempt_at;
+	preempt_task_pri = preempt_pri;
+	preempt_delayed = false;
 	x86_irq_enable();
 }
 
@@ -461,13 +471,17 @@ NORETURN void scheduler_loop(struct thread *self)
 			bool signal_preempt = CHECK_FLAG(preempt, 0x20),
 				delay = CHECK_FLAG(preempt, 0x40);
 				// pending = CHECK_FLAG(preempt, 0x80);
-			if(delay) {
-				printf("%s: preemption delay not implemented\n", __func__);
-				*preempt_p &= ~0x40;
+			/* FIXME: this clause is untested */
+			if(delay && preempt_delayed) {
+				*preempt_p &= ~(0x40 | 0x80);
 				delay = false;
 			}
 			if(signal_preempt) {
 				assert(!delay);
+				/* FIXME: store information in the thread structure so that a
+				 * preemption exception will be sent when the thread is
+				 * entered next.
+				 */
 				/* send an immediate preemption exception. */
 				struct thread *exh = get_thread_exh(prev, utcb);
 				if(exh != NULL) {
