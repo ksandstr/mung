@@ -148,12 +148,12 @@ static inline bool L4_DisablePreemptionFaultException(void) {
 }
 
 
-static inline bool L4_EnablePreemption(void) {
+static inline bool L4_DisablePreemption(void) {
 	return (bool)__BTAS(6, L4_VREG(__L4_Get_UtcbAddress(), L4_TCR_COP_PREEMPT));
 }
 
 
-static inline bool L4_DisablePreemption(void) {
+static inline bool L4_EnablePreemption(void) {
 	return (bool)__BTAC(6, L4_VREG(__L4_Get_UtcbAddress(), L4_TCR_COP_PREEMPT));
 }
 
