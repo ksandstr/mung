@@ -130,9 +130,11 @@ void sq_insert_thread(struct thread *t)
 	}
 	rb_insert_color(&t->sched_rb, &sched_tree);
 
+#if 0
 	TRACE("%s: inserted %lu:%lu (status %s, wakeup %#llx, pri %d)\n", __func__,
 		TID_THREADNUM(t->id), TID_VERSION(t->id), sched_status_str(t),
 		t->wakeup_time, (int)t->pri);
+#endif
 }
 
 
@@ -158,11 +160,7 @@ bool preempted_by(
 	uint64_t switch_at_us,
 	struct thread *other)
 {
-	/* TODO: implement checking of the delayed preemption. this requires UTCB
-	 * access, so take one of those for "self" too.
-	 */
-	return other->pri > self->pri		/* basics */
-		/* timeslice without delay */
+	return other->pri > self->pri
 		&& other->wakeup_time <= switch_at_us + self->quantum;
 }
 
@@ -180,7 +178,7 @@ static uint64_t next_preempt_at(
 	struct thread *self,
 	uint64_t switch_at_us)
 {
-	*preempt_pri = -1;
+	*preempt_pri = -1;		/* can always be loud (see isr_irq0_bottom()) */
 	uint64_t at = ~(uint64_t)0;
 
 	struct rb_node *pos = &self->sched_rb;
@@ -283,10 +281,10 @@ static struct thread *schedule_next_thread(
 		struct thread *cand = rb_entry(cur, struct thread, sched_rb);
 		if(cand == current) continue;
 
-		TRACE("%s: cand %lu:%lu (st %s, wk@ %#llx, pri %d, q %u)\n",
+		TRACE("%s: cand %lu:%lu (st %s, wk@ %#llx, pri %d, q %u µs)\n",
 			__func__, TID_THREADNUM(cand->id), TID_VERSION(cand->id),
 			sched_status_str(cand), cand->wakeup_time, (int)cand->pri,
-			cand->quantum / 1000);
+			cand->quantum);
 
 		assert(cand->status != TS_DEAD);
 		assert(cand->status != TS_STOPPED);
@@ -388,6 +386,9 @@ bool schedule(void)
 					t->quantum = 60000000;	/* a minute */
 				} else {
 					t->quantum = time_in_us(t->ts_len);
+					TRACE("refilled %lu:%lu with %u µs\n",
+						TID_THREADNUM(t->id), TID_VERSION(t->id),
+						t->quantum);
 				}
 			} else if(IS_IPC_WAIT(t->status) && t->wakeup_time > now) {
 				/* no need to advance past this point. */
@@ -465,6 +466,9 @@ NORETURN void scheduler_loop(struct thread *self)
 			struct thread *prev = thread_find(*scheduler_mr1);
 			if(prev == NULL) continue;
 
+			TRACE("%s: thread %lu:%lu was preempted at %#llx\n",
+				__func__, TID_THREADNUM(prev->id), TID_VERSION(prev->id),
+				read_global_timer());
 			void *utcb = thread_get_utcb(prev);
 			L4_Word_t *preempt_p = &L4_VREG(utcb, L4_TCR_COP_PREEMPT),
 				preempt = *preempt_p;
@@ -577,6 +581,9 @@ void sys_threadswitch(struct x86_exregs *regs)
 	thread_save_ctx(current, regs);
 
 	L4_ThreadId_t target = { .raw = regs->eax };
+	TRACE("%s: called in %lu:%lu; target is %lu:%lu\n",
+		__func__, TID_THREADNUM(current->id), TID_VERSION(current->id),
+		L4_ThreadNo(target), L4_Version(target));
 	struct thread *other = L4_IsNilThread(target) ? NULL : thread_find(target.raw);
 	if(other != NULL) return_to_other(current, other);
 
