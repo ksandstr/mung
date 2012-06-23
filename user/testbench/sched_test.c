@@ -520,51 +520,66 @@ START_LOOP_TEST(delay_preempt, t)
 
 		if(high_sens_pri) {
 			plan_tests(small_ts ? 2 : 1);
-			int at = wu->clock.raw - start_time.raw;
-			ok(wu != NULL && wu->was_exn && at >= 4 && at <= 6,
-				"first preemption at preempt wakeup");
-			step_wu(&preempts, &wu);
+			skip_start(wu == NULL, 1, "no wakeup");
+				int at = wu->clock.raw - start_time.raw;
+				ok(wu->was_exn && at >= 4 && at <= 6,
+					"first preemption at preempt wakeup");
+				step_wu(&preempts, &wu);
+			skip_end;
 		} else {
 			plan_tests(1);
 		}
 
 		if(small_ts) {
 			/* and (again?) by timeslice running out. */
-			int at = wu->clock.raw - start_time.raw;
-			if(high_sens_pri) {
-				ok(at >= 11 && at <= 13,
-					"preemption by short timeslice");
-			} else {
-				ok(at >= 11 && at <= 13 && wu == list_top(&preempts,
-						struct preempt_wakeup, result_link),
-					"first preemption by short timeslice");
-			}
+			skip_start(wu == NULL, 1, "no wakeup");
+				int at = wu->clock.raw - start_time.raw;
+				if(high_sens_pri) {
+					ok(at >= 11 && at <= 13,
+						"preemption by short timeslice");
+				} else {
+					ok(at >= 11 && at <= 13 && wu == list_top(&preempts,
+							struct preempt_wakeup, result_link),
+						"first preemption by short timeslice");
+				}
+			skip_end;
 		} else if(!high_sens_pri) {
 			ok(list_empty(&preempts),
 				"no preemption with long ts, low sens_pri");
 		}
 	} else if(!polite && !small_ts) {
-		plan_tests(1);
-		int at = wu->clock.raw - start_time.raw;
-		ok(wu != NULL && wu->was_exn && at >= 14 && at <= 16,
-			"preemption by max delay");
+		plan_tests(2);
+		if(wu == NULL) {
+			pass("preemption was delayed");
+			skip(1, "no wakeup");
+		} else {
+			int at = wu->clock.raw - start_time.raw;
+			ok(at > 5, "preemption was delayed");
+			ok(wu->was_exn && at >= 14 && at <= 16,
+				"preemption by max delay");
+		}
 	} else if(!polite && small_ts) {
-		plan_tests(1);
-		int at = wu->clock.raw - start_time.raw;
-		ok(wu != NULL && wu->was_exn && at >= 11 && at <= 13,
-			"preemption by quantum during delay");
+		plan_tests(2);
+		skip_start(wu == NULL, 2, "no wakeup");
+			int at = wu->clock.raw - start_time.raw;
+			ok(at > 5, "preemption was delayed");
+			ok(wu->was_exn && at >= 11 && at <= 13,
+				"preemption by quantum during delay");
+		skip_end;
 	} else if(polite && !small_ts) {
 		plan_tests(1);
 		ok(list_empty(&preempts),
 			"no preemption with polite spinner");
 	} else if(polite && small_ts) {
 		plan_tests(1);
-		int at = wu->clock.raw - start_time.raw;
-		/* TODO: it'd be nice to have a variable that split this from the
-		 * "preemption by quantum during delay" case.
-		 */
-		ok(wu != NULL && wu->was_exn && at >= 11 && at <= 13,
-			"preemption by quantum while polite");
+		skip_start(wu == NULL, 1, "no wakeup");
+			int at = wu->clock.raw - start_time.raw;
+			/* TODO: it'd be nice to have a variable that split this from the
+			 * "preemption by quantum during delay" case.
+			 */
+			ok(wu->was_exn && at >= 11 && at <= 13,
+				"preemption by quantum while polite");
+		skip_end;
 	} else {
 		diag("unhandled case %d", t);
 		plan_skip_all("case not handled");
