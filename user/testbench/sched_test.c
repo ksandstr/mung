@@ -142,7 +142,6 @@ static void spinner_fn(void *param_ptr)
 	if(param->signal_preempt) {
 		L4_EnablePreemptionFaultException();
 	}
-	assert(!param->is_polite || param->delay_pe);
 	if(param->delay_pe) L4_DisablePreemption();
 
 #if 0
@@ -154,6 +153,8 @@ static void spinner_fn(void *param_ptr)
 	do {
 		delay_loop(iters_per_tick / 4);
 		if(param->is_polite && L4_PreemptionPending()) {
+			assert(param->delay_pe);
+			L4_EnablePreemption();
 			L4_ThreadSwitch(L4_nilthread);
 			L4_DisablePreemption();
 		}
