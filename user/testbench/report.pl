@@ -63,7 +63,7 @@ sub tap_line {
 		if($diag && $diag =~ s/Skip //) {
 			die "malformed skip plan" unless $tap_low > $tap_high;
 			$tcase->{tests_skipped}++;
-			my $tname = $test->{name};
+			my $tname = test_name();
 			report_msg("test plan `$tname' skipped: $diag");
 			$diag = '';
 		}
@@ -93,17 +93,35 @@ sub tap_line {
 		$test->{seen}++;
 		$test->{planned}++ if $no_plan;
 		$test->{passed}++ unless $fail;
-		my $tname = $test->{name};
-		report_msg("test `$tname' failed: $desc") if $fail;
+		my $tname = test_name();
+		if($fail) {
+			report_msg("test `$tname' failed: $desc");
+			print "test log: $_\n" foreach @{$test->{log}};
+		}
 		if(++$tap_next > $tap_high && !$no_plan) {
 			# end of test
 			undef $tap_low;
 		}
+	} elsif($line =~ /^ok\s+(\d+)?/ && $diag =~ s/^skip\s+//i) {
+		# skip lines.
+		my $id = int($1 || '0');
+		$test->{skipped}++;
+		$test->{seen}++;
+		my $tname = test_name();
+		report_msg("skip $id - # $diag\t[$tname]");
+		undef $diag;
 	} elsif($line !~ /^\s*$/) {
 		die "unrecognized line";
 	}
 
 	report_msg("diag: $diag") if $diag;
+}
+
+
+sub test_name {
+	my $n = $test->{name};
+	$n .= " {iter $test->{iter}}" if exists $test->{iter};
+	return $n;
 }
 
 
@@ -135,6 +153,8 @@ my %begin_table = (
 	},
 	test => sub {
 		my $name = shift;
+		my $tag = shift;
+		my $value = shift;
 		$test = {
 			name => $name,
 			planned => 0,		# of test points
@@ -143,6 +163,7 @@ my %begin_table = (
 			skipped => 0,
 			log => [],
 		};
+		$test->{iter} = int($value) if $tag eq 'iter';
 	},
 );
 
