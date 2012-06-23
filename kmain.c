@@ -65,9 +65,6 @@ uint8_t syscall_stack[PAGE_SIZE] PAGE_ALIGN;
 uint8_t kcp_copy[PAGE_SIZE] PAGE_ALIGN;
 
 uint64_t *global_timer_count = NULL;
-uint64_t preempt_timer_count = ~(uint64_t)0;
-uint64_t task_switch_time = 0;
-L4_Word_t *scheduler_mr1 = NULL;
 
 
 /* rudimentary serial port output from µiX */

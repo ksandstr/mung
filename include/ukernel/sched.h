@@ -10,6 +10,15 @@
 #include <ukernel/thread.h>
 
 
+/* global data from sched.c */
+
+/* accessed from the timer interrupt. r/w only with irqs off. */
+extern uint64_t preempt_timer_count;
+extern uint64_t task_switch_time;		/* ms */
+/* set per CPU rather early, used to signal preemption scheduling */
+extern L4_Word_t *scheduler_mr1;
+
+
 /* initializes the scheduler.
  *
  * TODO: should be generalized to accept a per-CPU structure, and initialize

@@ -29,6 +29,13 @@ static struct rb_root sched_tree = { };
 extern struct list_head thread_list, dead_thread_list;
 extern struct htable thread_hash;
 
+/* these control the timer interrupt. write with irqs disabled only. */
+uint64_t preempt_timer_count = ~(uint64_t)0;
+uint64_t task_switch_time = 0;
+int preempt_task_pri = 0;
+L4_Word_t *scheduler_mr1 = NULL;
+
+
 
 COLD void init_sched(struct thread *current)
 {

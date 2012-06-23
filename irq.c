@@ -114,7 +114,7 @@ void isr_irq0_bottom(struct x86_exregs *regs)
 			 * of string transfers are uninterruptable.)
 			 */
 		} else {
-			/* (this segment seems long for a timer interrupt. then again, a
+			/* (this segment seems long for a timer interrupt. but then, a
 			 * timer interrupt occurs at the start of each tick, which was
 			 * just observed.)
 			 */
