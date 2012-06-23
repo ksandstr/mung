@@ -528,7 +528,7 @@ START_LOOP_TEST(delay_preempt, t)
 			plan_tests(small_ts ? 2 : 1);
 			skip_start(wu == NULL, 1, "no wakeup");
 				int at = wu->clock.raw - start_time.raw;
-				ok(wu->was_exn && at >= 4 && at <= 6,
+				ok(at >= 4 && at <= 6,
 					"first preemption at preempt wakeup");
 				step_wu(&preempts, &wu);
 			skip_end;
@@ -580,10 +580,10 @@ START_LOOP_TEST(delay_preempt, t)
 		plan_tests(1);
 		skip_start(wu == NULL, 1, "no wakeup");
 			int at = wu->clock.raw - start_time.raw;
-			/* TODO: it'd be nice to have a variable that split this from the
-			 * "preemption by quantum during delay" case.
+			/* politeness gets the spinner first 5 ms of runtime, and then
+			 * another 12 ms due to the ThreadSwitch.
 			 */
-			ok(wu->was_exn && at >= 11 && at <= 13,
+			ok(at >= 16 && at <= 18,
 				"preemption by quantum while polite");
 		skip_end;
 	} else {
