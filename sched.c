@@ -581,6 +581,8 @@ void sys_threadswitch(struct x86_exregs *regs)
 	if(other != NULL) return_to_other(current, other);
 
 	current->status = TS_READY;
+	/* the thread gets a new quantum once other threads have run. */
+	current->quantum = 0;
 	return_to_scheduler();
 }
 
