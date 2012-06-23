@@ -125,7 +125,8 @@ void isr_irq0_bottom(struct x86_exregs *regs)
 			bool preempt = true;
 			if(preempt_task_pri <= (int)current->sens_pri) {
 				L4_Word_t *ctl;
-				if(!preempt_delayed
+				if(preempt_task_pri >= 0
+					&& !preempt_delayed
 					&& current->max_delay > 0
 					&& (ctl = &L4_VREG(thread_get_utcb(current), L4_TCR_COP_PREEMPT),
 						CHECK_FLAG(*ctl, 0x40)))
