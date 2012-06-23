@@ -131,7 +131,7 @@ struct spinner_param
 {
 	L4_ThreadId_t parent;
 	L4_Word_t spin_ms;
-	bool signal_preempt, is_polite;
+	bool signal_preempt, is_polite, delay_pe;
 };
 
 
@@ -142,6 +142,8 @@ static void spinner_fn(void *param_ptr)
 	if(param->signal_preempt) {
 		L4_EnablePreemptionFaultException();
 	}
+	assert(!param->is_polite || param->delay_pe);
+	if(param->delay_pe) L4_DisablePreemption();
 
 #if 0
 	printf("spinner spins for %lu ms from %llu...\n", param->spin_ms,
@@ -153,6 +155,7 @@ static void spinner_fn(void *param_ptr)
 		delay_loop(iters_per_tick / 4);
 		if(param->is_polite && L4_PreemptionPending()) {
 			L4_ThreadSwitch(L4_nilthread);
+			L4_DisablePreemption();
 		}
 	} while(start.raw + param->spin_ms > L4_SystemClock().raw);
 
@@ -185,7 +188,8 @@ static L4_ThreadId_t start_spinner(
 	int spin_ms,
 	L4_Time_t timeslice,
 	bool signal_preempt,
-	bool is_polite)
+	bool is_polite,
+	bool delay_pe)
 {
 	assert(spin_ms > 0);
 	assert(time_in_us(timeslice) >= 1000);
@@ -199,6 +203,7 @@ static L4_ThreadId_t start_spinner(
 		.spin_ms = spin_ms,
 		.signal_preempt = signal_preempt,
 		.is_polite = is_polite,
+		.delay_pe = delay_pe,
 	};
 	L4_ThreadId_t spinner = start_thread_long(&spinner_fn, p,
 		priority, timeslice, L4_Never);
@@ -263,7 +268,7 @@ static bool preempt_exn_case(
 	bool ok = true;
 	int my_pri = find_own_priority();
 	L4_ThreadId_t spinner = start_spinner(my_pri - 2, spin_time_ms,
-		spinner_ts, signal_preempt, false);
+		spinner_ts, signal_preempt, false, false);
 	assert(!L4_IsNilThread(spinner));
 
 	L4_ThreadId_t preempt;
@@ -602,8 +607,16 @@ static bool delay_preempt_case(
 
 	L4_ThreadId_t spinner = start_spinner(my_pri - 2, 25,
 		small_ts ? L4_TimePeriod(12 * 1000) : L4_TimePeriod(50 * 1000),
-		true, polite);
+		true, polite, delay_pe);
 	if(L4_IsNilThread(spinner)) return false;
+	/* TODO: could split delay_pe into two flags: one controlling whether the
+	 * delay_preemption flag is set in the spinner's TCR, and the other
+	 * controlling the max_delay variable. this tests whether dropping
+	 * max_delay will prevent preemption delay regardless of the delay flag's
+	 * setting.
+	 *
+	 * which could likely be a test on its own.
+	 */
 	L4_Set_PreemptionDelay(spinner,
 		high_sens_pri ? my_pri - 1 : my_pri - 2,
 		delay_pe ? 10 * 1000 : 0);
@@ -667,7 +680,7 @@ static int yield_timeslice_case(bool preempt_spinner)
 	printf("%s: starting, my_pri is %d\n", __func__, my_pri);
 
 	L4_ThreadId_t spinner = start_spinner(my_pri - 2, 15,
-		L4_TimePeriod(2 * 1000), false, false);
+		L4_TimePeriod(2 * 1000), false, false, false);
 	printf("%s: returned after spinner start\n", __func__);
 
 	L4_ThreadId_t preempt = L4_nilthread;
