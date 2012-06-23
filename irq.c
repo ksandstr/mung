@@ -22,15 +22,8 @@ static uint32_t irq_pending[16];
 static void isr_irq_bottom_soft(int irq, struct x86_exregs *regs)
 {
 	assert(irq >= 0 && irq <= 15);
-	if(irq == 1) {
-		/* FIXME: send a proper interrupt IPC to the microkernel's
-		 * keyboard-pumping thread.
-		 */
-		extern void pump_keyboard(void);
-		pump_keyboard();
-	} else {
-		printf("got unexpected interrupt 0x%x\n", (unsigned)irq);
-	}
+	/* FIXME: send interrupt IPC to the proper recipient */
+	printf("got unexpected interrupt 0x%x\n", (unsigned)irq);
 }
 
 

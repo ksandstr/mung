@@ -28,33 +28,6 @@
 #include <ukernel/bug.h>
 
 
-/* keyboard variables. these are just for testing the PIC setup, and will be
- * replaced with the timer chip's variables soon enough.
- *
- * what does a microkernel do with a keyboard, anyhow???
- */
-#define KBD_STATUS_REG	0x64	/* read */
-#define KBD_CTL_REG		0x64	/* write */
-#define KBD_DATA_REG	0x60	/* read */
-#define KBD_CMD_REG		0x60	/* write */
-
-#define KBD_STAT_OBF	0x01	/* output buffer full */
-
-#define KBD_CMD_WRITECMD	0x60	/* write keyboard command byte */
-#define KBD_CMD_MOU_ENABLE	0xa7	/* enable mouse */
-#define KBD_CMD_MOU_DISABLE	0xa8	/* disable mouse */
-#define KBD_CMD_MOU_TEST	0xa9	/* test mouse. results come back on pt 0x60 */
-
-#define KBD_KBF_KEYINTR		0x01	/* 1 = enable, 0 = disable */
-#define KBD_KBF_MOUINTR		0x02	/* 1 = enable, 0 = disable */
-#define KBD_KBF_SYSFLG		0x04	/* system flag (1 = selftest ok, 0 = fail) */
-#define KBD_KBF_INHIB_OVER	0x08	/* PC/AT inhibit override (must be 0) */
-#define KBD_KBF_KEY_DISABLE	0x10	/* 1 = disable, 0 = no change */
-#define KBD_KBF_KEY_ENABLE	0x20	/* 1 = enable, 0 = no change */
-#define KBD_KBF_MOU_ENABLE	0x40	/* 1 = enable, 0 = no change */
-#define KBD_KBF_PCCOMPAT	0x80	/* PC compat crap, must be 0 */
-
-
 struct tss kernel_tss;
 struct space *sigma0_space = NULL;
 
@@ -263,21 +236,6 @@ static void init_kernel_tss(struct tss *t)
 		.esp0 = stk,
 		.iopb_offset = sizeof(struct tss),
 	};
-}
-
-
-void pump_keyboard(void)
-{
-	for(;;) {
-		uint8_t status = inb(KBD_STATUS_REG);
-		if(!CHECK_FLAG(status, KBD_STAT_OBF)) break;
-
-		uint8_t byte = inb(KBD_DATA_REG);
-		if(byte == 0x39) {
-			printf("spacebar was pressed. timer count %d\n",
-				(int)read_global_timer());
-		}
-	}
 }
 
 
@@ -597,12 +555,6 @@ void kmain(void *bigp, unsigned int magic)
 	}
 	thread_start(s0_thread);
 	if(roottask != NULL) thread_start(roottask);
-
-	printf("enabling keyboard & keyboard interrupt\n");
-	outb(KBD_CMD_REG, KBD_CMD_WRITECMD);
-	outb(KBD_CMD_REG, KBD_KBF_KEYINTR | KBD_KBF_KEY_ENABLE);
-	pump_keyboard();
-	pic_clear_mask(0x02, 0x00);
 
 	printf("enabling timer interrupt\n");
 	setup_timer_ch0();
