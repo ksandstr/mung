@@ -477,7 +477,6 @@ NORETURN void scheduler_loop(struct thread *self)
 				delay = false;
 			}
 			if(signal_preempt) {
-				assert(!delay);
 				/* FIXME: store information in the thread structure so that a
 				 * preemption exception will be sent when the thread is
 				 * entered next.
