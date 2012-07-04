@@ -23,7 +23,7 @@ typedef union {
 	L4_Word_t raw[2];
 	struct {
 		L4_Word_t C:1;
-		L4_Word_t type:3;
+		L4_Word_t __type:3;
 		L4_Word_t __zeros:6;
 		L4_Word_t snd_base:22;
 		L4_Fpage_t snd_fpage;
@@ -33,12 +33,12 @@ typedef union {
 
 static inline L4_MapItem_t L4_MapItem(L4_Fpage_t f, L4_Word_t SndBase)
 {
-	return (L4_MapItem_t){ .X.type = 0x04, .X.snd_base = SndBase >> 10,
+	return (L4_MapItem_t){ .X.__type = 0x04, .X.snd_base = SndBase >> 10,
 		.X.snd_fpage = f };
 }
 
 static inline L4_Bool_t L4_IsMapItem(L4_MapItem_t m) {
-	return m.X.type == 0x04;
+	return m.X.__type == 0x04;
 }
 
 static inline L4_Fpage_t L4_MapItemSndFpage(L4_MapItem_t m) {
