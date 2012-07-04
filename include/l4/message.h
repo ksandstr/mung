@@ -49,4 +49,44 @@ static inline L4_Word_t L4_MapItemSndBase(L4_MapItem_t m) {
 	return m.X.snd_base << 10;
 }
 
+
+/* L4_GrantItem_t. adapted from L4Ka::Pistachio. */
+
+typedef union {
+	L4_Word_t raw[2];
+	struct {
+		L4_Word_t C:1;
+		L4_Word_t __type:3;
+		L4_Word_t __zeros:6;
+		L4_Word_t snd_base:22;
+		L4_Fpage_t snd_fpage;
+	} X;
+} L4_GrantItem_t;
+
+
+static inline L4_Bool_t L4_IsGrantItem(L4_GrantItem_t g) {
+	return g.X.__type == 0x05;
+}
+
+static inline L4_GrantItem_t L4_GrantItem(L4_Fpage_t f, L4_Word_t snd_base)
+{
+	return (L4_GrantItem_t){
+		.raw[0] = 0,
+		.X = {
+			.__type = 0x05,
+			.snd_base = snd_base >> 10,
+			.snd_fpage.raw = f.raw,
+		},
+	};
+}
+
+static inline L4_Fpage_t L4_GrantItemSndFpage(L4_GrantItem_t m) {
+	return m.X.snd_fpage;
+}
+
+static inline L4_Word_t L4_GrantItemSndBase(L4_GrantItem_t m) {
+	return m.X.snd_base << 10;
+}
+
+
 #endif
