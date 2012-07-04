@@ -13,6 +13,7 @@ my $TOPLEVEL = ".";
 
 $SIG{PIPE} = "IGNORE";		# and smoke it.
 $SIG{INT} = "IGNORE";		# my regards to 007
+$| = 1;
 
 
 sub start_test {
