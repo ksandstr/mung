@@ -37,6 +37,10 @@ L4_Fpage_t sigma0_get_page(L4_Fpage_t page, L4_Word_t attributes)
 }
 
 
+/* TODO: make this, and the kernel heap, contiguous in address space -- and
+ * then enable MORECORE_CONTIGUOUS in dlmalloc.c & leave DEFAULT_GRANULARITY
+ * at default to minimize dead kernel memory.
+ */
 void *sbrk(intptr_t increment)
 {
 	printf("%s: increment is %ld\n", __func__, (long int)increment);
