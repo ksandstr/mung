@@ -14,6 +14,7 @@
 #include <ukernel/misc.h>
 #include <ukernel/slab.h>
 #include <ukernel/trace.h>
+#include <ukernel/space.h>
 #include <ukernel/mapdb.h>
 
 
@@ -42,6 +43,24 @@ static struct kmem_cache *map_group_slab = NULL;
 static uint32_t next_ref_id = 1;
 static struct htable ref_hash = HTABLE_INITIALIZER(ref_hash,
 	rehash_ref_hash, NULL);
+
+
+static void dump_map_group(struct map_group *g)
+{
+#ifndef NDEBUG
+	TRACE("%s: group %#lx .. %#lx contains (%d ents, %d alloc):\n",
+		__func__, g->start, g->start + GROUP_SIZE - 1,
+		g->num_entries, g->num_alloc);
+	for(int i=0; i < g->num_entries; i++) {
+		struct map_entry *e = &g->entries[i];
+		assert(!L4_IsNilFpage(e->range));
+		TRACE("  %d: [%#lx .. %#lx], pages [%u .. %lu]\n", i,
+			L4_Address(e->range), L4_Address(e->range) + L4_Size(e->range) - 1,
+			e->first_page_id,
+			e->first_page_id + L4_Size(e->range) / PAGE_SIZE - 1);
+	}
+#endif
+}
 
 
 /* returns true if the entry was cleared. */
@@ -483,17 +502,7 @@ int mapdb_add_map(
 	}
 
 #ifndef NDEBUG
-	TRACE("%s: group %#lx .. %#lx contains (%d ents, %d alloc):\n",
-		__func__, g->start, g->start + GROUP_SIZE - 1,
-		g->num_entries, g->num_alloc);
-	for(int i=0; i < g->num_entries; i++) {
-		struct map_entry *e = &g->entries[i];
-		assert(!L4_IsNilFpage(e->range));
-		TRACE("  %d: [%#lx .. %#lx], pages [%u .. %lu]\n", i,
-			L4_Address(e->range), L4_Address(e->range) + L4_Size(e->range) - 1,
-			e->first_page_id,
-			e->first_page_id + L4_Size(e->range) / PAGE_SIZE - 1);
-	}
+	dump_map_group(g);
 #endif
 
 	return 0;
@@ -503,9 +512,6 @@ int mapdb_add_map(
 /* does mappings of all physical pages inside map_page. skips holes in the
  * sender address space within the mapping (so pages in the receiver won't be
  * unmapped on overlap with empty.)
- *
- * TODO: should have a "grant" option, removing the maps from the source
- * database.
  */
 int mapdb_map_pages(
 	struct map_db *from_db,
@@ -515,6 +521,7 @@ int mapdb_map_pages(
 {
 	struct map_entry *first = NULL;
 	struct map_group *grp;
+	/* TODO: scan the bitmap instead of repeating binary searches */
 	L4_Word_t first_addr = L4_Address(map_page),
 		last_addr = L4_Address(map_page) + L4_Size(map_page) - 1;
 	do {
@@ -554,7 +561,7 @@ int mapdb_map_pages(
 		return L4_Rights(p);
 	} else {
 #if 0
-		printf("%s: first->range %#lx:%#lx; map_page %#lx:%#lx\n", __func__,
+		TRACE("%s: first->range %#lx:%#lx; map_page %#lx:%#lx\n", __func__,
 			L4_Address(first->range), L4_Size(first->range),
 			L4_Address(map_page), L4_Size(map_page));
 #endif
@@ -607,6 +614,290 @@ int mapdb_map_pages(
 	}
 
 	return 0;
+}
+
+
+/* enough space = MSB(size) - 11 map_entries */
+static int make_pages_for_range(
+	L4_Fpage_t *dst,
+	L4_Word_t start,
+	L4_Word_t size)
+{
+	assert(((start | size) & 0xfff) == 0);
+
+	L4_Word_t addr;
+	int sizelog2, p = 0;
+	for_page_range(start, start + size, addr, sizelog2) {
+		dst[p++] = L4_FpageLog2(addr, sizelog2);
+	}
+	return p;
+}
+
+
+static int split_entry(
+	struct map_group *g,
+	struct map_entry *e,
+	L4_Fpage_t cut)
+{
+	/* a maximum group has just a single 4 MiB entry. at most this breaks up
+	 * into one each of the smaller sizes and two of the smallest. so 11
+	 * entries for each potential copy operation is definitely enough, plus
+	 * one for the cut itself.
+	 */
+	L4_Fpage_t pg_buf[23];
+	int p = 0;
+
+	L4_Word_t r_first = L4_Address(cut);
+	if(L4_Address(e->range) < r_first) {
+		/* left side */
+		p += make_pages_for_range(&pg_buf[p], L4_Address(e->range),
+			r_first - L4_Address(e->range));
+	}
+	pg_buf[p++] = cut;	/* middle */
+	L4_Word_t r_end = L4_Address(cut) + L4_Size(cut);
+	if(L4_Address(e->range) + L4_Size(e->range) > r_end) {
+		/* right side */
+		p += make_pages_for_range(&pg_buf[p], r_end,
+			L4_Address(e->range) + L4_Size(e->range) - r_end);
+	}
+	assert(p > 1);		/* forbid the trivial case */
+
+	int need = g->num_entries + p - 1;
+	if(need > g->num_alloc) {
+		/* make moar RAMz */
+		int e_pos = e - g->entries;
+		assert(e_pos < g->num_entries);
+		int newsize = g->num_alloc * 2;
+		while(newsize < need) newsize *= 2;
+		TRACE("%s: resizing group from %u to %d entries\n", __func__,
+			g->num_alloc, newsize);
+		void *ptr = realloc(g->entries, newsize * sizeof(struct map_entry));
+		if(ptr == NULL) return -ENOMEM;
+		g->entries = ptr;
+		g->num_alloc = newsize;
+		e = &g->entries[e_pos];
+	}
+	assert(g->num_alloc >= need);
+
+	int num_tail = g->num_entries - (e - g->entries) - 1;
+	if(num_tail > 0) {
+		/* poor man's memmove(3) (TODO: add better one) */
+		TRACE("%s: move %d items to %d (entry at %d)\n", __func__, num_tail,
+			e - g->entries + p, e - g->entries);
+		size_t len = sizeof(struct map_entry) * num_tail;
+		void *tmp = malloc(len);
+		if(tmp == NULL) return -ENOMEM;
+		memcpy(tmp, e + 1, len);
+		memcpy(e + p, tmp, len);
+		free(tmp);
+	}
+	struct map_entry saved = *e;
+	L4_Word_t addr_offset = 0;
+	for(int i=0; i < p; i++) {
+		e[i] = (struct map_entry){
+			.range = pg_buf[i],
+			.parent = REF_DEFINED(saved.parent)
+					? MAPDB_REF(REF_SPACE(saved.parent),
+						REF_ADDR(saved.parent) + addr_offset)
+					: 0,
+			.first_page_id = saved.first_page_id + (addr_offset >> PAGE_BITS),
+			.access = saved.access,
+			/* num_children, child/children left undefined */
+		};
+		L4_Set_Rights(&e[i].range, L4_Rights(saved.range));
+		TRACE("%s: set ents[%d] = range %#lx:%#lx, parent %#lx, first page %u, rwx %#lx\n",
+			__func__, e - g->entries + i, L4_Address(e[i].range), L4_Size(e[i].range),
+			e[i].parent, e[i].first_page_id, L4_Rights(e[i].range));
+		addr_offset += L4_Size(pg_buf[i]);
+	}
+	g->num_entries += p - 1;
+
+	/* FIXME: redistribute children */
+
+	return 0;
+}
+
+
+/* render a map_group's map_entries discontiguous in such a way that entries
+ * covered by "range" fit inside it exactly. returns the first entry covered
+ * by "range".
+ */
+static struct map_entry *discontiguate(struct map_group *g, L4_Fpage_t range)
+{
+	int err;
+	TRACE("%s: group %#lx, range %#lx:%#lx\n", __func__, g->start,
+		L4_Address(range), L4_Size(range));
+	/* test the first and last entries in the group that fall within
+	 * `range`.
+	 */
+	struct map_entry *e = probe_group_bitmap(g, range);
+	if(e == NULL) return NULL;
+//	TRACE("%s: e %#lx:%#lx\n", __func__, L4_Address(e->range),
+//		L4_Size(e->range));
+	bool new_e = false;
+	L4_Word_t r_start = L4_Address(range);
+	if(L4_Address(e->range) < r_start
+		|| (L4_Address(e->range) == r_start
+			&& L4_Size(e->range) > L4_Size(range)))
+	{
+		err = split_entry(g, e, range);
+		if(err < 0) goto fail;
+		new_e = true;
+	}
+
+	/* then the last entry. */
+	if(L4_Size(range) > PAGE_SIZE) {
+		L4_Word_t r_end = r_start + L4_Size(range);
+		struct map_entry *last = probe_group_bitmap(g, L4_FpageLog2(
+			L4_Address(range) + L4_Size(range) - PAGE_SIZE, PAGE_BITS));
+//		TRACE("%s: last %#lx:%#lx\n", __func__,
+//			L4_Address(last->range), L4_Size(last->range));
+		/* ... does this work? */
+		if(last != NULL
+			&& (L4_Address(last->range) != r_start
+				|| L4_Size(last->range) != L4_Size(range))
+			&& L4_Address(last->range) < r_end)
+		{
+			err = split_entry(g, last, range);
+			if(err < 0) goto fail;
+			new_e = true;
+		}
+	}
+
+	if(new_e) {
+//		TRACE("%s: dumping the modified group\n", __func__);
+//		dump_map_group(g);
+
+		e = probe_group_bitmap(g, range);
+		assert(e != NULL);		/* guaranteed by previous "e" */
+	}
+
+	return e;
+
+fail:
+	/* FIXME: have a proper exit path here */
+	panic("split_entry() failed: out of kernel heap");
+	return NULL;
+}
+
+
+int mapdb_unmap_fpage(struct map_db *db, L4_Fpage_t range, bool recursive)
+{
+	int rwx_seen = 0;
+
+	TRACE("%s: range %#lx:%#lx\n", __func__,
+		L4_Address(range), L4_Size(range));
+	L4_Word_t r_end = L4_Address(range) + L4_Size(range);
+	for(L4_Word_t grp_pos = L4_Address(range);
+		grp_pos < r_end;
+		grp_pos += GROUP_SIZE)
+	{
+		struct map_group *g = group_for_addr(db, grp_pos);
+		if(g == NULL) {
+			TRACE("%s: group for %#lx doesn't exist\n", __func__, grp_pos);
+			continue;
+		}
+
+		struct map_entry *e = NULL;
+		if(L4_Rights(range) != 0) {
+			e = discontiguate(g, range);
+			/* FIXME: discontiguate() can also fail due to ENOMEM. in this
+			 * case the operation should be put to sleep (pending restart on
+			 * some condition) and some sort of handler invoked to acquire
+			 * more kernel memory to expand the heap, or to release allocated
+			 * memory to create sufficiently large free heap segments, in each
+			 * case triggering syscall restart.
+			 *
+			 * (for now the malloc() failure is handled with panic(). that'll
+			 * start happening once the kernel heap reaches a couple of
+			 * megabytes. the kernel address space limit doesn't matter
+			 * because of the tiny amount of free RAM, some of which will be
+			 * locked away in page tables and other recreatable structures.
+			 * the quick workaround is just to increase the kernel
+			 * allocation.)
+			 */
+		} else {
+			e = probe_group_bitmap(g, range);
+		}
+		if(e == NULL) continue;
+
+		L4_Word_t r_pos = L4_Address(e->range);
+		do {
+			/* properties ensured by discontiguate() */
+			assert(L4_Address(e->range) >= L4_Address(range));
+			assert(L4_Address(e->range) + L4_Size(e->range) <= r_end);
+
+			/* check each native page.
+			 *
+			 * TODO: extend to support big pages as specified in the related
+			 * KIP field.
+			 */
+			int e_mask = 0;
+			do {
+				L4_Word_t next = 0;
+				int pmask = space_probe_pt_access(&next, db->space, r_pos);
+				r_pos += PAGE_SIZE;
+				if(pmask >= 0) {
+					e_mask |= pmask;
+				} else {
+					assert(pmask == -ENOENT);
+					if(next > r_pos) r_pos = next;
+				}
+			} while(r_pos < L4_Address(e->range) + L4_Size(e->range)
+				&& e_mask != L4_FullyAccessible);
+
+			if(e_mask != 0 && REF_DEFINED(e->parent)) {
+				/* FIXME: propagate e_mask to parent */
+			}
+
+			rwx_seen |= (e_mask | e->access);
+			e->access = 0;
+
+			if(recursive) {
+				/* FIXME: examine children: for each, see if they're valid
+				 * (and compress them where not), and if the actual address
+				 * falls within `range`.
+				 */
+				panic("recursive unmap not implemented");
+			}
+
+			r_pos = L4_Address(e->range) + L4_Size(e->range);
+			L4_Set_Rights(&e->range, L4_Rights(e->range) & ~L4_Rights(range));
+			if(L4_Rights(e->range) == 0) {
+				/* TODO: implement memmove(3), use it */
+				TRACE("%s: removing entry %#lx:%#lx\n", __func__,
+					L4_Address(e->range), L4_Size(e->range));
+				int pos = e - g->entries;
+				if(pos < g->num_entries - 1) {
+					int copy_num = g->num_entries - 1 - pos;
+					size_t c_size = copy_num * sizeof(struct map_entry);
+					void *tmp = malloc(c_size);
+					assert(tmp != NULL);		/* FIXME */
+					memcpy(tmp, &g->entries[pos + 1], c_size);
+					memcpy(&g->entries[pos], tmp, c_size);
+					free(tmp);
+				}
+				g->num_entries--;
+				/* map_group shrinking (but don't go below 8 items) */
+				if(g->num_entries <= g->num_alloc / 2 - g->num_alloc / 8
+					&& g->num_alloc > 8)
+				{
+					int e_pos = e - g->entries, newsize = g->num_alloc / 2;
+					void *ptr = realloc(g->entries,
+						newsize * sizeof(struct map_entry));
+					if(ptr != NULL) {
+						g->entries = ptr;
+						g->num_alloc = newsize;
+						e = &g->entries[e_pos];
+					}
+				}
+			}
+		} while(++e < &g->entries[g->num_entries] && r_pos < r_end);
+
+		dump_map_group(g);
+	}
+
+	return rwx_seen;
 }
 
 

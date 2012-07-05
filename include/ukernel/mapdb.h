@@ -30,7 +30,18 @@ struct space;
 struct map_entry
 {
 	L4_Fpage_t range;		/* incl. L4 permission bits */
+	L4_Word_t parent;
 	uint32_t first_page_id;
+	/* this field is OR'd with the page table queries to give the access bits
+	 * returned by Unmap. it's written to when a parent recursively
+	 * queries-and-resets the page table's access bits, and when a child
+	 * resets its own access bits. it's cleared by Unmap.
+	 *
+	 * NOTE: there's some loss of precision where a parent entry is larger
+	 * than the child; i.e. some physical pages' entries end up reporting for
+	 * a larger range than their size.
+	 */
+	uint16_t access;
 	/* there may be fewer actual children of this map_entry; num_children only
 	 * tracks whether "child" or "children" is to be used, and how many words
 	 * are allocated under "children" when num_children > 1.
@@ -94,6 +105,23 @@ extern int mapdb_map_pages(
 	struct map_db *to,
 	L4_Fpage_t src_page,
 	L4_Word_t dest_addr);
+
+/* revokes access rights for bits given and in the mappings covered by
+ * `fpage`. if a covered mapping ends up with no rights at all, it is removed
+ * and its children are moved to its parent (if any remain after recursion).
+ *
+ * returns the inclusive mask of access bits of the physical pages actually
+ * covered by `fpage` since the last call to mapdb_unmap_fpage(). if
+ * `recursive` is set, this also covers child mappings' access bits.
+ * destructive examination of page tables is compensated by storing access
+ * bits in struct map_entry as appropriate to recursion. (see comment above
+ * the field declaration.)
+ */
+extern int mapdb_unmap_fpage(
+	struct map_db *db,
+	L4_Fpage_t fpage,
+	bool recursive);
+
 
 /* access from the pagefault handler. returns NULL when the entry doesn't
  * exist.
