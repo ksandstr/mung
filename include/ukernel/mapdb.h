@@ -13,7 +13,7 @@
  * null value.
  */
 
-#define MAPDB_REF(spaceid, addr) (((spaceid) & PAGE_MASK) | ((addr) & ~page_mask))
+#define MAPDB_REF(spaceid, addr) (((spaceid) & PAGE_MASK) | ((addr) & ~PAGE_MASK))
 #define REF_DEFINED(ref) (REF_SPACE((ref)) != 0)
 #define REF_SPACE(ref) ((ref) & PAGE_MASK)
 #define REF_ADDR(ref) ((ref) & ~PAGE_MASK)
