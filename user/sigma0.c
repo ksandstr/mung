@@ -140,9 +140,9 @@ static int sigma0_ipc_loop(void *kip_base)
 					break;
 				}
 				assert((L4_Word_t)ptr == (addr & ~PAGE_MASK));
-				L4_Fpage_t page = L4_FpageLog2(addr, PAGE_BITS);
+				L4_Fpage_t page = L4_FpageLog2(addr & ~PAGE_MASK, PAGE_BITS);
 				L4_Set_Rights(&page, L4_FullyAccessible);
-				L4_MapItem_t idemp = L4_MapItem(page, addr & ~PAGE_MASK);
+				L4_GrantItem_t idemp = L4_GrantItem(page, addr & ~PAGE_MASK);
 				L4_LoadMR(0, (L4_MsgTag_t){ .X.label = 666, .X.t = 2 }.raw);
 				L4_LoadMR(1, idemp.raw[0]);
 				L4_LoadMR(2, idemp.raw[1]);
@@ -173,7 +173,7 @@ static int sigma0_ipc_loop(void *kip_base)
 					L4_Fpage_t map_page = L4_FpageLog2((L4_Word_t)ptr,
 						L4_SizeLog2(req_fpage));
 					L4_Set_Rights(&map_page, L4_FullyAccessible);
-					L4_MapItem_t map = L4_MapItem(map_page, (L4_Word_t)ptr);
+					L4_GrantItem_t map = L4_GrantItem(map_page, (L4_Word_t)ptr);
 					L4_LoadMR(0, (L4_MsgTag_t){ .X.t = 2 }.raw);
 					L4_LoadMR(1, map.raw[0]);
 					L4_LoadMR(2, map.raw[1]);
