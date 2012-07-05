@@ -124,6 +124,14 @@ static int apply_mapitem(
 	L4_MapItem_t m)
 {
 	L4_Fpage_t map_page = L4_MapItemSndFpage(m);
+	bool is_grant;
+	switch(m.X.__type) {
+		case 0x5: is_grant = true; break;
+		case 0x4: is_grant = false; break;
+		default:
+			/* neither mapitem or grantitem. skip it. */
+			return 0;
+	}
 
 	/* no-ops */
 	if(source->space == dest->space) return 0;
@@ -140,19 +148,22 @@ static int apply_mapitem(
 		else return apply_io_mapitem(source, s_base, dest, d_base, m, wnd);
 	}
 
-#if 0
-	printf("mapping 0x%lx:0x%lx, sndbase 0x%lx, rcvwindow %#lx:%#lx (%s)\n",
+	TRACE("mapping 0x%lx:0x%lx, sndbase 0x%lx, rcvwindow %#lx:%#lx (%s)\n",
 		L4_Address(map_page), L4_Size(map_page),
 		L4_MapItemSndBase(m), L4_Address(wnd), L4_Size(wnd),
 		wnd.raw == L4_CompleteAddressSpace.raw ? "CompleteAddressSpace" : "<- that");
-#endif
 
 	if(wnd.raw == L4_CompleteAddressSpace.raw
 		|| L4_Size(wnd) >= L4_MapItemSndBase(m) + L4_Size(map_page))
 	{
-		return mapdb_map_pages(&source->space->mapdb,
+		int given = mapdb_map_pages(&source->space->mapdb,
 			&dest->space->mapdb, map_page,
 			L4_Address(wnd) + L4_MapItemSndBase(m));
+		if(is_grant && given != 0) {
+			L4_Set_Rights(&map_page, given);
+			mapdb_unmap_fpage(&source->space->mapdb, map_page, false);
+		}
+		return given;
 	} else {
 		/* TODO */
 		panic("apply_mapitem() can't handle trunc rcvwindow cases");
@@ -172,7 +183,9 @@ static L4_Word_t do_typed_transfer(
 	while(pos <= last) {
 		L4_Word_t w0 = L4_VREG(s_base, L4_TCR_MR(pos));
 		switch(w0 & 0xe) {
-			case 0x8: {
+			case 0x8:
+			case 0xa: {
+				/* MapItem (0x8), GrantItem (0xa) */
 				if(unlikely(pos + 1 > last)) goto too_short;
 				L4_MapItem_t m = {
 					.raw = { w0, L4_VREG(s_base, pos + 1) },
@@ -192,9 +205,6 @@ static L4_Word_t do_typed_transfer(
 				pos += 2;
 				break;
 			}
-			case 0xa:
-				panic("can't handle grantitems yet");
-				break;
 			case 0xc:
 				panic("ctrlxferitems not supported");
 				break;
