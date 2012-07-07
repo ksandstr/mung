@@ -634,6 +634,50 @@ static int make_pages_for_range(
 }
 
 
+/* blanks appear after *entry. it is updated after group resize. */
+static int insert_blanks(
+	struct map_group *g,
+	int num_to_add,
+	struct map_entry **entry)
+{
+	assert(*entry >= g->entries && *entry < &g->entries[g->num_alloc]);
+	struct map_entry *e = *entry;
+
+	int need = g->num_entries + num_to_add,
+		num_tail = g->num_entries - (e - g->entries) - 1;
+	if(need > g->num_alloc) {
+		/* make moar RAMz */
+		int e_pos = e - g->entries;
+		assert(e_pos < g->num_entries);
+		int newsize = g->num_alloc * 2;
+		while(newsize < need) newsize *= 2;
+		TRACE("%s: resizing group from %u to %d entries\n", __func__,
+			g->num_alloc, newsize);
+		void *ptr = realloc(g->entries, newsize * sizeof(struct map_entry));
+		if(ptr == NULL) return -ENOMEM;
+		g->entries = ptr;
+		g->num_alloc = newsize;
+		e = &g->entries[e_pos];
+		*entry = e;
+	}
+	assert(g->num_alloc >= need);
+
+	if(num_tail > 0) {
+		/* poor man's memmove(3) (TODO) */
+		TRACE("%s: move %d items to %d (*entry at %d)\n", __func__, num_tail,
+			(e + num_to_add + 1) - g->entries, e - g->entries);
+		size_t len = sizeof(struct map_entry) * num_tail;
+		void *tmp = malloc(len);
+		if(tmp == NULL) return -ENOMEM;
+		memcpy(tmp, e + 1, len);
+		memcpy(e + num_to_add + 1, tmp, len);
+		free(tmp);
+	}
+
+	return 0;
+}
+
+
 static int split_entry(
 	struct map_group *g,
 	struct map_entry *e,
@@ -662,35 +706,9 @@ static int split_entry(
 	}
 	assert(p > 1);		/* forbid the trivial case */
 
-	int need = g->num_entries + p - 1;
-	if(need > g->num_alloc) {
-		/* make moar RAMz */
-		int e_pos = e - g->entries;
-		assert(e_pos < g->num_entries);
-		int newsize = g->num_alloc * 2;
-		while(newsize < need) newsize *= 2;
-		TRACE("%s: resizing group from %u to %d entries\n", __func__,
-			g->num_alloc, newsize);
-		void *ptr = realloc(g->entries, newsize * sizeof(struct map_entry));
-		if(ptr == NULL) return -ENOMEM;
-		g->entries = ptr;
-		g->num_alloc = newsize;
-		e = &g->entries[e_pos];
-	}
-	assert(g->num_alloc >= need);
+	int n = insert_blanks(g, p - 1, &e);
+	if(unlikely(n < 0)) return n;
 
-	int num_tail = g->num_entries - (e - g->entries) - 1;
-	if(num_tail > 0) {
-		/* poor man's memmove(3) (TODO: add better one) */
-		TRACE("%s: move %d items to %d (entry at %d)\n", __func__, num_tail,
-			e - g->entries + p, e - g->entries);
-		size_t len = sizeof(struct map_entry) * num_tail;
-		void *tmp = malloc(len);
-		if(tmp == NULL) return -ENOMEM;
-		memcpy(tmp, e + 1, len);
-		memcpy(e + p, tmp, len);
-		free(tmp);
-	}
 	struct map_entry saved = *e;
 	L4_Word_t addr_offset = 0;
 	for(int i=0; i < p; i++) {
