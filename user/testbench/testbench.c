@@ -165,6 +165,7 @@ int main(void)
 	/* proper test suite */
 	static Suite *(* const suites[])(void) = {
 		&sched_suite,
+		&space_suite,
 	};
 	SRunner *run = srunner_create(NULL);
 	for(int i=0; i < sizeof(suites) / sizeof(suites[0]); i++) {
