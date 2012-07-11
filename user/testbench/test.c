@@ -30,6 +30,8 @@ struct TCase
 {
 	struct list_node suite_link;
 	struct list_head tests;
+	SFun uf_setup, uf_teardown;
+	SFun cf_setup, cf_teardown;
 	char name[];
 };
 
@@ -62,10 +64,30 @@ TCase *tcase_create(const char *name)
 {
 	int len = strlen(name);
 	TCase *tc = malloc(sizeof(TCase) + len + 1);
+	memset(tc, '\0', sizeof(*tc));
 	tc->suite_link = (struct list_node){ };
 	list_head_init(&tc->tests);
 	memcpy(tc->name, name, len + 1);
 	return tc;
+}
+
+
+/* TODO: proper support for test fixtures requires controlled restarting of
+ * the emulator & skipping past a point in the test suite runner's loop. so
+ * for now test.c implements fixtures without anything like forking.
+ */
+
+void tcase_add_unchecked_fixture(TCase *tc, SFun setup, SFun teardown)
+{
+	tc->uf_setup = setup;
+	tc->uf_teardown = teardown;
+}
+
+
+void tcase_add_checked_fixture(TCase *tc, SFun setup, SFun teardown)
+{
+	tc->cf_setup = setup;
+	tc->cf_teardown = teardown;
 }
 
 
@@ -150,6 +172,7 @@ void srunner_run_all(SRunner *sr, int report_mode)
 		TCase *tc;
 		list_for_each(&s->cases, tc, suite_link) {
 			printf("*** begin tcase `%s'\n", tc->name);
+			if(tc->uf_setup != NULL) (*tc->uf_setup)();
 			struct test *t;
 			list_for_each(&tc->tests, t, tcase_link) {
 				int high = t->high;
@@ -158,6 +181,7 @@ void srunner_run_all(SRunner *sr, int report_mode)
 					printf("*** begin test `%s'", t->name);
 					if(t->low < high) printf(" iter %d", val);
 					printf("\n");
+					if(tc->cf_setup != NULL) (*tc->cf_setup)();
 
 					flush_log(false);
 					tap_reset();
@@ -174,9 +198,12 @@ void srunner_run_all(SRunner *sr, int report_mode)
 						 */
 						flush_log(true);
 					}
+
+					if(tc->cf_teardown != NULL) (*tc->cf_teardown)();
 					printf("*** end test `%s' rc %d\n", t->name, rc);
 				}
 			}
+			if(tc->uf_teardown != NULL) (*tc->uf_teardown)();
 			printf("*** end tcase `%s'\n", tc->name);
 		}
 		printf("*** end suite `%s'\n", s->name);

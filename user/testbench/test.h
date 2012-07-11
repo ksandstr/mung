@@ -39,6 +39,8 @@ typedef struct TCase TCase;
 struct SRunner;
 typedef struct SRunner SRunner;
 
+typedef void (*SFun)(void);
+
 #define START_TEST(name) \
 	static void name (int _i) {
 #define START_LOOP_TEST(name, _var) \
@@ -59,6 +61,8 @@ typedef struct SRunner SRunner;
 extern Suite *suite_create(const char *name);
 extern void suite_add_tcase(Suite *s, TCase *tc);
 extern TCase *tcase_create(const char *name);
+extern void tcase_add_unchecked_fixture(TCase *tc, SFun setup, SFun teardown);
+extern void tcase_add_checked_fixture(TCase *tc, SFun setup, SFun teardown);
 
 extern void tcase_add_test_full(
 	TCase *tc,
