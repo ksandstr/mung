@@ -14,8 +14,12 @@ struct Suite;
 
 /* various test suites */
 
-extern void threadctl_test(void);
 extern struct Suite *sched_suite(void);
+
+
+/* pre-formal tests */
+extern void threadctl_test(void);
+extern void thread_test(void);
 
 
 /* from thread.c */
