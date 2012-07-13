@@ -1,9 +1,21 @@
 
 #include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <ccan/likely/likely.h>
+#include <ccan/compiler/compiler.h>
 
 #include <l4/types.h>
 #include <l4/ipc.h>
 #include <l4/kip.h>
+
+#include <ukernel/util.h>
+
+
+static L4_Word_t heap_pos = 0;
+
+
+static void heap_init(void);
 
 
 /* NOTE: the current L4.X2 spec says there's a third parameter, high_address.
@@ -37,21 +49,56 @@ L4_Fpage_t sigma0_get_page(L4_Fpage_t page, L4_Word_t attributes)
 }
 
 
-/* TODO: make this, and the kernel heap, contiguous in address space -- and
- * then enable MORECORE_CONTIGUOUS in dlmalloc.c & leave DEFAULT_GRANULARITY
- * at default to minimize dead kernel memory.
+/* TODO: make the kernel heap also contiguous in address space -- and then
+ * enable MORECORE_CONTIGUOUS in dlmalloc.c & leave DEFAULT_GRANULARITY at
+ * default to minimize unused kernel RAM.
  */
 void *sbrk(intptr_t increment)
 {
-	printf("%s: increment is %ld\n", __func__, (long int)increment);
-	if(increment == 0) return NULL;
-	else {
-		int size = L4_SizeLog2(L4_Fpage(0, increment));
-		L4_Fpage_t page = sigma0_get_page(L4_FpageLog2(~0ul, size), 0);
-		if(L4_IsNilFpage(page)) return NULL;
-		else {
-			printf("%s: got memory at %#lx\n", __func__, L4_Address(page));
-			return (void *)L4_Address(page);
+	if(unlikely(heap_pos == 0)) {
+		heap_init();
+		assert(heap_pos > 0);
+	}
+
+	if(increment == 0) return (void *)heap_pos;
+	else if(increment > 0) {
+		/* FIXME: get smallest physical page size from KIP */
+		increment = (increment + 0xfff) & ~0xfff;
+		L4_Fpage_t page = sigma0_get_page(
+			L4_Fpage(heap_pos - increment, increment), 0);
+		if(L4_IsNilFpage(page)) {
+			return NULL;
+		} else {
+			heap_pos = L4_Address(page);
+			return (void *)heap_pos;
+		}
+	} else {
+		/* TODO: move the allocated heap backward, so that pages aren't
+		 * re-requested from sigma0 once the heap grows again.
+		 */
+		return (void *)heap_pos;	/* nuh-huh! */
+	}
+}
+
+
+static COLD void heap_init(void)
+{
+	/* find the highest address where there's regular memory. use that as heap
+	 * top.
+	 */
+	L4_KernelInterfacePage_t *kip = L4_GetKernelInterface();
+	int n_descs = kip->MemoryInfo & 0xffff;
+	L4_Word_t high = 0;
+	for(int i=0; i < n_descs; i++) {
+		const L4_MemoryDesc_t *desc = L4_MemoryDesc(kip, i);
+		if(L4_IsMemoryDescVirtual(desc)) {
+			if(high == 0) high = L4_MemoryDescHigh(desc);
+		} else if(L4_MemoryDescType(desc) == L4_ConventionalMemoryType
+			&& L4_MemoryDescHigh(desc) > 0x200000)
+		{
+			high = MIN(L4_Word_t, L4_MemoryDescHigh(desc), high);
 		}
 	}
+
+	heap_pos = high + 1;	/* high address is hardwired to ones */
 }
