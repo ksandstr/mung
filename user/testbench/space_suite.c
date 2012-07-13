@@ -238,11 +238,11 @@ static void pager_teardown(void)
 }
 
 
-START_TEST(poke_peek_test)
+/* no-hole case */
+START_TEST(poke_peek_nofault_test)
 {
 	plan_tests(3);
 
-	/* no-hole case */
 	void *ptr = malloc(12 * 1024);
 	*(uint8_t *)ptr = 0;
 	bool ok = poke(pg_poker, (L4_Word_t)ptr, 0x42);
@@ -260,7 +260,34 @@ START_TEST(poke_peek_test)
 		skip_end;
 	skip_end;
 
-	/* TODO: add tests for the hole case, and the post-hole case */
+	free(ptr);
+}
+END_TEST
+
+
+/* hole case */
+START_TEST(poke_peek_fault_test)
+{
+	plan_tests(3);
+
+	uint8_t *valid = malloc(12 * 1024);
+	skip_start((L4_Word_t)valid < 0xf00000, 3, "alloc must be above 15M");
+		memset(valid, 0, 12 * 1024);
+		uint8_t *invalid = valid - 0xa00000;	/* 10 MiB backward. */
+		bool ok = poke(pg_poker, (L4_Word_t)invalid, 0xaf);
+		skip_start(!ok, 3, "poke failed: ec %#lx", L4_ErrorCode());
+			ok(pg_stats->n_faults == 1 && pg_stats->n_write == 1,
+				"poke write-faults");
+			uint8_t val;
+			ok = peek(&val, pg_poker, (L4_Word_t)invalid);
+			skip_start(!ok, 2, "peek failed: ec %#lx", L4_ErrorCode());
+				ok(pg_stats->n_faults == 1, "peek doesn't read-fault");
+				ok(val == 0xaf, "peek returns poked value");
+			skip_end;
+		skip_end;
+	skip_end;
+
+	free(valid);
 }
 END_TEST
 
@@ -271,7 +298,8 @@ Suite *space_suite(void)
 
 	TCase *pager_case = tcase_create("pager");
 	tcase_add_checked_fixture(pager_case, &pager_setup, &pager_teardown);
-	tcase_add_test(pager_case, poke_peek_test);
+	tcase_add_test(pager_case, poke_peek_nofault_test);
+	tcase_add_test(pager_case, poke_peek_fault_test);
 	suite_add_tcase(s, pager_case);
 
 	return s;
