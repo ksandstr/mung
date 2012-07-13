@@ -1,6 +1,10 @@
 
 /* unit tests concerning the SpaceControl system call, and pager operation. */
 
+/* TODO: the timeout values for poke(), peek(), and send_quit() should be
+ * considered and adjusted to something reasonable and module global.
+ */
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
@@ -43,8 +47,11 @@ static void stats_pager_fn(void *param_ptr)
 		L4_ThreadId_t from;
 		L4_MsgTag_t tag = L4_Wait(&from);
 
-		while(run) {
-			if(L4_IpcFailed(tag)) break;
+		for(;;) {
+			if(L4_IpcFailed(tag)) {
+				diag("reply/wait failed, ec %#lx", L4_ErrorCode());
+				break;
+			}
 
 			if(tag.X.label == QUIT_LABEL) {
 				run = false;
@@ -73,13 +80,18 @@ static void stats_pager_fn(void *param_ptr)
 						L4_ErrorCode());
 					stats->n_fail++;
 					break;
+				} else if(tag.X.t != 2 || tag.X.u != 0) {
+					diag("stats-to-pager IPC returned weird tag %#lx",
+						tag.raw);
+					stats->n_fail++;
+					break;
+				} else {
+					/* reply. */
+					L4_LoadMR(0, 0);
+					tag = L4_ReplyWait(from, &from);
 				}
-
-				/* reply. */
-				L4_LoadMR(0, 0);
-				tag = L4_ReplyWait(from, &from);
 			} else {
-				diag("stats pager thread got weird IPC from %#lx (label %#lx)",
+				diag("pager got weird IPC from %#lx (label %#lx)",
 					from.raw, tag.X.label);
 				break;
 			}
@@ -130,7 +142,7 @@ static bool poke(L4_ThreadId_t thread, L4_Word_t address, uint8_t value)
 	L4_LoadMR(1, address);
 	L4_LoadMR(2, value);
 	L4_MsgTag_t tag = L4_Call_Timeouts(thread, L4_Never,
-		L4_TimePeriod(2 * 1000));
+		L4_TimePeriod(50 * 1000));
 	return L4_IpcSucceeded(tag);
 }
 
@@ -141,7 +153,7 @@ static bool peek(uint8_t *value_p, L4_ThreadId_t thread, L4_Word_t address)
 	L4_LoadMR(0, (L4_MsgTag_t){ .X.label = PEEK_LABEL, .X.u = 1 }.raw);
 	L4_LoadMR(1, address);
 	L4_MsgTag_t tag = L4_Call_Timeouts(thread, L4_Never,
-		L4_TimePeriod(2 * 1000));
+		L4_TimePeriod(50 * 1000));
 	if(L4_IpcFailed(tag)) return false;
 	else {
 		L4_Word_t w;
@@ -155,7 +167,7 @@ static bool peek(uint8_t *value_p, L4_ThreadId_t thread, L4_Word_t address)
 static bool send_quit(L4_ThreadId_t thread)
 {
 	L4_LoadMR(0, (L4_MsgTag_t) { .X.label = QUIT_LABEL }.raw);
-	return L4_IpcSucceeded(L4_Send(thread));
+	return L4_IpcSucceeded(L4_Send_Timeout(thread, L4_TimePeriod(50 * 1000)));
 }
 
 
@@ -198,15 +210,28 @@ static void pager_setup(void)
 	if(L4_IsNilThread(pg_poker)) {
 		fixture_fail("can't start poke/peek thread");
 	}
+
+	assert(L4_IsGlobalId(pg_pager));
+	L4_Set_PagerOf(pg_poker, pg_pager);
+/* FIXME: restore when the sys_exregs() can handle readouts */
+#if 0
+	if(L4_PagerOf(pg_poker).raw != pg_pager.raw) {
+		fixture_fail("poker's pager TCR wasn't set");
+	}
+#endif
 }
 
 
 static void pager_teardown(void)
 {
-	send_quit(pg_poker);
-	send_quit(pg_pager);
-	join_thread(pg_poker);
-	join_thread(pg_pager);
+	if(send_quit(pg_poker)) join_thread(pg_poker);
+	else {
+		/* FIXME: do forced teardown of a failed poker thread */
+		fixture_fail("can't stop hung poker thread");
+	}
+
+	if(send_quit(pg_pager)) join_thread(pg_pager);
+	else fixture_fail("can't stop pager thread");
 
 	free(pg_stats);
 	pg_stats = NULL;
