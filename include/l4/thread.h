@@ -178,4 +178,23 @@ static inline void L4_Set_UserDefinedHandleOf(
 }
 
 
+static inline L4_ThreadId_t L4_PagerOf(L4_ThreadId_t thread)
+{
+	L4_Word_t dummy;
+	L4_ThreadId_t ret;
+	L4_ExchangeRegisters(thread, (1 << 9), 0, 0, 0, 0, L4_nilthread,
+		&dummy, &dummy, &dummy, &dummy, &dummy, &ret);
+	return ret;
+}
+
+
+static inline void L4_Set_PagerOf(L4_ThreadId_t dest, L4_ThreadId_t pager)
+{
+	L4_Word_t dummy;
+	L4_ThreadId_t dummy_id;
+	L4_ExchangeRegisters(dest, (1 << 7), 0, 0, 0, 0, pager,
+		&dummy, &dummy, &dummy, &dummy, &dummy, &dummy_id);
+}
+
+
 #endif
