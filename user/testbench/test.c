@@ -29,10 +29,15 @@ struct Suite
 struct TCase
 {
 	struct list_node suite_link;
-	struct list_head tests;
-	SFun uf_setup, uf_teardown;
-	SFun cf_setup, cf_teardown;
+	struct list_head tests, u_fixtures, c_fixtures;
 	char name[];
+};
+
+
+struct fixture
+{
+	struct list_node link;	/* in u_fixtures or c_fixtures */
+	SFun setup, teardown;
 };
 
 
@@ -72,8 +77,21 @@ TCase *tcase_create(const char *name)
 	memset(tc, '\0', sizeof(*tc));
 	tc->suite_link = (struct list_node){ };
 	list_head_init(&tc->tests);
+	list_head_init(&tc->c_fixtures);
+	list_head_init(&tc->u_fixtures);
 	memcpy(tc->name, name, len + 1);
 	return tc;
+}
+
+
+static void add_fixture(
+	struct list_head *list,
+	SFun setup,
+	SFun teardown)
+{
+	struct fixture *f = malloc(sizeof(*f));
+	*f = (struct fixture){ .setup = setup, .teardown = teardown };
+	list_add_tail(list, &f->link);
 }
 
 
@@ -82,17 +100,13 @@ TCase *tcase_create(const char *name)
  * for now test.c implements fixtures without anything like forking.
  */
 
-void tcase_add_unchecked_fixture(TCase *tc, SFun setup, SFun teardown)
-{
-	tc->uf_setup = setup;
-	tc->uf_teardown = teardown;
+void tcase_add_unchecked_fixture(TCase *tc, SFun setup, SFun teardown) {
+	add_fixture(&tc->u_fixtures, setup, teardown);
 }
 
 
-void tcase_add_checked_fixture(TCase *tc, SFun setup, SFun teardown)
-{
-	tc->cf_setup = setup;
-	tc->cf_teardown = teardown;
+void tcase_add_checked_fixture(TCase *tc, SFun setup, SFun teardown) {
+	add_fixture(&tc->c_fixtures, setup, teardown);
 }
 
 
@@ -139,6 +153,44 @@ void exit_on_fail(void)
 		};
 	}
 	exit_thread(st);
+}
+
+
+static void fixture_wrapper_fn(void *param_ptr)
+{
+	SFun *param = param_ptr;
+	(**param)();
+}
+
+
+static bool run_fixture_list(
+	struct list_head *list,
+	bool teardown)
+{
+	bool rc = true;
+	struct fixture *f;
+	list_for_each(list, f, link) {
+		SFun *param = malloc(sizeof(*param));
+		*param = teardown ? f->teardown : f->setup;
+		L4_ThreadId_t thread = start_thread(&fixture_wrapper_fn, param);
+		if(L4_IsNilThread(thread)) {
+			printf("*** %s: start_thread() failed\n", __func__);
+			free(param);
+			return false;
+		}
+
+		struct test_status *status = join_thread(thread);
+		if(status != NULL) {
+			rc = status->rc;
+			free(status);
+		}
+
+		free(param);
+
+		if(!rc) break;
+	}
+
+	return rc;
 }
 
 
@@ -196,7 +248,14 @@ void srunner_run_all(SRunner *sr, int report_mode)
 		TCase *tc;
 		list_for_each(&s->cases, tc, suite_link) {
 			printf("*** begin tcase `%s'\n", tc->name);
-			if(tc->uf_setup != NULL) (*tc->uf_setup)();
+			if(!list_empty(&tc->u_fixtures)
+				&& !run_fixture_list(&tc->u_fixtures, false))
+			{
+				/* FIXME: see below */
+				printf("*** abort tcase `%s' (unchecked fixture failed)\n",
+					tc->name);
+				continue;
+			}
 			struct test *t;
 			list_for_each(&tc->tests, t, tcase_link) {
 				int high = t->high;
@@ -205,7 +264,24 @@ void srunner_run_all(SRunner *sr, int report_mode)
 					printf("*** begin test `%s'", t->name);
 					if(t->low < high) printf(" iter %d", val);
 					printf("\n");
-					if(tc->cf_setup != NULL) (*tc->cf_setup)();
+					if(!list_empty(&tc->c_fixtures)
+						&& !run_fixture_list(&tc->c_fixtures, false))
+					{
+						/* TODO: do an exit-to-restart here just in case the
+						 * microkernel has become fucked. but note the test
+						 * sequence run so far, or something.
+						 *
+						 * FIXME: at least signal that a test case was
+						 * skipped!
+						 *
+						 * for now this just goes on to the next tcase,
+						 * leaving fixtures before the failed one in place.
+						 * that's pretty bad.
+						 */
+						printf("*** abort test `%s' (checked fixture failed)\n",
+							t->name);
+						continue;
+					}
 
 					flush_log(false);
 					tap_reset();
@@ -223,11 +299,23 @@ void srunner_run_all(SRunner *sr, int report_mode)
 						flush_log(true);
 					}
 
-					if(tc->cf_teardown != NULL) (*tc->cf_teardown)();
+					if(!list_empty(&tc->c_fixtures)
+						&& !run_fixture_list(&tc->c_fixtures, true))
+					{
+						printf("*** test `%s': checked fixture teardown failed\n",
+							t->name);
+						/* FIXME: do exit-to-restart or something */
+					}
 					printf("*** end test `%s' rc %d\n", t->name, rc);
 				}
 			}
-			if(tc->uf_teardown != NULL) (*tc->uf_teardown)();
+			if(!list_empty(&tc->u_fixtures)
+				&& !run_fixture_list(&tc->u_fixtures, true))
+			{
+				printf("*** tcase `%s': unchecked fixture teardown failed\n",
+					tc->name);
+				/* FIXME: see above */
+			}
 			printf("*** end tcase `%s'\n", tc->name);
 		}
 		printf("*** end suite `%s'\n", s->name);
