@@ -268,11 +268,12 @@ END_TEST
 /* hole case */
 START_TEST(poke_peek_fault_test)
 {
-	plan_tests(3);
+	plan_tests(4);
 
 	uint8_t *valid = malloc(12 * 1024);
-	skip_start((L4_Word_t)valid < 0xf00000, 3, "alloc must be above 15M");
+	skip_start((L4_Word_t)valid < 0xf00000, 4, "alloc must be above 15M");
 		memset(valid, 0, 12 * 1024);
+
 		uint8_t *invalid = valid - 0xa00000;	/* 10 MiB backward. */
 		bool ok = poke(pg_poker, (L4_Word_t)invalid, 0xaf);
 		skip_start(!ok, 3, "poke failed: ec %#lx", L4_ErrorCode());
@@ -284,6 +285,15 @@ START_TEST(poke_peek_fault_test)
 				ok(pg_stats->n_faults == 1, "peek doesn't read-fault");
 				ok(val == 0xaf, "peek returns poked value");
 			skip_end;
+		skip_end;
+
+		invalid += 16 * 1024;
+		uint8_t val;
+		const int old_n = pg_stats->n_faults, old_r = pg_stats->n_read;
+		ok = peek(&val, pg_poker, (L4_Word_t)invalid);
+		skip_start(!ok, 1, "peek failed: ec %#lx", L4_ErrorCode());
+			ok(pg_stats->n_faults == old_n + 1
+				&& pg_stats->n_read == old_r + 1, "peek caused read fault");
 		skip_end;
 	skip_end;
 
