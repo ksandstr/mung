@@ -45,6 +45,11 @@ struct test
 };
 
 
+struct test_status {
+	bool rc;		/* run_test() return value */
+};
+
+
 Suite *suite_create(const char *name)
 {
 	int len = strlen(name);
@@ -121,6 +126,19 @@ static void test_wrapper_fn(void *param_ptr)
 {
 	const struct test_thread_param *p = param_ptr;
 	(*p->t->t_fun)(p->val);
+	/* TODO: fill in a test_status report, return it through exit_thread() */
+}
+
+
+void exit_on_fail(void)
+{
+	struct test_status *st = malloc(sizeof(*st));
+	if(st != NULL) {
+		*st = (struct test_status){
+			.rc = false,
+		};
+	}
+	exit_thread(st);
 }
 
 
@@ -139,9 +157,12 @@ static bool run_test(Suite *s, TCase *tc, struct test *t, int test_value)
 		goto end;
 	}
 
-	/* FIXME: catch early termination, nonlocal exit, etc */
-
-	join_thread(thread);
+	struct test_status *status = join_thread(thread);
+	if(status != NULL) {
+		/* early terminations, etc. */
+		rc = status->rc;
+		free(status);
+	}
 
 end:
 	free(param);
@@ -164,6 +185,9 @@ void srunner_add_suite(SRunner *run, Suite *s)
 }
 
 
+/* TODO: run fixture setup and teardown in threads so that they can call
+ * fail_unless() etc. also
+ */
 void srunner_run_all(SRunner *sr, int report_mode)
 {
 	Suite *s;

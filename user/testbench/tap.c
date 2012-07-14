@@ -91,8 +91,7 @@ void _fail_unless(
 		printf("FAIL: %s\n", buf);
 		flush_log(true);
 
-		/* meh */
-		asm volatile ("int $1");
+		exit_on_fail();
 	}
 }
 

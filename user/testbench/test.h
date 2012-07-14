@@ -7,6 +7,7 @@
 #define SEEN_MUNG_TESTBENCH_TEST_H
 
 #include <stdbool.h>
+#include <ccan/compiler/compiler.h>
 
 
 /* imitation of tap.h from libtap by Nik Clayton */
@@ -77,6 +78,10 @@ extern void tcase_add_test_full(
 extern SRunner *srunner_create(Suite *first_suite);
 extern void srunner_add_suite(SRunner *run, Suite *s);
 extern void srunner_run_all(SRunner *sr, int report_mode);
+
+
+/* internal API for test exit from _fail_unless() */
+extern NORETURN void exit_on_fail(void);
 
 
 /* from tap.c */
