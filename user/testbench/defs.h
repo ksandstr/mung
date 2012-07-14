@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <stdarg.h>
 #include <stdbool.h>
+#include <ccan/compiler/compiler.h>
 
 #include <l4/types.h>
 
@@ -33,7 +34,8 @@ extern L4_ThreadId_t start_thread_long(
 	L4_Time_t ts_len,
 	L4_Time_t total_quantum);
 
-extern void join_thread(L4_ThreadId_t tid);
+extern NORETURN void exit_thread(void *return_value);
+extern void *join_thread(L4_ThreadId_t tid);
 
 
 /* from delay.c */
