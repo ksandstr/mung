@@ -8,6 +8,7 @@
 #include <l4/types.h>
 #include <l4/kcp.h>
 #include <l4/kip.h>
+#include <l4/bootinfo.h>
 
 #include <ukernel/x86.h>
 #include <ukernel/16550.h>
@@ -148,13 +149,22 @@ static void fill_kcp(
 	*(L4_Word_t *)&kcp_base[0x58] = 0;		/* kdebug.config0 */
 	*(L4_Word_t *)&kcp_base[0x5c] = 0;		/* kdebug.config1 */
 
-	*(L4_Word_t *)&kcp_base[0xb8] = 0;		/* BootInfo */
+	int resv_pos = 0x100;	/* reserved after the defined KCP bits. */
+	L4_BootInfo_t *binf = (L4_BootInfo_t *)&kcp_base[resv_pos];
+	*(L4_Word_t *)&kcp_base[0xb8] = (L4_Word_t)binf;	/* BootInfo */
+	resv_pos += sizeof(L4_BootInfo_t);
+	*binf = (L4_BootInfo_t){
+		.magic = L4_BOOTINFO_MAGIC,
+		.version = L4_BOOTINFO_VERSION,
+		.size = sizeof(L4_BootInfo_t),
+		.first_entry = 0, .num_entries = 0,
+	};
 
 	/* memory descriptors. the bootloader passes just conventional and
 	 * reserved memory.
 	 */
-	const int md_pos = 0x100;
-	L4_MemoryDesc_t *mdbuf = (L4_MemoryDesc_t *)&kcp_base[md_pos];
+	const int md_pos = resv_pos;
+	L4_MemoryDesc_t *mdbuf = (L4_MemoryDesc_t *)&kcp_base[resv_pos];
 	int p = 0;
 	/* the x86 virtual address space. */
 	mdbuf[p++] = (L4_MemoryDesc_t){
@@ -194,7 +204,11 @@ static void fill_kcp(
 			};
 		}
 	}
-	/* and for the other boot modules */
+	/* and for the other boot modules. (also collects those boot modules that
+	 * should be passed to the root server.)
+	 */
+	const struct boot_module *list_mods[num_boot_mods];
+	int num_list = 0;
 	for(int i=0; i < num_boot_mods; i++) {
 		const struct boot_module *m = &boot_mods[i];
 		bool found = false;
@@ -211,12 +225,47 @@ static void fill_kcp(
 				.x.type = L4_DedicatedMemoryType, .x.v = 0,
 				.x.low = m->start >> 10, .x.high = m->end >> 10,
 			};
+			list_mods[num_list++] = m;
 		}
 	}
+	resv_pos += sizeof(L4_MemoryDesc_t) * p;
 
 	/* MemoryInfo */
 	assert(offsetof(L4_KernelConfigurationPage_t, MemoryInfo) == 0x54);
 	*(L4_Word_t *)&kcp_base[0x54] = md_pos << 16 | p;
+
+	/* BootRecs */
+	binf->num_entries = num_list;
+	L4_BootRec_t *prev = NULL;
+	for(int i=0; i < num_list; i++) {
+		const struct boot_module *m = list_mods[i];
+		L4_Boot_Module_t *mod = (L4_Boot_Module_t *)&kcp_base[resv_pos];
+		resv_pos += sizeof(*mod);
+		/* the command line, too. */
+		int cllen = strlen(m->cmdline), cl_resv = (cllen + 4) & ~3;
+		char *cmdline_buf = (char *)&kcp_base[resv_pos];
+		memcpy(cmdline_buf, m->cmdline, cllen);
+		memset(&cmdline_buf[cllen], 0, cl_resv - cllen);
+		resv_pos += cl_resv;
+
+		*mod = (L4_Boot_Module_t){
+			.type = L4_BootInfo_Module, .version = 1,
+			.start = m->start,
+			.size = m->end - m->start + 1,
+			.cmdline_offset = (uint8_t *)cmdline_buf - (uint8_t *)mod,
+		};
+
+		/* linkage */
+		if(prev == NULL) {
+			binf->first_entry = (uint8_t *)mod - (uint8_t *)binf;
+		} else {
+			prev->offset_next = (uint8_t *)mod - (uint8_t *)prev;
+		}
+		assert(offsetof(L4_Boot_Module_t, offset_next)
+			== offsetof(L4_BootRec_t, offset_next));
+		prev = (L4_BootRec_t *)mod;
+	}
+	assert(binf->num_entries == 0 || binf->first_entry != 0);
 }
 
 
