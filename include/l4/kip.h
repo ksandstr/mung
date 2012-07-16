@@ -169,6 +169,13 @@ static inline void *L4_GetKernelInterface(void)
 }
 
 
+static inline L4_Word_t L4_BootInfo(void *kip_ptr)
+{
+	L4_KernelInterfacePage_t *kip = kip_ptr;
+	return kip->BootInfo;
+}
+
+
 static inline L4_MemoryDesc_t *L4_MemoryDesc(void *kip, L4_Word_t num)
 {
 	/* FIXME: use a KIP struct */
