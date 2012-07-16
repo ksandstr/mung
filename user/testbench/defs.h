@@ -24,6 +24,8 @@ extern struct Suite *thread_suite(void);
 extern void threadctl_test(void);
 extern void thread_test(void);
 
+extern void legacy_tests(void);		/* from legacy.c */
+
 
 /* from thread.c */
 
