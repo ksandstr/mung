@@ -33,15 +33,7 @@ root server besides `testbench`, go chuck some runes of your own.
 
 ### Doesn't work. ###
 
-
-A known issue is that `config.mk`'s default enables all the bells and whistles
-in the resulting kernel image that're available on the host system. This leads
-to GCC 4.7 emitting AVX instructions on a recent CPU, which require some sort
-of extended state in the x86, for which no handler is installed by MultiBoot,
-and which therefore causes an octuple 720 inverse crap-out fault right out of
-the gate.
-
-So don't compile it with GCC 4.7; I don't, either.
+Figure it out. File an issue. Or don't.
 
 
   -- Kalle A. Sandström <ksandstr@iki.fi>
