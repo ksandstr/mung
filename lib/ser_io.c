@@ -72,6 +72,7 @@ static void computchar(unsigned char ch)
 }
 
 
-void con_putstr(const char *str) {
+/* overridden in user/testbench/forkserv.c */
+__attribute__((weak)) void con_putstr(const char *str) {
 	while(*str != '\0') computchar(*(str++));
 }
