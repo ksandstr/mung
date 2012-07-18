@@ -78,6 +78,7 @@ struct space *space_new(void)
 	sp->tss = NULL;
 	sp->tss_len = 0;
 	sp->tss_seg = 0;
+	sp->flags = 0;
 
 	return sp;
 }

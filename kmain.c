@@ -504,6 +504,7 @@ void kmain(void *bigp, unsigned int magic)
 	if(roottask_mod.high >= PAGE_SIZE) {
 		roottask = spawn_kernel_server(THREAD_ID(160, 1), &roottask_mod,
 			s0_thread, 16, false);
+		roottask->space->flags |= SF_PRIVILEGE;
 		printf("roottask [%#lx .. %#lx] created as %lu:%lu.\n",
 			roottask_mod.low, roottask_mod.high,
 			TID_THREADNUM(roottask->id), TID_VERSION(roottask->id));

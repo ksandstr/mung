@@ -13,12 +13,18 @@
 #include <ukernel/mapdb.h>
 
 
+/* space->flags */
+#define SF_PRIVILEGE 0x1	/* *Control syscall access */
+
+
 struct thread;
 
 struct space
 {
 	struct list_node link;		/* in the global space list */
 	struct list_head threads;	/* <struct thread> via space_link */
+
+	uint16_t flags;				/* SF_* */
 
 	/* pages for the UTCB area, allocated as threads are assigned UTCB
 	 * segments in the address space
