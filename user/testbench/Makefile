@@ -18,7 +18,8 @@ distclean:
 
 testbench: testbench.ld crt0.o testbench.o heap.o thread.o delay.o \
 		exn-store.o log.o tap.o test.o \
-		thread_test.o sched_suite.o space_suite.o \
+		sched_suite.o space_suite.o thread_suite.o \
+		thread_test.o \
 		syscalls.o ccan-list.o dlmalloc.o
 	@echo "  LD $@"
 	@$(LD) $(LDFLAGS) -T testbench.ld $(filter %.o,$^) $(LIBS) -o $@ \
