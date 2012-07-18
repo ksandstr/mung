@@ -750,10 +750,6 @@ void sys_threadcontrol(struct x86_exregs *regs)
 			ec = 4;		/* invalid scheduler */
 			goto end;
 		}
-		if(utcb_loc == ~0ul) {
-			ec = 6;		/* invalid UTCB location */
-			goto end;
-		}
 
 		TRACE("%s: creating thread %lu:%lu\n", __func__,
 			TID_THREADNUM(dest_tid.raw), TID_VERSION(dest_tid.raw));
