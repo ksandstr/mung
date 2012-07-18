@@ -302,6 +302,90 @@ START_TEST(poke_peek_fault_test)
 END_TEST
 
 
+/* tcase "ctl" */
+
+START_TEST(spacectl_basic)
+{
+	plan_tests(2);
+
+	/* first, an inactive thread. */
+	L4_ThreadId_t tid = L4_GlobalId(1024, 199), self = L4_Myself();
+	L4_Word_t res = L4_ThreadControl(tid, self, self, L4_nilthread,
+		(void *)-1);
+	skip_start(res != 1, 2, "creating ThreadControl failed, ec %#lx",
+			L4_ErrorCode());
+		ok(res == 1, "space & first thread created");
+		L4_Word_t ctl_out;
+		res = L4_SpaceControl(tid, 0, L4_FpageLog2(0x100000, 12),
+			L4_FpageLog2(0x101000, 14), L4_anythread, &ctl_out);
+		skip_start(res != 1, 1, "SpaceControl failed, ec %#lx",
+				L4_ErrorCode());
+			ok(res == 1, "space configured");
+
+			/* TODO: add thread to space, test valid UTCB locations, and
+			 * invalid ones outside the area
+			 */
+		skip_end;
+	skip_end;
+}
+END_TEST
+
+
+START_TEST(spacectl_iface)
+{
+	L4_Fpage_t kip_area = L4_FpageLog2(0x100000, 12),
+		utcb_area = L4_FpageLog2(0x200000, 12);
+
+	/* FIXME: get this from KIP */
+	const L4_Word_t utcb_size = 512;
+
+	plan_tests(2 + L4_Size(utcb_area) / utcb_size);
+
+	L4_ThreadId_t tid = L4_GlobalId(23042, 199), self = L4_Myself();
+	L4_Word_t res = L4_ThreadControl(tid, tid, self, L4_nilthread,
+		(void *)-1);
+	skip_start(res != 1, 1, "creating ThreadControl failed, ec %#lx",
+			L4_ErrorCode());
+		L4_Word_t ctl_out;
+
+		/* TODO: test overlapping of kip_area with utcb_area */
+		/* TODO: test too small kip_area & utcb_area */
+
+		res = L4_SpaceControl(tid, 0, kip_area, utcb_area, L4_anythread,
+			&ctl_out);
+		skip_start(res != 1, 1, "SpaceControl failed, ec %#lx",
+				L4_ErrorCode());
+
+			/* configure valid threads within the UTCB area. */
+			for(L4_Word_t addr = L4_Address(utcb_area);
+				addr < L4_Address(utcb_area) + L4_Size(utcb_area);
+				addr += utcb_size)
+			{
+				res = L4_ThreadControl(tid, tid, L4_nilthread, L4_nilthread,
+					(void *)addr);
+				ok(res == 1, "can set UTCB at %#lx", addr);
+			}
+
+			/* and outside the UTCB area. */
+			L4_Word_t out_posns[] = {
+				L4_Address(utcb_area) - utcb_size,
+				L4_Address(utcb_area) + L4_Size(utcb_area),
+			};
+			for(int i=0; i < NUM_ELEMENTS(out_posns); i++) {
+				L4_Word_t addr = out_posns[i];
+				res = L4_ThreadControl(tid, tid, L4_nilthread, L4_nilthread,
+					(void *)addr);
+				ok(res == 0 && L4_ErrorCode() == 6,
+					"addr %#lx is outside UTCB range", addr);
+			}
+
+			/* TODO: test UTCB position change while thread is activated. */
+		skip_end;
+	skip_end;
+}
+END_TEST
+
+
 Suite *space_suite(void)
 {
 	Suite *s = suite_create("space");
@@ -311,6 +395,11 @@ Suite *space_suite(void)
 	tcase_add_test(pager_case, poke_peek_nofault_test);
 	tcase_add_test(pager_case, poke_peek_fault_test);
 	suite_add_tcase(s, pager_case);
+
+	TCase *ctl_case = tcase_create("ctl");
+	tcase_add_test(ctl_case, spacectl_basic);
+	tcase_add_test(ctl_case, spacectl_iface);
+	suite_add_tcase(s, ctl_case);
 
 	return s;
 }
