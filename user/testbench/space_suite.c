@@ -12,6 +12,7 @@
 
 #include <l4/types.h>
 #include <l4/ipc.h>
+#include <l4/kip.h>
 #include <l4/syscall.h>
 
 #include <ukernel/util.h>
@@ -331,15 +332,32 @@ END_TEST
 
 START_TEST(spacectl_iface)
 {
-	L4_Fpage_t kip_area = L4_FpageLog2(0x100000, 12),
+	L4_KernelInterfacePage_t *kip = L4_GetKernelInterface();
+	int kip_s = kip->KipAreaInfo.X.s;
+	L4_Fpage_t kip_area = L4_FpageLog2(0x100000, kip_s),
 		utcb_area = L4_FpageLog2(0x200000, 12);
 
-	plan_tests(1);
+	/* find top of the virtual address space. */
+	L4_Word_t vaddr_end = ~(L4_Word_t)0;
+	for(int i=0; i < (kip->MemoryInfo & 0xffff); i++) {
+		L4_MemoryDesc_t *md = L4_MemoryDesc(kip, i);
+		if(L4_IsMemoryDescVirtual(md)) {
+			if(L4_MemoryDescType(md) == L4_ConventionalMemoryType) {
+				vaddr_end = MIN(L4_Word_t, vaddr_end,
+					L4_MemoryDescHigh(md));
+			} else {
+				vaddr_end = MIN(L4_Word_t, vaddr_end,
+					L4_MemoryDescLow(md));
+			}
+		}
+	}
+
+	plan_tests(5);
 
 	L4_ThreadId_t tid = L4_GlobalId(23042, 199), self = L4_Myself();
 	L4_Word_t res = L4_ThreadControl(tid, tid, self, L4_nilthread,
 		(void *)-1);
-	skip_start(res != 1, 1, "creating ThreadControl failed, ec %#lx",
+	skip_start(res != 1, 3, "creating ThreadControl failed, ec %#lx",
 			L4_ErrorCode());
 
 		L4_Word_t ctl_out;
@@ -347,8 +365,40 @@ START_TEST(spacectl_iface)
 			&ctl_out);
 		ok(res == 1, "valid SpaceControl is valid");
 
-		/* TODO: test overlapping of kip_area with utcb_area */
-		/* TODO: test too small or too large kip_area & utcb_area */
+		/* simple overlap between kip_area and utcb_area */
+		L4_Fpage_t bad_utcb_area = L4_FpageLog2(0x100000 - (0x1000 * 2), 14);
+		assert(RANGE_OVERLAP(L4_Address(bad_utcb_area), L4_Address(bad_utcb_area) + L4_Size(bad_utcb_area) - 1,
+			L4_Address(kip_area), L4_Address(kip_area) + L4_Size(kip_area) - 1));
+		res = L4_SpaceControl(tid, 0, kip_area, bad_utcb_area, L4_anythread,
+			&ctl_out);
+		L4_Word_t ec = L4_ErrorCode();
+		ok(res == 0 && ec == 7, "error 7 on KIP/UTCB area overlap");
+
+		/* KIP areas that's too small */
+		L4_Fpage_t bad_kip_area = L4_FpageLog2(L4_Address(kip_area),
+			kip->KipAreaInfo.X.s - 1);
+		res = L4_SpaceControl(tid, 0, bad_kip_area, utcb_area,
+			L4_anythread, &ctl_out);
+		ec = L4_ErrorCode();
+		ok(res == 0 && ec == 7, "kip area %#lx:%#lx is the wrong size",
+			L4_Address(bad_kip_area), L4_Size(bad_kip_area));
+
+		/* TODO: test too large an utcb_area */
+
+		/* UTCB and KIP areas outside the address space */
+		bad_kip_area = L4_FpageLog2(vaddr_end + 0x10000, kip_s);
+		res = L4_SpaceControl(tid, 0, bad_kip_area, utcb_area,
+			L4_anythread, &ctl_out);
+		ec = L4_ErrorCode();
+		ok(res == 0 && ec == 7, "kip area %#lx:%#lx out of range",
+			L4_Address(bad_kip_area), L4_Size(bad_kip_area));
+
+		bad_utcb_area = L4_FpageLog2(vaddr_end + 0x10000, 18);
+		res = L4_SpaceControl(tid, 0, kip_area, bad_utcb_area,
+			L4_anythread, &ctl_out);
+		ec = L4_ErrorCode();
+		ok(res == 0 && ec == 6, "utcb area %#lx:%#lx out of range",
+			L4_Address(bad_utcb_area), L4_Size(bad_utcb_area));
 
 		/* TODO: test UTCB/KIP area change while thread is activated. */
 	skip_end;
