@@ -25,6 +25,12 @@
 #define MAX(t, a, b) ({ t __a = (a), __b = (b); __a > __b ? (t)__a : (t)__b; })
 #define SWAP(t, a, b) do { t __tmp = (a); (a) = (b); (b) = __tmp; } while(0)
 
+#define BETWEEN(low, high, x) ((low) <= (x) && (x) <= (high))
+
+#define RANGE_OVERLAP(l0, h0, l1, h1) \
+	(BETWEEN((l0), (h0), (l1)) || BETWEEN((l0), (h0), (h1)) \
+		|| BETWEEN((l1), (h1), (l0)) || BETWEEN((l1), (h1), (h0)))
+
 #define MSB(x) (sizeof((x)) * 8 - __builtin_clzl((x)) - 1)
 #define POPCOUNT(x) (__builtin_popcount((x)))
 

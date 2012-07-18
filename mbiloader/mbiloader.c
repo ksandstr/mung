@@ -32,12 +32,6 @@ struct boot_module
 } __attribute__((packed));
 
 
-#define BETWEEN(low, high, x) ((low) <= (x) && (x) <= (high))
-#define RANGE_OVERLAP(l0, h0, l1, h1) \
-	(BETWEEN((l0), (h0), (l1)) || BETWEEN((l0), (h0), (h1)) \
-		|| BETWEEN((l1), (h1), (l0)) || BETWEEN((l1), (h1), (h0)))
-
-
 static int num_boot_mods = 0;
 static struct boot_module boot_mods[MAX_BOOT_MODS];
 
