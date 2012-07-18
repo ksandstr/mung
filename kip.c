@@ -88,15 +88,27 @@ static void make_systemclock_stub(void *start, int *len_p)
 /* compose a 32-bit little-endian kernel interface page. */
 void make_kip(void *mem, L4_Word_t kern_start, L4_Word_t kern_end)
 {
-	/* preserve memorydescs */
+	/* preserve memorydescs from the KCP, while adding two entries at the
+	 * front: the virtual address space, and the kernel's reserved slice
+	 * therein.
+	 */
 	L4_KernelConfigurationPage_t *kcp = mem;
 	int num_mds = kcp->MemoryInfo.n;
-	L4_MemoryDesc_t mds[num_mds + 1];
-	memcpy(mds, mem + kcp->MemoryInfo.MemDescPtr,
+	L4_MemoryDesc_t mds[num_mds + 3];
+	mds[0] = (L4_MemoryDesc_t){
+		.x.v = 1, .x.type = L4_ConventionalMemoryType,
+		.x.low = 0, .x.high = ~(L4_Word_t)0 >> 10,
+	};
+	mds[1] = (L4_MemoryDesc_t){
+		.x.v = 1, .x.type = L4_ReservedMemoryType,
+		.x.low = KERNEL_SEG_START >> 10, .x.high = ~(L4_Word_t)0 >> 10,
+	};
+	memcpy(&mds[2], mem + kcp->MemoryInfo.MemDescPtr,
 		sizeof(L4_Word_t) * 2 * num_mds);
+	num_mds += 2;
 
-	/* the kernel's initial heap appears as a reserved region, before the
-	 * first dedicated region (as they take precedence).
+	/* also, add a reserved region for the kernel's initial heap. this may be
+	 * further restricted by the bootloader's dedicated regions; that's fine.
 	 */
 	int first_ded = 0;
 	while(first_ded < num_mds
