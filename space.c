@@ -13,6 +13,7 @@
 #include <ccan/compiler/compiler.h>
 
 #include <l4/types.h>
+#include <l4/kip.h>
 #include <l4/vregs.h>
 #include <ukernel/mm.h>
 #include <ukernel/x86.h>
@@ -79,6 +80,7 @@ struct space *space_new(void)
 	sp->tss_len = 0;
 	sp->tss_seg = 0;
 	sp->flags = 0;
+	sp->redirector = L4_nilthread.raw;
 
 	return sp;
 }
@@ -482,22 +484,81 @@ void sys_unmap(struct x86_exregs *regs)
 
 void sys_spacecontrol(struct x86_exregs *regs)
 {
-	L4_Word_t control = regs->ecx, result, old_ctl;
-	L4_ThreadId_t spacespec = { .raw = regs->eax };
-	L4_Fpage_t kip_area = { .raw = regs->edx },
-		utcb_area = { .raw = regs->esi },
+	L4_Word_t control = regs->ecx, result, old_ctl = 0;
+	L4_ThreadId_t spacespec = { .raw = regs->eax },
 		redirector = { .raw = regs->edi };
+	L4_Fpage_t kip_area = { .raw = regs->edx },
+		utcb_area = { .raw = regs->esi };
 
-	printf("%s: called; ctl %#lx, spacespec %lu:%lu, kip_area %#lx:%#lx\n",
-		__func__, control,
-		TID_THREADNUM(spacespec.raw), TID_VERSION(spacespec.raw),
-		L4_Address(kip_area), L4_Size(kip_area));
-	printf("%s: ... utcb_area %#lx:%#lx, redirector %lu:%lu\n", __func__,
-		L4_Address(utcb_area), L4_Size(utcb_area),
-		TID_THREADNUM(redirector.raw), TID_VERSION(redirector.raw));
-	result = 0xdeadbeef;
-	old_ctl = 0x42424242;
+	struct thread *current = get_current_thread();
+	void *utcb = thread_get_utcb(current);
+	L4_Word_t *ec_p = &L4_VREG(utcb, L4_TCR_ERRORCODE);
+	if(unlikely(!CHECK_FLAG(current->space->flags, SF_PRIVILEGE))) {
+		*ec_p = 1;		/* no privilege */
+		result = 0;
+		goto end;
+	}
 
+	if(unlikely(control != 0)) {
+		*ec_p = 0;		/* enforce zero control error */
+		result = 0;
+		goto end;
+	}
+
+	struct thread *space_thread = thread_find(spacespec.raw);
+	if(unlikely(space_thread == NULL)) {
+		*ec_p = 3;		/* invalid space */
+		result = 0;
+		goto end;
+	}
+
+	struct space *sp;
+	assert(space_thread->space != NULL);
+	sp = space_thread->space;
+
+	/* is there at least one active thread in this space? */
+	bool t_active = false;
+	struct thread *t;
+	list_for_each(&sp->threads, t, space_link) {
+		/* active being defined as "has UTCB slot" */
+		if(t->utcb_pos >= 0) {
+			t_active = true;
+			break;
+		}
+	}
+	if(!t_active) {
+		/* consider the pie. */
+		const L4_KernelInterfacePage_t *kip = kip_mem;
+		if(L4_SizeLog2(kip_area) < kip->KipAreaInfo.X.s) {
+			*ec_p = 7;	/* invalid KIP area */
+			result = 0;
+			goto end;
+		}
+		if(L4_SizeLog2(utcb_area) < kip->UtcbAreaInfo.X.s) {
+			*ec_p = 6;	/* invalid UTCB area */
+			result = 0;
+			goto end;
+		}
+
+		/* FIXME: check overlap between kip_area & utcb_area
+		 * FIXME: check that kip_area fits in the user address space
+		 * FIXME: same for utcb_area
+		 */
+		sp->kip_area = kip_area;
+		sp->utcb_area = utcb_area;
+	}
+
+	if(redirector.raw == L4_anythread.raw) {
+		sp->redirector = L4_anythread.raw;
+	} else if(!L4_IsNilThread(redirector)) {
+		struct thread *red = thread_find(redirector.raw);
+		if(red != NULL) sp->redirector = red->id;
+	}
+
+	result = 1;
+	old_ctl = 0;
+
+end:
 	regs->eax = result;
 	regs->ecx = old_ctl;
 }
