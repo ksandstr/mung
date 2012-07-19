@@ -31,6 +31,9 @@
 	(BETWEEN((l0), (h0), (l1)) || BETWEEN((l0), (h0), (h1)) \
 		|| BETWEEN((l1), (h1), (l0)) || BETWEEN((l1), (h1), (h0)))
 
+#define FPAGE_LOW(fp) (L4_Address((fp)))
+#define FPAGE_HIGH(fp) (FPAGE_LOW((fp)) + L4_Size((fp)) - 1)
+
 #define MSB(x) (sizeof((x)) * 8 - __builtin_clzl((x)) - 1)
 #define POPCOUNT(x) (__builtin_popcount((x)))
 

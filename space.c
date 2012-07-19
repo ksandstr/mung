@@ -529,19 +529,21 @@ void sys_spacecontrol(struct x86_exregs *regs)
 	if(!t_active) {
 		/* consider the pie. */
 		const L4_KernelInterfacePage_t *kip = kip_mem;
-		if(L4_SizeLog2(kip_area) < kip->KipAreaInfo.X.s) {
-			*ec_p = 7;	/* invalid KIP area */
-			result = 0;
-			goto end;
-		}
 		if(L4_SizeLog2(utcb_area) < kip->UtcbAreaInfo.X.s) {
 			*ec_p = 6;	/* invalid UTCB area */
 			result = 0;
 			goto end;
 		}
+		if(L4_SizeLog2(kip_area) < kip->KipAreaInfo.X.s
+			|| RANGE_OVERLAP(FPAGE_LOW(kip_area), FPAGE_HIGH(kip_area),
+				FPAGE_LOW(utcb_area), FPAGE_HIGH(utcb_area)))
+		{
+			*ec_p = 7;	/* invalid KIP area */
+			result = 0;
+			goto end;
+		}
 
-		/* FIXME: check overlap between kip_area & utcb_area
-		 * FIXME: check that kip_area fits in the user address space
+		/* FIXME: check that kip_area fits in the user address space
 		 * FIXME: same for utcb_area
 		 */
 		sp->kip_area = kip_area;
