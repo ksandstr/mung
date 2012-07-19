@@ -85,12 +85,8 @@ static inline L4_ThreadId_t L4_MyLocalId(void) {
 	return tid;
 }
 
-/* TODO: L4_ProcessorNo(), L4_UserDefinedHandle(),
- * L4_Set_UserDefinedHandle(), L4_ErrorCode_String(),
+/* TODO: L4_ProcessorNo(), L4_ErrorCode_String(),
  * L4_XferTimeouts(), L4_Set_XferTimeouts(),
- * L4_IntendedReceiver(), L4_ActualSender(),
- * L4_Set_VirtualSender(),
- *
  * (???) L4_WordSizeMask(), L4_Reset_WordSizeMask()
  */
 
@@ -115,6 +111,22 @@ static inline L4_ThreadId_t L4_Pager(void) {
 static inline void L4_Set_Pager(L4_ThreadId_t pg) {
 	void *utcb = __L4_Get_UtcbAddress();
 	L4_VREG(utcb, L4_TCR_PAGER) = pg.raw;
+}
+
+
+static inline void L4_Set_VirtualSender(L4_ThreadId_t id) {
+	void *utcb = __L4_Get_UtcbAddress();
+	L4_VREG(utcb, L4_TCR_VA_SENDER) = id.raw;
+}
+
+static inline L4_ThreadId_t L4_ActualSender(void) {
+	void *utcb = __L4_Get_UtcbAddress();
+	return (L4_ThreadId_t){ .raw = L4_VREG(utcb, L4_TCR_VA_SENDER) };
+}
+
+static inline L4_ThreadId_t L4_IntendedReceiver(void) {
+	void *utcb = __L4_Get_UtcbAddress();
+	return (L4_ThreadId_t){ .raw = L4_VREG(utcb, L4_TCR_INTENDEDRECEIVER) };
 }
 
 
