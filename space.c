@@ -175,13 +175,15 @@ struct space *space_find(thread_id tid)
 }
 
 
-/* the UTCB setting part of SpaceControl. */
+/* the UTCB setting part of SpaceControl. no checks, no brakes. */
 int space_set_utcb_area(struct space *sp, L4_Fpage_t area)
 {
-	assert(list_empty(&sp->threads));
-
-	/* TODO: check overlap with KIP */
-	if(L4_Size(area) < UTCB_SIZE) return 6;
+	if(FPAGE_LOW(area) >= KERNEL_SEG_START
+		|| FPAGE_HIGH(area) >= KERNEL_SEG_START)
+	{
+		/* UTCB outside address space. */
+		return 6;
+	}
 
 	if(sp->utcb_pages != NULL) {
 		for(int i=0; i < NUM_UTCB_PAGES(sp->utcb_area); i++) {
@@ -199,11 +201,16 @@ int space_set_utcb_area(struct space *sp, L4_Fpage_t area)
 
 int space_set_kip_area(struct space *sp, L4_Fpage_t area)
 {
-	/* FIXME: change these to error returns */
-	assert(L4_IsNilFpage(sp->kip_area));
-	assert(L4_Address(area) < KERNEL_SEG_START);
-	assert(L4_Address(area) + L4_Size(area) < KERNEL_SEG_START);
-	assert(L4_Size(area) >= PAGE_SIZE);
+	if(FPAGE_LOW(area) >= KERNEL_SEG_START
+		|| FPAGE_HIGH(area) >= KERNEL_SEG_START)
+	{
+		/* KIP outside address space. */
+		return 7;
+	}
+
+	if(!L4_IsNilFpage(sp->kip_area)) {
+		/* FIXME: remove old KIP mapping */
+	}
 
 	sp->kip_area = area;
 	space_put_page(sp, L4_Address(sp->kip_area),
@@ -543,11 +550,16 @@ void sys_spacecontrol(struct x86_exregs *regs)
 			goto end;
 		}
 
-		/* FIXME: check that kip_area fits in the user address space
-		 * FIXME: same for utcb_area
-		 */
-		sp->kip_area = kip_area;
-		sp->utcb_area = utcb_area;
+		int rc = space_set_kip_area(sp, kip_area);
+		if(rc == 0) rc = space_set_utcb_area(sp, utcb_area);
+		if(rc != 0) {
+			*ec_p = rc;
+			result = 0;
+			goto end;
+		}
+
+		assert(sp->kip_area.raw == kip_area.raw);
+		assert(sp->utcb_area.raw == utcb_area.raw);
 	}
 
 	if(redirector.raw == L4_anythread.raw) {
