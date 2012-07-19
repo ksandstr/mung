@@ -802,7 +802,7 @@ void sys_threadcontrol(struct x86_exregs *regs)
 	}
 
 	if(!L4_IsNilThread(scheduler)) dest->scheduler = scheduler;
-	if(!L4_IsNilThread(pager)) {
+	if(!L4_IsNilThread(pager) && dest->utcb_pos >= 0) {
 		void *dest_utcb = thread_get_utcb(dest);
 		L4_VREG(dest_utcb, L4_TCR_PAGER) = pager.raw;
 		if(dest->status == TS_STOPPED && !L4_IsNilThread(pager)) {
