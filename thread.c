@@ -784,8 +784,12 @@ void sys_threadcontrol(struct x86_exregs *regs)
 
 	assert(dest != NULL);
 	struct space *sp = dest->space;
+	void *dest_utcb = NULL;
+	if(!L4_IsNilThread(scheduler)) dest->scheduler = scheduler;
 
 	if(utcb_loc != ~0ul) {
+		bool created = dest->utcb_pos < 0;
+
 		/* set utcb_pos. */
 		if(utcb_loc < L4_Address(sp->utcb_area)
 			|| utcb_loc + UTCB_SIZE > L4_Address(sp->utcb_area) + L4_Size(sp->utcb_area)
@@ -799,13 +803,29 @@ void sys_threadcontrol(struct x86_exregs *regs)
 			ec = 8;		/* "out of memory" */
 			goto end;
 		}
+
+		if(created) {
+			dest_utcb = thread_get_utcb(dest);
+			L4_VREG(dest_utcb, L4_TCR_PAGER) = dest->saved_regs[0];
+		}
 	}
 
-	if(!L4_IsNilThread(scheduler)) dest->scheduler = scheduler;
-	if(!L4_IsNilThread(pager) && dest->utcb_pos >= 0) {
-		void *dest_utcb = thread_get_utcb(dest);
-		L4_VREG(dest_utcb, L4_TCR_PAGER) = pager.raw;
-		if(dest->status == TS_STOPPED && !L4_IsNilThread(pager)) {
+	if(!L4_IsNilThread(pager)) {
+		if(dest->utcb_pos >= 0) {
+			dest_utcb = thread_get_utcb(dest);
+			L4_VREG(dest_utcb, L4_TCR_PAGER) = pager.raw;
+		} else {
+			dest->saved_regs[0] = pager.raw;
+		}
+	}
+
+	/* activation condition. */
+	if(dest->utcb_pos >= 0 && dest->space != NULL) {
+		if(dest_utcb == NULL) dest_utcb = thread_get_utcb(dest);
+		assert(L4_IsNilThread(pager)
+			|| pager.raw == L4_VREG(dest_utcb, L4_TCR_PAGER));
+		pager.raw = L4_VREG(dest_utcb, L4_TCR_PAGER);
+		if(!L4_IsNilThread(pager) && dest->status == TS_STOPPED) {
 			dest->ipc_from = pager;
 			dest->ipc_to = L4_nilthread;
 			dest->recv_timeout = L4_Never;

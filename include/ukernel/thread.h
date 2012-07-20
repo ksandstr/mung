@@ -101,6 +101,9 @@ struct thread
 
 	/* saved IPC registers. at most 14 (acceptor, tag, 12 MRs for exception
 	 * message) for x86.
+	 *
+	 * NOTE: before a thread is activated, saved_regs[0] is used for the pager
+	 * value set by ThreadControl before a thread's pager TCR is available.
 	 */
 	uint8_t saved_mrs, saved_brs;
 	L4_Word_t saved_regs[14];
