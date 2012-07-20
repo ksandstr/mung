@@ -1,24 +1,49 @@
-
-/* TODO: extend this roottask to support enough of the Check unit testing
- * framework to be useful in running proper unit tests. output via serial port
- * and so forth.
- */
-
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <assert.h>
+#include <ccan/compiler/compiler.h>
+#include <ccan/htable/htable.h>
 
 #include <l4/types.h>
 #include <l4/thread.h>
 #include <l4/ipc.h>
+#include <l4/kip.h>
 #include <l4/syscall.h>
+#include <l4/bootinfo.h>
 
 #include <ukernel/util.h>
 
 #include "defs.h"
 #include "test.h"
+#include "elf.h"
 
+
+/* FIXME: derive these from the kernel interface page at runtime */
+#define PAGE_SIZE 4096
+#define PAGE_MASK 0xfff
+
+
+/* pages tracked by the forkserv pager. mappings are granted to forkserv as
+ * faults occur. presence of a forkserv_page means that a page was already
+ * received from sigma0.
+ */
+struct forkserv_page {
+	L4_Word_t address;
+};
+
+
+static size_t hash_forkserv_page(const void *key, void *priv);
+
+
+static L4_ThreadId_t forkserv_pager, forkserv_tid;
+static L4_Fpage_t forkserv_utcb_area;
+static struct htable forkserv_pages = HTABLE_INITIALIZER(forkserv_pages,
+	&hash_forkserv_page, NULL);
+static L4_Word_t forkserv_start, forkserv_end;
+
+
+/* runtime bits (TODO: move into a library?) */
 
 void abort(void)
 {
@@ -52,7 +77,227 @@ void __assert_failure(
 	printf("testbench %s(`%s', `%s', %u, `%s')\n", __func__,
 		condition, file, line, function);
 	abort();
-	for(;;) { }
+	for(;;) { asm volatile("int $1"); }
+}
+
+
+static size_t hash_forkserv_page(const void *key, void *priv) {
+	return int_hash(((struct forkserv_page *)key)->address);
+}
+
+
+static bool forkserv_page_cmp(const void *cand, void *key) {
+	return ((struct forkserv_page *)cand)->address == *(L4_Word_t *)key;
+}
+
+
+static void add_forkserv_pages(L4_Word_t start, L4_Word_t end)
+{
+	for(L4_Word_t addr = start & ~PAGE_MASK;
+		addr <= (end | PAGE_MASK);
+		addr += PAGE_SIZE)
+	{
+		size_t hash = int_hash(addr);
+		void *ptr = htable_get(&forkserv_pages, hash,
+			&forkserv_page_cmp, &addr);
+		if(ptr == NULL) {
+			struct forkserv_page *p = malloc(sizeof(*p));
+			p->address = addr;
+			if(!htable_add(&forkserv_pages, hash, p)) {
+				fprintf(stderr, "htable_add() failed\n");
+				abort();
+			}
+		}
+	}
+}
+
+
+static void forkserv_pager_fn(void *param UNUSED)
+{
+	for(;;) {
+		L4_ThreadId_t from;
+		L4_MsgTag_t tag = L4_Wait(&from);
+
+		for(;;) {
+			if(L4_IpcFailed(tag)) {
+				// diag("reply/wait failed, ec %#lx", L4_ErrorCode());
+				break;
+			}
+
+			if(tag.X.label >> 4 == 0xffe
+				&& tag.X.u == 2 && tag.X.t == 0)
+			{
+				L4_Word_t faddr, fip;
+				L4_StoreMR(1, &faddr);
+				L4_StoreMR(2, &fip);
+				// diag("%s: pf ip %#lx, addr %#lx\n", __func__, fip, faddr);
+				int rwx = tag.X.label & 0x000f;
+
+				/* look it up. */
+				L4_Word_t page_addr = faddr & ~PAGE_MASK;
+				struct forkserv_page *fp = htable_get(&forkserv_pages,
+					int_hash(page_addr), &forkserv_page_cmp, &page_addr);
+				if(fp != NULL) {
+					/* grant it on */
+					L4_Fpage_t grant = L4_Fpage(fp->address, PAGE_SIZE);
+					L4_Set_Rights(&grant, L4_FullyAccessible);
+					L4_GrantItem_t gi = L4_GrantItem(grant, page_addr);
+					L4_LoadMR(0, (L4_MsgTag_t){ .X.t = 2 }.raw);
+					L4_LoadMR(1, gi.raw[0]);
+					L4_LoadMR(2, gi.raw[1]);
+				} else {
+					/* pass the fault up to our pager (sigma0). */
+					L4_LoadMR(0, (L4_MsgTag_t){ .X.label = 0xffe0 | rwx,
+						.X.u = 2 }.raw);
+					L4_LoadMR(1, faddr);
+					L4_LoadMR(2, fip);
+					L4_LoadBR(0, L4_CompleteAddressSpace.raw);
+					tag = L4_Call(L4_Pager());
+					if(L4_IpcFailed(tag)) {
+						//diag("stats-to-pager IPC failed, ec %lu",
+						//	L4_ErrorCode());
+						break;
+					} else if(tag.X.t != 2 || tag.X.u != 0) {
+						//diag("stats-to-pager IPC returned weird tag %#lx",
+						//	tag.raw);
+						break;
+					}
+				}
+			} else if(tag.X.label == 0x5370) {
+				/* sigma0's con_putstr() protocol.
+				 *
+				 * NOTE: near-copypasta'd from kmain.c!
+				 */
+				char buf[257];
+				for(int i=0; i < tag.X.u; i++) {
+					L4_Word_t val;
+					L4_StoreMR(i + 1, &val);
+					memcpy(&buf[i * 4], &val, sizeof(L4_Word_t));
+				}
+				buf[tag.X.u * 4] = '\0';
+				int len = strlen(buf);
+				while(len > 0 && buf[len - 1] == '\n') buf[--len] = '\0';
+				printf("[forkserv]: %s\n", buf);
+
+				L4_LoadMR(0, 0);
+			} else {
+				printf("forkserv's pager got weird IPC from %#lx (label %#lx)\n",
+					from.raw, (L4_Word_t)tag.X.label);
+				break;
+			}
+
+			/* reply. */
+			tag = L4_ReplyWait(from, &from);
+		}
+	}
+}
+
+
+static void start_forkserv(void)
+{
+	L4_KernelInterfacePage_t *kip = L4_GetKernelInterface();
+	L4_BootInfo_t *bootinfo = (L4_BootInfo_t *)L4_BootInfo(kip);
+
+	L4_BootRec_t *rec = L4_BootInfo_FirstEntry(bootinfo);
+	bool found = false;
+	for(L4_Word_t i = 0;
+		i < L4_BootInfo_Entries(bootinfo);
+		i++, rec = L4_BootRec_Next(rec))
+	{
+		if(rec->type != L4_BootInfo_Module) {
+			printf("rec at %p is not module\n", rec);
+			continue;
+		}
+
+		char *cmdline = L4_Module_Cmdline(rec);
+		const char *slash = strrchr(cmdline, '/');
+		if(slash != NULL && strcmp(slash + 1, "forkserv") == 0) {
+			found = true;
+			break;
+		}
+	}
+	if(!found) {
+		printf("can't find forkserv module; was it loaded?\n");
+		abort();
+	}
+
+	forkserv_start = L4_Module_Start(rec);
+	forkserv_end = forkserv_start + L4_Module_Size(rec) - 1;
+	forkserv_pager = start_thread(&forkserv_pager_fn, NULL);
+	if(L4_IsNilThread(forkserv_pager)) {
+		printf("forkserv_pager_fn launch failed\n");
+		abort();
+	}
+
+	/* parse and load the ELF32 binary. */
+	const Elf32_Ehdr *ee = (void *)forkserv_start;
+	if(memcmp(ee->e_ident, ELFMAG, SELFMAG) != 0) {
+		printf("incorrect forkserv ELF magic\n");
+		abort();
+	}
+	uintptr_t phoff = ee->e_phoff;
+	for(int i=0; i < ee->e_phnum; i++, phoff += ee->e_phentsize) {
+		const Elf32_Phdr *ep = (void *)(forkserv_start + phoff);
+		if(ep->p_type != PT_LOAD) continue;	/* skip the GNU stack thing */
+#if 0
+		printf("program header at %p: type %u, offset %u, vaddr %#x, paddr %#x, filesz %#x, memsz %#x\n",
+			ep, ep->p_type, ep->p_offset, ep->p_vaddr, ep->p_paddr, ep->p_filesz,
+			ep->p_memsz);
+#endif
+
+		/* map that shit! */
+		memcpy((void *)ep->p_vaddr, (void *)(forkserv_start + ep->p_offset),
+			ep->p_filesz);
+		if(ep->p_filesz < ep->p_memsz) {
+			memset((void *)ep->p_vaddr + ep->p_filesz, 0,
+				ep->p_memsz - ep->p_filesz);
+		}
+		add_forkserv_pages(ep->p_vaddr, ep->p_vaddr + ep->p_memsz - 1);
+	}
+
+	/* set up the address space & start the main thread. */
+	forkserv_tid = L4_GlobalId(1366, 768);	/* yeah. so what? */
+	L4_Word_t res = L4_ThreadControl(forkserv_tid, forkserv_tid,
+		forkserv_pager, forkserv_pager, (void *)-1);
+	if(res != 1) {
+		fprintf(stderr, "%s: ThreadControl failed, ec %lu\n",
+			__func__, L4_ErrorCode());
+		abort();
+	}
+	forkserv_utcb_area = L4_FpageLog2(0x100000, 14);
+	L4_Word_t old_ctl;
+	res = L4_SpaceControl(forkserv_tid, 0, L4_FpageLog2(0xff000, 12),
+		forkserv_utcb_area, L4_anythread, &old_ctl);
+	if(res != 1) {
+		fprintf(stderr, "%s: SpaceControl failed, ec %lu\n",
+			__func__, L4_ErrorCode());
+		abort();
+	}
+	res = L4_ThreadControl(forkserv_tid, forkserv_tid, forkserv_pager,
+		forkserv_pager, (void *)L4_Address(forkserv_utcb_area));
+	if(res != 1) {
+		fprintf(stderr, "%s: ThreadControl failed, ec %lu\n",
+			__func__, L4_ErrorCode());
+		abort();
+	}
+
+	/* propagated breath of life. */
+	L4_Set_VirtualSender(forkserv_pager);
+	L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 2, .X.flags = 1 }.raw);
+	L4_LoadMR(1, ee->e_entry);
+	L4_LoadMR(2, 0xdeadbeef);
+	L4_MsgTag_t tag = L4_Send_Timeout(forkserv_tid,
+		L4_TimePeriod(50 * 1000));
+	if(L4_IpcFailed(tag)) {
+		fprintf(stderr, "%s: breath-of-life to forkserv failed: ec %lu\n",
+			__func__, L4_ErrorCode());
+		abort();
+	}
+
+#if 0
+	L4_Sleep(L4_TimePeriod(5 * 1000 * 1000));
+	abort();
+#endif
 }
 
 
@@ -60,6 +305,8 @@ int main(void)
 {
 	printf("hello, world!\n");
 	calibrate_delay_loop();
+
+	start_forkserv();
 
 	/* proper test suite */
 	static Suite *(* const suites[])(void) = {

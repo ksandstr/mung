@@ -23,7 +23,7 @@ sub start_test {
 
 sub is_kmsg {
 	shift;
-	return /^\[sigma0\]/ || /^sbrk:/;
+	return /^\[(sigma0|forkserv)\]: / || /^sbrk:/;
 }
 
 
