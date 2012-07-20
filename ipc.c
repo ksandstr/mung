@@ -33,6 +33,7 @@
 struct ipc_wait
 {
 	L4_ThreadId_t dest_tid;		/* copied for rehash */
+	L4_ThreadId_t send_tid;		/* vs when propagated */
 	struct thread *thread;
 };
 
@@ -282,6 +283,10 @@ void set_ipc_error_thread(struct thread *t, L4_Word_t ec)
 /* returns true when the send phase has completed succesfully. false
  * otherwise; if the send phase doesn't immediately succeed, status changes to
  * TS_SEND_WAIT if the thread should sleep, and sets ErrorCode on error.
+ *
+ * TODO: this function is rather sub-optimal wrt thread_get_utcb(). the
+ * pointers should really be grabbed once and passed as parameters to
+ * do_ipc_transfer() etc.
  */
 bool ipc_send_half(struct thread *self)
 {
@@ -297,10 +302,35 @@ bool ipc_send_half(struct thread *self)
 		return false;
 	}
 
+	/* TODO: quicker tag access? maybe keep it next to ipc_to? */
+	void *self_utcb = thread_get_utcb(self);
+	L4_MsgTag_t tag = { .raw = L4_VREG(self_utcb, L4_TCR_MR(0)) };
+	L4_ThreadId_t self_id = { .raw = self->id };
+	bool propagated = false;
+	if(CHECK_FLAG(tag.X.flags, 0x1)) {
+		/* propagation (sender fakery). */
+		L4_ThreadId_t vs_tid = {
+			.raw = L4_VREG(self_utcb, L4_TCR_VA_SENDER),
+		};
+		struct thread *vs;
+		if(L4_IsLocalId(vs_tid)) {
+			vs = space_find_local_thread(self->space, vs_tid.local);
+		} else {
+			vs = thread_find(vs_tid.raw);
+		}
+		/* FIXME: also check interrupt propagation, redirector chain */
+		if(vs != NULL && (self->space == vs->space
+			|| self->space == dest->space))
+		{
+			self_id.raw = vs->id;
+			propagated = true;
+		}
+	}
+
 	/* override TS_R_RECV? */
 	int status = dest->status;
 	uint64_t now_us = read_global_timer() * 1000;
-	if(status == TS_R_RECV && dest->ipc_from.raw == self->id) {
+	if(status == TS_R_RECV && dest->ipc_from.raw == self_id.raw) {
 		if(now_us >= dest->wakeup_time) {
 			/* nah, time the peer out instead */
 			set_ipc_error_thread(dest, (1 << 1) | 1);
@@ -313,13 +343,14 @@ bool ipc_send_half(struct thread *self)
 
 	if(status == TS_RECV_WAIT
 		&& (dest->ipc_from.raw == L4_anythread.raw
-			|| dest->ipc_from.raw == self->id)
+			|| dest->ipc_from.raw == self_id.raw)
 		&& (dest->wakeup_time == ~(uint64_t)0u
 			|| dest->wakeup_time > now_us))
 	{
 		/* active send */
-		TRACE("%s: active send to %lu:%lu (from %lu:%lu)\n", __func__,
+		TRACE("%s: active send to %lu:%lu (from %lu:%lu, actual %lu:%lu)\n", __func__,
 			TID_THREADNUM(dest->id), TID_VERSION(dest->id),
+			TID_THREADNUM(self_id.raw), TID_VERSION(self_id.raw),
 			TID_THREADNUM(self->id), TID_VERSION(self->id));
 
 		L4_Word_t error = do_ipc_transfer(self, dest);
@@ -328,7 +359,7 @@ bool ipc_send_half(struct thread *self)
 			int code = (error & 0xe) >> 1;
 			if(code >= 4) {
 				/* mutual error; signal to partner also. */
-				dest->ipc_from.raw = self->id;
+				dest->ipc_from = L4_nilthread;
 				if(likely(!post_exn_fail(dest))) {
 					set_ipc_error(thread_get_utcb(dest), error | 1);
 					set_ipc_return_thread(dest);
@@ -341,10 +372,16 @@ bool ipc_send_half(struct thread *self)
 		}
 
 		/* receiver's IPC return */
-		dest->ipc_from.raw = self->id;
+		dest->ipc_from = self_id;
 		if(likely(!post_exn_ok(dest))) {
 			/* ordinary IPC; set up the IPC return registers. */
 			set_ipc_return_thread(dest);
+			if(propagated) {
+				void *dest_utcb = thread_get_utcb(dest);
+				assert(CHECK_FLAG(L4_VREG(dest_utcb, L4_TCR_MR(0)),
+					0x1000));
+				L4_VREG(dest_utcb, L4_TCR_VA_SENDER) = self->id;
+			}
 		}
 		thread_wake(dest);
 
@@ -360,11 +397,14 @@ bool ipc_send_half(struct thread *self)
 		}
 	} else if(self->send_timeout.raw != L4_ZeroTime.raw) {
 		/* passive send */
-		TRACE("%s: passive send to %lu:%lu (from %lu:%lu)\n", __func__,
+		TRACE("%s: passive send to %lu:%lu (from %lu:%lu, actual %lu:%lu)\n",
+			__func__,
 			TID_THREADNUM(dest->id), TID_VERSION(dest->id),
+			TID_THREADNUM(self_id.raw), TID_VERSION(self_id.raw),
 			TID_THREADNUM(self->id), TID_VERSION(self->id));
 		struct ipc_wait *w = kmem_cache_alloc(ipc_wait_slab);
 		w->dest_tid = self->ipc_to;
+		w->send_tid = self_id;
 		w->thread = self;
 
 		htable_add(&sendwait_hash, int_hash(w->dest_tid.raw), w);
@@ -415,6 +455,7 @@ bool ipc_recv_half(struct thread *self, bool *preempt_p)
 
 	/* find sender. */
 	struct thread *from = NULL;
+	L4_ThreadId_t from_tid = L4_nilthread;
 	size_t hash = int_hash(self->id);
 	if(self->ipc_from.raw != L4_anylocalthread.raw) {
 		struct htable_iter it;
@@ -424,9 +465,10 @@ bool ipc_recv_half(struct thread *self, bool *preempt_p)
 		{
 			if(w->dest_tid.raw == self->id
 				&& (self->ipc_from.raw == L4_anythread.raw
-					|| self->ipc_from.raw == w->thread->id))
+					|| self->ipc_from.raw == w->send_tid.raw))
 			{
 				from = w->thread;
+				from_tid = w->send_tid;
 				htable_delval(&sendwait_hash, &it);
 				kmem_cache_free(ipc_wait_slab, w);
 				break;
@@ -450,7 +492,9 @@ bool ipc_recv_half(struct thread *self, bool *preempt_p)
 		return false;
 	} else {
 		/* active receive */
-		TRACE("%s: active receive from %lu:%lu (to %lu:%lu)\n", __func__,
+		TRACE("%s: active receive from %lu:%lu actual %lu:%lu (to %lu:%lu)\n",
+			__func__,
+			TID_THREADNUM(from_tid.raw), TID_VERSION(from_tid.raw),
 			TID_THREADNUM(from->id), TID_VERSION(from->id),
 			TID_THREADNUM(self->id), TID_VERSION(self->id));
 		assert(from->status == TS_SEND_WAIT);
@@ -476,7 +520,15 @@ bool ipc_recv_half(struct thread *self, bool *preempt_p)
 		}
 
 		thread_wake(self);
-		self->ipc_from.raw = from->id;
+		self->ipc_from.raw = from_tid.raw;
+		if(from_tid.raw != from->id) {
+			/* propagation parameter delivery */
+			/* TODO: get the utcb ptr somewhere else... */
+			void *self_utcb = thread_get_utcb(self);
+			assert(CHECK_FLAG(L4_VREG(self_utcb, L4_TCR_MR(0)), 0x1000));
+			L4_VREG(self_utcb, L4_TCR_VA_SENDER) = from->id;
+		}
+
 		if(unlikely(IS_KERNEL_THREAD(from))) {
 			/* kernel threads do the send/receive phases as control flow. */
 			thread_wake(from);
