@@ -157,14 +157,8 @@ static struct map_group *group_for_addr(struct map_db *db, uintptr_t addr)
 }
 
 
-/* TODO: unit test the living crap out of this function, please. right now
- * there's the rudimentary "iters" limit to break it up after 20 iterations
- * (2^20 being 1024^2, one power more than the maximum number of elements in a
- * map_group)
- */
-static struct map_entry *find_entry_in_group(
-	struct map_group *g,
-	uintptr_t addr)
+/* TODO: needs thorough testing. */
+static struct map_entry *probe_group_addr(struct map_group *g, uintptr_t addr)
 {
 	if(g->num_entries == 0) return NULL;
 
@@ -221,76 +215,21 @@ static struct map_entry *find_entry_in_group(
 }
 
 
-/* TODO: move this into an utility header */
-static uint32_t mask32_range(int first, int count)
+static struct map_entry *probe_group_range(struct map_group *g, L4_Fpage_t fpage)
 {
-	uint32_t mask = (~0u << first);
-	if(first + count < 32) mask &= ~(~0u << (first + count));
-#ifndef NDEBUG
-	for(int i=0; i < 32; i++) {
-		bool set = (mask & (1 << i)) != 0;
-		assert(set || i < first || i >= first + count);
-		assert(!set || (i >= first && i < first + count));
-	}
-#endif
-	return mask;
-}
-
-
-static void add_to_group_occ(struct map_group *g, L4_Fpage_t fpage)
-{
-	/* +2 for aliasing four 4 KiB pages per bit */
-	const int first = (L4_Address(fpage) - g->start) >> (PAGE_BITS + 2),
-		count = L4_Size(fpage) >> (PAGE_BITS + 2);
-	int done = 0;
-	while(done < count) {
-		int pos = first + done, limb = pos >> 5, offset = pos & 0x1f,
-			seg = MIN(int, 32 - offset, count - done);
-		g->occ[limb] |= mask32_range(offset, seg);
-		done += seg;
-		assert(done == count || ((done + first) & 0x1f) == 0);
-	}
-
-#ifndef NDEBUG
-	for(int i = first; i < first + count; i++) {
-		int limb = i >> 5, offset = i & 0x1f;
-		assert((g->occ[limb] & (1 << offset)) != 0);
-	}
-#endif
-}
-
-
-static struct map_entry *probe_group_bitmap(
-	struct map_group *g,
-	L4_Fpage_t fpage)
-{
-	assert(!L4_IsNilFpage(fpage));
-	int num_pages = MAX(int, 1, L4_Size(fpage) >> PAGE_BITS);
-	if(num_pages <= 4) {
-		/* optimized unit case (with aliasing) */
-		int pos = (L4_Address(fpage) - g->start) >> (PAGE_BITS + 2),
-			limb = pos >> 5, offset = pos & 0x1f;
-#if 0
-		TRACE("probing pos %d (limb %d, offset %d) in %#lx; occ[%d] = %#lx\n",
-			pos, limb, offset, g->start, limb, g->occ[limb]);
-#endif
-		if((g->occ[limb] & (1 << offset)) != 0) {
-			/* do a final 4-page scan at the aliased range. */
-			for(int p=0; p < 4; p++) {
-				struct map_entry *e = find_entry_in_group(g,
-					L4_Address(fpage) + p * PAGE_SIZE);
-				if(e != NULL) return e;
-			}
-		}
-	} else {
-		/* other cases in terms of the previous.
-		 * TODO: use proper mask tests, bit-magic
-		 */
-		for(int p=0; p < num_pages; p += 4) {
-			struct map_entry *e = probe_group_bitmap(g,
-				L4_FpageLog2(L4_Address(fpage) + p * PAGE_SIZE, 14));
-			if(e != NULL) return e;
-		}
+	/* when in doubt, use brute force.
+	 *
+	 * this time it's because 1) the group occupancy bitmap wasn't known to be
+	 * a good idea, and 2) it was also broken. this isn't the properly
+	 * efficient version; instead, a range-to-range binary search operation
+	 * should be written.
+	 */
+	for(L4_Word_t addr = L4_Address(fpage), lim = addr + L4_Size(fpage);
+		addr < lim;
+		addr += PAGE_SIZE)
+	{
+		struct map_entry *e = probe_group_addr(g, addr);
+		if(e != NULL) return e;
 	}
 
 	return NULL;
@@ -427,9 +366,8 @@ int mapdb_add_map(
 			kmem_cache_free(map_group_slab, g);
 			return -ENOMEM;
 		}
-		add_to_group_occ(g, fpage);
 	} else {
-		struct map_entry *old = probe_group_bitmap(g, fpage);
+		struct map_entry *old = probe_group_range(g, fpage);
 		if(old == NULL) {
 			/* TODO: use a clever binary hoppity-skip algorithm here,
 			 * recycling it for the split-placement bit in the next case.
@@ -478,7 +416,6 @@ int mapdb_add_map(
 				};
 				g->num_entries++;
 			}
-			add_to_group_occ(g, fpage);
 		} else {
 			struct map_entry split_tmp[MAX_SPLIT];
 			int split_count = entry_split_and_insert(split_tmp, old,
@@ -526,7 +463,7 @@ int mapdb_map_pages(
 		last_addr = L4_Address(map_page) + L4_Size(map_page) - 1;
 	do {
 		grp = group_for_addr(from_db, first_addr);
-		if(grp != NULL) first = find_entry_in_group(grp, first_addr);
+		if(grp != NULL) first = probe_group_addr(grp, first_addr);
 	} while(first == NULL && (first_addr += PAGE_SIZE) <= last_addr);
 
 	if(first == NULL) {
@@ -748,7 +685,7 @@ static struct map_entry *discontiguate(struct map_group *g, L4_Fpage_t range)
 	/* test the first and last entries in the group that fall within
 	 * `range`.
 	 */
-	struct map_entry *e = probe_group_bitmap(g, range);
+	struct map_entry *e = probe_group_range(g, range);
 	if(e == NULL) return NULL;
 //	TRACE("%s: e %#lx:%#lx\n", __func__, L4_Address(e->range),
 //		L4_Size(e->range));
@@ -766,7 +703,7 @@ static struct map_entry *discontiguate(struct map_group *g, L4_Fpage_t range)
 	/* then the last entry. */
 	if(L4_Size(range) > PAGE_SIZE) {
 		L4_Word_t r_end = r_start + L4_Size(range);
-		struct map_entry *last = probe_group_bitmap(g, L4_FpageLog2(
+		struct map_entry *last = probe_group_range(g, L4_FpageLog2(
 			L4_Address(range) + L4_Size(range) - PAGE_SIZE, PAGE_BITS));
 //		TRACE("%s: last %#lx:%#lx\n", __func__,
 //			L4_Address(last->range), L4_Size(last->range));
@@ -786,7 +723,7 @@ static struct map_entry *discontiguate(struct map_group *g, L4_Fpage_t range)
 //		TRACE("%s: dumping the modified group\n", __func__);
 //		dump_map_group(g);
 
-		e = probe_group_bitmap(g, range);
+		e = probe_group_range(g, range);
 		assert(e != NULL);		/* guaranteed by previous "e" */
 	}
 
@@ -835,7 +772,7 @@ int mapdb_unmap_fpage(struct map_db *db, L4_Fpage_t range, bool recursive)
 			 * allocation.)
 			 */
 		} else {
-			e = probe_group_bitmap(g, range);
+			e = probe_group_range(g, range);
 		}
 		if(e == NULL) continue;
 
@@ -928,7 +865,7 @@ struct map_entry *mapdb_probe(
 
 	assert(addr >= g->start);
 	assert(addr < g->start + GROUP_SIZE);
-	return find_entry_in_group(g, addr);
+	return probe_group_addr(g, addr);
 }
 
 

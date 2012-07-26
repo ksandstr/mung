@@ -69,7 +69,6 @@ struct map_group
 	L4_Word_t start;			/* virtual address */
 	uint16_t num_entries;
 	uint16_t num_alloc;			/* always a power of two, or 0; never 1 */
-	uint32_t occ[8];			/* occupancy bitmap, 4 entries per bit */
 	struct map_entry *entries;	/* at most MAX_ENTRIES_PER_GROUP */
 };
 
