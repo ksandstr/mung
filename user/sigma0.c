@@ -55,20 +55,6 @@ static void free_page_range(
 	bool dedicate);
 
 
-static L4_Word_t send_test(L4_Word_t payload)
-{
-	L4_LoadMR(0, (L4_MsgTag_t){ .X.label = 0x2369, .X.u = 1 }.raw);
-	L4_LoadMR(1, payload);
-	L4_MsgTag_t tag = L4_Call(L4_Pager());
-	if(L4_IpcFailed(tag)) return 0;
-	else {
-		L4_Word_t val;
-		L4_StoreMR(1, &val);
-		return val;
-	}
-}
-
-
 void con_putstr(const char *str)
 {
 	size_t len = strlen(str);
@@ -538,11 +524,6 @@ int main(void)
 {
 	L4_Word_t apiver, apiflags, kernelid;
 	void *kip = L4_KernelInterface(&apiver, &apiflags, &kernelid);
-
-	send_test(0xdeadbeef);
-	send_test(L4_SystemClock().raw);
-
 	build_heap(kip);
-
 	return sigma0_ipc_loop(kip);
 }

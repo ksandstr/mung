@@ -262,8 +262,6 @@ static void add_mem_to_sigma0(
 
 static void pager_thread(void *parameter)
 {
-	printf("pager thread started.\n");
-
 	for(;;) {
 		L4_ThreadId_t from = L4_anythread;
 		L4_MsgTag_t tag = kipc(L4_nilthread, &from,
@@ -300,12 +298,6 @@ static void pager_thread(void *parameter)
 				while(len > 0 && buf[len - 1] == '\n') buf[--len] = '\0';
 				printf("[sigma0]: %s\n", buf);
 				L4_VREG(utcb, L4_TCR_MR(0)) = 0;
-			} else if(tag.X.label == 0x2369) {
-				/* respond, to test out ReplyWait. */
-				printf("%s: got test message at %llu, mr1 is %#lx\n", __func__,
-					read_global_timer(), L4_VREG(utcb, L4_TCR_MR(1)));
-				L4_VREG(utcb, L4_TCR_MR(0)) = ((L4_MsgTag_t){ .X.u = 1 }).raw;
-				L4_VREG(utcb, L4_TCR_MR(1)) = 0xc0def00d;
 			} else {
 				printf("%s: unknown IPC label %#lx (u %lu, t %lu) from %lu:%lu\n",
 					__func__, (L4_Word_t)tag.X.label, (L4_Word_t)tag.X.u,
