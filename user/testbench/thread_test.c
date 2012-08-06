@@ -62,6 +62,7 @@ void threadctl_test(void)
 		static uint8_t stack[8192] __attribute__((aligned(4096)));
 		const L4_Word_t child_stk_top = (L4_Word_t)(stack
 			+ sizeof(stack) - 16);
+		add_fs_tid(1, dest);
 		L4_Start_SpIp(dest, child_stk_top, (L4_Word_t)&test_thread_fn);
 		printf("test thread %lu:%lu started.\n",
 			L4_ThreadNo(dest), L4_Version(dest));
@@ -72,7 +73,7 @@ void threadctl_test(void)
 			L4_ThreadNo(dest), L4_Version(dest));
 		L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 1 }.raw);
 		L4_LoadMR(1, 0x234269ff);
-		L4_MsgTag_t tag = L4_Send(dest);
+		L4_MsgTag_t tag = L4_Send_Timeout(dest, L4_TimePeriod(50 * 1000));
 		if(L4_IpcFailed(tag)) {
 			printf("initial message failed: errorcode %#lx\n",
 				L4_ErrorCode());

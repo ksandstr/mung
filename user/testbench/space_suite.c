@@ -68,6 +68,10 @@ static void stats_pager_fn(void *param_ptr)
 				if(CHECK_FLAG(rwx, L4_Readable)) stats->n_read++;
 				if(CHECK_FLAG(rwx, L4_Writable)) stats->n_write++;
 				if(CHECK_FLAG(rwx, L4_eXecutable)) stats->n_exec++;
+#if 0
+				diag("%s: pf in %lu:%lu at %#lx, ip %#lx", __func__,
+					L4_ThreadNo(from), L4_Version(from), faddr, fip);
+#endif
 
 				/* pass it on. */
 				L4_LoadMR(0, (L4_MsgTag_t){ .X.label = 0xffe0 | rwx,
@@ -104,6 +108,11 @@ static void stats_pager_fn(void *param_ptr)
 /* poke/peek thread. obeys POKE, PEEK, and QUIT. */
 static void poke_peek_fn(void *param_ptr)
 {
+#if 0
+	diag("%s: started as %lu:%lu. pager is %#lx", __func__,
+		L4_ThreadNo(L4_MyGlobalId()), L4_Version(L4_MyGlobalId()),
+		L4_Pager());
+#endif
 	for(;;) {
 		L4_ThreadId_t from;
 		L4_MsgTag_t tag = L4_Wait(&from);
@@ -111,8 +120,10 @@ static void poke_peek_fn(void *param_ptr)
 		for(;;) {
 			if(L4_IpcFailed(tag)) break;
 
-			if(tag.X.label == QUIT_LABEL) return;
-			else if(tag.X.label == PEEK_LABEL) {
+			if(tag.X.label == QUIT_LABEL) {
+				// diag("%s: quitting", __func__);
+				return;
+			} else if(tag.X.label == PEEK_LABEL) {
 				L4_Word_t addr;
 				L4_StoreMR(1, &addr);
 				L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 1 }.raw);
@@ -271,34 +282,33 @@ START_TEST(poke_peek_fault_test)
 {
 	plan_tests(4);
 
-	uint8_t *valid = malloc(12 * 1024);
-	skip_start((L4_Word_t)valid < 0xf00000, 4, "alloc must be above 15M");
-		memset(valid, 0, 12 * 1024);
+	uint8_t *nonfaulted = sbrk(16 * 1024);
 
-		uint8_t *invalid = valid - 0xa00000;	/* 10 MiB backward. */
-		bool ok = poke(pg_poker, (L4_Word_t)invalid, 0xaf);
-		skip_start(!ok, 3, "poke failed: ec %#lx", L4_ErrorCode());
-			ok(pg_stats->n_faults == 1 && pg_stats->n_write == 1,
-				"poke write-faults");
-			uint8_t val;
-			ok = peek(&val, pg_poker, (L4_Word_t)invalid);
-			skip_start(!ok, 2, "peek failed: ec %#lx", L4_ErrorCode());
-				ok(pg_stats->n_faults == 1, "peek doesn't read-fault");
-				ok(val == 0xaf, "peek returns poked value");
-			skip_end;
-		skip_end;
-
-		invalid += 16 * 1024;
+	L4_Word_t test_addr = (L4_Word_t)&nonfaulted[0];
+	bool ok = poke(pg_poker, test_addr, 0xaf);
+	skip_start(!ok, 3, "poke failed: ec %#lx", L4_ErrorCode());
+		ok(pg_stats->n_faults == 1 && pg_stats->n_write == 1,
+			"poke write-faults");
 		uint8_t val;
-		const int old_n = pg_stats->n_faults, old_r = pg_stats->n_read;
-		ok = peek(&val, pg_poker, (L4_Word_t)invalid);
-		skip_start(!ok, 1, "peek failed: ec %#lx", L4_ErrorCode());
-			ok(pg_stats->n_faults == old_n + 1
-				&& pg_stats->n_read == old_r + 1, "peek caused read fault");
+		ok = peek(&val, pg_poker, test_addr);
+		skip_start(!ok, 2, "peek failed: ec %#lx", L4_ErrorCode());
+			ok(pg_stats->n_faults == 1, "peek doesn't read-fault");
+			ok(val == 0xaf, "peek returns poked value");
 		skip_end;
 	skip_end;
 
-	free(valid);
+	test_addr = (L4_Word_t)&nonfaulted[4 * 1024];
+	uint8_t val;
+	const int old_n = pg_stats->n_faults, old_r = pg_stats->n_read;
+	ok = peek(&val, pg_poker, test_addr);
+	skip_start(!ok, 1, "peek failed: ec %#lx", L4_ErrorCode());
+		ok(pg_stats->n_faults == old_n + 1
+			&& pg_stats->n_read == old_r + 1, "peek caused read fault");
+	skip_end;
+
+	/* "nonfaulted" isn't released. who cares? testbench tests will run inside
+	 * a copy-on-write fork soon enough.
+	 */
 }
 END_TEST
 
