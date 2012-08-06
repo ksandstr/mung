@@ -438,9 +438,7 @@ void isr_exn_pf_bottom(struct x86_exregs *regs)
 
 		thread_save_ctx(current, regs);
 		void *utcb = thread_get_utcb(current);
-		L4_ThreadId_t pager_id = { .raw = L4_VREG(utcb, L4_TCR_PAGER) };
-		struct thread *pager = likely(!L4_IsNilThread(pager_id))
-			? thread_find(pager_id.raw) : NULL;
+		struct thread *pager = get_thread_pager(current, utcb);
 		if(unlikely(pager == NULL)) {
 			printf("thread %lu:%lu has no pager, stopping it\n",
 				TID_THREADNUM(current->id), TID_VERSION(current->id));
