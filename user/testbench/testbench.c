@@ -437,11 +437,16 @@ int main(void)
 	printf("hello, world!\n");
 	calibrate_delay_loop();
 
+	/* FIXME: add option to _not_ activate forkserv. */
 	start_forkserv();
 	transfer_to_forkserv();
 
 	/* proper test suite */
 	static Suite *(* const suites[])(void) = {
+		/* selftests */
+		&process_suite,
+
+		/* microkernel tests */
 		&thread_suite,
 		&space_suite,
 		&sched_suite,

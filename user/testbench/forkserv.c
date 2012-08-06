@@ -201,7 +201,7 @@ ipcfail:
  */
 static bool handle_pf(L4_ThreadId_t from, L4_Word_t addr, L4_Word_t ip)
 {
-#if 1
+#if 0
 	printf("pf in %d:%d (ip %#lx, addr %#lx)\n",
 		from.global.X.thread_no, from.global.X.version,
 		ip, addr);

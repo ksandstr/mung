@@ -19,6 +19,7 @@ struct Suite;
 
 /* various test suites */
 
+extern struct Suite *process_suite(void);
 extern struct Suite *sched_suite(void);
 extern struct Suite *space_suite(void);
 extern struct Suite *thread_suite(void);
@@ -80,6 +81,14 @@ extern void heap_init(int adjustment);
  * asking sigma0 for more delicious RAMs.
  */
 extern bool use_forkserv_sbrk;
+
+
+/* from process.c */
+
+/* returns address space ID on parent, 0 on child. */
+extern int fork(void);
+extern int wait(int *status);
+extern NORETURN void exit(int status);
 
 
 /* from log.c */
