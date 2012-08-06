@@ -41,6 +41,9 @@ extern void sys_ipc(struct x86_exregs *regs);
  * when ipc_recv_half() returns true, and the thread status is TS_READY, and
  * *preempt_p is returned as true, the caller should preempt the current
  * receiver thread if it is currently executing.
+ *
+ * NOTE: this is flawed, as ipc_send_half() may also cause preemption by
+ * activating a higher-priority receiver on the same CPU. see github issue #2.
  */
 extern bool ipc_recv_half(struct thread *receiver, bool *preempt_p);
 extern bool ipc_send_half(struct thread *sender);

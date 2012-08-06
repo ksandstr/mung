@@ -263,6 +263,9 @@ static void set_ipc_return_regs(
 
 static void set_ipc_return_thread(struct thread *t)
 {
+	TRACE("%s: called for %skernel thread %lu:%lu\n", __func__,
+		!IS_KERNEL_THREAD(t) ? "non-" : "", TID_THREADNUM(t->id),
+		TID_VERSION(t->id));
 	if(likely(!IS_KERNEL_THREAD(t))) {
 		set_ipc_return_regs(&t->ctx, t, thread_get_utcb(t));
 	}
@@ -346,26 +349,14 @@ bool ipc_send_half(struct thread *self)
 		thread_wake(dest);
 
 		if(L4_IsNilThread(self->ipc_from)) {
+			/* send-only, and done. */
 			assert(self->status == TS_RUNNING);
 			return true;
 		} else {
-			/* try active receive, just in case.
-			 *
-			 * FIXME: ... isn't this handled by ipc() and kipc()? the state
-			 * machine should only spin for exception IPCs.
-			 *
-			 * FIXME: this is supported by how the preempt value goes nowhere.
-			 */
-			bool preempt;
-			if(ipc_recv_half(self, &preempt)) {
-				assert(self->status == TS_RUNNING
-					|| self->status == TS_READY);
-				return true;
-			} else {
-				assert(self->status == TS_RECV_WAIT
-					|| self->status == TS_READY);
-				return false;
-			}
+			/* indicate active receive. */
+			TRACE("%s: setting status to R_RECV\n", __func__);
+			self->status = TS_R_RECV;
+			return true;
 		}
 	} else if(self->send_timeout.raw != L4_ZeroTime.raw) {
 		/* passive send */
@@ -410,7 +401,11 @@ void ipc_user(struct thread *from, struct thread *to)
 	from->send_timeout = L4_Never;
 	from->recv_timeout = L4_Never;
 
-	ipc_send_half(from);
+	if(ipc_send_half(from) && from->status == TS_R_RECV) {
+		/* TODO: use preempt somewhere */
+		bool preempt = false;
+		ipc_recv_half(from, &preempt);
+	}
 }
 
 
@@ -580,16 +575,30 @@ static void ipc(struct thread *current, void *utcb, bool *preempt_p)
 	*preempt_p = false;
 
 	/* send phase. */
-	if(!L4_IsNilThread(current->ipc_to) && !ipc_send_half(current)) {
-		/* an error was set. */
-	} else if(!L4_IsNilThread(current->ipc_from)) {
+	if(!L4_IsNilThread(current->ipc_to)) {
+		TRACE("%s: IPC send phase.\n", __func__);
+		if(!ipc_send_half(current)) {
+			/* error case. */
+			goto end;
+		}
+	}
+	if(!L4_IsNilThread(current->ipc_from)
+		&& current->status != TS_SEND_WAIT)
+	{
 		/* receive phase. */
+		TRACE("%s: IPC receive phase.\n", __func__);
 		ipc_recv_half(current, preempt_p);
+		assert(current->status == TS_READY
+			|| current->status == TS_RECV_WAIT);
 	}
 
+end:
 	if(current->status == TS_READY && !*preempt_p) {
 		current->status = TS_RUNNING;
 	}
+
+	TRACE("%s: IPC returning with status %d.\n", __func__,
+		(int)current->status);
 }
 
 
@@ -615,18 +624,21 @@ void sys_ipc(struct x86_exregs *regs)
 	bool preempt = false;
 	ipc(current, utcb, &preempt);
 	if(current->status == TS_SEND_WAIT || current->status == TS_RECV_WAIT) {
+		TRACE("%s: returning to scheduler\n", __func__);
 		thread_save_ctx(current, regs);
 		/* TODO: schedule the waitee */
 		return_to_scheduler();
 		assert(false);
 	} else if(current->status == TS_READY && preempt) {
 		/* IPC successful, but pre-empted by the receive-phase partner */
+		TRACE("%s: returning to partner\n", __func__);
 		thread_save_ctx(current, regs);
 		set_ipc_return_regs(&current->ctx, current, utcb);
 		return_to_scheduler();
 		assert(false);
 	} else {
 		/* return from IPC at once. */
+		TRACE("%s: returning to caller\n", __func__);
 		assert(current->status == TS_RUNNING);
 		set_ipc_return_regs(regs, current, utcb);
 	}
