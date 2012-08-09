@@ -599,7 +599,26 @@ L4_Word_t sys_exregs(
 		dest_utcb = NULL;
 	}
 
-	L4_Word_t ctl_in = *control_p;
+	L4_Word_t ctl_in = *control_p, sp_in = *sp_p, ip_in = *ip_p,
+		flags_in = *flags_p, udh_in = *udh_p;
+	L4_ThreadId_t pager_in = *pager_p;
+
+	if(CHECK_FLAG(ctl_in, CTL_d)) {
+		/* readout */
+		ctl_in &= ~CTL_d;
+
+		*control_p = dest_thread->status == TS_STOPPED ? 1 : 0;	/* "H"alt */
+		/* S, R never set because string transfers aren't implemented yet. */
+
+		*sp_p = dest_thread->ctx.esp;
+		*ip_p = dest_thread->ctx.eip;
+		*flags_p = dest_thread->ctx.eflags;
+		*udh_p = L4_VREG(dest_utcb, L4_TCR_USERDEFINEDHANDLE);
+		pager_p->raw = L4_VREG(dest_utcb, L4_TCR_PAGER);
+
+		TRACE("%s: delivered ExchangeRegisters values\n", __func__);
+	}
+
 	if(CHECK_FLAG(ctl_in, CTL_R)) {
 		/* abort receive. */
 		/* TODO: check for the "currently receiving" state */
@@ -671,24 +690,17 @@ L4_Word_t sys_exregs(
 	if(CHECK_FLAG_ANY(ctl_in, regset_mask)) {
 		if(CHECK_FLAG(ctl_in, CTL_p)) {
 			assert(dest_utcb != NULL);
-			L4_VREG(dest_utcb, L4_TCR_PAGER) = pager_p->raw;
+			L4_VREG(dest_utcb, L4_TCR_PAGER) = pager_in.raw;
 		}
 		if(CHECK_FLAG(ctl_in, CTL_u)) {
 			assert(dest_utcb != NULL);
-			L4_VREG(dest_utcb, L4_TCR_USERDEFINEDHANDLE) = *udh_p;
+			L4_VREG(dest_utcb, L4_TCR_USERDEFINEDHANDLE) = udh_in;
 		}
-		if(CHECK_FLAG(ctl_in, CTL_f)) dest_thread->ctx.eflags = *flags_p;
-		if(CHECK_FLAG(ctl_in, CTL_i)) dest_thread->ctx.eip = *ip_p;
-		if(CHECK_FLAG(ctl_in, CTL_s)) dest_thread->ctx.esp = *sp_p;
+		if(CHECK_FLAG(ctl_in, CTL_f)) dest_thread->ctx.eflags = flags_in;
+		if(CHECK_FLAG(ctl_in, CTL_i)) dest_thread->ctx.eip = ip_in;
+		if(CHECK_FLAG(ctl_in, CTL_s)) dest_thread->ctx.esp = sp_in;
 
 		ctl_in &= ~regset_mask;
-	}
-
-	if(CHECK_FLAG(ctl_in, CTL_d)) {
-		/* readout */
-		TRACE("%s: my brain cannot handle readouts. poor me\n", __func__);
-		panic("hfasdjfa skhfd jahskdjf lhakjs");
-		ctl_in &= ~CTL_d;
 	}
 
 	if(unlikely(ctl_in != 0)) {
