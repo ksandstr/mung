@@ -95,6 +95,15 @@ void yield(struct thread *t)
 static void restore_saved_regs(struct thread *t, void *priv)
 {
 	if(t == NULL) return;
+	/* TODO: make this a TRACE(). it's useful for catching mis-nesting of
+	 * restore_saved_regs() and save_ipc_regs(), i.e. spots where
+	 * post_exn_{ok,fail}() isn't being called properly.
+	 */
+#if 0
+	printf("%s: called for %lu:%lu (%d MRs, %d BRs)\n", __func__,
+		TID_THREADNUM(t->id), TID_VERSION(t->id),
+		(int)t->saved_mrs, (int)t->saved_brs);
+#endif
 	assert(t->saved_mrs > 0 || t->saved_brs > 0);
 
 	void *utcb = thread_get_utcb(t);
@@ -111,6 +120,11 @@ static void restore_saved_regs(struct thread *t, void *priv)
 
 void save_ipc_regs(struct thread *t, int mrs, int brs)
 {
+	/* TODO: see above */
+#if 0
+	printf("%s: called for %lu:%lu (%d MRs, %d BRs)\n", __func__,
+		TID_THREADNUM(t->id), TID_VERSION(t->id), mrs, brs);
+#endif
 	assert(t->post_exn_call == NULL);
 	assert(t->saved_mrs == 0 && t->saved_brs == 0);
 	assert(mrs >= 1 && brs >= 0);
@@ -792,6 +806,7 @@ void sys_threadcontrol(struct x86_exregs *regs)
 	} else if(L4_IsNilThread(spacespec) && dest != NULL) {
 		/* thread/space deletion */
 		thread_halt(dest);
+		abort_waiting_ipc(dest, 2 << 1);	/* "lost partner" */
 		if(dest->status != TS_STOPPED) {
 			dest->status = TS_STOPPED;
 			sq_remove_thread(dest);

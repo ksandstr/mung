@@ -22,6 +22,15 @@ extern void ipc_simple(struct thread *dest);
 /* same, but for "from" */
 extern void ipc_user(struct thread *from, struct thread *to);
 
+/* one thing that thread_ipc_fail() doesn't do. used by the deleting mode of
+ * ThreadControl to abort waiting IPCs that depend on a moribund thread's
+ * rendezvous.
+ *
+ * this function also does the other thing, i.e. aborting threads waiting for
+ * IPC from @t specifically.
+ */
+extern void abort_waiting_ipc(struct thread *t, L4_Word_t errorcode);
+
 
 extern L4_MsgTag_t kipc(
 	L4_ThreadId_t to,

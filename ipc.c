@@ -32,9 +32,9 @@
  */
 struct ipc_wait
 {
-	L4_ThreadId_t dest_tid;		/* copied for rehash */
+	L4_ThreadId_t dest_tid;		/* key, ptr offset in sendwait_hash */
 	L4_ThreadId_t send_tid;		/* vs when propagated */
-	struct thread *thread;
+	struct thread *thread;		/* sender thread (avoids lookup) */
 };
 
 
@@ -292,6 +292,60 @@ void set_ipc_error_thread(struct thread *t, L4_Word_t ec)
 {
 	set_ipc_error(thread_get_utcb(t), ec);
 	set_ipc_return_thread(t);
+}
+
+
+/* one thing that thread_ipc_fail() doesn't do. used by the deleting mode
+ * of ThreadControl.
+ *
+ * FIXME: untested!
+ */
+void abort_waiting_ipc(struct thread *t, L4_Word_t errcode)
+{
+	/* fail those IPC operations that're waiting to send to this one. */
+	struct htable_iter it;
+	size_t hash = int_hash(t->id);
+	errcode &= ~(L4_Word_t)1;		/* send-phase errors. */
+	for(void *ptr = htable_firstval(&sendwait_hash, &it, hash);
+		ptr != NULL;
+		ptr = htable_nextval(&sendwait_hash, &it, hash))
+	{
+		struct ipc_wait *w = container_of(ptr, struct ipc_wait, dest_tid);
+		if(w->dest_tid.raw != t->id) continue;
+
+		assert(w->thread->status == TS_SEND_WAIT);
+		assert(w->thread->ipc_to.raw == t->id);
+		if(!post_exn_fail(w->thread)) {
+			/* ordinary non-exception IPC. for exceptions, a silent return via
+			 * the callback
+			 */
+			set_ipc_error_thread(w->thread, errcode);
+		}
+		thread_wake(w->thread);
+
+		htable_delval(&sendwait_hash, &it);
+		kmem_cache_free(ipc_wait_slab, w);
+	}
+
+	/* NOTE: out-of-module access to thread_hash!
+	 * NOTE: also, this should be done with a recvwait_hash type thing to
+	 * avoid brute force. (luckily the CCAN htable module serves as multiset
+	 * just as well.)
+	 */
+	errcode |= 1;		/* receive-phase errors. */
+	for(struct thread *other = htable_first(&thread_hash, &it);
+		other != NULL;
+		other = htable_next(&thread_hash, &it))
+	{
+		if(other->status != TS_RECV_WAIT || other->ipc_from.raw != t->id) {
+			continue;
+		}
+
+		if(!post_exn_fail(other)) {
+			set_ipc_error_thread(other, errcode);
+		}
+		thread_wake(other);
+	}
 }
 
 
