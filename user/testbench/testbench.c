@@ -15,6 +15,7 @@
 #include <ukernel/util.h>
 
 #include "defs.h"
+#include "forkserv.h"
 #include "test.h"
 #include "elf.h"
 
@@ -112,6 +113,9 @@ static void add_forkserv_pages(L4_Word_t start, L4_Word_t end)
 }
 
 
+/* FIXME: move this into a generic pager mechanism. the loop has been written
+ * and copypasta'd often enough.
+ */
 static void forkserv_pager_fn(void *param UNUSED)
 {
 	for(;;) {
@@ -138,13 +142,13 @@ static void forkserv_pager_fn(void *param UNUSED)
 				struct forkserv_page *fp = htable_get(&forkserv_pages,
 					int_hash(page_addr), &forkserv_page_cmp, &page_addr);
 				if(fp != NULL) {
-					/* grant it on */
-					L4_Fpage_t grant = L4_Fpage(fp->address, PAGE_SIZE);
-					L4_Set_Rights(&grant, L4_FullyAccessible);
-					L4_GrantItem_t gi = L4_GrantItem(grant, page_addr);
+					/* map it without sigma0 */
+					L4_Fpage_t map = L4_Fpage(fp->address, PAGE_SIZE);
+					L4_Set_Rights(&map, L4_FullyAccessible);
+					L4_MapItem_t mi = L4_MapItem(map, page_addr);
 					L4_LoadMR(0, (L4_MsgTag_t){ .X.t = 2 }.raw);
-					L4_LoadMR(1, gi.raw[0]);
-					L4_LoadMR(2, gi.raw[1]);
+					L4_LoadMR(1, mi.raw[0]);
+					L4_LoadMR(2, mi.raw[1]);
 				} else {
 					/* pass the fault up to our pager (sigma0). */
 					L4_LoadMR(0, (L4_MsgTag_t){ .X.label = 0xffe0 | rwx,
@@ -163,6 +167,28 @@ static void forkserv_pager_fn(void *param UNUSED)
 						break;
 					}
 				}
+			} else if((tag.X.label & 0xfff0) == 0xff80
+				&& tag.X.u == 2 && tag.X.t == 0)
+			{
+				/* I/O faults (ia32, amd64) */
+				L4_Fpage_t iofp;
+				L4_StoreMR(1, &iofp.raw);
+				if(!L4_IsIoFpage(iofp)) {
+					printf("I/O fault didn't deliver I/O fpage? what.\n");
+					break;
+				}
+				printf("iopf in %#lx, port range %#lx:%lu\n", from.raw,
+					L4_IoFpagePort(iofp), L4_IoFpageSizeLog2(iofp));
+				/* ... could forward the fault to sigma0, but why bother?
+				 * forkserv won't do anything more than a debug printf()
+				 * anyway.
+				 */
+				L4_Set_Rights(&iofp, L4_FullyAccessible);
+				L4_MapItem_t map = L4_MapItem(iofp, 0);
+				L4_Set_Rights(&map.X.snd_fpage, L4_FullyAccessible);
+				L4_LoadMR(0, (L4_MsgTag_t){ .X.t = 2 }.raw);
+				L4_LoadMR(1, map.raw[0]);
+				L4_LoadMR(2, map.raw[1]);
 			} else if(tag.X.label == 0x5370) {
 				/* sigma0's con_putstr() protocol.
 				 *
@@ -293,11 +319,116 @@ static void start_forkserv(void)
 			__func__, L4_ErrorCode());
 		abort();
 	}
+}
 
-#if 0
-	L4_Sleep(L4_TimePeriod(5 * 1000 * 1000));
+
+/* space_id 0 means forkserv's own pages. */
+static void send_one_page(L4_Word_t address, L4_Word_t space_id)
+{
+	/* "hey, prepare to receive." */
+	L4_LoadMR(0, (L4_MsgTag_t){ .X.label = FORKSERV_SEND_PAGE,
+		.X.u = 2 }.raw);
+	L4_LoadMR(1, address);
+	L4_LoadMR(2, space_id);
+	L4_MsgTag_t tag = L4_Call(forkserv_tid);
+	if(L4_IpcFailed(tag)) goto ipcfail;
+
+	L4_Fpage_t page = L4_Fpage(address, PAGE_SIZE);
+	L4_Set_Rights(&page, L4_FullyAccessible);
+	L4_GrantItem_t gi = L4_GrantItem(page, 0);
+	L4_LoadBR(0, L4_CompleteAddressSpace.raw);
+	L4_LoadMR(0, (L4_MsgTag_t){ .X.label = FORKSERV_SEND_PAGE_2,
+		.X.t = 2 }.raw);
+	L4_LoadMR(1, gi.raw[0]);
+	L4_LoadMR(2, gi.raw[1]);
+	tag = L4_Call(forkserv_tid);
+	if(L4_IpcFailed(tag)) goto ipcfail;
+
+	return;
+
+ipcfail:
+	printf("IPC failed: ec %#lx\n", L4_ErrorCode());
 	abort();
-#endif
+}
+
+
+void add_fs_tid(L4_Word_t space_id, L4_ThreadId_t tid)
+{
+	L4_LoadMR(0, (L4_MsgTag_t){ .X.label = FORKSERV_ADD_TID,
+		.X.u = 2 }.raw);
+	L4_LoadMR(1, space_id);
+	L4_LoadMR(2, tid.raw);
+	L4_MsgTag_t tag = L4_Call(forkserv_tid);
+	if(L4_IpcFailed(tag)) {
+		printf("%s: IPC failed: ec %#lx\n", __func__, L4_ErrorCode());
+		abort();
+	}
+}
+
+
+static void transfer_to_forkserv(void)
+{
+	add_fs_tid(0, forkserv_tid);
+	struct htable_iter it;
+	for(struct forkserv_page *fp = htable_first(&forkserv_pages, &it);
+		fp != NULL;
+		fp = htable_next(&forkserv_pages, &it))
+	{
+		send_one_page(fp->address, 0);
+	}
+
+	/* switch it over to sigma0 paging. */
+	L4_Word_t res = L4_ThreadControl(forkserv_tid, forkserv_tid,
+		L4_nilthread, L4_Pager(), (void *)-1);
+	if(res != 1) {
+		printf("can't set forkserv to s0 paging: ec %lu\n", L4_ErrorCode());
+		abort();
+	}
+
+	/* TODO: iterate over the hash table again and free all the forkserv_page
+	 * structs, then clear it
+	 */
+
+	/* transfer testbench's own pages over to forkserv. this is a bit
+	 * tricky.
+	 */
+	extern char _start, _end;
+	const int max_pages = 2048;
+	L4_Word_t *page_addrs = malloc(sizeof(L4_Word_t) * max_pages);
+	printf("page_addrs is %lu bytes at %p\n",
+		(unsigned long)(sizeof(L4_Word_t) * max_pages), page_addrs);
+	int num_pages = 0;
+	/* first, fault them in. */
+	volatile uint8_t foo = 0;
+	/* ELF pages */
+	for(L4_Word_t addr = (L4_Word_t)&_start & ~PAGE_MASK;
+		addr < (((L4_Word_t)&_end + PAGE_MASK) & ~PAGE_MASK);
+		addr += PAGE_SIZE)
+	{
+		foo ^= *(const uint8_t *)addr;	/* fault it in. */
+		assert(num_pages < max_pages);
+		page_addrs[num_pages++] = addr;
+	}
+	/* malloc heap */
+	for(L4_Word_t addr = (L4_Word_t)sbrk(0);
+		addr < get_heap_top();
+		addr += PAGE_SIZE)
+	{
+		foo ^= *(const uint8_t *)addr;
+		assert(num_pages < max_pages);
+		page_addrs[num_pages++] = addr;
+	}
+	/* then the send. */
+	add_fs_tid(1, L4_MyGlobalId());
+	L4_Set_Pager(forkserv_tid);
+	L4_Set_PagerOf(forkserv_pager, forkserv_tid);
+	use_forkserv_sbrk = true;
+	for(int i=num_pages - 1; i >= 0; --i) send_one_page(page_addrs[i], 1);
+	free(page_addrs);
+
+	/* TODO: terminate forkserv pager & release its stack */
+
+	printf("%s: at an end\n", __func__);
 }
 
 
@@ -307,6 +438,7 @@ int main(void)
 	calibrate_delay_loop();
 
 	start_forkserv();
+	transfer_to_forkserv();
 
 	/* proper test suite */
 	static Suite *(* const suites[])(void) = {

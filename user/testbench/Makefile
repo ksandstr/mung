@@ -27,7 +27,9 @@ testbench: testbench.ld crt0.o testbench.o heap.o thread.o delay.o \
 		$(shell gcc $(CFLAGS) -print-libgcc-file-name)
 
 
-forkserv: forkserv.ld crt0.o forkserv.o syscalls.o dlmalloc.o ccan-list.o
+# NOTE: use of the same heap.o as in testbench
+forkserv: forkserv.ld crt0.o forkserv.o syscalls.o heap.o dlmalloc.o \
+		ccan-list.o ccan-htable.o
 	@echo "  LD $@"
 	@$(LD) $(LDFLAGS) -T forkserv.ld $(filter %.o,$^) $(LIBS) -o $@ \
 		-L $(CFGDIR)/lib -lukernel_util \

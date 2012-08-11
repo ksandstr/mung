@@ -145,6 +145,9 @@ L4_ThreadId_t start_thread_long(
 		return L4_nilthread;
 	}
 
+	/* let forkserv know this should be paged for testbench */
+	add_fs_tid(1, tid);
+
 	uint8_t *stack = malloc(THREAD_STACK_SIZE);
 	if(stack == NULL) {
 		printf("%s: can't allocate stack for thread!\n", __func__);

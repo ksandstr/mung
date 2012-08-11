@@ -11,11 +11,13 @@
 
 #include <ukernel/util.h>
 
+#include "defs.h"
+#include "forkserv.h"
 
-static L4_Word_t heap_pos = 0;
 
+static L4_Word_t heap_pos = 0, heap_top = 0;
 
-static void heap_init(void);
+bool use_forkserv_sbrk = false;
 
 
 /* NOTE: the current L4.X2 spec says there's a third parameter, high_address.
@@ -49,6 +51,11 @@ L4_Fpage_t sigma0_get_page(L4_Fpage_t page, L4_Word_t attributes)
 }
 
 
+L4_Word_t get_heap_top(void) {
+	return heap_top;
+}
+
+
 /* TODO: make the kernel heap also contiguous in address space -- and then
  * enable MORECORE_CONTIGUOUS in dlmalloc.c & leave DEFAULT_GRANULARITY at
  * default to minimize unused kernel RAM.
@@ -56,36 +63,41 @@ L4_Fpage_t sigma0_get_page(L4_Fpage_t page, L4_Word_t attributes)
 void *sbrk(intptr_t increment)
 {
 	if(unlikely(heap_pos == 0)) {
-		heap_init();
+		heap_init(0);
 		assert(heap_pos > 0);
+		heap_top = heap_pos;
 	}
 
-	if(increment == 0) return (void *)heap_pos;
-	else if(increment > 0) {
+	if(increment > 0) {
 		/* FIXME: get smallest physical page size from KIP */
 		increment = (increment + 0xfff) & ~0xfff;
-		L4_Fpage_t page = sigma0_get_page(
-			L4_Fpage(heap_pos - increment, increment), 0);
-		if(L4_IsNilFpage(page)) {
-			return NULL;
+		if(use_forkserv_sbrk) {
+			L4_LoadMR(0, (L4_MsgTag_t){ .X.label = FORKSERV_SBRK,
+				.X.u = 1 }.raw);
+			L4_LoadMR(1, heap_pos - increment);
+			L4_MsgTag_t tag = L4_Call(L4_Pager());
+			if(L4_IpcFailed(tag)) {
+				printf("forkserv sbrk() failed: ec %#lx\n", L4_ErrorCode());
+			}
+			heap_pos -= increment;
 		} else {
+			L4_Fpage_t page = sigma0_get_page(
+				L4_Fpage(heap_pos - increment, increment), 0);
+			if(L4_IsNilFpage(page)) return NULL;
 			heap_pos = L4_Address(page);
-			return (void *)heap_pos;
 		}
-	} else {
+	} else if(increment < 0) {
 		/* TODO: move the allocated heap backward, so that pages aren't
 		 * re-requested from sigma0 once the heap grows again.
 		 */
-		return (void *)heap_pos;	/* nuh-huh! */
 	}
+
+	return (void *)heap_pos;
 }
 
 
-static COLD void heap_init(void)
+COLD L4_Word_t find_phys_mem_top(void)
 {
-	/* find the highest address where there's regular memory. use that as heap
-	 * top.
-	 */
 	L4_KernelInterfacePage_t *kip = L4_GetKernelInterface();
 	int n_descs = kip->MemoryInfo & 0xffff;
 	L4_Word_t high = 0;
@@ -100,5 +112,20 @@ static COLD void heap_init(void)
 		}
 	}
 
-	heap_pos = high + 1;	/* high address is hardwired to ones */
+	/* return value is "last valid address", i.e. offset bits hardwired to
+	 * all-ones.
+	 */
+	return high;
+}
+
+
+COLD void heap_init(int adjustment)
+{
+	assert(adjustment >= 0);
+	adjustment = (adjustment + PAGE_SIZE - 1) & ~PAGE_MASK;
+
+	/* find the highest address where there's regular memory. use that as heap
+	 * top.
+	 */
+	heap_pos = find_phys_mem_top() + 1 - adjustment;
 }
