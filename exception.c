@@ -63,7 +63,8 @@ void isr_exn_ud_bottom(struct x86_exregs *regs)
 	} else {
 		printf("#UD at eip 0x%lx, esp 0x%lx\n", regs->eip, regs->esp);
 		/* TODO: pop an "invalid opcode" exception. */
-		thread_stop(current);
+		thread_halt(current);
+		assert(current->status == TS_STOPPED);
 		return_to_scheduler();
 	}
 }
@@ -88,7 +89,8 @@ void isr_exn_basic_sc_bottom(struct x86_exregs *regs)
 	if(unlikely(sc_num >= num_sc) || unlikely(fn[sc_num] == NULL)) {
 		struct thread *current = get_current_thread();
 		printf("unknown basic syscall %lu (caller stopped)\n", regs->eax);
-		thread_stop(current);
+		thread_halt(current);
+		assert(current->status == TS_STOPPED);
 		return_to_scheduler();
 	} else {
 		assert(x86_frame_len(regs) == sizeof(*regs));
@@ -150,7 +152,8 @@ static void handle_kdb_enter(struct thread *current, struct x86_exregs *regs)
 	printf("#KDB (eip %#lx): [%#lx] %s\n", regs->eip, strptr, buf);
 
 msgfail:
-	thread_stop(current);
+	thread_halt(current);
+	assert(current->status == TS_STOPPED);
 	return_to_scheduler();
 }
 
@@ -255,7 +258,8 @@ static void handle_io_fault(struct thread *current, struct x86_exregs *regs)
 	return;
 
 fail:
-	thread_stop(current);
+	thread_halt(current);
+	assert(current->status == TS_STOPPED);
 	return_to_scheduler();
 }
 
@@ -358,7 +362,8 @@ void isr_exn_gp_bottom(struct x86_exregs *regs)
 		printf("KERNEL #GP(%#lx) at eip %#lx, esp %#lx in %lu:%lu\n",
 			regs->error, regs->eip, regs->esp,
 			TID_THREADNUM(current->id), TID_VERSION(current->id));
-		thread_stop(current);
+		thread_halt(current);
+		assert(current->status == TS_STOPPED);
 		return_to_scheduler();
 		assert(false);
 	}
@@ -382,7 +387,8 @@ void isr_exn_gp_bottom(struct x86_exregs *regs)
 			build_exn_ipc(current, utcb, -5, regs);
 			return_to_ipc(exh);
 		} else {
-			thread_stop(current);
+			thread_halt(current);
+			assert(current->status == TS_STOPPED);
 			return_to_scheduler();
 		}
 	}
@@ -416,7 +422,8 @@ void isr_exn_pf_bottom(struct x86_exregs *regs)
 		printf("WARNING: faulted many times on the same address %#lx\n",
 			fault_addr);
 		thread_save_ctx(current, regs);
-		thread_stop(current);
+		thread_halt(current);
+		assert(current->status == TS_STOPPED);
 		return_to_scheduler();
 		assert(false);
 	} else if(last_fault != fault_addr) {
@@ -443,7 +450,8 @@ void isr_exn_pf_bottom(struct x86_exregs *regs)
 			printf("thread %lu:%lu has no pager, stopping it\n",
 				TID_THREADNUM(current->id), TID_VERSION(current->id));
 			printf("  (fault was at %#lx, ip %#lx)\n", fault_addr, regs->eip);
-			thread_stop(current);
+			thread_halt(current);
+			assert(current->status == TS_STOPPED);
 			return_to_scheduler();
 		} else {
 			save_ipc_regs(current, 3, 1);

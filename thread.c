@@ -367,7 +367,8 @@ bool thread_set_utcb(struct thread *t, L4_Word_t start)
 
 void thread_start(struct thread *t)
 {
-	assert(t->status == TS_STOPPED);
+	/* "freshly created" */
+	assert(t->status == TS_STOPPED && !CHECK_FLAG(t->flags, TF_HALT));
 
 	t->status = TS_READY;
 	t->wakeup_time = 0;
@@ -375,30 +376,34 @@ void thread_start(struct thread *t)
 }
 
 
-void thread_stop(struct thread *t)
+void thread_halt(struct thread *t)
 {
+	assert(!CHECK_FLAG(t->flags, TF_HALT));
 	assert(t->status != TS_STOPPED);
+	assert(t->status != TS_DEAD);
 
-	/* interrupt IPC in progress */
-	switch(t->status) {
-		case TS_R_RECV:
-		case TS_RECV_WAIT:
-		case TS_SEND_WAIT:
-			post_exn_fail(t);
-			break;
+	t->flags |= TF_HALT;
+	if(t->status == TS_READY || t->status == TS_RUNNING) {
+		sq_remove_thread(t);
+		t->status = TS_STOPPED;
 
-		/* TODO: string transfer send/recv states */
-
-		default:
-			break;
+		if(t == get_current_thread()) {
+			if(IS_KERNEL_THREAD(t)) schedule();
+			/* otherwise, rely on the caller to invoke the scheduler */
+		}
 	}
+}
 
-	sq_remove_thread(t);
-	t->status = TS_STOPPED;
 
-	if(t == get_current_thread()) {
-		if(IS_KERNEL_THREAD(t)) schedule();
-		/* otherwise, rely on the caller to invoke the scheduler */
+void thread_resume(struct thread *t)
+{
+	assert(CHECK_FLAG(t->flags, TF_HALT));
+
+	t->flags &= ~TF_HALT;
+	if(t->status == TS_STOPPED) {
+		t->status = TS_READY;
+		t->wakeup_time = 0;
+		sq_insert_thread(t);
 	}
 }
 
@@ -413,29 +418,47 @@ uint64_t wakeup_at(L4_Time_t period)
 
 void thread_sleep(struct thread *t, L4_Time_t period)
 {
+	if(t->status != TS_SEND_WAIT && t->status != TS_RECV_WAIT) {
+		printf("thread %lu:%lu status is %d in %s called from %p\n",
+			TID_THREADNUM(t->id), TID_VERSION(t->id), (int)t->status,
+			__func__, __builtin_return_address(0));
+	}
 	assert(t->status == TS_SEND_WAIT || t->status == TS_RECV_WAIT);
+	/* NOTE: merged with thread_wake(), which asserted against TS_STOPPED and
+	 * TS_DEAD rather than for the IPC wait states
+	 */
 
 	if(period.raw != L4_ZeroTime.raw && period.raw != L4_Never.raw) {
 		TRACE("%s: sleeping thread %lu:%lu for %llu microseconds\n", __func__,
 			TID_THREADNUM(t->id), TID_VERSION(t->id), time_in_us(period));
 	}
-	t->wakeup_time = wakeup_at(period);
+
 	if(period.raw == L4_ZeroTime.raw) {
 		/* extreme napping */
 		t->status = TS_READY;
+		t->wakeup_time = 0;
+	} else {
+		t->wakeup_time = wakeup_at(period);
 	}
 	sq_update_thread(t);
 }
 
 
-void thread_wake(struct thread *t)
+void thread_ipc_fail(struct thread *t)
 {
-	assert(t->status != TS_STOPPED);
-	assert(t->status != TS_DEAD);
+	assert(t->status == TS_RECV_WAIT
+		|| t->status == TS_SEND_WAIT
+		|| t->status == TS_R_RECV);
 
-	t->status = TS_READY;
-	t->wakeup_time = 0;
-	sq_update_thread(t);
+	if(CHECK_FLAG(t->flags, TF_HALT)) {
+		t->status = TS_STOPPED;
+	} else {
+		t->status = TS_READY;
+		if(t->wakeup_time > 0) {
+			t->wakeup_time = 0;
+			sq_update_thread(t);
+		}
+	}
 }
 
 
@@ -625,22 +648,14 @@ L4_Word_t sys_exregs(
 		/* ... and move this into ipc.c, & also the one for the send side */
 		int state = dest_thread->status;
 		if(state == TS_R_RECV || state == TS_RECV_WAIT) {
-			bool halted = CHECK_FLAG(dest_thread->flags, TF_HALT);
-			if(halted) thread_stop(dest_thread);
-			else thread_wake(dest_thread);
+			thread_ipc_fail(dest_thread);
 			dest_thread->ipc_from = L4_nilthread;
 			/* "canceled in receive phase" */
 			assert(dest_utcb != NULL);
 			L4_VREG(dest_utcb, L4_TCR_ERRORCODE) = 1 | (3 << 1);
 			L4_VREG(dest_utcb, L4_TCR_MR(0)) = (L4_MsgTag_t){ .X.flags = 0x8 }.raw;
 
-			/* that covers exceptions, too. */
-			if(dest_thread->post_exn_call != NULL) {
-				(*dest_thread->post_exn_call)(NULL,
-					dest_thread->exn_priv);
-				dest_thread->post_exn_call = NULL;
-				dest_thread->exn_priv = NULL;
-			}
+			post_exn_fail(dest_thread);
 
 			TRACE("%s: aborted receive\n", __func__);
 		}
@@ -651,15 +666,15 @@ L4_Word_t sys_exregs(
 		/* abort send. */
 		/* TODO: check for the "currently sending" state */
 		if(dest_thread->status == TS_SEND_WAIT) {
-			bool halted = CHECK_FLAG(dest_thread->flags, TF_HALT);
-			if(halted) thread_stop(dest_thread);
-			else thread_wake(dest_thread);
+			thread_ipc_fail(dest_thread);
 
 			dest_thread->ipc_from = L4_nilthread;
 			/* "canceled in send phase" */
 			assert(dest_utcb != NULL);
 			L4_VREG(dest_utcb, L4_TCR_ERRORCODE) = 0 | (3 << 1);
 			L4_VREG(dest_utcb, L4_TCR_MR(0)) = (L4_MsgTag_t){ .X.flags = 0x8 }.raw;
+
+			post_exn_fail(dest_thread);
 
 			TRACE("%s: aborted send\n", __func__);
 		}
@@ -677,7 +692,8 @@ L4_Word_t sys_exregs(
 		} else {
 			dest_thread->flags |= TF_HALT;
 			if(IS_READY(dest_thread->status) || state == TS_RUNNING) {
-				thread_stop(dest_thread);
+				thread_halt(dest_thread);
+				assert(dest_thread->status == TS_STOPPED);
 				TRACE("%s: stopped running thread\n", __func__);
 			}
 		}
@@ -775,7 +791,11 @@ void sys_threadcontrol(struct x86_exregs *regs)
 		space_add_thread(sp, dest);
 	} else if(L4_IsNilThread(spacespec) && dest != NULL) {
 		/* thread/space deletion */
-		thread_stop(dest);
+		thread_halt(dest);
+		if(dest->status != TS_STOPPED) {
+			dest->status = TS_STOPPED;
+			sq_remove_thread(dest);
+		}
 		thread_destroy(dest);
 	} else if(!L4_IsNilThread(spacespec) && dest != NULL) {
 		/* modification only. (rest shared with creation.) */

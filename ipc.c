@@ -398,6 +398,7 @@ bool ipc_send_half(struct thread *self)
 				L4_VREG(dest_utcb, L4_TCR_VA_SENDER) = self->id;
 			}
 		}
+		dest->status = status;	/* join with the overridden status */
 		thread_wake(dest);
 
 		if(L4_IsNilThread(self->ipc_from)) {
@@ -534,7 +535,13 @@ bool ipc_recv_half(struct thread *self, bool *preempt_p)
 			return false;
 		}
 
-		thread_wake(self);
+		/* successful active receive -> READY. */
+		self->status = TS_READY;
+		if(self->wakeup_time > 0) {
+			self->wakeup_time = 0;
+			sq_update_thread(self);
+		}
+
 		self->ipc_from.raw = from_tid.raw;
 		if(from_tid.raw != from->id) {
 			/* propagation parameter delivery */

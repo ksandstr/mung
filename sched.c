@@ -168,7 +168,7 @@ bool preempted_by(
 static void timeout_ipc(struct thread *t)
 {
 	bool is_send = t->status == TS_SEND_WAIT;
-	if(CHECK_FLAG(t->flags, TF_HALT)) thread_stop(t); else thread_wake(t);
+	thread_ipc_fail(t);
 	set_ipc_error_thread(t, (1 << 1) | (is_send ? 0 : 1));
 }
 
@@ -490,9 +490,10 @@ NORETURN void scheduler_loop(struct thread *self)
 				if(exh != NULL) {
 					build_exn_ipc(prev, utcb, -4, &prev->ctx);
 					ipc_user(prev, exh);
+					/* halt the thread if its exception handler is AWOL. */
 					if(!IS_IPC_WAIT(prev->status)) {
 						assert(L4_VREG(utcb, L4_TCR_ERRORCODE) != 0);
-						thread_stop(prev);
+						thread_halt(prev);
 					}
 				}
 				*preempt_p &= ~0x80;

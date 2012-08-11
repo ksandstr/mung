@@ -143,12 +143,61 @@ extern struct thread *thread_new(thread_id tid);
 extern void thread_set_spip(struct thread *t, L4_Word_t sp, L4_Word_t ip);
 /* returns false on some error (generally when out of GDT slots). */
 extern bool thread_set_utcb(struct thread *t, L4_Word_t start);
-extern void thread_start(struct thread *t);
-extern void thread_stop(struct thread *t);
-extern void thread_sleep(struct thread *t, L4_Time_t period);
-extern void thread_wake(struct thread *t);
 
+/* schedules a stopped thread with a cleared TF_HALT bit. this status only
+ * occurs in freshly-created threads.
+ *
+ * requires that status == STOPPED && TF_HALT is set.
+ */
+extern void thread_start(struct thread *t);
+
+/* sets TF_HALT and, if status \in {READY,RUNNING}, changes it to STOPPED and
+ * removes the thread from scheduling. IPC operation is not affected. a halted
+ * thread may therefore generate page faults if a string transfer starts due
+ * to an active sender.
+ *
+ * requires that TF_HALT is clear.
+ *
+ * as a special case, when a kernel thread halts itself, this function calls
+ * schedule() on its behalf.
+ */
+extern void thread_halt(struct thread *t);
+
+/* clears TF_HALT and sets status to READY if it was STOPPED before.
+ * requires that TF_HALT is set.
+ */
+extern void thread_resume(struct thread *t);
+
+/* effects an IPC failure (timeout, abort, cancel) state transition. doesn't
+ * change vregs or call the post-exception hooks, just does the status &
+ * scheduling bits.
+ *
+ * requires status \in {RECV_WAIT, SEND_WAIT, R_RECV}.
+ */
+extern void thread_ipc_fail(struct thread *t);
+
+
+/* sets a thread's wakeup timer and updates its scheduling. if "period" is
+ * L4_ZeroTime, the thread wakes up immediately.
+ *
+ * requires that status \in {RECV_WAIT, SEND_WAIT}.
+ */
+extern void thread_sleep(struct thread *t, L4_Time_t period);
+
+/* interrupts an IPC wait (incl. R_RECV state) and sets state to STOPPED or
+ * READY, depending on TF_HALT as you'd expect. low-level function; doesn't
+ * set error codes or invoke exception IPC callbacks. exactly equivalent to
+ * thread_sleep(t, L4_ZeroTime), but this is better documentation.
+ *
+ * requires that status \in {RECV_WAIT, SEND_WAIT}.
+ */
+#define thread_wake(t) thread_sleep((t), L4_ZeroTime)
+
+/* used by exception handlers to save previous IPC registers & automagically
+ * restore them on IPC completion.
+ */
 extern void save_ipc_regs(struct thread *t, int mrs, int brs);
+
 /* these return false for ordinary IPC (with return values etc), and true for
  * exception IPC (with a full frame restore). they don't care about kernel
  * threads.
