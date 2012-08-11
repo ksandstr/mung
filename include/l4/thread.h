@@ -185,7 +185,7 @@ static inline L4_ThreadState_t L4_Stop(L4_ThreadId_t tid)
 	L4_ThreadId_t dummy_id;
 	L4_ThreadState_t state;
 
-	L4_ExchangeRegisters(tid, 1 | 1 << 8 | 1 << 9, 0, 0, 0, 0,
+	L4_ExchangeRegisters(tid, 1 | 1 << 8, 0, 0, 0, 0,
 		L4_nilthread, &state.raw, &dummy, &dummy, &dummy, &dummy,
 		&dummy_id);
 	return state;
