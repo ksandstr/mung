@@ -11,7 +11,9 @@
 #include <ccan/container_of/container_of.h>
 
 #include <l4/types.h>
+
 #include <ukernel/misc.h>
+#include <ukernel/util.h>
 #include <ukernel/slab.h>
 #include <ukernel/trace.h>
 #include <ukernel/space.h>
@@ -37,6 +39,7 @@
 
 
 static size_t rehash_ref_hash(const void *, void *);
+static struct map_entry *discontiguate(struct map_group *g, L4_Fpage_t range);
 
 
 static struct kmem_cache *map_group_slab = NULL;
@@ -236,16 +239,6 @@ static struct map_entry *probe_group_range(struct map_group *g, L4_Fpage_t fpage
 }
 
 
-static int entry_split_and_insert(
-	struct map_entry *outbuf,
-	const struct map_entry *src,
-	L4_Fpage_t fpage,
-	uint32_t first_page_id)
-{
-	return 0;
-}
-
-
 static void coalesce_entries(
 	struct map_group *g,
 	struct map_entry *ent)
@@ -334,6 +327,12 @@ static bool merge_entries(
 }
 
 
+/* this should be split up by case. there are at least four:
+ * #1 -- map_group doesn't exist (trivial case)
+ * #2 -- entry doesn't exist in map_group (insert case)
+ * #3 -- entry exists and matches added map exactly (modify or no-op case)
+ * #4 -- entry exists and doesn't match added map (split case)
+ */
 int mapdb_add_map(
 	struct map_db *db,
 	L4_Fpage_t fpage,
@@ -416,24 +415,34 @@ int mapdb_add_map(
 				};
 				g->num_entries++;
 			}
-		} else {
-			struct map_entry split_tmp[MAX_SPLIT];
-			int split_count = entry_split_and_insert(split_tmp, old,
-				fpage, first_page_id);
-			TRACE("%s: ESI returned %d\n", __func__, split_count);
-			if(split_count <= 1) {
-				/* simple 1:1 replacement, no bitmap update even */
+		} else if(L4_SizeLog2(old->range) == L4_SizeLog2(fpage)) {
+			/* exact match with old entry's form. */
+			assert(L4_Address(old->range) == L4_Address(fpage));
+			if(old->first_page_id == first_page_id) {
+				/* and content. */
+				L4_Set_Rights(&old->range,
+					L4_Rights(old->range) | L4_Rights(fpage));
+			} else {
 				if(old->num_children > 1) {
+					/* FIXME: revert these children to referring to this
+					 * entry's parent
+					 */
 					free(old->children);
 					old->children = NULL;
 				}
 				*old = (struct map_entry){
 					.range = fpage, .first_page_id = first_page_id,
 				};
+			}
+		} else {
+			/* skip the no-op. */
+			int page_offs = (L4_Address(fpage) - L4_Address(old->range)) / PAGE_SIZE;
+			if(CHECK_FLAG_ALL(L4_Rights(old->range), L4_Rights(fpage))
+				&& old->first_page_id + page_offs == first_page_id)
+			{
+				/* no-op, truley */
 			} else {
-				int dst_pos = old - &g->entries[0];
-				printf("would insert %d items at %d\n", split_count, dst_pos);
-				panic("N-insert case not written");
+				panic("discontig case not written");
 			}
 		}
 	}
