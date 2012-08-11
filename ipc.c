@@ -401,7 +401,8 @@ bool ipc_send_half(struct thread *self)
 	uint64_t now_us = read_global_timer() * 1000;
 	if(status == TS_R_RECV && dest->ipc_from.raw == self_id.raw) {
 		if(now_us >= dest->wakeup_time) {
-			/* nah, time the peer out instead */
+			/* nah, time the peer out instead. */
+			dest->status = TS_RECV_WAIT;	/* required by thread_wake() */
 			set_ipc_error_thread(dest, (1 << 1) | 1);
 			thread_wake(dest);
 			status = dest->status;
