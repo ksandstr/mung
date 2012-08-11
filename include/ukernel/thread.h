@@ -10,6 +10,7 @@
 #include <l4/types.h>
 #include <ukernel/mm.h>
 #include <ukernel/rbtree.h>
+#include <ukernel/hook.h>
 #include <ukernel/util.h>
 #include <ukernel/x86.h>
 
@@ -77,17 +78,14 @@ struct thread
 	/* "from" is altered on receive. */
 	L4_ThreadId_t ipc_from, ipc_to;
 
-	/* the IPC mechanism arranges for post_exn_call() to be called once either
-	 * the correct thread replies to an exception IPC (page faults,
-	 * exceptions, breath-of-life), or the IPC receive is aborted (but then
-	 * only if "exn_priv" is not NULL). in the former case "thread" will refer
-	 * to the receiving thread, and in the latter it will be NULL.
+	/* the IPC mechanism arranges for post_exn_call to be called front-to-back
+	 * once either the IPC in progress succeeds, or fails. hook functions
+	 * should call hook_detach() as appropriate.
 	 *
-	 * the callback function is supposed to clear post_exn_call, unless the
-	 * next IPC reception is also supposed to trigger it.
+	 * @code is 0 on success and nonzero on failure. @dataptr isn't defined.
+	 * the containing thread can be referenced with container_of().
 	 */
-	void (*post_exn_call)(struct thread *thread, void *priv);
-	void *exn_priv;
+	struct hook post_exn_call;
 
 	struct space *space;
 	struct list_node space_link;

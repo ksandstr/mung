@@ -632,7 +632,7 @@ void sys_schedule(struct x86_exregs *regs)
 
 	if(IS_IPC(dest->status)
 		/* TODO: check flag to see if current IPC is by kernel */
-		&& (dest->post_exn_call != NULL
+		&& (!hook_empty(&dest->post_exn_call)
 			|| dest->saved_mrs > 0 || dest->saved_brs > 0))
 	{
 		result = 3;		/* "running", as IPC not by usermode */

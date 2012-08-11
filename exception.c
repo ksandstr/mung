@@ -264,11 +264,13 @@ fail:
 }
 
 
-static void receive_exn_reply(struct thread *t, void *priv)
+static void receive_exn_reply(struct hook *hook, uintptr_t code, void *priv)
 {
-	if(t == NULL) return;
+	hook_detach(hook);
+	if(code != 0) return;
 
-	assert(t->post_exn_call == &receive_exn_reply);
+	struct thread *t = container_of(hook, struct thread, post_exn_call);
+
 	void *utcb = thread_get_utcb(t);
 	struct x86_exregs *regs = &t->ctx;
 	L4_Word_t eflags;
@@ -296,11 +298,6 @@ static void receive_exn_reply(struct thread *t, void *priv)
 	/* set reserved bits correctly */
 	regs->eflags &= 0xffffffd7;
 	regs->eflags |= 0x00000002;
-
-	/* the wrapped handler. */
-	t->post_exn_call = priv;
-	t->exn_priv = NULL;
-	(*t->post_exn_call)(t, NULL);
 }
 
 
@@ -337,9 +334,10 @@ void build_exn_ipc(
 		L4_VREG(utcb, L4_TCR_MR(i + 1)) = exvars[i];
 	}
 
-	assert(t->exn_priv == NULL);
-	t->exn_priv = t->post_exn_call;
-	t->post_exn_call = &receive_exn_reply;
+	/* this should be called before the save_ipc_regs() hook restores those
+	 * MRs we're interested in.
+	 */
+	hook_push_front(&t->post_exn_call, &receive_exn_reply, NULL);
 }
 
 

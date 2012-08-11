@@ -92,17 +92,19 @@ void yield(struct thread *t)
 }
 
 
-static void restore_saved_regs(struct thread *t, void *priv)
+static void restore_saved_regs(struct hook *hook, uintptr_t code, void *priv)
 {
-	if(t == NULL) return;
+	struct thread *t = container_of(hook, struct thread, post_exn_call);
+
 	/* TODO: make this a TRACE(). it's useful for catching mis-nesting of
 	 * restore_saved_regs() and save_ipc_regs(), i.e. spots where
 	 * post_exn_{ok,fail}() isn't being called properly.
 	 */
 #if 0
-	printf("%s: called for %lu:%lu (%d MRs, %d BRs)\n", __func__,
+	printf("%s: called for %lu:%lu (%d MRs, %d BRs) on %s\n", __func__,
 		TID_THREADNUM(t->id), TID_VERSION(t->id),
-		(int)t->saved_mrs, (int)t->saved_brs);
+		(int)t->saved_mrs, (int)t->saved_brs,
+		code != 0 ? "IPC fail" : "IPC success");
 #endif
 	assert(t->saved_mrs > 0 || t->saved_brs > 0);
 
@@ -114,7 +116,7 @@ static void restore_saved_regs(struct thread *t, void *priv)
 	t->saved_mrs = 0;
 	t->saved_brs = 0;
 
-	t->post_exn_call = NULL;
+	hook_detach(hook);
 }
 
 
@@ -122,10 +124,10 @@ void save_ipc_regs(struct thread *t, int mrs, int brs)
 {
 	/* TODO: see above */
 #if 0
-	printf("%s: called for %lu:%lu (%d MRs, %d BRs)\n", __func__,
-		TID_THREADNUM(t->id), TID_VERSION(t->id), mrs, brs);
+	printf("%s: called for %lu:%lu (%d MRs, %d BRs) from %p\n", __func__,
+		TID_THREADNUM(t->id), TID_VERSION(t->id), mrs, brs,
+		__builtin_return_address(0));
 #endif
-	assert(t->post_exn_call == NULL);
 	assert(t->saved_mrs == 0 && t->saved_brs == 0);
 	assert(mrs >= 1 && brs >= 0);
 	assert(mrs + brs <= sizeof(t->saved_regs) / sizeof(t->saved_regs[0]));
@@ -138,37 +140,21 @@ void save_ipc_regs(struct thread *t, int mrs, int brs)
 	memcpy(&t->saved_regs[mrs], &L4_VREG(utcb, L4_TCR_BR(0)),
 		sizeof(L4_Word_t) * brs);
 
-	t->post_exn_call = &restore_saved_regs;
-	t->exn_priv = NULL;
+	hook_push_back(&t->post_exn_call, &restore_saved_regs, NULL);
 }
 
 
 bool post_exn_ok(struct thread *t)
 {
-	if(t->post_exn_call != NULL) {
-		(*t->post_exn_call)(t, t->exn_priv);
-		return true;
-	} else {
-		return false;
-	}
+	int num = hook_call_front(&t->post_exn_call, -1, false, 0);
+	return num > 0;
 }
 
 
 bool post_exn_fail(struct thread *t)
 {
-	if(t->post_exn_call != NULL) {
-		if(t->exn_priv != NULL) {
-			/* (this is fancy so that the function doesn't need an exn_priv
-			 * just to clear the callback.)
-			 */
-			void (*fn)(struct thread *, void *) = t->post_exn_call;
-			t->post_exn_call = NULL;
-			(*fn)(NULL, t->exn_priv);
-		}
-		return true;
-	} else {
-		return false;
-	}
+	int num = hook_call_front(&t->post_exn_call, -1, false, 1);
+	return num > 0;
 }
 
 
@@ -218,6 +204,7 @@ struct thread *thread_new(thread_id tid)
 		},
 	};
 
+	hook_init(&t->post_exn_call, NULL);
 	htable_add(&thread_hash, int_hash(TID_THREADNUM(t->id)), t);
 
 	return t;
@@ -227,7 +214,7 @@ struct thread *thread_new(thread_id tid)
 static void thread_destroy(struct thread *t)
 {
 	assert(t->status == TS_DEAD || t->status == TS_STOPPED);
-	assert(t->post_exn_call == NULL);
+	assert(hook_empty(&t->post_exn_call));
 
 	struct space *sp = t->space;
 
@@ -438,8 +425,10 @@ void thread_sleep(struct thread *t, L4_Time_t period)
 			__func__, __builtin_return_address(0));
 	}
 	assert(t->status == TS_SEND_WAIT || t->status == TS_RECV_WAIT);
-	/* NOTE: merged with thread_wake(), which asserted against TS_STOPPED and
-	 * TS_DEAD rather than for the IPC wait states
+	/* NOTE: this function was merged with thread_wake(), which asserted
+	 * against {STOPPED, DEAD} rather than for the IPC wait states. callers
+	 * should handle R_RECV separately as it doesn't instantly promote to
+	 * RECV_WAIT.
 	 */
 
 	if(period.raw != L4_ZeroTime.raw && period.raw != L4_Never.raw) {
@@ -448,13 +437,19 @@ void thread_sleep(struct thread *t, L4_Time_t period)
 	}
 
 	if(period.raw == L4_ZeroTime.raw) {
-		/* extreme napping */
-		t->status = TS_READY;
-		t->wakeup_time = 0;
+		if(CHECK_FLAG(t->flags, TF_HALT)) {
+			t->status = TS_STOPPED;
+			sq_remove_thread(t);
+		} else {
+			/* extreme napping */
+			t->status = TS_READY;
+			t->wakeup_time = 0;
+			sq_update_thread(t);
+		}
 	} else {
 		t->wakeup_time = wakeup_at(period);
+		sq_update_thread(t);
 	}
-	sq_update_thread(t);
 }
 
 
@@ -466,6 +461,7 @@ void thread_ipc_fail(struct thread *t)
 
 	if(CHECK_FLAG(t->flags, TF_HALT)) {
 		t->status = TS_STOPPED;
+		sq_remove_thread(t);
 	} else {
 		t->status = TS_READY;
 		if(t->wakeup_time > 0) {
@@ -539,26 +535,28 @@ size_t hash_thread_by_id(const void *ptr, void *dataptr) {
 }
 
 
-static void receive_breath_of_life(struct thread *t, void *priv)
+static void receive_breath_of_life(
+	struct hook *hook,
+	uintptr_t code,
+	void *priv)
 {
-	if(t == NULL) return;
+	hook_detach(hook);
 
-	assert(t->post_exn_call == &receive_breath_of_life);
-	t->post_exn_call = NULL;
-	t->exn_priv = NULL;
+	if(code == 0) {
+		struct thread *t = container_of(hook, struct thread, post_exn_call);
+		void *utcb = thread_get_utcb(t);
+		L4_MsgTag_t tag = { .raw = L4_VREG(utcb, L4_TCR_MR(0)) };
+		TRACE("%s: in thread %lu:%lu, tag %#lx\n", __func__,
+			TID_THREADNUM(t->id), TID_VERSION(t->id),
+			tag.raw);
+		if(tag.X.u != 2 || tag.X.t != 0) return;
 
-	void *utcb = thread_get_utcb(t);
-	L4_MsgTag_t tag = { .raw = L4_VREG(utcb, L4_TCR_MR(0)) };
-	TRACE("%s: in thread %lu:%lu, tag %#lx\n", __func__,
-		TID_THREADNUM(t->id), TID_VERSION(t->id),
-		tag.raw);
-	if(tag.X.u != 2 || tag.X.t != 0) return;
-
-	L4_Word_t ip = L4_VREG(utcb, L4_TCR_MR(1)),
-		sp = L4_VREG(utcb, L4_TCR_MR(2));
-	TRACE("%s: setting sp %#lx, ip %#lx\n", __func__, sp, ip);
-	thread_set_spip(t, sp, ip);
-	/* the exception IPC mechanism starts the thread. */
+		L4_Word_t ip = L4_VREG(utcb, L4_TCR_MR(1)),
+			sp = L4_VREG(utcb, L4_TCR_MR(2));
+		TRACE("%s: setting sp %#lx, ip %#lx\n", __func__, sp, ip);
+		thread_set_spip(t, sp, ip);
+		/* the exception's IPC success unhalts the thread. */
+	}
 }
 
 
@@ -698,17 +696,23 @@ L4_Word_t sys_exregs(
 	if(CHECK_FLAG(ctl_in, CTL_h)) {
 		int state = dest_thread->status;
 		if(!CHECK_FLAG(ctl_in, CTL_H)) {
-			dest_thread->flags &= ~TF_HALT;
-			if(state == TS_STOPPED) {
-				TRACE("%s: starting halted thread\n", __func__);
+			if(!CHECK_FLAG(dest_thread->flags, TF_HALT)
+				&& state == TS_STOPPED)
+			{
+				TRACE("%s: starting fresh thread\n", __func__);
 				thread_start(dest_thread);
+			} else if(CHECK_FLAG(dest_thread->flags, TF_HALT)) {
+				TRACE("%s: calling thread_resume() on state %d\n",
+					__func__, state);
+				thread_resume(dest_thread);
 			}
 		} else {
-			dest_thread->flags |= TF_HALT;
-			if(IS_READY(dest_thread->status) || state == TS_RUNNING) {
+			if(!CHECK_FLAG(dest_thread->flags, TF_HALT)) {
 				thread_halt(dest_thread);
-				assert(dest_thread->status == TS_STOPPED);
-				TRACE("%s: stopped running thread\n", __func__);
+				assert(dest_thread->status == TS_STOPPED
+					|| dest_thread->status == TS_RECV_WAIT
+					|| dest_thread->status == TS_SEND_WAIT);
+				TRACE("%s: halted thread\n", __func__);
 			}
 		}
 
@@ -807,6 +811,7 @@ void sys_threadcontrol(struct x86_exregs *regs)
 		/* thread/space deletion */
 		thread_halt(dest);
 		abort_waiting_ipc(dest, 2 << 1);	/* "lost partner" */
+		post_exn_fail(dest);
 		if(dest->status != TS_STOPPED) {
 			dest->status = TS_STOPPED;
 			sq_remove_thread(dest);
@@ -879,8 +884,8 @@ void sys_threadcontrol(struct x86_exregs *regs)
 			dest->wakeup_time = ~(uint64_t)0;
 			dest->status = TS_R_RECV;
 			sq_insert_thread(dest);
-			dest->post_exn_call = &receive_breath_of_life;
-			dest->exn_priv = NULL;
+			hook_push_back(&dest->post_exn_call, &receive_breath_of_life,
+				NULL);
 
 			L4_VREG(dest_utcb, L4_TCR_EXCEPTIONHANDLER) = L4_nilthread.raw;
 		}
