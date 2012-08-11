@@ -276,14 +276,13 @@ void space_put_page(
 	assert(ptab_page->vm_addr != NULL);
 
 	uint32_t *ptab_mem = ptab_page->vm_addr;
-	bool invalidate = CHECK_FLAG(ptab_mem[ptab_ix], PT_PRESENT)
-		&& (ptab_mem[ptab_ix] >> 12) != page_id;
-	ptab_mem[ptab_ix] = page_id << 12 | PT_PRESENT | PT_USER
-		| (CHECK_FLAG(access, L4_Writable) ? PT_RW : 0);
-	if(invalidate) {
-		/* TODO: skip this if _sp_'s page table is not currently loaded */
-		x86_invalidate_page(addr & ~PAGE_MASK);
+	if(page_id == 0) ptab_mem[ptab_ix] = 0;
+	else {
+		ptab_mem[ptab_ix] = page_id << 12 | PT_PRESENT | PT_USER
+			| (CHECK_FLAG(access, L4_Writable) ? PT_RW : 0);
 	}
+	/* TODO: skip this if _sp_'s page table is not currently loaded */
+	x86_invalidate_page(addr & ~PAGE_MASK);
 }
 
 
