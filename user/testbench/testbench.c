@@ -395,8 +395,6 @@ static void transfer_to_forkserv(void)
 	extern char _start, _end;
 	const int max_pages = 2048;
 	L4_Word_t *page_addrs = malloc(sizeof(L4_Word_t) * max_pages);
-	printf("page_addrs is %lu bytes at %p\n",
-		(unsigned long)(sizeof(L4_Word_t) * max_pages), page_addrs);
 	int num_pages = 0;
 	/* first, fault them in. */
 	volatile uint8_t foo = 0;
@@ -427,8 +425,6 @@ static void transfer_to_forkserv(void)
 	free(page_addrs);
 
 	/* TODO: terminate forkserv pager & release its stack */
-
-	printf("%s: at an end\n", __func__);
 }
 
 

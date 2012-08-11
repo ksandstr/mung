@@ -287,7 +287,6 @@ static bool handle_new_thread(
 static bool handle_fork(L4_ThreadId_t from)
 {
 	/* not quite yet. */
-	printf("forkserv: would've forked for tid %#lx\n", from.raw);
 	L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 1 }.raw);
 	L4_LoadMR(1, ~(L4_Word_t)0);
 	return true;
