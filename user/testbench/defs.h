@@ -49,6 +49,9 @@ extern L4_ThreadId_t start_thread_long(
 
 extern NORETURN void exit_thread(void *return_value);
 extern void *join_thread(L4_ThreadId_t tid);
+extern void for_each_thread(
+	void (*fn)(L4_ThreadId_t tid, void *ptr),
+	void *ptr);
 
 
 /* from delay.c */

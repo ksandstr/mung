@@ -216,3 +216,13 @@ void *join_thread(L4_ThreadId_t tid)
 	threads[t].retval = NULL;
 	return rv;
 }
+
+
+void for_each_thread(void (*fn)(L4_ThreadId_t tid, void *ptr), void *ptr)
+{
+	for(int i=0; i < MAX_THREADS; i++) {
+		if(!threads[i].alive) continue;
+		L4_ThreadId_t tid = L4_GlobalId(base_tnum + i, threads[i].version);
+		(*fn)(tid, ptr);
+	}
+}

@@ -272,6 +272,28 @@ static bool handle_sbrk(L4_ThreadId_t from, L4_Word_t new_break)
 }
 
 
+static bool handle_new_thread(
+	L4_ThreadId_t from,
+	L4_Word_t space_id,
+	L4_Word_t ip,
+	L4_Word_t sp)
+{
+	/* yeah, no. */
+	printf("forkserv: new_thread not implemented\n");
+	return false;
+}
+
+
+static bool handle_fork(L4_ThreadId_t from)
+{
+	/* not quite yet. */
+	printf("forkserv: would've forked for tid %#lx\n", from.raw);
+	L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 1 }.raw);
+	L4_LoadMR(1, ~(L4_Word_t)0);
+	return true;
+}
+
+
 /* (not quite certain if this'll work with just a single thread. more RAM can
  * be had from sigma0, though, so there's no dependency there.)
  */
@@ -309,6 +331,18 @@ static void forkserv_dispatch_loop(void)
 				}
 
 				case FORKSERV_FORK:
+					reply = handle_fork(from);
+					break;
+
+				case FORKSERV_NEW_THREAD: {
+					L4_Word_t space_id, ip, sp;
+					L4_StoreMR(1, &space_id);
+					L4_StoreMR(2, &ip);
+					L4_StoreMR(3, &sp);
+					reply = handle_new_thread(from, space_id, ip, sp);
+					break;
+				}
+
 				case FORKSERV_EXIT:
 					printf("label %#x not implemented yet\n",
 						(unsigned)tag.X.label);
