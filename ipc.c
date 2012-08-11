@@ -404,6 +404,7 @@ bool ipc_send_half(struct thread *self)
 			/* nah, time the peer out instead */
 			set_ipc_error_thread(dest, (1 << 1) | 1);
 			thread_wake(dest);
+			status = dest->status;
 		} else {
 			/* yep */
 			status = TS_RECV_WAIT;
@@ -452,7 +453,11 @@ bool ipc_send_half(struct thread *self)
 				L4_VREG(dest_utcb, L4_TCR_VA_SENDER) = self->id;
 			}
 		}
-		dest->status = status;	/* join with the overridden status */
+		/* join with the overridden status. this satisfies thread_wake()'s
+		 * precondition.
+		 */
+		assert(dest->status == TS_RECV_WAIT || dest->status == TS_R_RECV);
+		dest->status = status;
 		thread_wake(dest);
 
 		if(L4_IsNilThread(self->ipc_from)) {
@@ -463,6 +468,10 @@ bool ipc_send_half(struct thread *self)
 			/* indicate active receive. */
 			TRACE("%s: setting status to R_RECV\n", __func__);
 			self->status = TS_R_RECV;
+			if(self->wakeup_time > 0) {
+				self->wakeup_time = 0;
+				sq_update_thread(self);
+			}
 			return true;
 		}
 	} else if(self->send_timeout.raw != L4_ZeroTime.raw) {
