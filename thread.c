@@ -385,8 +385,8 @@ void thread_halt(struct thread *t)
 
 	t->flags |= TF_HALT;
 	if(t->status == TS_READY || t->status == TS_RUNNING) {
-		sq_remove_thread(t);
 		t->status = TS_STOPPED;
+		sq_remove_thread(t);
 
 		if(t == get_current_thread()) {
 			if(IS_KERNEL_THREAD(t)) schedule();
@@ -419,11 +419,6 @@ uint64_t wakeup_at(L4_Time_t period)
 
 void thread_sleep(struct thread *t, L4_Time_t period)
 {
-	if(t->status != TS_SEND_WAIT && t->status != TS_RECV_WAIT) {
-		printf("thread %lu:%lu status is %d in %s called from %p\n",
-			TID_THREADNUM(t->id), TID_VERSION(t->id), (int)t->status,
-			__func__, __builtin_return_address(0));
-	}
 	assert(t->status == TS_SEND_WAIT || t->status == TS_RECV_WAIT);
 	/* NOTE: this function was merged with thread_wake(), which asserted
 	 * against {STOPPED, DEAD} rather than for the IPC wait states. callers
