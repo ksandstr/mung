@@ -126,6 +126,14 @@ static size_t rehash_ref_hash(const void *elem, void *priv) {
 
 int mapdb_init(struct map_db *ptr, struct space *space)
 {
+	/* FIXME: add a proper interface for enabling/disabling trace IDs.
+	 * kernel commandline perhaps?
+	 */
+#if 0
+	// trace_enable(TRID_MAPDB);
+	// trace_enable(TRID_IPC);
+	// trace_enable(TRID_SCHED);
+#endif
 	htable_init(&ptr->groups, &rehash_map_group, NULL);
 	ptr->space = space;
 	ptr->ref_id = next_ref_id++;
