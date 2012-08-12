@@ -413,6 +413,14 @@ void isr_exn_pf_bottom(struct x86_exregs *regs)
 		panic("KERNEL #PF");
 	}
 
+	/* NOTE: due to the way caches work, a write fault should also be a read
+	 * fault except where an existing map_entry already grants read access.
+	 * likewise read access should promote to execute access until NX bits
+	 * (and PTE support in general) come about.
+	 */
+	const int fault_access = CHECK_FLAG(regs->error, 2)
+		? L4_Writable : L4_Readable;
+
 #ifndef NDEBUG
 	static uintptr_t last_fault = ~0;
 	static int repeat_count = 0;
@@ -432,7 +440,7 @@ void isr_exn_pf_bottom(struct x86_exregs *regs)
 
 	const struct map_entry *e = mapdb_probe(&current->space->mapdb,
 		fault_addr);
-	if(e != NULL) {
+	if(e != NULL && CHECK_FLAG_ALL(L4_Rights(e->range), fault_access)) {
 		space_put_page(current->space, fault_addr,
 			mapdb_page_id_in_entry(e, fault_addr), L4_Rights(e->range));
 		space_commit(current->space);
