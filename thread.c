@@ -657,12 +657,14 @@ L4_Word_t sys_exregs(
 		if(state == TS_R_RECV || state == TS_RECV_WAIT) {
 			thread_ipc_fail(dest_thread);
 			dest_thread->ipc_from = L4_nilthread;
-			/* "canceled in receive phase" */
-			assert(dest_utcb != NULL);
-			L4_VREG(dest_utcb, L4_TCR_ERRORCODE) = 1 | (3 << 1);
-			L4_VREG(dest_utcb, L4_TCR_MR(0)) = (L4_MsgTag_t){ .X.flags = 0x8 }.raw;
-
-			post_exn_fail(dest_thread);
+			/* "canceled in receive phase", but only communicate it for
+			 * non-exception IPC.
+			 */
+			if(!post_exn_fail(dest_thread)) {
+				assert(dest_utcb != NULL);
+				L4_VREG(dest_utcb, L4_TCR_ERRORCODE) = 1 | (3 << 1);
+				L4_VREG(dest_utcb, L4_TCR_MR(0)) = (L4_MsgTag_t){ .X.flags = 0x8 }.raw;
+			}
 
 			TRACE("%s: aborted receive\n", __func__);
 		}
@@ -676,12 +678,12 @@ L4_Word_t sys_exregs(
 			thread_ipc_fail(dest_thread);
 
 			dest_thread->ipc_from = L4_nilthread;
-			/* "canceled in send phase" */
-			assert(dest_utcb != NULL);
-			L4_VREG(dest_utcb, L4_TCR_ERRORCODE) = 0 | (3 << 1);
-			L4_VREG(dest_utcb, L4_TCR_MR(0)) = (L4_MsgTag_t){ .X.flags = 0x8 }.raw;
-
-			post_exn_fail(dest_thread);
+			/* "canceled in send phase", but see comment above */
+			if(!post_exn_fail(dest_thread)) {
+				assert(dest_utcb != NULL);
+				L4_VREG(dest_utcb, L4_TCR_ERRORCODE) = 0 | (3 << 1);
+				L4_VREG(dest_utcb, L4_TCR_MR(0)) = (L4_MsgTag_t){ .X.flags = 0x8 }.raw;
+			}
 
 			TRACE("%s: aborted send\n", __func__);
 		}
