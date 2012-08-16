@@ -347,8 +347,18 @@ int mapdb_add_map(
 	uint32_t first_page_id)
 {
 	L4_Word_t addr = L4_Address(fpage);
-	TRACE("%s: adding fpage at %#lx, size %#lx\n", __func__, addr,
-		L4_Size(fpage));
+	TRACE("%s: adding fpage at %#lx, size %#lx, access [%c%c%c]\n", __func__,
+		addr, L4_Size(fpage),
+		CHECK_FLAG(L4_Rights(fpage), L4_Readable) ? 'r' : '-',
+		CHECK_FLAG(L4_Rights(fpage), L4_Writable) ? 'w' : '-',
+		CHECK_FLAG(L4_Rights(fpage), L4_eXecutable) ? 'x' : '-');
+
+	/* x86 no-NX hack. this lets the pagefault exception handler do
+	 * pre-existing maps correctly.
+	 */
+	if(CHECK_FLAG(L4_Rights(fpage), L4_Readable)) {
+		L4_Set_Rights(&fpage, L4_Rights(fpage) | L4_eXecutable);
+	}
 
 	struct map_group *g = group_for_addr(db, addr);
 	if(g == NULL) {
