@@ -106,11 +106,11 @@ void kmem_cache_destroy(struct kmem_cache *cache)
 
 void *kmem_cache_alloc(struct kmem_cache *cache)
 {
-	struct slab *slab;
-	if(list_empty(&cache->partial_list)) {
-		if(!list_empty(&cache->free_list)) {
-			slab = container_of(cache->free_list.n.next, struct slab, link);
-			list_del(cache->free_list.n.next);
+	struct slab *slab = list_top(&cache->partial_list, struct slab, link);
+	if(slab == NULL) {
+		slab = list_top(&cache->free_list, struct slab, link);
+		if(slab != NULL) {
+			list_del_from(&cache->free_list, &slab->link);
 		} else {
 			void *kpage = kmem_alloc_new_page();
 			if(unlikely(kpage == NULL)) return NULL;
@@ -122,8 +122,6 @@ void *kmem_cache_alloc(struct kmem_cache *cache)
 		slab->in_use = 0;
 		slab->magic = SLAB_MAGIC;
 		list_add(&cache->partial_list, &slab->link);
-	} else {
-		slab = container_of(cache->partial_list.n.next, struct slab, link);
 	}
 
 	void *ret = slab->freelist, *next = *(void **)ret;
@@ -155,6 +153,8 @@ void *kmem_cache_zalloc(struct kmem_cache *cache)
 
 void kmem_cache_free(struct kmem_cache *cache, void *ptr)
 {
+	assert(kmem_cache_find(ptr) == cache);
+
 	struct slab *slab = (struct slab *)((intptr_t)ptr & ~PAGE_MASK);
 	assert(slab->in_use > 0);
 	if(slab->freelist == NULL) {
@@ -162,6 +162,16 @@ void kmem_cache_free(struct kmem_cache *cache, void *ptr)
 		list_del_from(&cache->full_list, &slab->link);
 		list_add(&cache->partial_list, &slab->link);
 	}
+
+#ifndef NDEBUG
+	/* assert against free twice. */
+	void **next = &slab->freelist;
+	while(*next != NULL) {
+		assert(ptr != *next);
+		next = *next;
+	}
+	assert(ptr < *next || *next == NULL);
+#endif
 
 	*(void **)ptr = slab->freelist;
 	slab->freelist = ptr;
