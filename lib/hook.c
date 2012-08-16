@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <stdint.h>
 #include <stdbool.h>
+#include <assert.h>
 #include <ccan/list/list.h>
 #include <ccan/container_of/container_of.h>
 #include <ccan/alignof/alignof.h>
@@ -24,6 +25,7 @@ static struct kmem_cache *hook_fn_slab = NULL;
 
 static struct hook_fn *h_fn(hook_call_t fn, void *ptr)
 {
+	assert(hook_fn_slab != NULL);
 	struct hook_fn *ent = kmem_cache_alloc(hook_fn_slab);
 	ent->fn = fn;
 	ent->dataptr = ptr;
@@ -35,6 +37,7 @@ void hook_init(struct hook *h, void *dataptr)
 {
 	static bool first = true;
 	if(unlikely(first)) {
+		first = false;
 		hook_fn_slab = kmem_cache_create("hook_fn_slab",
 			sizeof(struct hook_fn), ALIGNOF(struct hook_fn),
 			0, NULL, NULL);
