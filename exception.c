@@ -413,13 +413,23 @@ void isr_exn_pf_bottom(struct x86_exregs *regs)
 		panic("KERNEL #PF");
 	}
 
-	/* NOTE: due to the way caches work, a write fault should also be a read
-	 * fault except where an existing map_entry already grants read access.
-	 * likewise read access should promote to execute access until NX bits
-	 * (and PTE support in general) come about.
+	int fault_access = L4_Readable;		/* the cache always reads. */
+	if(CHECK_FLAG(regs->error, 2)) fault_access |= L4_Writable;
+	/* TODO: is there some way to catch this explicitly e.g. with NX-enabled
+	 * PTEs?
+	 *
+	 * see also the x86 hack in mapdb_add_map().
 	 */
-	const int fault_access = CHECK_FLAG(regs->error, 2)
-		? L4_Writable : L4_Readable;
+	if(regs->eip == fault_addr) fault_access |= L4_eXecutable;
+
+#if 0
+	printf("#PF (%s, %s, %s) @ %#lx (eip %#lx); current thread %lu:%lu\n",
+		CHECK_FLAG(regs->error, 4) ? "user" : "super",
+		CHECK_FLAG(regs->error, 2) ? "write" : "read",
+		CHECK_FLAG(regs->error, 1) ? "access" : "presence",
+		fault_addr, regs->eip,
+		TID_THREADNUM(current->id), TID_VERSION(current->id));
+#endif
 
 #ifndef NDEBUG
 	static uintptr_t last_fault = ~0;
@@ -463,7 +473,7 @@ void isr_exn_pf_bottom(struct x86_exregs *regs)
 			save_ipc_regs(current, 3, 1);
 			L4_VREG(utcb, L4_TCR_BR(0)) = L4_CompleteAddressSpace.raw;
 			L4_VREG(utcb, L4_TCR_MR(0)) = ((-2) & 0xfff) << 20		/* label */
-				| (CHECK_FLAG(regs->error, 2) ? 0x2 : 0x4) << 16	/* access */
+				| fault_access << 16	/* access */
 				| 2;		/* "u" for msgtag */
 			L4_VREG(utcb, L4_TCR_MR(1)) = fault_addr;
 			L4_VREG(utcb, L4_TCR_MR(2)) = regs->eip;
