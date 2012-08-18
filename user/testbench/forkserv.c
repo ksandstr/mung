@@ -985,26 +985,14 @@ static void helper_thread_fn(void)
 {
 	L4_Set_ExceptionHandler(L4_Pager());
 
-	bool first = true;
 	for(;;) {
 		L4_ThreadId_t from;
 		L4_MsgTag_t tag;
 
-		if(!first || helper_queue == NULL) {
-			tag = L4_Wait(&from);
-		} else if(helper_queue == NULL) {
-			first = false;
-		} else {
-			assert(first && helper_queue != NULL);
-			/* if helper_thread_fn() wakes up only after the first item has
-			 * been queued, it won't be picked up. so falsify a CHOPCHOP
-			 * message if the queue isn't empty.
-			 */
-			from = forkserv_tid;
-			tag = (L4_MsgTag_t){ .X.u = 1, .X.label = FSHELPER_CHOPCHOP};
-			L4_LoadMR(0, tag.raw);
-			L4_LoadMR(1, 0);
-		}
+		/* polling, polling, polling, polling... */
+		L4_LoadMR(0, (L4_MsgTag_t){ .X.label = FSHELPER_CHOPCHOP_DONE }.raw);
+		tag = L4_Ipc(forkserv_tid, L4_anythread,
+			L4_Timeouts(L4_Never, L4_Never), &from);
 
 		for(;;) {
 			if(L4_IpcFailed(tag)) {
@@ -1025,16 +1013,16 @@ static void helper_thread_fn(void)
 					struct helper_work *w;
 					do {
 						w = *(struct helper_work *volatile *)&helper_queue;
-					} while(!__sync_bool_compare_and_swap(&helper_queue,
-						w, NULL));
+					} while(w != NULL
+						&& !__sync_bool_compare_and_swap(&helper_queue,
+							w, NULL));
 
 					if(w != NULL) {
 						w = reverse_work(w);
-						for(struct helper_work *next = w->next;
-							w != NULL;
-							w = next, next = w->next)
-						{
+						while(w != NULL) {
+							struct helper_work *next = w->next;
 							helper_chopchop(from, w);
+							w = next;
 						}
 					}
 
@@ -1056,8 +1044,8 @@ static void helper_thread_fn(void)
 					.X.label = FSHELPER_CHOPCHOP_DONE,
 				}.raw);
 			/* "SendWait" */
-			tag = L4_Ipc(from, L4_anythread, L4_Timeouts(L4_Never, L4_Never),
-				&from);
+			tag = L4_Ipc(forkserv_tid, L4_anythread,
+				L4_Timeouts(L4_Never, L4_Never), &from);
 		}
 	}
 }
