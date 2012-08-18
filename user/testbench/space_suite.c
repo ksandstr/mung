@@ -13,6 +13,7 @@
 #include <l4/types.h>
 #include <l4/ipc.h>
 #include <l4/kip.h>
+#include <l4/space.h>
 #include <l4/syscall.h>
 
 #include <ukernel/util.h>
@@ -418,6 +419,48 @@ START_TEST(spacectl_iface)
 END_TEST
 
 
+/* tcase "unmap" */
+
+START_TEST(simple_unmap)
+{
+	const uint8_t poke_val = 0x22;
+
+	assert(pg_stats != NULL);
+	plan_tests(1);
+
+	const size_t mem_size = 3 * 4096;
+	void *ptr = valloc(mem_size);
+	memset(ptr, 0, mem_size);
+
+	bool ok = poke(pg_poker, (L4_Word_t)ptr, poke_val);
+	skip_start(!ok, 1, "poke of address %p failed", ptr) {
+		L4_Fpage_t ptr_page = L4_FpageLog2((L4_Word_t)ptr, 12);
+		L4_Set_Rights(&ptr_page, L4_FullyAccessible);
+		L4_UnmapFpage(ptr_page);
+
+#if 0
+		int old_r = pg_stats->n_read;
+		uint8_t val;
+		ok = peek(&val, pg_poker, (L4_Word_t)ptr);
+		skip_start(!ok, 3, "peek of address %p failed", ptr) {
+			ok(pg_stats->n_read == old_r + 1, "read fault after unmap");
+			ok(val == poke_val, "peeked value is correct");
+			ok(val == *(uint8_t *)ptr, "peeked value in memory");
+		} skip_end;
+#endif
+
+		int old_f = pg_stats->n_faults;
+		ok = poke(pg_poker, (L4_Word_t)ptr, 0xff ^ poke_val);
+		skip_start(!ok, 1, "second poke of address %p failed", ptr) {
+			ok(pg_stats->n_faults == old_f + 1, "fault after unmap");
+		} skip_end;
+	} skip_end;
+
+	free(ptr);
+}
+END_TEST
+
+
 Suite *space_suite(void)
 {
 	Suite *s = suite_create("space");
@@ -432,6 +475,11 @@ Suite *space_suite(void)
 	tcase_add_test(ctl_case, spacectl_basic);
 	tcase_add_test(ctl_case, spacectl_iface);
 	suite_add_tcase(s, ctl_case);
+
+	TCase *unmap_case = tcase_create("unmap");
+	tcase_add_checked_fixture(unmap_case, &pager_setup, &pager_teardown);
+	tcase_add_test(unmap_case, simple_unmap);
+	suite_add_tcase(s, unmap_case);
 
 	return s;
 }
