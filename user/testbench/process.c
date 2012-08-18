@@ -88,7 +88,7 @@ static bool handle_int(
 	param->parent_tid = L4_Myself();
 	param->fork_tid = from;
 	param->stk_top = ct_stack;
-	param->exn_size = num_exn_regs;
+	param->exn_size = num_exn_regs + 1;
 	memcpy(param->exn_frame, exn_regs, sizeof(L4_Word_t) * param->exn_size);
 	/* prepare the stack for a call to child_starter_fn(). */
 	L4_Word_t *stk_pos = (void *)param;
@@ -191,23 +191,75 @@ static void proc_mgr_fn(void *parameter UNUSED)
 }
 
 
+static void pop_int24_to(L4_ThreadId_t exh_tid)
+{
+	L4_Set_ExceptionHandler(exh_tid);
+	asm volatile ("int $24");
+}
+
+
 static void child_starter_fn(struct child_param *param)
 {
 	/* initialization message from the parent process */
 	L4_MsgTag_t tag = L4_Receive(param->parent_tid);
 	if(L4_IpcFailed(tag)) {
 		printf("%s: init IPC failed, code %#lx\n", __func__, L4_ErrorCode());
-		goto end;
+		goto fail;
 	}
-
 	/* it doesn't carry any information we'd like to save, though. just a
 	 * synchronization.
 	 */
 
-	printf("%s: would do child-side fork things now.\n", __func__);
-	/* FIXME: do them */
+	/* the technique is this: create a page-sized temporary stack for
+	 * pop_int24_to(), which contains the exception handler parameter that
+	 * receives a #GP for int $24. this exception is used to reload the fork
+	 * caller's frame in that thread.
+	 */
+	void *popstack = malloc(4096);
+	L4_Word_t *top = popstack + 4096 - 32;
+	*(--top) = L4_Myself().raw;
+	*(--top) = 0xb44dc0d3;		/* baaaaad. */
+	L4_ThreadId_t caller_tid = param->fork_tid;
+	if(thread_on_fork(&caller_tid, (L4_Word_t)&pop_int24_to,
+		(L4_Word_t)top) != 0)
+	{
+		printf("%s: thread_on_fork failed\n", __func__);
+		/* FIXME: abort properly */
+		goto fail;
+	}
 
-end:
+	tag = L4_Receive(caller_tid);
+	if(L4_IpcFailed(tag)) {
+		printf("%s: exception receive failed, ec %#lx\n", __func__,
+			L4_ErrorCode());
+		goto fail;
+	} else if((tag.X.label & 0xfff0) != 0xffb0) {
+		printf("%s: weird exception label %#lx\n", __func__,
+			(L4_Word_t)tag.X.label);
+		goto fail;
+	}
+	free(popstack);
+	L4_Word_t frame[64];
+	int frame_len = MIN(int, 63, tag.X.u + tag.X.t);
+	L4_StoreMRs(1, frame_len, &frame[1]);
+	frame[0] = tag.raw;
+	param->exn_frame[11] = 0;		/* %eax */
+	param->exn_frame[0] += 2;		/* skip INT $n (2 bytes) */
+	assert(param->exn_size >= frame_len + 1);
+	L4_LoadMR(0, (L4_MsgTag_t){ .X.u = param->exn_size - 1 }.raw);
+	L4_LoadMRs(1, param->exn_size - 1, param->exn_frame);
+	tag = L4_Reply(caller_tid);
+	if(L4_IpcFailed(tag)) {
+		printf("%s: exception frame reply failed, ec %#lx\n", __func__,
+			L4_ErrorCode());
+		goto fail;
+	}
+
+	/* FIXME: do proper thread exit here. arrange freeing of
+	 * param->stk_top .
+	 */
+
+fail:
 	asm volatile ("int $1");
 }
 
@@ -221,7 +273,7 @@ int fork(void)
 	L4_ThreadId_t old_exh = L4_ExceptionHandler();
 	L4_Set_ExceptionHandler(mgr_tid);
 	int retval;
-	asm volatile ("int $23": "=a" (retval));
+	asm volatile ("int $23": "=a" (retval) :: "memory");
 
 	if(retval != 0) {
 		/* only restore this in the parent */

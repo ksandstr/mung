@@ -56,6 +56,15 @@ extern void for_each_thread(
 	void (*fn)(L4_ThreadId_t tid, void *ptr),
 	void *ptr);
 
+/* 0 on success, errno on failure. the thread indicated by *caller_tid_p will
+ * be preserved & recreated, and the new TID stored in *caller_tid_p . the new
+ * thread starts with ip, sp.
+ */
+extern int thread_on_fork(
+	L4_ThreadId_t *caller_tid_p,
+	L4_Word_t caller_ip,
+	L4_Word_t caller_sp);
+
 extern void tsd_key_create(int *key_p, void (*destructor)(void *ptr));
 extern void tsd_set(int key, void *ptr);
 extern void *tsd_get(int key);

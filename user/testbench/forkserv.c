@@ -878,6 +878,9 @@ static void forkserv_dispatch_loop(void)
 							w->next = *(struct helper_work *volatile *)&helper_queue;
 						} while(!__sync_bool_compare_and_swap(&helper_queue,
 							w->next, w));
+						L4_Time_t x, y;
+						L4_Word_t sr = L4_Timeslice(helper_tid, &x, &y);
+						printf("recursion recurs! sched result %lu\n", sr);
 						reply = false;
 					} else if(L4_IpcFailed(tag)) {
 						printf("helper_tid call failed: ec %#lx\n",

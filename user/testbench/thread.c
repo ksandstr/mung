@@ -19,6 +19,7 @@
 #include <ukernel/util.h>
 
 #include "defs.h"
+#include "forkserv.h"
 
 
 #define THREAD_STACK_SIZE (32 * 1024)
@@ -93,6 +94,45 @@ static COLD void init_threading(void)
 	base_tnum = L4_ThreadNo(L4_Myself()) + 2;
 	/* TODO: pull mask, UTCB size from KIP */
 	utcb_base = (L4_MyLocalId().raw & ~511ul) + 512 + 512;
+}
+
+
+int thread_on_fork(
+	L4_ThreadId_t *caller_tid,
+	L4_Word_t caller_ip,
+	L4_Word_t caller_sp)
+{
+	/* TODO: run atfork-style child-side hooks? */
+
+	int caller = L4_ThreadNo(*caller_tid) - base_tnum;
+	struct thread copy = threads[caller];
+	base_tnum = L4_ThreadNo(L4_Myself());
+	for(int i=0; i < MAX_THREADS; i++) {
+		if(!threads[i].alive || i == caller) continue;
+
+		if(i != caller) {
+			free(threads[i].stack);
+		}
+		threads[i].stack = NULL;
+		threads[i].alive = false;
+		threads[i].retval = NULL;
+	}
+
+	L4_LoadMR(0, (L4_MsgTag_t){ .X.label = FORKSERV_NEW_THREAD,
+		.X.u = 3 }.raw);
+	L4_LoadMR(1, ~(L4_Word_t)0);
+	L4_LoadMR(2, caller_ip);
+	L4_LoadMR(3, caller_sp);
+	L4_MsgTag_t tag = L4_Call(L4_Pager());
+	if(L4_IpcFailed(tag)) {
+		return 1;		/* TODO: not a proper errno. */
+	}
+
+	L4_StoreMR(1, &caller_tid->raw);
+	caller = L4_ThreadNo(*caller_tid) - base_tnum;
+	threads[caller] = copy;
+
+	return 0;
 }
 
 
