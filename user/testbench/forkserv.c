@@ -96,7 +96,7 @@ static struct htable space_hash = HTABLE_INITIALIZER(space_hash,
 	&hash_word, NULL);
 
 static L4_ThreadId_t console_tid, fpager_tid, helper_tid, forkserv_tid;
-static L4_Word_t map_range_pos = 0, next_space_id = 1024, next_async_id = 1;
+static L4_Word_t map_range_pos = 0, next_space_id = 100, next_async_id = 1;
 static struct helper_work *helper_queue = NULL;
 
 
@@ -539,8 +539,8 @@ static bool handle_new_thread(
 		/* also initialize the new address space. */
 		L4_Word_t ctl_out;
 		retval = fpager_spacectl(&tag, &syscall_ec,
-			space_tid, 0, L4_FpageLog2(0x2f000, 12), sp->utcb_area,
-			L4_nilthread, &ctl_out);
+			space_tid, 0, sp->kip_area, sp->utcb_area, L4_nilthread,
+			&ctl_out);
 		if(retval != 1) goto sc_fail;
 	}
 
@@ -633,6 +633,7 @@ static bool handle_fork(L4_ThreadId_t from)
 	copy_space->id = copy_id;
 	copy_space->prog_brk = sp->prog_brk;
 	copy_space->utcb_area = sp->utcb_area;
+	copy_space->kip_area = sp->kip_area;
 	htable_init(&copy_space->pages, &hash_word, NULL);
 	htable_add(&space_hash, int_hash(copy_space->id), &copy_space->id);
 
