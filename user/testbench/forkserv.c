@@ -518,10 +518,17 @@ static bool handle_new_thread(
 {
 	const char *what;
 
+	struct fs_space *sp;
+	if(space_id == ~(L4_Word_t)0) {
+		sp = get_space_by_tid(from);
+		space_id = sp->id;
+	} else {
+		sp = get_space(space_id);
+	}
+
 	/* forkserv's initial pager will do privileged operations on forkserv's
 	 * behalf.
 	 */
-	struct fs_space *sp = get_space(space_id);
 	int t;
 	for(t = 0; t < THREADS_PER_SPACE; t++) {
 		if(sp->threads[t] == NULL) break;
@@ -560,13 +567,17 @@ static bool handle_new_thread(
 		(void *)L4_Address(sp->utcb_area) + t * UTCB_SIZE);
 	if(retval != 1) goto tc_fail;
 
-	/* finally, a breath-of-life IPC. */
+	/* finally, a breath-of-life IPC.
+	 *
+	 * TODO: strictly speaking this should be sent via forkserv_tid.
+	 */
 	L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 2 }.raw);
 	L4_LoadMR(1, instptr);
 	L4_LoadMR(2, stkptr);
-	tag = L4_Send_Timeout(new_tid, L4_TimePeriod(5 * 1000));
+	tag = L4_Send(new_tid);
 	if(L4_IpcFailed(tag)) {
-		printf("%s: breath of life failed, ec %#lx\n", __func__,
+		printf("%s: breath of life to %lu:%lu failed, ec %#lx\n",
+			__func__, L4_ThreadNo(new_tid), L4_Version(new_tid),
 			L4_ErrorCode());
 		abort();
 	}
