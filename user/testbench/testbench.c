@@ -134,7 +134,10 @@ static void forkserv_pager_fn(void *param UNUSED)
 				L4_Word_t faddr, fip;
 				L4_StoreMR(1, &faddr);
 				L4_StoreMR(2, &fip);
-				// diag("%s: pf ip %#lx, addr %#lx\n", __func__, fip, faddr);
+#if 0
+				printf("%s: pf in %#lx: ip %#lx, addr %#lx\n", __func__, from.raw,
+					fip, faddr);
+#endif
 				int rwx = tag.X.label & 0x000f;
 
 				/* look it up. */
@@ -206,6 +209,34 @@ static void forkserv_pager_fn(void *param UNUSED)
 				printf("[forkserv]: %s\n", buf);
 
 				L4_LoadMR(0, 0);
+			} else if(tag.X.label == FPAGER_THREADCTL) {
+				L4_ThreadId_t dest, space, scheduler, pager;
+				L4_Word_t utcb_loc;
+				L4_StoreMR(1, &dest.raw);
+				L4_StoreMR(2, &space.raw);
+				L4_StoreMR(3, &scheduler.raw);
+				L4_StoreMR(4, &pager.raw);
+				L4_StoreMR(5, &utcb_loc);
+				L4_Word_t retval = L4_ThreadControl(dest, space, scheduler,
+					pager, (void *)utcb_loc);
+				L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 2 }.raw);
+				L4_LoadMR(1, retval);
+				L4_LoadMR(2, L4_ErrorCode());
+			} else if(tag.X.label == FPAGER_SPACECTL) {
+				L4_ThreadId_t spacespec, redirector;
+				L4_Word_t control, ctl_out;
+				L4_Fpage_t kip_area, utcb_area;
+				L4_StoreMR(1, &spacespec.raw);
+				L4_StoreMR(2, &control);
+				L4_StoreMR(3, &kip_area.raw);
+				L4_StoreMR(4, &utcb_area.raw);
+				L4_StoreMR(5, &redirector.raw);
+				L4_Word_t retval = L4_SpaceControl(spacespec, control,
+					kip_area, utcb_area, redirector, &ctl_out);
+				L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 3 }.raw);
+				L4_LoadMR(1, retval);
+				L4_LoadMR(2, L4_ErrorCode());
+				L4_LoadMR(3, ctl_out);
 			} else {
 				printf("forkserv's pager got weird IPC from %#lx (label %#lx)\n",
 					from.raw, (L4_Word_t)tag.X.label);
@@ -418,13 +449,32 @@ static void transfer_to_forkserv(void)
 	}
 	/* then the send. */
 	add_fs_tid(1, L4_MyGlobalId());
+	add_fs_tid(1, forkserv_pager);
 	L4_Set_Pager(forkserv_tid);
 	L4_Set_PagerOf(forkserv_pager, forkserv_tid);
 	use_forkserv_sbrk = true;
 	for(int i=num_pages - 1; i >= 0; --i) send_one_page(page_addrs[i], 1);
 	free(page_addrs);
 
-	/* TODO: terminate forkserv pager & release its stack */
+	/* inform forkserv of the shape of testbench's address space, i.e. the KIP
+	 * and UTCB locations.
+	 */
+	const L4_KernelInterfacePage_t *kip = L4_GetKernelInterface();
+	L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 3, .X.label = FORKSERV_AS_CFG }.raw);
+	L4_LoadMR(1, 1);		/* testbench initial space */
+	L4_LoadMR(2, L4_FpageLog2((L4_Word_t)kip, kip->KipAreaInfo.X.s).raw);
+	/* s = 13 means 16 threads. */
+	L4_LoadMR(3, L4_FpageLog2((L4_Word_t)__L4_Get_UtcbAddress(), 13).raw);
+	L4_MsgTag_t tag = L4_Call(forkserv_tid);
+	if(L4_IpcFailed(tag)) {
+		printf("%s: A/S config with forkserv failed, ec %#lx\n",
+			__func__, L4_ErrorCode());
+		abort();
+	}
+
+	/* forkserv's pager is left behind to do privileged syscalls on its
+	 * behalf.
+	 */
 }
 
 

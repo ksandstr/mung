@@ -105,7 +105,7 @@ static bool handle_int(
 	L4_LoadMR(3, (L4_Word_t)ct_stack + 16 * 1024 - 32);	/* sp */
 	tag = L4_Call(L4_Pager());
 	if(L4_IpcFailed(tag)) {
-		/* FIXME: cleanup */
+		/* TODO: cleanup */
 		printf("%s: ffffuuuuuu (ec %#lx)\n", __func__, L4_ErrorCode());
 		abort();
 	}
@@ -115,7 +115,15 @@ static bool handle_int(
 	/* send it off */
 	L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 1 }.raw);
 	L4_LoadMR(1, (L4_Word_t)ct_stack);
-	tag = L4_Send(cp_tid);
+	tag = L4_Send_Timeout(cp_tid, L4_TimePeriod(200 * 1000));
+	if(L4_IpcFailed(tag)) {
+		/* fail for the unit tests' sake.
+		 *
+		 * TODO: there's no cleanup, either. who needs cleanup in a unit test
+		 * harness, anyway?
+		 */
+		retval = (L4_Word_t)-1;
+	}
 
 end:
 	/* return the same stack frame, but set %eax to the fork() return value.
