@@ -16,12 +16,12 @@ distclean:
 	@rm -rf .deps testbench forkserv
 
 
-testbench: testbench.ld crt0.o testbench.o heap.o thread.o delay.o \
-		process.o exn-store.o log.o tap.o test.o \
+testbench: testbench.ld crt0.o testbench.o dlmalloc.o heap.o thread.o \
+		delay.o process.o exn-store.o log.o tap.o test.o \
 		sched_suite.o space_suite.o thread_suite.o \
 		process_suite.o \
 		legacy.o thread_test.o \
-		syscalls.o ccan-list.o ccan-htable.o dlmalloc.o
+		syscalls.o ccan-list.o ccan-htable.o
 	@echo "  LD $@"
 	@$(LD) $(LDFLAGS) -T testbench.ld $(filter %.o,$^) $(LIBS) -o $@ \
 		-L $(CFGDIR)/lib -lukernel_util \
