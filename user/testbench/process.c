@@ -236,7 +236,14 @@ int fork(void)
 
 int wait(int *status)
 {
-	return -1;
+	L4_LoadMR(0, (L4_MsgTag_t){ .X.label = FORKSERV_WAIT }.raw);
+	L4_MsgTag_t tag = L4_Call(L4_Pager());
+	if(L4_IpcFailed(tag) || tag.X.u < 2) return -1;
+
+	L4_Word_t st, id;
+	L4_StoreMR(1, &id);
+	L4_StoreMR(2, &st);
+	return id;
 }
 
 

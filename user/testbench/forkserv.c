@@ -892,6 +892,14 @@ static void forkserv_dispatch_loop(void)
 					break;
 				}
 
+				case FORKSERV_WAIT:
+					/* stub to let tests exit */
+					L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 2 }.raw);
+					L4_LoadMR(1, (L4_Word_t)-1);
+					L4_LoadMR(2, 0);
+					reply = true;
+					break;
+
 				case FORKSERV_EXIT:
 					printf("label %#x not implemented yet\n",
 						(unsigned)tag.X.label);
