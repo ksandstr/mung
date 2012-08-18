@@ -16,10 +16,20 @@
 #include "forkserv.h"
 
 
+struct child_param
+{
+	L4_ThreadId_t parent_tid;	/* init message sender */
+	L4_ThreadId_t fork_tid;		/* fork() caller's TID */
+	void *stk_top;				/* base address of child_starter_fn() stack */
+	int exn_size;				/* # of regs incl. tag at [0] */
+	L4_Word_t exn_frame[];
+};
+
+
 static L4_ThreadId_t mgr_tid = { .raw = 0 };
 
 
-static void child_starter_fn(void);
+static void child_starter_fn(struct child_param *param);
 
 
 static void stop_local_thread(L4_ThreadId_t tid, void *ptr)
@@ -67,12 +77,23 @@ static bool handle_int(
 		return false;
 	}
 
-#if 0
-	printf("%s: forking in thread %#lx\n", __func__, L4_Myself().raw);
-#endif
-
-	/* allocate memory for the child process entry thread's stack. */
-	void *ct_stack = malloc(16 * 1024);
+	/* allocate memory for the child process entry thread's stack, and prepare
+	 * a parameter structure.
+	 */
+	size_t param_size = sizeof(struct child_param)
+			+ sizeof(L4_Word_t) * num_exn_regs,
+		ct_stack_size = 16 * 1024;
+	void *ct_stack = malloc(ct_stack_size);
+	struct child_param *param = ct_stack + ct_stack_size - param_size - 32;
+	param->parent_tid = L4_Myself();
+	param->fork_tid = from;
+	param->stk_top = ct_stack;
+	param->exn_size = num_exn_regs;
+	memcpy(param->exn_frame, exn_regs, sizeof(L4_Word_t) * param->exn_size);
+	/* prepare the stack for a call to child_starter_fn(). */
+	L4_Word_t *stk_pos = (void *)param;
+	*(--stk_pos) = (L4_Word_t)param;
+	*(--stk_pos) = 0xbadc0d3;		/* returning would be bad indeed. */
 
 	/* stop all local threads, except this one and the caller. */
 	L4_ThreadId_t non[3] = { L4_Myself(), from, L4_nilthread };
@@ -102,7 +123,7 @@ static bool handle_int(
 		.X.u = 3 }.raw);
 	L4_LoadMR(1, retval);		/* space ID */
 	L4_LoadMR(2, (L4_Word_t)&child_starter_fn);	/* ip */
-	L4_LoadMR(3, (L4_Word_t)ct_stack + 16 * 1024 - 32);	/* sp */
+	L4_LoadMR(3, (L4_Word_t)stk_pos); /* sp */
 	tag = L4_Call(L4_Pager());
 	if(L4_IpcFailed(tag)) {
 		/* TODO: cleanup */
@@ -112,18 +133,13 @@ static bool handle_int(
 	L4_ThreadId_t cp_tid;
 	L4_StoreMR(1, &cp_tid.raw);
 
-	/* send it off */
-	L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 1 }.raw);
-	L4_LoadMR(1, (L4_Word_t)ct_stack);
-	tag = L4_Send_Timeout(cp_tid, L4_TimePeriod(200 * 1000));
-	if(L4_IpcFailed(tag)) {
-		/* fail for the unit tests' sake.
-		 *
-		 * TODO: there's no cleanup, either. who needs cleanup in a unit test
-		 * harness, anyway?
-		 */
-		retval = (L4_Word_t)-1;
-	}
+	/* send it off.
+	 *
+	 * TODO: could handshake with the child to confirm its side of the fork
+	 * has succeeded in recreating the caller thread etc.
+	 */
+	L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 0 }.raw);
+	L4_Send(cp_tid);
 
 end:
 	/* return the same stack frame, but set %eax to the fork() return value.
@@ -175,11 +191,23 @@ static void proc_mgr_fn(void *parameter UNUSED)
 }
 
 
-static void child_starter_fn(void)
+static void child_starter_fn(struct child_param *param)
 {
-	printf("%s: awakened in %#lx! ffffuuuuu!\n",
-		__func__, L4_Myself().raw);
+	/* initialization message from the parent process */
+	L4_MsgTag_t tag = L4_Receive(param->parent_tid);
+	if(L4_IpcFailed(tag)) {
+		printf("%s: init IPC failed, code %#lx\n", __func__, L4_ErrorCode());
+		goto end;
+	}
 
+	/* it doesn't carry any information we'd like to save, though. just a
+	 * synchronization.
+	 */
+
+	printf("%s: would do child-side fork things now.\n", __func__);
+	/* FIXME: do them */
+
+end:
 	asm volatile ("int $1");
 }
 
