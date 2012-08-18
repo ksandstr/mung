@@ -84,11 +84,15 @@ struct helper_work {
 
 
 static size_t hash_word(const void *, void *);
+static size_t hash_threadno(const void *, void *);
 
 
-static struct htable space_hash = HTABLE_INITIALIZER(space_hash,
-	&hash_word, NULL);
+/* thread_hash is hashed by threadno, but compared for equality with full TID
+ * (i.e. word_cmp().) this is for handle_add_tid()'s overwrite function.
+ */
 static struct htable thread_hash = HTABLE_INITIALIZER(thread_hash,
+	&hash_threadno, NULL);
+static struct htable space_hash = HTABLE_INITIALIZER(space_hash,
 	&hash_word, NULL);
 
 static L4_ThreadId_t console_tid, fpager_tid, helper_tid, forkserv_tid;
@@ -104,6 +108,18 @@ static size_t hash_word(const void *elem, void *priv) {
 
 static bool word_cmp(const void *a, void *b) {
 	return *(const L4_Word_t *)a == *(L4_Word_t *)b;
+}
+
+
+static size_t hash_threadno(const void *elem, void *priv) {
+	L4_ThreadId_t val = { .raw = *(const L4_Word_t *)elem };
+	return int_hash(L4_ThreadNo(val));
+}
+
+
+static struct fs_thread *get_thread(L4_ThreadId_t tid) {
+	return htable_get(&thread_hash, int_hash(L4_ThreadNo(tid)),
+		&word_cmp, &tid);
 }
 
 
@@ -129,10 +145,8 @@ static struct fs_space *get_space(L4_Word_t id)
 
 static struct fs_space *get_space_by_tid(L4_ThreadId_t tid)
 {
-	void *ptr = htable_get(&thread_hash, int_hash(tid.raw),
-		&word_cmp, &tid.raw);
-	if(ptr == NULL) return NULL;
-	else return container_of(ptr, struct fs_thread, tid)->space;
+	struct fs_thread *t = get_thread(tid);
+	return t == NULL ? NULL : t->space;
 }
 
 
@@ -367,16 +381,20 @@ static bool handle_pf(
  */
 static bool handle_add_tid(L4_Word_t space_id, L4_ThreadId_t tid)
 {
-	/* brute-force replace semantics. */
+	size_t tno_hash = int_hash(L4_ThreadNo(tid));
 	struct fs_thread *t;
+
+	/* just find the matching thread number for overwrite. */
 	struct htable_iter it;
-	for(t = htable_first(&thread_hash, &it);
+	for(t = htable_firstval(&thread_hash, &it, tno_hash);
 		t != NULL;
-		t = htable_next(&thread_hash, &it))
+		t = htable_nextval(&thread_hash, &it, tno_hash))
 	{
 		if(L4_ThreadNo(t->tid) == L4_ThreadNo(tid)) break;
 	}
+
 	if(t != NULL) {
+		t->tid = tid;
 		t->space = get_space(space_id);
 		if(t->tid.raw != tid.raw) {
 			htable_delval(&thread_hash, &it);
@@ -386,14 +404,15 @@ static bool handle_add_tid(L4_Word_t space_id, L4_ThreadId_t tid)
 	} else {
 		t = malloc(sizeof(struct fs_thread));
 		*t = (struct fs_thread){ .tid = tid, .space = get_space(space_id) };
-		htable_add(&thread_hash, int_hash(tid.raw), &t->tid.raw);
+		htable_add(&thread_hash, tno_hash, &t->tid);
 
 		int slot;
 		for(slot = THREADS_PER_SPACE - 1; slot >= 0; --slot) {
 			if(t->space->threads[slot] == NULL) break;
 		}
 		if(slot < 0) {
-			printf("%s: no slots left!\n", __func__);
+			printf("%s: no slots left in space %lu!\n", __func__,
+				space_id);
 			return false;		/* (breaks unit testing, which is OK) */
 		}
 		t->space->threads[slot] = t;
@@ -563,7 +582,8 @@ static bool handle_new_thread(
 
 	sp->threads[t] = malloc(sizeof(struct fs_thread));
 	*sp->threads[t] = (struct fs_thread){ .space = sp, .tid = new_tid };
-	htable_add(&thread_hash, int_hash(new_tid.raw), &sp->threads[t]->tid.raw);
+	htable_add(&thread_hash, int_hash(L4_ThreadNo(new_tid)),
+		&sp->threads[t]->tid);
 
 	L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 1 }.raw);
 	L4_LoadMR(1, new_tid.raw);
