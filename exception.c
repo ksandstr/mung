@@ -70,16 +70,41 @@ void isr_exn_ud_bottom(struct x86_exregs *regs)
 }
 
 
+static void sys_unmap_wrap(struct x86_exregs *regs)
+{
+	L4_Word_t control = regs->eax;
+
+	/* TODO: pass utcb to sys_unmap()? */
+	void *utcb = thread_get_utcb(get_current_thread());
+	if((control & 0x3f) > 0) L4_VREG(utcb, L4_TCR_MR(0)) = regs->esi;
+	sys_unmap(control);
+
+	regs->esi = L4_VREG(utcb, L4_TCR_MR(0));
+}
+
+
+static void sys_spacecontrol_wrap(struct x86_exregs *regs)
+{
+	regs->eax = sys_spacecontrol(
+		(L4_ThreadId_t){ .raw = regs->eax },	/* spacespec */
+		regs->ecx,								/* control */
+		(L4_Fpage_t){ .raw = regs->edx },		/* kip_area */
+		(L4_Fpage_t){ .raw = regs->esi },		/* utcb_area */
+		(L4_ThreadId_t){ .raw = regs->edi },	/* redirector */
+		&regs->ecx);							/* old_control */
+}
+
+
 /* basically the slowest possible syscall wrappers. */
 void isr_exn_basic_sc_bottom(struct x86_exregs *regs)
 {
 	static void (*const fn[])(struct x86_exregs *regs) = {
 		[SC_IPC] = &sys_ipc,
 		[SC_LIPC] = &sys_ipc,
-		[SC_UNMAP] = &sys_unmap,
+		[SC_UNMAP] = &sys_unmap_wrap,
 		[SC_THREADSWITCH] = &sys_threadswitch,
 		[SC_SCHEDULE] = &sys_schedule,
-		[SC_SPACECONTROL] = &sys_spacecontrol,
+		[SC_SPACECONTROL] = &sys_spacecontrol_wrap,
 		[SC_THREADCONTROL] = &sys_threadcontrol,
 		[SC_PROCESSORCONTROL] = &sys_processorcontrol,
 	};

@@ -9,7 +9,6 @@
 
 #include <ukernel/thread.h>
 #include <ukernel/mm.h>
-#include <ukernel/x86.h>
 #include <ukernel/mapdb.h>
 
 
@@ -120,8 +119,14 @@ static inline void space_commit(struct space *sp) {
 	/* emptiness */
 }
 
-extern void sys_unmap(struct x86_exregs *regs);
-extern void sys_spacecontrol(struct x86_exregs *regs);
+extern void sys_unmap(L4_Word_t control);
+extern L4_Word_t sys_spacecontrol(
+	L4_ThreadId_t spacespec,
+	L4_Word_t control,
+	L4_Fpage_t kip_area,
+	L4_Fpage_t utcb_area,
+	L4_ThreadId_t redirector,
+	L4_Word_t *old_control);
 
 
 /* pages reserved before htable_add() can be used, are added to the list.

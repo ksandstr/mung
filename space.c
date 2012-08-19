@@ -458,20 +458,16 @@ bool space_add_ioperm(struct space *sp, L4_Word_t base_port, int size)
 }
 
 
-/* syscalls.
- *
- * TODO: divorce them from the x86_regs representation.
- */
+/* syscalls. */
 
-void sys_unmap(struct x86_exregs *regs)
+void sys_unmap(L4_Word_t control)
 {
-	L4_Word_t control = regs->eax;
 	printf("%s: called. control %#x\n", __func__, (unsigned)control);
 
 	struct thread *current = get_current_thread();
 	void *utcb = thread_get_utcb(current);
-	if((control & 0x3f) > 0) L4_VREG(utcb, L4_TCR_MR(0)) = regs->esi;
-	for(int i=0; i <= (control & 0x3f); i++) {
+	int page_count = (control & 0x3f) + 1;
+	for(int i=0; i < page_count; i++) {
 		L4_Fpage_t fp = { .raw = L4_VREG(utcb, L4_TCR_MR(i)) };
 		printf("  would %s %#x:%#x (%c%c%c) for thread %lu:%lu\n",
 			CHECK_FLAG(control, 0x40) ? "flush" : "unmap",
@@ -483,8 +479,6 @@ void sys_unmap(struct x86_exregs *regs)
 		L4_Set_Rights(&fp, L4_NoAccess);
 		L4_VREG(utcb, L4_TCR_MR(i)) = fp.raw;
 	}
-
-	regs->esi = L4_VREG(utcb, L4_TCR_MR(0));
 }
 
 
@@ -492,13 +486,15 @@ void sys_unmap(struct x86_exregs *regs)
  * various failure modes. an attempt should be made to restore the previous
  * values as appropriate.
  */
-void sys_spacecontrol(struct x86_exregs *regs)
+L4_Word_t sys_spacecontrol(
+	L4_ThreadId_t spacespec,
+	L4_Word_t control,
+	L4_Fpage_t kip_area,
+	L4_Fpage_t utcb_area,
+	L4_ThreadId_t redirector,
+	L4_Word_t *old_control)
 {
-	L4_Word_t control = regs->ecx, result, old_ctl = 0;
-	L4_ThreadId_t spacespec = { .raw = regs->eax },
-		redirector = { .raw = regs->edi };
-	L4_Fpage_t kip_area = { .raw = regs->edx },
-		utcb_area = { .raw = regs->esi };
+	L4_Word_t old_ctl = 0, result;
 
 	struct thread *current = get_current_thread();
 	void *utcb = thread_get_utcb(current);
@@ -582,8 +578,8 @@ void sys_spacecontrol(struct x86_exregs *regs)
 	old_ctl = 0;
 
 end:
-	regs->eax = result;
-	regs->ecx = old_ctl;
+	*old_control = old_ctl;
+	return result;
 }
 
 
