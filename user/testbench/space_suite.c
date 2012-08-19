@@ -421,19 +421,20 @@ END_TEST
 
 /* tcase "unmap" */
 
+/* TODO: move the access flag test points out into a different test */
 START_TEST(simple_flush)
 {
 	const uint8_t poke_val = 0x22;
 
 	assert(pg_stats != NULL);
-	plan_tests(3);
+	plan_tests(8);
 
 	const size_t mem_size = 3 * 4096;
 	void *ptr = valloc(mem_size);
 	memset(ptr, 0, mem_size);
 
 	bool ok = poke(pg_poker, (L4_Word_t)ptr, poke_val);
-	skip_start(!ok, 3, "poke of address %p failed", ptr) {
+	skip_start(!ok, 8, "poke of address %p failed", ptr) {
 		L4_Fpage_t ptr_page = L4_FpageLog2((L4_Word_t)ptr, 12);
 		L4_Set_Rights(&ptr_page, L4_FullyAccessible);
 		L4_FlushFpages(1, &ptr_page);
@@ -442,16 +443,20 @@ START_TEST(simple_flush)
 		ok(CHECK_FLAG(L4_Rights(ptr_page), L4_Writable),
 			"poke caused write access");
 
-#if 0
 		int old_r = pg_stats->n_read;
 		uint8_t val;
 		ok = peek(&val, pg_poker, (L4_Word_t)ptr);
-		skip_start(!ok, 3, "peek of address %p failed", ptr) {
+		skip_start(!ok, 5, "peek of address %p failed", ptr) {
 			ok(pg_stats->n_read == old_r + 1, "read fault after unmap");
 			ok(val == poke_val, "peeked value is correct");
 			ok(val == *(uint8_t *)ptr, "peeked value in memory");
+
+			L4_Fpage_t st = L4_GetStatus(ptr_page);
+			ok(CHECK_FLAG(L4_Rights(st), L4_Readable),
+				"peek caused read access");
+			ok(!CHECK_FLAG(L4_Rights(st), L4_Writable),
+				"peek didn't cause write access");
 		} skip_end;
-#endif
 
 		int old_f = pg_stats->n_faults;
 		ok = poke(pg_poker, (L4_Word_t)ptr, 0xff ^ poke_val);
@@ -459,6 +464,36 @@ START_TEST(simple_flush)
 			ok(pg_stats->n_faults == old_f + 1, "fault after flush");
 		} skip_end;
 	} skip_end;
+
+	free(ptr);
+}
+END_TEST
+
+
+/* "partial" meaning "to read only". */
+START_TEST(partial_flush)
+{
+	assert(pg_stats != NULL);
+	plan_tests(2);
+
+	const size_t mem_size = 3 * 4096;
+	void *ptr = valloc(mem_size);
+	memset(ptr, 0, mem_size);
+
+	L4_Fpage_t ptr_page = L4_FpageLog2((L4_Word_t)ptr, 12);
+	L4_Set_Rights(&ptr_page, L4_Writable);
+	L4_FlushFpages(1, &ptr_page);
+
+	uint8_t val;
+	int old_f = pg_stats->n_faults;
+	bool ok = peek(&val, pg_poker, (L4_Word_t)ptr);
+	assert(ok);		/* FIXME: replace with an early exiting fail_unless() */
+	ok(pg_stats->n_faults == old_f, "peek caused no fault");
+
+	int old_w = pg_stats->n_write;
+	ok = poke(pg_poker, (L4_Word_t)ptr, 0x22);
+	assert(ok);
+	ok(pg_stats->n_write == old_w + 1, "poke caused a fault");
 
 	free(ptr);
 }
@@ -483,6 +518,7 @@ Suite *space_suite(void)
 	TCase *unmap_case = tcase_create("unmap");
 	tcase_add_checked_fixture(unmap_case, &pager_setup, &pager_teardown);
 	tcase_add_test(unmap_case, simple_flush);
+	tcase_add_test(unmap_case, partial_flush);
 	suite_add_tcase(s, unmap_case);
 
 	return s;
