@@ -105,20 +105,29 @@ extern int mapdb_map_pages(
 	L4_Fpage_t src_page,
 	L4_Word_t dest_addr);
 
-/* revokes access rights for bits given and in the mappings covered by
- * `fpage`. if a covered mapping ends up with no rights at all, it is removed
- * and its children are moved to its parent (if any remain after recursion).
+/* revokes access rights for bits given and in the mappings covered by @fpage.
+ * if a covered mapping ends up with no rights at all, it is removed and its
+ * children are moved to its parent (if any remain after recursion).
+ *
+ * if @immediate is true, the mappings in @db covered by @fpage will be
+ * affected. thus pairs of (@immediate, @recursive) correspond to L4.X2 unmap
+ * operations like this:
+ *   (true, false) = grant
+ *   (true, true) = flush
+ *   (false, true) = unmap
+ *   (false, false) = one-level status read (not used)
  *
  * returns the inclusive mask of access bits of the physical pages actually
- * covered by `fpage` since the last call to mapdb_unmap_fpage(). if
- * `recursive` is set, this also covers child mappings' access bits.
- * destructive examination of page tables is compensated by storing access
- * bits in struct map_entry as appropriate to recursion. (see comment above
- * the field declaration.)
+ * covered by @fpage since the last call to mapdb_unmap_fpage(). if @recursive
+ * is set, this also covers child mappings' access bits. destructive
+ * examination of page tables is compensated by storing access bits in struct
+ * map_entry as appropriate to recursion. (see comment above the field
+ * declaration.)
  */
 extern int mapdb_unmap_fpage(
 	struct map_db *db,
 	L4_Fpage_t fpage,
+	bool immediate,
 	bool recursive);
 
 

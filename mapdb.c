@@ -763,13 +763,21 @@ fail:
 }
 
 
-int mapdb_unmap_fpage(struct map_db *db, L4_Fpage_t range, bool recursive)
+int mapdb_unmap_fpage(
+	struct map_db *db,
+	L4_Fpage_t range,
+	bool immediate,
+	bool recursive)
 {
+	assert(recursive || immediate);	/* disallows the one-level status read */
+
 	int rwx_seen = 0;
 
-	TRACE("%s: range %#lx:%#lx\n", __func__,
-		L4_Address(range), L4_Size(range));
-	L4_Word_t r_end = L4_Address(range) + L4_Size(range);
+	TRACE("%s: range %#lx:%#lx, %simmediate, %srecursive\n",
+		__func__, L4_Address(range), L4_Size(range),
+		!immediate ? "non-" : "", !recursive ? "non-" : "");
+	L4_Word_t unmap_rights = L4_Rights(range),
+		r_end = L4_Address(range) + L4_Size(range);
 	for(L4_Word_t grp_pos = L4_Address(range);
 		grp_pos < r_end;
 		grp_pos += GROUP_SIZE)
@@ -781,7 +789,7 @@ int mapdb_unmap_fpage(struct map_db *db, L4_Fpage_t range, bool recursive)
 		}
 
 		struct map_entry *e = NULL;
-		if(L4_Rights(range) != 0) {
+		if(immediate && unmap_rights != 0) {
 			e = discontiguate(g, range);
 			/* FIXME: discontiguate() can also fail due to ENOMEM. in this
 			 * case the operation should be put to sleep (pending restart on
@@ -840,12 +848,16 @@ int mapdb_unmap_fpage(struct map_db *db, L4_Fpage_t range, bool recursive)
 				 * (and compress them where not), and if the actual address
 				 * falls within `range`.
 				 */
-				panic("recursive unmap not implemented");
+				static bool warned = false;
+				if(!warned) {
+					printf("%s: recursive unmap skipped!\n", __func__);
+					warned = true;
+				}
 			}
 
 			r_pos = L4_Address(e->range) + L4_Size(e->range);
-			L4_Set_Rights(&e->range, L4_Rights(e->range) & ~L4_Rights(range));
-			if(L4_Rights(e->range) == 0) {
+			if(immediate && (L4_Rights(e->range) & ~unmap_rights) == 0) {
+				L4_Set_Rights(&e->range, L4_Rights(e->range) & ~unmap_rights);
 				/* TODO: implement memmove(3), use it */
 				TRACE("%s: removing entry %#lx:%#lx\n", __func__,
 					L4_Address(e->range), L4_Size(e->range));

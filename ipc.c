@@ -162,7 +162,7 @@ static int apply_mapitem(
 			L4_Address(wnd) + L4_MapItemSndBase(m));
 		if(is_grant && given != 0) {
 			L4_Set_Rights(&map_page, given);
-			mapdb_unmap_fpage(&source->space->mapdb, map_page, false);
+			mapdb_unmap_fpage(&source->space->mapdb, map_page, true, false);
 			/* TODO: this revokes all access and destroys access bits.
 			 * fortunately the latter will have been saved for child mappings
 			 * by mapdb_unmap_fpage(), but for this one that's a problem.

@@ -276,8 +276,9 @@ void space_put_page(
 	assert(ptab_page->vm_addr != NULL);
 
 	uint32_t *ptab_mem = ptab_page->vm_addr;
-	if(page_id == 0) ptab_mem[ptab_ix] = 0;
-	else {
+	if(page_id == 0) {
+		ptab_mem[ptab_ix] = 0;
+	} else {
 		ptab_mem[ptab_ix] = page_id << 12 | PT_PRESENT | PT_USER
 			| (CHECK_FLAG(access, L4_Writable) ? PT_RW : 0);
 	}
@@ -462,23 +463,44 @@ bool space_add_ioperm(struct space *sp, L4_Word_t base_port, int size)
 
 void sys_unmap(L4_Word_t control)
 {
-	printf("%s: called. control %#x\n", __func__, (unsigned)control);
-
 	struct thread *current = get_current_thread();
 	void *utcb = thread_get_utcb(current);
-	int page_count = (control & 0x3f) + 1;
+	struct map_db *mdb = &current->space->mapdb;
+	const bool flush = CHECK_FLAG(control, 0x40);
+	int page_count = (control & 0x3f) + 1, remove_agg = 0;
 	for(int i=0; i < page_count; i++) {
 		L4_Fpage_t fp = { .raw = L4_VREG(utcb, L4_TCR_MR(i)) };
-		printf("  would %s %#x:%#x (%c%c%c) for thread %lu:%lu\n",
-			CHECK_FLAG(control, 0x40) ? "flush" : "unmap",
+		int remove = L4_Rights(fp);
+		remove_agg |= remove;
+#if 0
+		printf("  %s %#x:%#x (%c%c%c) for thread %lu:%lu\n",
+			flush ? "flushing" : "unmapping",
 			(unsigned)L4_Address(fp), (unsigned)L4_Size(fp),
 			CHECK_FLAG(L4_Rights(fp), L4_Readable) ? 'r' : '-',
 			CHECK_FLAG(L4_Rights(fp), L4_Writable) ? 'w' : '-',
 			CHECK_FLAG(L4_Rights(fp), L4_eXecutable) ? 'x' : '-',
 			TID_THREADNUM(current->id), TID_VERSION(current->id));
-		L4_Set_Rights(&fp, L4_NoAccess);
+#endif
+
+		L4_Set_Rights(&fp, mapdb_unmap_fpage(mdb, fp, flush, true));
 		L4_VREG(utcb, L4_TCR_MR(i)) = fp.raw;
+
+		if(remove != 0) {
+			/* make the unmap take effect in the caller's address space.
+			 *
+			 * TODO: use space_put_page() to modify the page table's access
+			 * bits instead using an and/or mask pair. this current solution
+			 * causes minor refaults over the entire range later on.
+			 */
+			for(L4_Word_t addr = FPAGE_LOW(fp);
+				addr < FPAGE_HIGH(fp);
+				addr += PAGE_SIZE)
+			{
+				space_put_page(current->space, addr, 0, 0);
+			}
+		}
 	}
+	if(remove_agg != 0) space_commit(current->space);
 }
 
 
