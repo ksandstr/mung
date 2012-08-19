@@ -421,22 +421,26 @@ END_TEST
 
 /* tcase "unmap" */
 
-START_TEST(simple_unmap)
+START_TEST(simple_flush)
 {
 	const uint8_t poke_val = 0x22;
 
 	assert(pg_stats != NULL);
-	plan_tests(1);
+	plan_tests(3);
 
 	const size_t mem_size = 3 * 4096;
 	void *ptr = valloc(mem_size);
 	memset(ptr, 0, mem_size);
 
 	bool ok = poke(pg_poker, (L4_Word_t)ptr, poke_val);
-	skip_start(!ok, 1, "poke of address %p failed", ptr) {
+	skip_start(!ok, 3, "poke of address %p failed", ptr) {
 		L4_Fpage_t ptr_page = L4_FpageLog2((L4_Word_t)ptr, 12);
 		L4_Set_Rights(&ptr_page, L4_FullyAccessible);
-		L4_UnmapFpage(ptr_page);
+		L4_FlushFpages(1, &ptr_page);
+		ok(CHECK_FLAG(L4_Rights(ptr_page), L4_Readable),
+			"poke caused read access");
+		ok(CHECK_FLAG(L4_Rights(ptr_page), L4_Writable),
+			"poke caused write access");
 
 #if 0
 		int old_r = pg_stats->n_read;
@@ -452,7 +456,7 @@ START_TEST(simple_unmap)
 		int old_f = pg_stats->n_faults;
 		ok = poke(pg_poker, (L4_Word_t)ptr, 0xff ^ poke_val);
 		skip_start(!ok, 1, "second poke of address %p failed", ptr) {
-			ok(pg_stats->n_faults == old_f + 1, "fault after unmap");
+			ok(pg_stats->n_faults == old_f + 1, "fault after flush");
 		} skip_end;
 	} skip_end;
 
@@ -478,7 +482,7 @@ Suite *space_suite(void)
 
 	TCase *unmap_case = tcase_create("unmap");
 	tcase_add_checked_fixture(unmap_case, &pager_setup, &pager_teardown);
-	tcase_add_test(unmap_case, simple_unmap);
+	tcase_add_test(unmap_case, simple_flush);
 	suite_add_tcase(s, unmap_case);
 
 	return s;
