@@ -79,7 +79,7 @@ extern struct thread *space_find_local_thread(
 	struct space *sp,
 	L4_LthreadId_t ltid);
 
-/* use 0 to erase a page. */
+/* use 0 for @page_id to erase a page. */
 extern void space_put_page(
 	struct space *sp,
 	uintptr_t addr,
