@@ -84,8 +84,17 @@ static inline void x86_flush_tlbs(void) {
  * valid since the 80486, and this microkernel won't support the 386, so no
  * specialcasing.
  */
-static inline void x86_invalidate_page(uintptr_t address) {
-	__asm__ __volatile__ ("invlpg %0" :: "m" (*(char *)address): "memory");
+static inline void x86_invalidate_page(uintptr_t address)
+{
+	/* FIXME: somehow this doesn't work at all; a page table modified right
+	 * before doesn't even budge. so instead we'll flush the entire TLB like
+	 * it's 1987.
+	 */
+#if 0
+	__asm__ __volatile__ ("invlpg (%0)" :: "r" (address): "memory");
+#else
+	x86_flush_tlbs();
+#endif
 }
 
 
