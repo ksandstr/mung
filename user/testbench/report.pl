@@ -32,6 +32,8 @@ my ($tap_low, $tap_high, $tap_next, $no_plan);
 my $msg_break;
 my %stats;
 
+# output a line without context while managing the running "Suite: x y z [X/Y
+# OK]" form nicely.
 sub report_msg {
 	my $str = shift;
 	if(!$msg_break) {
@@ -39,7 +41,6 @@ sub report_msg {
 		$msg_break = 1;
 	}
 
-	# TODO: put this in test/tcase/suite context
 	print "$str\n";
 }
 
@@ -98,7 +99,7 @@ sub tap_line {
 		$test->{passed}++ unless $fail;
 		my $tname = test_name();
 		if($fail) {
-			report_msg("test `$tname' failed: $desc");
+			report_msg("not ok [$tcase->{name}:$tname] - $desc");
 			print "test log: $_\n" foreach @{$test->{log}};
 		}
 		if(++$tap_next > $tap_high && !$no_plan) {
@@ -114,10 +115,11 @@ sub tap_line {
 		report_msg("skip $id - # $diag\t[$tname]");
 		undef $diag;
 	} elsif($line !~ /^\s*$/) {
-		die "unrecognized line";
+		report_msg("# *** ignored `$line'");
+		die "unrecognized";
 	}
 
-	report_msg("diag: $diag") if $diag;
+	report_msg("# $diag") if $diag;
 }
 
 
@@ -217,6 +219,7 @@ my %end_table = (
 my $test_pipe = start_test();
 my $i = 0;
 my $status = 0;
+my @errors;
 
 # loop state
 my $failmsg;
@@ -270,14 +273,36 @@ while(<$test_pipe>) {
 		};
 		if($@) {
 			$@ =~ /^(.+) at/;
-			print STDERR  "tap: $1 (line `$_')\n";
+			push @errors, { what => $1, line => $_ };
 		}
 	}
 }
 kill "INT", -getpgrp(0);
 $test_pipe->close;
 
+# reporting.
 # TODO: make this more useful somehow.
+
+print "\n";
+if(@errors) {
+	my %bywhat;
+	my @what_order;
+	foreach(@errors) {
+		my $key = $_->{what};
+		push @what_order, $key unless exists $bywhat{$key};
+		push @{$bywhat{$key}}, $_->{line};
+	}
+
+	print "There were " . scalar @errors . " errors parsing test output:\n";
+	# (and scalar @what_order kinds of error.)
+	foreach my $what (@what_order) {
+		print "  $what\n";
+		foreach my $line (@{$bywhat{$what}}) {
+			print "\tline `$line'\n";
+		}
+	}
+}
+
 if($stats{incorrect} || $stats{failed}) {
 	print "There were $stats{incorrect} incorrect tests";
 	if($stats{failed}) {
