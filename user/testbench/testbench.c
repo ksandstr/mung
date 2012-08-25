@@ -75,10 +75,16 @@ void __assert_failure(
 	unsigned int line,
 	const char *function)
 {
-	printf("testbench %s(`%s', `%s', %u, `%s')\n", __func__,
-		condition, file, line, function);
-	abort();
-	for(;;) { asm volatile("int $1"); }
+	if(in_test()) {
+		printf("*** test failed: msg `assert %s failed in %s:%d'\n",
+			condition, file, line);
+		exit_on_fail();
+	} else {
+		printf("testbench %s(`%s', `%s', %u, `%s')\n", __func__,
+			condition, file, line, function);
+		abort();
+		for(;;) { asm volatile("int $1"); }
+	}
 }
 
 

@@ -83,6 +83,9 @@ extern void srunner_run_all(SRunner *sr, int report_mode);
 /* internal API for test exit from _fail_unless() */
 extern NORETURN void exit_on_fail(void);
 
+/* same for test from __assert_failure() */
+extern bool in_test(void);
+
 
 /* from tap.c */
 

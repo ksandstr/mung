@@ -8,8 +8,13 @@
 #include <ccan/list/list.h>
 #include <ccan/container_of/container_of.h>
 
+#include <l4/thread.h>
+
 #include "defs.h"
 #include "test.h"
+
+
+#define IN_TEST_MAGIC	0x51deb00b		/* with fuckings to mjg */
 
 
 struct SRunner
@@ -139,6 +144,7 @@ struct test_thread_param
 static void test_wrapper_fn(void *param_ptr)
 {
 	const struct test_thread_param *p = param_ptr;
+	L4_Set_UserDefinedHandle(IN_TEST_MAGIC);
 	(*p->t->t_fun)(p->val);
 	/* TODO: fill in a test_status report, return it through exit_thread() */
 }
@@ -152,7 +158,18 @@ void exit_on_fail(void)
 			.rc = false,
 		};
 	}
+
+	/* FIXME: cause any accessory threads to shut down as well. right now ones
+	 * that aren't controlled by fixtures will be left hanging, which may
+	 * compromise the test process. (though restartability would help.)
+	 */
 	exit_thread(st);
+}
+
+
+bool in_test(void) {
+	/* FIXME: use a proper TSD thing here instead of just taking over UDH. */
+	return L4_UserDefinedHandle() == IN_TEST_MAGIC;
 }
 
 
