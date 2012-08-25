@@ -259,19 +259,17 @@ START_TEST(poke_peek_nofault_test)
 	void *ptr = malloc(12 * 1024);
 	*(uint8_t *)ptr = 0;
 	bool ok = poke(pg_poker, (L4_Word_t)ptr, 0x42);
-	skip_start(!ok, 3, "poke failed");
-		ok(*(uint8_t *)ptr == 0x42, "poke() did set a byte");
-		uint8_t val = 0;
-		ok = peek(&val, pg_poker, (L4_Word_t)ptr);
-		skip_start(!ok, 2, "peek failed");
-			ok(val == 0x42, "peek() returned the right byte");
-			*(uint8_t *)ptr = 0xab;
-			ok = peek(&val, pg_poker, (L4_Word_t)ptr);
-			skip_start(!ok, 1, "second peek failed");
-				ok(val == 0xab, "second peek() returned the right byte");
-			skip_end;
-		skip_end;
-	skip_end;
+	fail_unless(ok, "poke failed");
+	ok(*(uint8_t *)ptr == 0x42, "poke() did set a byte");
+
+	uint8_t val = 0;
+	ok = peek(&val, pg_poker, (L4_Word_t)ptr);
+	fail_unless(ok, "peek failed");
+	ok(val == 0x42, "peek() returned the right byte");
+	*(uint8_t *)ptr = 0xab;
+	ok = peek(&val, pg_poker, (L4_Word_t)ptr);
+	fail_unless(ok, "second peek failed");
+	ok(val == 0xab, "second peek() returned the right byte");
 
 	free(ptr);
 }
@@ -287,25 +285,22 @@ START_TEST(poke_peek_fault_test)
 
 	L4_Word_t test_addr = (L4_Word_t)&nonfaulted[0];
 	bool ok = poke(pg_poker, test_addr, 0xaf);
-	skip_start(!ok, 3, "poke failed: ec %#lx", L4_ErrorCode());
-		ok(pg_stats->n_faults == 1 && pg_stats->n_write == 1,
-			"poke write-faults");
-		uint8_t val;
-		ok = peek(&val, pg_poker, test_addr);
-		skip_start(!ok, 2, "peek failed: ec %#lx", L4_ErrorCode());
-			ok(pg_stats->n_faults == 1, "peek doesn't read-fault");
-			ok(val == 0xaf, "peek returns poked value");
-		skip_end;
-	skip_end;
+	fail_unless(ok, "poke failed: ec %#lx", L4_ErrorCode());
+	ok(pg_stats->n_faults == 1 && pg_stats->n_write == 1,
+		"poke write-faults");
+	uint8_t val = 0;
+	ok = peek(&val, pg_poker, test_addr);
+	fail_unless(ok, "peek failed: ec %#lx", L4_ErrorCode());
+	ok(pg_stats->n_faults == 1, "peek doesn't read-fault");
+	ok(val == 0xaf, "peek returns poked value");
 
 	test_addr = (L4_Word_t)&nonfaulted[4 * 1024];
-	uint8_t val;
 	const int old_n = pg_stats->n_faults, old_r = pg_stats->n_read;
+	val = 0;
 	ok = peek(&val, pg_poker, test_addr);
-	skip_start(!ok, 1, "peek failed: ec %#lx", L4_ErrorCode());
-		ok(pg_stats->n_faults == old_n + 1
-			&& pg_stats->n_read == old_r + 1, "peek caused read fault");
-	skip_end;
+	fail_unless(ok, "peek failed: ec %#lx", L4_ErrorCode());
+	ok(pg_stats->n_faults == old_n + 1
+		&& pg_stats->n_read == old_r + 1, "peek caused read fault");
 
 	/* "nonfaulted" isn't released. who cares? testbench tests will run inside
 	 * a copy-on-write fork soon enough.
@@ -318,23 +313,20 @@ END_TEST
 
 START_TEST(spacectl_basic)
 {
-	plan_tests(2);
+	plan_tests(1);
 
 	/* first, an inactive thread. */
 	L4_ThreadId_t tid = L4_GlobalId(1024, 199), self = L4_Myself();
 	L4_Word_t res = L4_ThreadControl(tid, tid, self, L4_nilthread,
 		(void *)-1);
-	skip_start(res != 1, 2, "creating ThreadControl failed, ec %#lx",
-			L4_ErrorCode());
-		ok(res == 1, "space & first thread created");
-		L4_Word_t ctl_out;
-		res = L4_SpaceControl(tid, 0, L4_FpageLog2(0x100000, 12),
-			L4_FpageLog2(0x101000, 14), L4_anythread, &ctl_out);
-		skip_start(res != 1, 1, "SpaceControl failed, ec %#lx",
-				L4_ErrorCode());
-			ok(res == 1, "space configured");
-		skip_end;
-	skip_end;
+	fail_unless(res == 1, "creating ThreadControl failed, ec %#lx",
+		L4_ErrorCode());
+
+	L4_Word_t ctl_out;
+	res = L4_SpaceControl(tid, 0, L4_FpageLog2(0x100000, 12),
+		L4_FpageLog2(0x101000, 14), L4_anythread, &ctl_out);
+	if(res != 1) diag("SpaceControl failed, ec %#lx", L4_ErrorCode());
+	ok(res == 1, "space configured");
 
 	/* TODO: destroy thread, space */
 }
@@ -368,51 +360,50 @@ START_TEST(spacectl_iface)
 	L4_ThreadId_t tid = L4_GlobalId(23042, 199), self = L4_Myself();
 	L4_Word_t res = L4_ThreadControl(tid, tid, self, L4_nilthread,
 		(void *)-1);
-	skip_start(res != 1, 3, "creating ThreadControl failed, ec %#lx",
-			L4_ErrorCode());
+	fail_unless(res == 1, "creating ThreadControl failed, ec %#lx",
+		L4_ErrorCode());
 
-		L4_Word_t ctl_out;
-		res = L4_SpaceControl(tid, 0, kip_area, utcb_area, L4_anythread,
-			&ctl_out);
-		ok(res == 1, "valid SpaceControl is valid");
+	L4_Word_t ctl_out;
+	res = L4_SpaceControl(tid, 0, kip_area, utcb_area, L4_anythread,
+		&ctl_out);
+	ok(res == 1, "valid SpaceControl is valid");
 
-		/* simple overlap between kip_area and utcb_area */
-		L4_Fpage_t bad_utcb_area = L4_FpageLog2(0x100000 - (0x1000 * 2), 14);
-		assert(RANGE_OVERLAP(L4_Address(bad_utcb_area), L4_Address(bad_utcb_area) + L4_Size(bad_utcb_area) - 1,
-			L4_Address(kip_area), L4_Address(kip_area) + L4_Size(kip_area) - 1));
-		res = L4_SpaceControl(tid, 0, kip_area, bad_utcb_area, L4_anythread,
-			&ctl_out);
-		L4_Word_t ec = L4_ErrorCode();
-		ok(res == 0 && ec == 7, "error 7 on KIP/UTCB area overlap");
+	/* simple overlap between kip_area and utcb_area */
+	L4_Fpage_t bad_utcb_area = L4_FpageLog2(0x100000 - (0x1000 * 2), 14);
+	assert(RANGE_OVERLAP(L4_Address(bad_utcb_area), L4_Address(bad_utcb_area) + L4_Size(bad_utcb_area) - 1,
+		L4_Address(kip_area), L4_Address(kip_area) + L4_Size(kip_area) - 1));
+	res = L4_SpaceControl(tid, 0, kip_area, bad_utcb_area, L4_anythread,
+		&ctl_out);
+	L4_Word_t ec = L4_ErrorCode();
+	ok(res == 0 && ec == 7, "error 7 on KIP/UTCB area overlap");
 
-		/* KIP areas that's too small */
-		L4_Fpage_t bad_kip_area = L4_FpageLog2(L4_Address(kip_area),
-			kip->KipAreaInfo.X.s - 1);
-		res = L4_SpaceControl(tid, 0, bad_kip_area, utcb_area,
-			L4_anythread, &ctl_out);
-		ec = L4_ErrorCode();
-		ok(res == 0 && ec == 7, "kip area %#lx:%#lx is the wrong size",
-			L4_Address(bad_kip_area), L4_Size(bad_kip_area));
+	/* KIP area that's too small */
+	L4_Fpage_t bad_kip_area = L4_FpageLog2(L4_Address(kip_area),
+		kip->KipAreaInfo.X.s - 1);
+	res = L4_SpaceControl(tid, 0, bad_kip_area, utcb_area,
+		L4_anythread, &ctl_out);
+	ec = L4_ErrorCode();
+	ok(res == 0 && ec == 7, "kip area %#lx:%#lx is the wrong size",
+		L4_Address(bad_kip_area), L4_Size(bad_kip_area));
 
-		/* TODO: test too large an utcb_area */
+	/* TODO: test too large an utcb_area */
 
-		/* UTCB and KIP areas outside the address space */
-		bad_kip_area = L4_FpageLog2(vaddr_end + 0x10000, kip_s);
-		res = L4_SpaceControl(tid, 0, bad_kip_area, utcb_area,
-			L4_anythread, &ctl_out);
-		ec = L4_ErrorCode();
-		ok(res == 0 && ec == 7, "kip area %#lx:%#lx out of range",
-			L4_Address(bad_kip_area), L4_Size(bad_kip_area));
+	/* UTCB and KIP areas outside the address space */
+	bad_kip_area = L4_FpageLog2(vaddr_end + 0x10000, kip_s);
+	res = L4_SpaceControl(tid, 0, bad_kip_area, utcb_area,
+		L4_anythread, &ctl_out);
+	ec = L4_ErrorCode();
+	ok(res == 0 && ec == 7, "kip area %#lx:%#lx out of range",
+		L4_Address(bad_kip_area), L4_Size(bad_kip_area));
 
-		bad_utcb_area = L4_FpageLog2(vaddr_end + 0x10000, 18);
-		res = L4_SpaceControl(tid, 0, kip_area, bad_utcb_area,
-			L4_anythread, &ctl_out);
-		ec = L4_ErrorCode();
-		ok(res == 0 && ec == 6, "utcb area %#lx:%#lx out of range",
-			L4_Address(bad_utcb_area), L4_Size(bad_utcb_area));
+	bad_utcb_area = L4_FpageLog2(vaddr_end + 0x10000, 18);
+	res = L4_SpaceControl(tid, 0, kip_area, bad_utcb_area,
+		L4_anythread, &ctl_out);
+	ec = L4_ErrorCode();
+	ok(res == 0 && ec == 6, "utcb area %#lx:%#lx out of range",
+		L4_Address(bad_utcb_area), L4_Size(bad_utcb_area));
 
-		/* TODO: test UTCB/KIP area change while thread is activated. */
-	skip_end;
+	/* TODO: test UTCB/KIP area change while thread is activated. */
 
 	/* TODO: destroy thread, space */
 }
@@ -486,12 +477,12 @@ START_TEST(partial_flush)
 	uint8_t val;
 	int old_f = pg_stats->n_faults;
 	bool ok = peek(&val, pg_poker, (L4_Word_t)ptr);
-	assert(ok);		/* FIXME: replace with an early exiting fail_unless() */
+	fail_unless(ok);
 	ok(pg_stats->n_faults == old_f, "peek caused no fault");
 
 	int old_w = pg_stats->n_write;
 	ok = poke(pg_poker, (L4_Word_t)ptr, 0x22);
-	assert(ok);
+	fail_unless(ok);
 	ok(pg_stats->n_write == old_w + 1, "poke caused a fault");
 
 	free(ptr);

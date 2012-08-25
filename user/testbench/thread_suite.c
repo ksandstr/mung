@@ -32,41 +32,39 @@ START_TEST(threadctl_basic)
 	L4_ThreadId_t tid = L4_GlobalId(2369, 199), self = L4_Myself();
 	L4_Word_t res = L4_ThreadControl(tid, tid, self, L4_nilthread,
 		(void *)-1);
-	skip_start(res != 1, n_tests, "creating ThreadControl failed, ec %#lx",
-			L4_ErrorCode());
-		L4_Word_t ctl_out;
+	fail_unless(res == 1, "creating ThreadControl failed, ec %#lx",
+		L4_ErrorCode());
 
-		res = L4_SpaceControl(tid, 0, kip_area, utcb_area, L4_anythread,
-			&ctl_out);
-		skip_start(res != 1, n_tests, "SpaceControl failed, ec %#lx",
-				L4_ErrorCode());
+	L4_Word_t ctl_out;
 
-			/* configure valid threads within the UTCB area. */
-			for(L4_Word_t addr = L4_Address(utcb_area);
-				addr < L4_Address(utcb_area) + L4_Size(utcb_area);
-				addr += utcb_size)
-			{
-				res = L4_ThreadControl(tid, tid, L4_nilthread, L4_nilthread,
-					(void *)addr);
-				ok(res == 1, "can set UTCB at %#lx", addr);
-			}
+	res = L4_SpaceControl(tid, 0, kip_area, utcb_area, L4_anythread,
+		&ctl_out);
+	fail_unless(res == 1, "SpaceControl failed, ec %#lx", L4_ErrorCode());
 
-			/* and outside the UTCB area. */
-			L4_Word_t out_posns[] = {
-				L4_Address(utcb_area) - utcb_size,
-				L4_Address(utcb_area) + L4_Size(utcb_area),
-			};
-			for(int i=0; i < NUM_ELEMENTS(out_posns); i++) {
-				L4_Word_t addr = out_posns[i];
-				res = L4_ThreadControl(tid, tid, L4_nilthread, L4_nilthread,
-					(void *)addr);
-				ok(res == 0 && L4_ErrorCode() == 6,
-					"addr %#lx is outside UTCB range", addr);
-			}
+	/* configure valid threads within the UTCB area. */
+	for(L4_Word_t addr = L4_Address(utcb_area);
+		addr < L4_Address(utcb_area) + L4_Size(utcb_area);
+		addr += utcb_size)
+	{
+		res = L4_ThreadControl(tid, tid, L4_nilthread, L4_nilthread,
+			(void *)addr);
+		ok(res == 1, "can set UTCB at %#lx", addr);
+	}
 
-			/* TODO: test UTCB position change while thread is activated. */
-		skip_end;
-	skip_end;
+	/* and outside the UTCB area. */
+	L4_Word_t out_posns[] = {
+		L4_Address(utcb_area) - utcb_size,
+		L4_Address(utcb_area) + L4_Size(utcb_area),
+	};
+	for(int i=0; i < NUM_ELEMENTS(out_posns); i++) {
+		L4_Word_t addr = out_posns[i];
+		res = L4_ThreadControl(tid, tid, L4_nilthread, L4_nilthread,
+			(void *)addr);
+		ok(res == 0 && L4_ErrorCode() == 6,
+			"addr %#lx is outside UTCB range", addr);
+	}
+
+	/* TODO: test UTCB position change while thread is activated. */
 
 	/* TODO: destroy thread, space */
 }
