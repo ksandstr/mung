@@ -285,14 +285,10 @@ void srunner_run_all(SRunner *sr, int report_mode)
 
 					flush_log(false);
 					tap_reset();
-					if(!run_test(s, tc, t, val)) {
-						/* FIXME: handle this somehow */
-						printf("*** the gait of the least graceful hippopotamus\n");
-						return;
-					}
+					bool failed = !run_test(s, tc, t, val);
 
 					int rc = exit_status();
-					if(rc > 0) {
+					if(rc > 0 || failed) {
 						/* TODO: gather results for unplanned and unexecuted
 						 * test points.
 						 */
@@ -306,7 +302,12 @@ void srunner_run_all(SRunner *sr, int report_mode)
 							t->name);
 						/* FIXME: do exit-to-restart or something */
 					}
-					printf("*** end test `%s' rc %d\n", t->name, rc);
+
+					if(failed) {
+						printf("*** test `%s' failed, rc %d\n", t->name, rc);
+					} else {
+						printf("*** end test `%s' rc %d\n", t->name, rc);
+					}
 				}
 			}
 			if(!list_empty(&tc->u_fixtures)

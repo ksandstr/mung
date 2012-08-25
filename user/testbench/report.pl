@@ -30,6 +30,7 @@ sub is_kmsg {
 my ($suite, $tcase, $test);
 my ($tap_low, $tap_high, $tap_next, $no_plan);
 my $msg_break;
+my %stats;
 
 sub report_msg {
 	my $str = shift;
@@ -38,6 +39,7 @@ sub report_msg {
 		$msg_break = 1;
 	}
 
+	# TODO: put this in test/tcase/suite context
 	print "$str\n";
 }
 
@@ -192,12 +194,18 @@ my %end_table = (
 	},
 	test => sub {
 		my $name = shift;
-		my $tag = shift;
-		my $val = shift;
-		$test->{rc} = $val if $tag eq 'rc';
+		my %tagval = @_;
+		while(my ($tag, $val) = each %tagval) {
+			$test->{$tag} = $val;
+		}
+		if($test->{failmsg}) {
+			report_msg("test failed: $test->{failmsg}");
+			$stats{failed}++;
+		}
 		if($test->{planned} > $test->{seen}) {
 			report_msg("planned " . $test->{planned}
 				. " test(s), but executed only " . $test->{seen});
+			$stats{incorrect}++;
 		}
 		push @{$tcase->{tests}}, $test;
 		undef $test;
@@ -209,6 +217,10 @@ my %end_table = (
 my $test_pipe = start_test();
 my $i = 0;
 my $status = 0;
+
+# loop state
+my $failmsg;
+
 while(<$test_pipe>) {
 	chomp;
 	s/^\s+//;	# apparently sometimes there are carriage returns.
@@ -226,6 +238,20 @@ while(<$test_pipe>) {
 		} elsif($msg =~ /test\s+log:\s*(.+)$/) {
 			# capture test log output
 			push @{$test->{log}}, $1;
+		} elsif($msg =~ /test failed:\s+(msg\s+[`'](.+?)')?/) {
+			if($failmsg) {
+				print STDERR "WARNING: multiple test failure messages"
+					. " (last was `$failmsg')\n";
+			}
+			$failmsg = $2 || '';
+		} elsif($msg =~ /test [`'](\w+)' failed, rc (\d+)/) {
+			# TODO: output something that relates the return code to the test
+			# plan.
+			# TODO: also do that for tests that didn't fail.
+			&{$end_table{test}}($1,
+				rc => int($2) || 0,
+				failmsg => $failmsg || '');
+			undef $failmsg;
 		} elsif($msg =~ /(.+) follow/) {
 			# NOTE: should ignore from here until the next valid control
 			# message & possibly log into a hash keyed with $1
@@ -250,4 +276,16 @@ while(<$test_pipe>) {
 }
 kill "INT", -getpgrp(0);
 $test_pipe->close;
+
+# TODO: make this more useful somehow.
+if($stats{incorrect} || $stats{failed}) {
+	print "There were $stats{incorrect} incorrect tests";
+	if($stats{failed}) {
+		print ", and $stats{failed} test(s) failed";
+		$status = 2;
+	}
+	print ".\n";
+}
+
+# exit codes: 1 for premature testbench abort, 2 for test failures.
 exit $status;

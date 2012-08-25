@@ -434,36 +434,35 @@ START_TEST(simple_flush)
 	memset(ptr, 0, mem_size);
 
 	bool ok = poke(pg_poker, (L4_Word_t)ptr, poke_val);
-	skip_start(!ok, 8, "poke of address %p failed", ptr) {
-		L4_Fpage_t ptr_page = L4_FpageLog2((L4_Word_t)ptr, 12);
-		L4_Set_Rights(&ptr_page, L4_FullyAccessible);
-		L4_FlushFpages(1, &ptr_page);
-		ok(CHECK_FLAG(L4_Rights(ptr_page), L4_Readable),
-			"poke caused read access");
-		ok(CHECK_FLAG(L4_Rights(ptr_page), L4_Writable),
-			"poke caused write access");
+	fail_unless(ok, "poke of address %p failed", ptr);
 
-		int old_r = pg_stats->n_read;
-		uint8_t val;
-		ok = peek(&val, pg_poker, (L4_Word_t)ptr);
-		skip_start(!ok, 5, "peek of address %p failed", ptr) {
-			ok(pg_stats->n_read == old_r + 1, "read fault after unmap");
-			ok(val == poke_val, "peeked value is correct");
-			ok(val == *(uint8_t *)ptr, "peeked value in memory");
+	L4_Fpage_t ptr_page = L4_FpageLog2((L4_Word_t)ptr, 12);
+	L4_Set_Rights(&ptr_page, L4_FullyAccessible);
+	L4_FlushFpages(1, &ptr_page);
+	ok(CHECK_FLAG(L4_Rights(ptr_page), L4_Readable),
+		"poke caused read access");
+	ok(CHECK_FLAG(L4_Rights(ptr_page), L4_Writable),
+		"poke caused write access");
 
-			L4_Fpage_t st = L4_GetStatus(ptr_page);
-			ok(CHECK_FLAG(L4_Rights(st), L4_Readable),
-				"peek caused read access");
-			ok(!CHECK_FLAG(L4_Rights(st), L4_Writable),
-				"peek didn't cause write access");
-		} skip_end;
+	int old_r = pg_stats->n_read;
+	uint8_t val;
+	ok = peek(&val, pg_poker, (L4_Word_t)ptr);
+	fail_unless(ok, "peek of address %p failed", ptr);
 
-		int old_f = pg_stats->n_faults;
-		ok = poke(pg_poker, (L4_Word_t)ptr, 0xff ^ poke_val);
-		skip_start(!ok, 1, "second poke of address %p failed", ptr) {
-			ok(pg_stats->n_faults == old_f + 1, "fault after flush");
-		} skip_end;
-	} skip_end;
+	ok(pg_stats->n_read == old_r + 1, "read fault after unmap");
+	ok(val == poke_val, "peeked value is correct");
+	ok(val == *(uint8_t *)ptr, "peeked value in memory");
+
+	L4_Fpage_t st = L4_GetStatus(ptr_page);
+	ok(CHECK_FLAG(L4_Rights(st), L4_Readable),
+		"peek caused read access");
+	ok(!CHECK_FLAG(L4_Rights(st), L4_Writable),
+		"peek didn't cause write access");
+
+	int old_f = pg_stats->n_faults;
+	ok = poke(pg_poker, (L4_Word_t)ptr, 0xff ^ poke_val);
+	fail_unless(ok, "second poke of address %p failed", ptr);
+	ok(pg_stats->n_faults == old_f + 1, "fault after flush");
 
 	free(ptr);
 }
