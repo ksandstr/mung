@@ -8,8 +8,6 @@
 #include <ccan/list/list.h>
 #include <ccan/container_of/container_of.h>
 
-#include <l4/thread.h>
-
 #include "defs.h"
 #include "test.h"
 
@@ -60,8 +58,13 @@ struct test_status {
 };
 
 
+static int in_test_key = 0;		/* ptr value, IN_TEST_MAGIC */
+
+
 Suite *suite_create(const char *name)
 {
+	tsd_key_create(&in_test_key, NULL);
+
 	int len = strlen(name);
 	Suite *s = malloc(sizeof(Suite) + len + 1);
 	list_head_init(&s->cases);
@@ -144,7 +147,7 @@ struct test_thread_param
 static void test_wrapper_fn(void *param_ptr)
 {
 	const struct test_thread_param *p = param_ptr;
-	L4_Set_UserDefinedHandle(IN_TEST_MAGIC);
+	tsd_set(in_test_key, (void *)IN_TEST_MAGIC);
 	(*p->t->t_fun)(p->val);
 	/* TODO: fill in a test_status report, return it through exit_thread() */
 }
@@ -159,7 +162,7 @@ void exit_on_fail(void)
 		};
 	}
 
-	/* FIXME: cause any accessory threads to shut down as well. right now ones
+	/* TODO: cause any accessory threads to shut down as well. right now ones
 	 * that aren't controlled by fixtures will be left hanging, which may
 	 * compromise the test process. (though restartability would help.)
 	 */
@@ -168,8 +171,7 @@ void exit_on_fail(void)
 
 
 bool in_test(void) {
-	/* FIXME: use a proper TSD thing here instead of just taking over UDH. */
-	return L4_UserDefinedHandle() == IN_TEST_MAGIC;
+	return tsd_get(in_test_key) == (void *)IN_TEST_MAGIC;
 }
 
 

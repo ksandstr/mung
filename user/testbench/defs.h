@@ -53,6 +53,10 @@ extern void for_each_thread(
 	void (*fn)(L4_ThreadId_t tid, void *ptr),
 	void *ptr);
 
+extern void tsd_key_create(int *key_p, void (*destructor)(void *ptr));
+extern void tsd_set(int key, void *ptr);
+extern void *tsd_get(int key);
+
 
 /* from delay.c */
 

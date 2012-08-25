@@ -58,7 +58,6 @@ static void r_recv_timeout_fn(void *param_ptr)
 	/* in-parameters: [0] = partner TID, [1] = timeout (L4_Time_t) */
 	L4_Word_t *param = param_ptr;
 	L4_ThreadId_t partner = { .raw = param[0] };
-	L4_Set_UserDefinedHandle(partner.raw);
 	L4_Time_t timeout = { .raw = param[1] };
 
 	L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 1 }.raw);
