@@ -2,6 +2,12 @@
 #ifndef SEEN_TESTBENCH_FORKSERV_H
 #define SEEN_TESTBENCH_FORKSERV_H
 
+#include <assert.h>
+
+#include <l4/types.h>
+#include <l4/thread.h>
+#include <l4/ipc.h>
+
 
 /* IPC label definitions. stubs aren't necessary with a single call site. */
 
@@ -13,6 +19,30 @@
 #define FORKSERV_SBRK 0x7342		/* "sB" (more of a brk(2), though) */
 #define FORKSERV_EXIT 0x7a5a		/* "zZ" */
 #define FORKSERV_NEW_THREAD 0x2e21	/* ".!" */
+#define FORKSERV_UNMAP 0x754d		/* "uM" */
+
+
+/* this one is used from unit tests, though. forkserv calls unmap (not flush)
+ * on flexpages in the caller's virtual address space. fpages are returned as
+ * accessed by forkserv, with 63 returned indicating that there might've been
+ * more. calling it with 4k pages ensures 1:1 pass/return; otherwise @fpages
+ * should have at least 63 fpages' worth of room.
+ */
+static inline L4_MsgTag_t forkserv_unmap(
+	L4_ThreadId_t forkserv_tid,
+	L4_Word_t *n_p,		/* in-out parameter */
+	L4_Fpage_t *fpages)
+{
+	assert(n_p != NULL && *n_p > 0 && *n_p <= 63);
+	L4_LoadMR(0, (L4_MsgTag_t){ .X.u = *n_p, .X.label = FORKSERV_UNMAP }.raw);
+	L4_LoadMRs(1, *n_p, (L4_Word_t *)fpages);
+	L4_MsgTag_t tag = L4_Call(forkserv_tid);
+	if(L4_IpcSucceeded(tag)) {
+		*n_p = tag.X.u;
+		L4_StoreMRs(1, *n_p, (L4_Word_t *)fpages);
+	}
+	return tag;
+}
 
 
 /* forkserv-to-pager API for doing privileged system calls.

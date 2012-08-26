@@ -694,6 +694,46 @@ static bool handle_as_cfg(
 }
 
 
+static bool handle_unmap(
+	L4_ThreadId_t from,
+	L4_Word_t *n_p,
+	L4_Fpage_t *pages)
+{
+	struct fs_space *sp = get_space_by_tid(from);
+	if(sp == NULL) {
+		printf("%s: unknown space for %#lx\n", __func__, from.raw);
+		return false;
+	}
+
+	/* holy nested loops, batman! */
+	L4_Fpage_t local[63], output[63];
+	int outpos = 0;
+	for(int i=0, in_len = *n_p; i < in_len && outpos < 63; i++) {
+		for(L4_Word_t fp_addr = L4_Address(pages[i]),
+					  fp_max = fp_addr + L4_Size(pages[i]);
+			fp_addr < fp_max && outpos < 63;
+			fp_addr += PAGE_SIZE)
+		{
+			struct fs_vpage *vp = htable_get(&sp->pages,
+				int_hash(fp_addr), &word_cmp, &fp_addr);
+			if(vp == NULL) continue;
+
+			local[outpos] = L4_FpageLog2(vp->page->local_addr, 12);
+			output[outpos] = L4_FpageLog2(fp_addr, 12);
+			L4_Set_Rights(&local[outpos], L4_Rights(pages[i]));
+			outpos++;
+		}
+	}
+	L4_UnmapFpages(outpos, local);
+	for(int i=0; i < outpos; i++) {
+		L4_Set_Rights(&output[outpos], L4_Rights(local[outpos]));
+	}
+	*n_p = outpos;
+
+	return true;
+}
+
+
 /* used by forkserv_dispatch_loop to track async operation id to sender
  * thread.
  */
@@ -836,6 +876,18 @@ static void forkserv_dispatch_loop(void)
 					} else {
 						assert(L4_IpcSucceeded(tag));
 						reply = false;
+					}
+					break;
+				}
+
+				case FORKSERV_UNMAP: {
+					L4_Fpage_t pages[63];
+					L4_Word_t n = tag.X.u;
+					L4_StoreMRs(1, n, &pages[0].raw);
+					reply = handle_unmap(from, &n, pages);
+					if(reply) {
+						L4_LoadMR(0, (L4_MsgTag_t){ .X.u = n }.raw);
+						L4_LoadMRs(1, n, &pages[0].raw);
 					}
 					break;
 				}
