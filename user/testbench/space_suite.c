@@ -20,6 +20,7 @@
 
 #include "defs.h"
 #include "test.h"
+#include "forkserv.h"
 
 
 #define QUIT_LABEL 0xdead
@@ -460,9 +461,17 @@ START_TEST(simple_flush)
 END_TEST
 
 
-/* "partial" meaning "to read only". */
-START_TEST(partial_flush)
+/* "partial" meaning "to read only". does both immediate (own call to
+ * L4_FlushFpages()) and recursive (via forkserv).
+ *
+ * TODO: split this up to test privilege revocation, and access bit reading,
+ * separately.
+ */
+START_LOOP_TEST(partial_flush, iter)
 {
+	/* variants */
+	const bool recursive = CHECK_FLAG(iter, 1);
+
 	assert(pg_stats != NULL);
 	plan_tests(2);
 
@@ -472,7 +481,14 @@ START_TEST(partial_flush)
 
 	L4_Fpage_t ptr_page = L4_FpageLog2((L4_Word_t)ptr, 12);
 	L4_Set_Rights(&ptr_page, L4_Writable);
-	L4_FlushFpages(1, &ptr_page);
+	if(recursive) {
+		L4_Word_t n = 1;
+		L4_MsgTag_t tag = forkserv_unmap(L4_Pager(), &n, &ptr_page);
+		fail_unless(L4_IpcSucceeded(tag), "forkserv_unmap failed: ec %#lx",
+			L4_ErrorCode());
+	} else {
+		L4_FlushFpages(1, &ptr_page);
+	}
 
 	uint8_t val;
 	int old_f = pg_stats->n_faults;
@@ -508,7 +524,7 @@ Suite *space_suite(void)
 	TCase *unmap_case = tcase_create("unmap");
 	tcase_add_checked_fixture(unmap_case, &pager_setup, &pager_teardown);
 	tcase_add_test(unmap_case, simple_flush);
-	tcase_add_test(unmap_case, partial_flush);
+	tcase_add_loop_test(unmap_case, partial_flush, 0, 1);
 	suite_add_tcase(s, unmap_case);
 
 	return s;
