@@ -781,6 +781,11 @@ int mapdb_unmap_fpage(
 		!immediate ? "non-" : "", !recursive ? "non-" : "");
 	L4_Word_t unmap_rights = L4_Rights(range),
 		r_end = L4_Address(range) + L4_Size(range);
+	/* this function will only call discontiguate() to modify the structure of
+	 * the map_groups it accesses when it might revoke access in the immediate
+	 * map_db.
+	 */
+	const bool modify = immediate && unmap_rights != 0;
 	for(L4_Word_t grp_pos = L4_Address(range);
 		grp_pos < r_end;
 		grp_pos += GROUP_SIZE)
@@ -792,7 +797,7 @@ int mapdb_unmap_fpage(
 		}
 
 		struct map_entry *e = NULL;
-		if(immediate && unmap_rights != 0) {
+		if(modify) {
 			e = discontiguate(g, range);
 			/* FIXME: discontiguate() can also fail due to ENOMEM. in this
 			 * case the operation should be put to sleep (pending restart on
@@ -816,10 +821,6 @@ int mapdb_unmap_fpage(
 
 		L4_Word_t r_pos = L4_Address(e->range);
 		do {
-			/* properties ensured by discontiguate() */
-			assert(L4_Address(e->range) >= L4_Address(range));
-			assert(L4_Address(e->range) + L4_Size(e->range) <= r_end);
-
 			/* check each native page.
 			 *
 			 * TODO: extend to support big pages as specified in the related
@@ -860,13 +861,17 @@ int mapdb_unmap_fpage(
 
 			r_pos = L4_Address(e->range) + L4_Size(e->range);
 			bool drop = false;
-			if(immediate) {
+			if(modify) {
+				/* ensured by discontiguate() */
+				assert(L4_Address(e->range) >= L4_Address(range));
+				assert(L4_Address(e->range) + L4_Size(e->range) <= r_end);
+
 				int new_r = L4_Rights(e->range) & ~unmap_rights;
 				L4_Set_Rights(&e->range, new_r);
 				if(new_r == 0) drop = true;
 			}
 			if(drop) {
-				assert(immediate);
+				assert(modify);
 				/* TODO: implement memmove(3), use it */
 				TRACE("%s: removing entry %#lx:%#lx\n", __func__,
 					L4_Address(e->range), L4_Size(e->range));
