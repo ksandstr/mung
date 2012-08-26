@@ -459,7 +459,7 @@ void isr_exn_pf_bottom(struct x86_exregs *regs)
 #ifndef NDEBUG
 	static uintptr_t last_fault = ~0;
 	static int repeat_count = 0;
-	if(last_fault == fault_addr && ++repeat_count == 3) {
+	if(last_fault == fault_addr && ++repeat_count == 10) {
 		printf("WARNING: faulted many times on the same address %#lx\n",
 			fault_addr);
 		thread_save_ctx(current, regs);
