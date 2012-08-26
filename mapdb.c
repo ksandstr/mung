@@ -57,8 +57,11 @@ static void dump_map_group(struct map_group *g)
 	for(int i=0; i < g->num_entries; i++) {
 		struct map_entry *e = &g->entries[i];
 		assert(!L4_IsNilFpage(e->range));
-		TRACE("  %d: [%#lx .. %#lx], pages [%u .. %lu]\n", i,
+		TRACE("  %d: [%#lx .. %#lx] (%c%c%c), pages [%u .. %lu]\n", i,
 			L4_Address(e->range), L4_Address(e->range) + L4_Size(e->range) - 1,
+			CHECK_FLAG(L4_Rights(e->range), L4_Readable) ? 'r' : '-',
+			CHECK_FLAG(L4_Rights(e->range), L4_Writable) ? 'w' : '-',
+			CHECK_FLAG(L4_Rights(e->range), L4_eXecutable) ? 'x' : '-',
 			e->first_page_id,
 			e->first_page_id + L4_Size(e->range) / PAGE_SIZE - 1);
 	}
@@ -856,8 +859,14 @@ int mapdb_unmap_fpage(
 			}
 
 			r_pos = L4_Address(e->range) + L4_Size(e->range);
-			if(immediate && (L4_Rights(e->range) & ~unmap_rights) == 0) {
-				L4_Set_Rights(&e->range, L4_Rights(e->range) & ~unmap_rights);
+			bool drop = false;
+			if(immediate) {
+				int new_r = L4_Rights(e->range) & ~unmap_rights;
+				L4_Set_Rights(&e->range, new_r);
+				if(new_r == 0) drop = true;
+			}
+			if(drop) {
+				assert(immediate);
 				/* TODO: implement memmove(3), use it */
 				TRACE("%s: removing entry %#lx:%#lx\n", __func__,
 					L4_Address(e->range), L4_Size(e->range));
