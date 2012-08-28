@@ -482,7 +482,7 @@ void sys_unmap(L4_Word_t control)
 			TID_THREADNUM(current->id), TID_VERSION(current->id));
 #endif
 
-		L4_Set_Rights(&fp, mapdb_unmap_fpage(mdb, fp, flush, true));
+		L4_Set_Rights(&fp, mapdb_unmap_fpage(mdb, fp, flush, true, true));
 		L4_VREG(utcb, L4_TCR_MR(i)) = fp.raw;
 
 		if(remove != 0) {

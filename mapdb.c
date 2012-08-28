@@ -37,6 +37,20 @@
  */
 #define MAX_SPLIT 10
 
+/* maximum probe depth in map_entry->children. used by mapdb_add_child(). */
+#define MAX_PROBE_DEPTH 16
+
+
+/* dereferenced map_entry->children entry. */
+struct child_ref
+{
+	struct map_db *child_db;
+	struct map_entry *child_entry;
+
+	/* page offset within the deref_child() parent entry. */
+	int parent_offset;
+};
+
 
 static size_t rehash_ref_hash(const void *, void *);
 static struct map_entry *discontiguate(struct map_group *g, L4_Fpage_t range);
@@ -48,6 +62,12 @@ static struct htable ref_hash = HTABLE_INITIALIZER(ref_hash,
 	rehash_ref_hash, NULL);
 
 
+/* FIXME: move this into a utility header. many places duplicate it. */
+static inline bool int_eq(const void *elem, void *ref) {
+	return *(const int *)elem == *(int *)ref;
+}
+
+
 static void dump_map_group(struct map_group *g)
 {
 #ifndef NDEBUG
@@ -57,15 +77,64 @@ static void dump_map_group(struct map_group *g)
 	for(int i=0; i < g->num_entries; i++) {
 		struct map_entry *e = &g->entries[i];
 		assert(!L4_IsNilFpage(e->range));
-		TRACE("  %d: [%#lx .. %#lx] (%c%c%c), pages [%u .. %lu]\n", i,
+		TRACE("  %d: [%#lx .. %#lx] (%c%c%c), pages [%u .. %lu]; nc %u\n", i,
 			L4_Address(e->range), L4_Address(e->range) + L4_Size(e->range) - 1,
 			CHECK_FLAG(L4_Rights(e->range), L4_Readable) ? 'r' : '-',
 			CHECK_FLAG(L4_Rights(e->range), L4_Writable) ? 'w' : '-',
 			CHECK_FLAG(L4_Rights(e->range), L4_eXecutable) ? 'x' : '-',
 			e->first_page_id,
-			e->first_page_id + L4_Size(e->range) / PAGE_SIZE - 1);
+			e->first_page_id + L4_Size(e->range) / PAGE_SIZE - 1,
+			(unsigned)e->num_children);
 	}
 #endif
+}
+
+
+/* returns false on stale child. */
+static bool deref_child(
+	struct child_ref *cr,
+	struct map_db *home_db,
+	struct map_entry *e,
+	int child_ix)
+{
+	assert(child_ix < e->num_children);
+
+	const L4_Word_t *children = e->num_children > 1 ? e->children : &e->child;
+	if(!REF_DEFINED(children[child_ix])) return false;
+
+	L4_Word_t child_addr = REF_ADDR(children[child_ix]);
+	uint32_t space_id = REF_SPACE(children[child_ix]);
+	assert(space_id != home_db->ref_id);
+	struct map_db *db = htable_get(&ref_hash, int_hash(space_id),
+		&int_eq, &space_id);
+	if(db == NULL) {
+		printf("mapdb ref_id %u not found\n", (unsigned)space_id);
+		return false;
+	}
+
+	struct map_entry *ce = mapdb_probe(db, child_addr);
+	if(ce == NULL) return false;
+
+	/* a valid child refers to the home space, and into the home range. */
+	if(REF_SPACE(ce->parent) != home_db->ref_id
+		|| !BETWEEN(FPAGE_LOW(e->range), FPAGE_HIGH(e->range),
+				REF_ADDR(ce->parent)))
+	{
+		return false;
+	}
+
+	/* check that they refer to the same physical page. */
+	int child_offset = (child_addr - L4_Address(ce->range)) >> PAGE_BITS;
+	cr->parent_offset = ((REF_ADDR(ce->parent) - L4_Address(e->range)) >> PAGE_BITS)
+		+ child_offset;
+	uint32_t child_page = ce->first_page_id + child_offset,
+		parent_page = e->first_page_id + cr->parent_offset;
+	if(child_page != parent_page) return false;
+
+	cr->child_db = db;
+	cr->child_entry = ce;
+
+	return true;
 }
 
 
@@ -296,10 +365,13 @@ static void coalesce_entries(
 
 /* attempts to merge the given parameters of mapdb_add_map() to previously
  * existing items.
+ *
+ * FIXME: this doesn't account for the bits in @parent !!!
  */
 static bool merge_entries(
 	struct map_group *g,
 	int prev_pos,
+	L4_Word_t parent,
 	L4_Fpage_t fpage,
 	uint32_t first_page_id)
 {
@@ -346,15 +418,17 @@ static bool merge_entries(
  */
 int mapdb_add_map(
 	struct map_db *db,
+	L4_Word_t parent,
 	L4_Fpage_t fpage,
 	uint32_t first_page_id)
 {
 	L4_Word_t addr = L4_Address(fpage);
-	TRACE("%s: adding fpage at %#lx, size %#lx, access [%c%c%c]\n", __func__,
-		addr, L4_Size(fpage),
+	TRACE("%s: adding fpage at %#lx, size %#lx, access [%c%c%c], parent %#lx\n",
+		__func__, addr, L4_Size(fpage),
 		CHECK_FLAG(L4_Rights(fpage), L4_Readable) ? 'r' : '-',
 		CHECK_FLAG(L4_Rights(fpage), L4_Writable) ? 'w' : '-',
-		CHECK_FLAG(L4_Rights(fpage), L4_eXecutable) ? 'x' : '-');
+		CHECK_FLAG(L4_Rights(fpage), L4_eXecutable) ? 'x' : '-',
+		parent);
 
 	/* x86 no-NX hack. this lets the pagefault exception handler do
 	 * pre-existing maps correctly.
@@ -376,7 +450,7 @@ int mapdb_add_map(
 		g->start = GROUP_ADDR(addr);
 		g->num_alloc = 2;
 		g->entries[0] = (struct map_entry){
-			.range = fpage, .first_page_id = first_page_id,
+			.parent = parent, .range = fpage, .first_page_id = first_page_id,
 		};
 		g->entries[1].range = L4_Nilpage;
 		g->num_entries = 1;
@@ -403,7 +477,9 @@ int mapdb_add_map(
 					|| L4_Address(fpage) + L4_Size(fpage) - 1 < L4_Address(e));
 				if(L4_Address(e) < L4_Address(fpage)) prev = i; else break;
 			}
-			if(prev < 0 || !merge_entries(g, prev, fpage, first_page_id)) {
+			if(prev < 0 || !merge_entries(g, prev, parent,
+				fpage, first_page_id))
+			{
 				int dst_pos;
 				if(prev + 1 < g->num_alloc
 					&& L4_IsNilFpage(g->entries[prev + 1].range))
@@ -432,7 +508,8 @@ int mapdb_add_map(
 					}
 				}
 				g->entries[dst_pos] = (struct map_entry){
-					.range = fpage, .first_page_id = first_page_id,
+					.parent = parent, .range = fpage,
+					.first_page_id = first_page_id,
 				};
 				g->num_entries++;
 			}
@@ -452,17 +529,21 @@ int mapdb_add_map(
 					old->children = NULL;
 				}
 				*old = (struct map_entry){
-					.range = fpage, .first_page_id = first_page_id,
+					.parent = parent, .range = fpage,
+					.first_page_id = first_page_id,
 				};
 			}
 		} else {
 			/* skip the no-op. */
-			int page_offs = (L4_Address(fpage) - L4_Address(old->range)) / PAGE_SIZE;
+			int page_offs = (L4_Address(fpage) - L4_Address(old->range)) >> PAGE_BITS;
 			if(CHECK_FLAG_ALL(L4_Rights(old->range), L4_Rights(fpage))
-				&& old->first_page_id + page_offs == first_page_id)
+				&& old->first_page_id + page_offs == first_page_id
+				&& REF_SPACE(old->parent) == REF_SPACE(parent)
+				&& (REF_ADDR(old->parent) + page_offs * PAGE_SIZE) == REF_ADDR(parent))
 			{
 				/* no-op, truley */
 			} else {
+				/* FIXME: apply discontiguate() somehow */
 				panic("discontig case not written");
 			}
 		}
@@ -476,9 +557,109 @@ int mapdb_add_map(
 }
 
 
+static int grow_children_array(struct map_entry *ent)
+{
+	/* rehash old children into a larger hash table. if at least one doesn't
+	 * succeed due to exceeded probe depth, try with larger tables until
+	 * calloc() fails.
+	 */
+	int new_size = ent->num_children * 2;
+	L4_Word_t *new_children;
+	bool ok;
+	do {
+		new_children = calloc(new_size, sizeof(L4_Word_t));
+		if(new_children == NULL) return -ENOMEM;
+
+		int mask = new_size - 1,
+			depth = MIN(int, new_size, MAX_PROBE_DEPTH);
+		ok = true;
+		for(int i=0; i < ent->num_children && ok; i++) {
+			L4_Word_t c = ent->children[i];
+			if(!REF_DEFINED(c)) continue;
+			ok = false;
+			for(int p = int_hash(c) & mask, end = p + depth - 1;
+				p <= end;
+				p++)
+			{
+				if(new_children[p & mask] == 0) {
+					new_children[p & mask] = c;
+					ok = true;
+					break;
+				}
+			}
+		}
+
+		if(!ok) {
+			new_size *= 2;
+			free(new_children);
+		}
+	} while(!ok);
+
+	free(ent->children);
+	ent->children = new_children;
+	ent->num_children = new_size;
+
+	return 0;
+}
+
+
+/* returns 0, -ENOMEM, or -EEXIST.
+ *
+ * the probe for duplicates is done with a hashed starting position and a
+ * maximum depth of MIN(num_children, 16), accessing 2 cache lines when words
+ * are 32 bits wide. this means that a crowded bucket can trigger resizing of
+ * the entry.
+ */
+static int mapdb_add_child(struct map_entry *ent, L4_Word_t child)
+{
+	assert(REF_DEFINED(child));
+	if(ent->num_children == 0
+		|| (ent->num_children == 1 && !REF_DEFINED(ent->child)))
+	{
+		ent->child = child;
+		ent->num_children = 1;
+	} else if(ent->num_children == 1) {
+		L4_Word_t *new_children = malloc(sizeof(L4_Word_t) * 2);
+		if(new_children == NULL) return -ENOMEM;
+		int slot = int_hash(child) & 1;
+		new_children[slot] = ent->child;
+		new_children[slot ^ 1] = 0;
+		ent->children = new_children;
+		ent->num_children = 2;
+	} else {
+		L4_Word_t *got = NULL;
+		do {
+			assert(POPCOUNT(ent->num_children) == 1);
+			int mask = ent->num_children - 1, base = int_hash(child) & mask;
+			for(int i=0, md = MIN(int, MAX_PROBE_DEPTH, ent->num_children);
+				i < md;
+				i++)
+			{
+				int probe = (i + base) & mask;
+				L4_Word_t *c = &ent->children[probe];
+				if(*c == child) return -EEXIST;
+				else if(!REF_DEFINED(*c)) {
+					if(got == NULL) got = c;
+					if(*c != REF_TOMBSTONE) break;
+				}
+			}
+			if(got == NULL) {
+				int n = grow_children_array(ent);
+				if(n < 0) return n;
+			}
+		} while(got == NULL);
+		*got = child;
+	}
+
+	return 0;
+}
+
+
 /* does mappings of all physical pages inside map_page. skips holes in the
  * sender address space within the mapping (so pages in the receiver won't be
  * unmapped on overlap with empty.)
+ *
+ * FIXME: should catch and return -ENOMEM from mapdb_add_map() etc.
  */
 int mapdb_map_pages(
 	struct map_db *from_db,
@@ -488,12 +669,13 @@ int mapdb_map_pages(
 {
 	struct map_entry *first = NULL;
 	struct map_group *grp;
-	/* TODO: scan the bitmap instead of repeating binary searches */
 	L4_Word_t first_addr = L4_Address(map_page),
 		last_addr = L4_Address(map_page) + L4_Size(map_page) - 1;
 	do {
 		grp = group_for_addr(from_db, first_addr);
 		if(grp != NULL) first = probe_group_addr(grp, first_addr);
+		/* TODO: would this work? (or fold it into the += right-side.) */
+		// else first_addr += GROUP_SIZE - PAGE_SIZE;
 	} while(first == NULL && (first_addr += PAGE_SIZE) <= last_addr);
 
 	if(first == NULL) {
@@ -511,7 +693,12 @@ int mapdb_map_pages(
 		 */
 		L4_Fpage_t p = L4_FpageLog2(dest_addr, L4_SizeLog2(map_page));
 		L4_Set_Rights(&p, L4_Rights(first->range) & L4_Rights(map_page));
-		if(L4_Rights(p) != 0) mapdb_add_map(to_db, p, first->first_page_id);
+		if(L4_Rights(p) != 0) {
+			mapdb_add_map(to_db,
+				MAPDB_REF(from_db->ref_id, L4_Address(first->range)),
+				p, first->first_page_id);
+			mapdb_add_child(first, MAPDB_REF(to_db->ref_id, L4_Address(p)));
+		}
 		return L4_Rights(p);
 	} else if(first_addr == L4_Address(map_page)
 		&& last_addr < L4_Address(first->range) + L4_Size(first->range))
@@ -523,7 +710,11 @@ int mapdb_map_pages(
 		L4_Fpage_t p = L4_FpageLog2(dest_addr, L4_SizeLog2(map_page));
 		L4_Set_Rights(&p, L4_Rights(first->range) & L4_Rights(map_page));
 		if(L4_Rights(p) != 0) {
-			mapdb_add_map(to_db, p, first->first_page_id + offset);
+			mapdb_add_map(to_db,
+				MAPDB_REF(from_db->ref_id,
+					L4_Address(first->range) + offset * PAGE_SIZE),
+				p, first->first_page_id + offset);
+			mapdb_add_child(first, MAPDB_REF(to_db->ref_id, L4_Address(p)));
 		}
 		return L4_Rights(p);
 	} else {
@@ -533,7 +724,7 @@ int mapdb_map_pages(
 			L4_Address(map_page), L4_Size(map_page));
 #endif
 
-		const struct map_entry *ent = first;
+		struct map_entry *ent = first;
 		L4_Word_t pos = MAX(L4_Word_t, L4_Address(ent->range), first_addr),
 			limit = last_addr + 1;
 		while(pos < limit && ent != NULL && L4_Address(ent->range) < limit) {
@@ -556,7 +747,12 @@ int mapdb_map_pages(
 						PAGE_BITS);
 					L4_Set_Rights(&p, L4_Rights(ent->range) & L4_Rights(map_page));
 					if(L4_Rights(p) != 0) {
-						mapdb_add_map(to_db, p, ent->first_page_id + p_offs);
+						mapdb_add_map(to_db,
+							MAPDB_REF(from_db->ref_id,
+								L4_Address(ent->range) + p_offs * PAGE_SIZE),
+							p, ent->first_page_id + p_offs);
+						mapdb_add_child(ent,
+							MAPDB_REF(to_db->ref_id, L4_Address(p)));
 					}
 				}
 			}
@@ -770,15 +966,17 @@ int mapdb_unmap_fpage(
 	struct map_db *db,
 	L4_Fpage_t range,
 	bool immediate,
-	bool recursive)
+	bool recursive,
+	bool clear_stored_access)
 {
 	assert(recursive || immediate);	/* disallows the one-level status read */
 
 	int rwx_seen = 0;
 
-	TRACE("%s: range %#lx:%#lx, %simmediate, %srecursive\n",
+	TRACE("%s: range %#lx:%#lx, %simmediate, %srecursive, ref_id %d\n",
 		__func__, L4_Address(range), L4_Size(range),
-		!immediate ? "non-" : "", !recursive ? "non-" : "");
+		!immediate ? "non-" : "", !recursive ? "non-" : "",
+		(int)db->ref_id);
 	L4_Word_t unmap_rights = L4_Rights(range),
 		r_end = L4_Address(range) + L4_Size(range);
 	/* this function will only call discontiguate() to modify the structure of
@@ -845,18 +1043,59 @@ int mapdb_unmap_fpage(
 			}
 
 			rwx_seen |= (e_mask | e->access);
-			e->access = 0;
 
-			if(recursive) {
-				/* FIXME: examine children: for each, see if they're valid
-				 * (and compress them where not), and if the actual address
-				 * falls within `range`.
-				 */
-				static bool warned = false;
-				if(!warned) {
-					printf("%s: recursive unmap skipped!\n", __func__);
-					warned = true;
+			/* Urist McBreedington cancels store item in stockpile: seeking
+			 * infant.
+			 */
+			for(int i=0; recursive && i < e->num_children; i++) {
+				struct child_ref r;
+				if(!deref_child(&r, db, e, i)) {
+					if(e->num_children < 2) e->child = 0;
+					else e->children[i] = REF_TOMBSTONE;
+					continue;
 				}
+
+				TRACE("deref child %d (%#lx) -> %#lx:%#lx, p_o %d\n",
+					i, e->num_children < 2 ? e->child : e->children[i],
+					L4_Address(r.child_entry->range),
+					L4_Size(r.child_entry->range), r.parent_offset);
+
+				/* intersection with e->range in the child entry. this is for
+				 * the case where the parent is large and the child is small,
+				 * as happens with hugepages.
+				 */
+				int size_log2;
+				bool sp_changed = false;	/* TODO: track in struct space */
+				L4_Word_t address;
+				int ric_offs = r.parent_offset * PAGE_SIZE
+					+ (L4_Address(e->range) - L4_Address(range));
+				for_page_range(
+					MAX(L4_Word_t, L4_Address(r.child_entry->range),
+						L4_Address(r.child_entry->range) - ric_offs),
+					MIN(L4_Word_t, FPAGE_HIGH(r.child_entry->range),
+						L4_Address(r.child_entry->range) + L4_Size(range)
+							- ric_offs) + 1,
+					address, size_log2)
+				{
+					L4_Fpage_t fp = L4_FpageLog2(address, size_log2);
+					L4_Set_Rights(&fp, unmap_rights);
+					int pass_rwx = mapdb_unmap_fpage(r.child_db, fp,
+						true, true, false);
+					/* TODO: instead, call space_put_page() in
+					 * mapdb_unmap_fpage() end, or better yet, something that
+					 * modifies the MMU-level access bits.
+					 */
+					for(L4_Word_t a = L4_Address(fp);
+						a < L4_Address(fp) + L4_Size(fp);
+						a += PAGE_SIZE)
+					{
+						space_put_page(r.child_db->space, a, 0, 0);
+						sp_changed = true;
+					}
+
+					rwx_seen |= pass_rwx;
+				}
+				if(sp_changed) space_commit(r.child_db->space);
 			}
 
 			r_pos = L4_Address(e->range) + L4_Size(e->range);
@@ -900,6 +1139,8 @@ int mapdb_unmap_fpage(
 					}
 				}
 			}
+
+			e->access = clear_stored_access ? 0 : rwx_seen;
 		} while(++e < &g->entries[g->num_entries] && r_pos < r_end);
 
 		dump_map_group(g);
@@ -1002,7 +1243,7 @@ COLD void mapdb_init_range(
 			L4_Fpage_t page = L4_FpageLog2(range_pos, mag);
 			assert((range_pos & (L4_Size(page) - 1)) == 0);
 			L4_Set_Rights(&page, L4_FullyAccessible);
-			if(mapdb_add_map(db, page, page_ids[id_offset]) < 0) {
+			if(mapdb_add_map(db, 0, page, page_ids[id_offset]) < 0) {
 				panic("mapdb_init_range() [early boot call] mapdb_add_map() failed");
 			}
 

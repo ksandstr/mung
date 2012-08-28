@@ -18,6 +18,9 @@
 #define REF_SPACE(ref) ((ref) & PAGE_MASK)
 #define REF_ADDR(ref) ((ref) & ~PAGE_MASK)
 
+/* tombstone in map_entry->children */
+#define REF_TOMBSTONE MAPDB_REF(0, 1 << PAGE_BITS)
+
 #define LAST_PAGE_ID(ent) ((ent)->first_page_id + (L4_Size((ent)->range) >> PAGE_BITS) - 1)
 
 #define MAX_ENTRIES_PER_GROUP 1024	/* 4 MiB in 4 KiB pages */
@@ -30,7 +33,7 @@ struct space;
 struct map_entry
 {
 	L4_Fpage_t range;		/* incl. L4 permission bits */
-	L4_Word_t parent;
+	L4_Word_t parent;		/* range start in parent */
 	uint32_t first_page_id;
 	/* this field is OR'd with the page table queries to give the access bits
 	 * returned by Unmap. it's written to when a parent recursively
@@ -123,12 +126,17 @@ extern int mapdb_map_pages(
  * examination of page tables is compensated by storing access bits in struct
  * map_entry as appropriate to recursion. (see comment above the field
  * declaration.)
+ *
+ * if @clear_stored_access is set, the stored access bits retrieved for @fpage
+ * will be cleared in the immediate entry. for recursion it is always passed
+ * as false.
  */
 extern int mapdb_unmap_fpage(
 	struct map_db *db,
 	L4_Fpage_t fpage,
 	bool immediate,
-	bool recursive);
+	bool recursive,
+	bool clear_stored_access);
 
 
 /* access from the pagefault handler. returns NULL when the entry doesn't
@@ -152,6 +160,7 @@ static inline uint32_t mapdb_page_id_in_entry(
  */
 extern int mapdb_add_map(
 	struct map_db *db,
+	L4_Word_t parent,		/* as in struct map_entry */
 	L4_Fpage_t fpage,
 	uint32_t first_page_id);
 

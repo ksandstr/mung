@@ -339,7 +339,7 @@ bool thread_set_utcb(struct thread *t, L4_Word_t start)
 			L4_Fpage_t u_page = L4_FpageLog2(L4_Address(sp->utcb_area)
 				+ page * PAGE_SIZE, PAGE_BITS);
 			L4_Set_Rights(&u_page, L4_FullyAccessible);
-			mapdb_add_map(&sp->mapdb, u_page, sp->utcb_pages[page]->id);
+			mapdb_add_map(&sp->mapdb, 0, u_page, sp->utcb_pages[page]->id);
 		}
 	}
 	if(new_pos != t->utcb_pos) {
