@@ -297,7 +297,7 @@ static bool handle_pf(
 
 	static int rep_count = 0;
 	static L4_Word_t last_addr = 0;
-	if(last_addr == addr && ++rep_count == 3) {
+	if(last_addr == addr && ++rep_count == 10) {
 		printf("*** all work and no play makes jack a dull boy\n");
 		rep_count = 0;
 		last_addr = 0;
