@@ -562,6 +562,9 @@ static int grow_children_array(struct map_entry *ent)
 	/* rehash old children into a larger hash table. if at least one doesn't
 	 * succeed due to exceeded probe depth, try with larger tables until
 	 * calloc() fails.
+	 *
+	 * (TODO: this could be exploitable. perhaps the hash should be randomized
+	 * per map_entry from a pool seeded with the low 2 bits of rdtsc output.)
 	 */
 	int new_size = ent->num_children * 2;
 	L4_Word_t *new_children;
@@ -622,8 +625,8 @@ static int mapdb_add_child(struct map_entry *ent, L4_Word_t child)
 		L4_Word_t *new_children = malloc(sizeof(L4_Word_t) * 2);
 		if(new_children == NULL) return -ENOMEM;
 		int slot = int_hash(child) & 1;
-		new_children[slot] = ent->child;
-		new_children[slot ^ 1] = 0;
+		new_children[slot] = child;
+		new_children[slot ^ 1] = ent->child;
 		ent->children = new_children;
 		ent->num_children = 2;
 	} else {
