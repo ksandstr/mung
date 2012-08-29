@@ -814,6 +814,7 @@ void sys_threadcontrol(struct x86_exregs *regs)
 			sq_remove_thread(dest);
 		}
 		thread_destroy(dest);
+		goto dead;
 	} else if(!L4_IsNilThread(spacespec) && dest != NULL) {
 		/* modification only. (rest shared with creation.) */
 		if(spacespec.raw != dest_tid.raw) {
@@ -888,6 +889,7 @@ void sys_threadcontrol(struct x86_exregs *regs)
 		}
 	}
 
+dead:
 	result = 1;
 
 end:
