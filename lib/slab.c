@@ -124,19 +124,20 @@ void *kmem_cache_alloc(struct kmem_cache *cache)
 		list_add(&cache->partial_list, &slab->link);
 	}
 
+	assert(slab->freelist != NULL);
 	void *ret = slab->freelist, *next = *(void **)ret;
 	slab->in_use++;
 	intptr_t bump = (cache->size + cache->align - 1) & ~(cache->align - 1);
-	if(next != NULL) slab->freelist = next;
-	else {
-		slab->freelist += bump;
-		*(void **)slab->freelist = NULL;
-	}
-	if(slab->freelist + bump >= (void *)slab + PAGE_SIZE) {
-		/* it became full. */
+	if(next != NULL) slab->freelist = next;		/* pop. */
+	else if(slab->freelist + bump >= (void *)slab + PAGE_SIZE) {
+		/* became full. */
 		list_del_from(&cache->partial_list, &slab->link);
 		list_add(&cache->full_list, &slab->link);
 		slab->freelist = NULL;
+	} else {
+		/* advance. */
+		slab->freelist += bump;
+		*(void **)slab->freelist = NULL;
 	}
 
 	return ret;
@@ -156,6 +157,7 @@ void kmem_cache_free(struct kmem_cache *cache, void *ptr)
 	assert(kmem_cache_find(ptr) == cache);
 
 	struct slab *slab = (struct slab *)((intptr_t)ptr & ~PAGE_MASK);
+	assert(slab->magic == SLAB_MAGIC);
 	assert(slab->in_use > 0);
 	if(slab->freelist == NULL) {
 		/* reinstate into the partial slab list */
