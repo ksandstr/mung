@@ -202,29 +202,28 @@ static int sigma0_ipc_loop(void *kip_base)
 }
 
 
-static void *get_free_page_at(L4_Word_t address, int size_log2)
+static void *get_free_page_at(L4_Word_t address, int want_size_log2)
 {
 	assert((address & PAGE_MASK) == 0);
 
-	L4_Fpage_t key = L4_FpageLog2(address, size_log2);
-	assert(L4_Address(key) == address);
-	assert(L4_SizeLog2(key) == size_log2);
-	struct track_page *pg = find_page_by_range(key);
+	struct track_page *pg = find_page_by_range(
+		L4_FpageLog2(address, want_size_log2));
 	if(pg == NULL) return NULL;
 
 	L4_Fpage_t page = pg->page;
 	bool dedicated = pg->dedicated;
 	avl_remove(pages_by_range, &pg->page);
 	if(!dedicated) {
-		list_del_from(&free_pages[size_log2 - PAGE_BITS], &pg->link);
+		list_del_from(&free_pages[L4_SizeLog2(pg->page) - PAGE_BITS],
+			&pg->link);
 	}
 	kmem_cache_free(track_page_slab, pg);
 
-	if(L4_Address(page) != address || L4_SizeLog2(page) != size_log2) {
+	if(L4_Address(page) != address || L4_SizeLog2(page) != want_size_log2) {
 		/* complex case. */
 		L4_Word_t start_len = address - L4_Address(page);
 		free_page_range(L4_Address(page), start_len, dedicated);
-		L4_Word_t top = address + (1 << size_log2),
+		L4_Word_t top = address + (1 << want_size_log2),
 			pg_top = L4_Address(page) + L4_Size(page);
 		if(top < pg_top) {
 			free_page_range(top, pg_top - top, dedicated);
@@ -241,6 +240,7 @@ static void *get_free_page(int size_log2)
 	for(int i=size_log2 - PAGE_BITS; i < PAGE_BUCKETS; i++) {
 		if(!list_empty(&free_pages[i])) {
 			pg = list_top(&free_pages[i], struct track_page, link);
+			assert(pg != NULL);
 			list_del_from(&free_pages[i], &pg->link);
 			break;
 		}
