@@ -13,6 +13,9 @@
 #define PAGE_SIZE 4096
 #define PAGE_MASK 0xfff
 
+/* the appropriate delay for IPC reception before failure */
+#define TEST_IPC_DELAY L4_TimePeriod(150000)
+
 
 struct Suite;
 
