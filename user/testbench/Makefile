@@ -21,7 +21,7 @@ testbench: testbench.ld crt0.o testbench.o dlmalloc.o heap.o thread.o \
 		sched_suite.o space_suite.o thread_suite.o \
 		process_suite.o \
 		legacy.o thread_test.o \
-		syscalls.o ccan-list.o ccan-htable.o
+		syscalls.o ccan-list.o ccan-htable.o ccan-hash.o
 	@echo "  LD $@"
 	@$(LD) $(LDFLAGS) -T testbench.ld $(filter %.o,$^) $(LIBS) -o $@ \
 		-L $(CFGDIR)/lib -lukernel_util \

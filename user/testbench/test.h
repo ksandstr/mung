@@ -78,6 +78,8 @@ extern void tcase_add_test_full(
 extern SRunner *srunner_create(Suite *first_suite);
 extern void srunner_add_suite(SRunner *run, Suite *s);
 extern void srunner_run_all(SRunner *sr, int report_mode);
+extern void srunner_run_path(SRunner *sr, const char *path, int report_mode);
+extern void srunner_describe(SRunner *sr);
 
 
 /* internal API for test exit from _fail_unless() */

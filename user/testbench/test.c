@@ -4,9 +4,15 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdarg.h>
+#include <ctype.h>
 #include <assert.h>
 #include <ccan/list/list.h>
 #include <ccan/container_of/container_of.h>
+#include <ccan/htable/htable.h>
+#include <ccan/hash/hash.h>
+#include <ccan/str/str.h>
+
+#include <ukernel/util.h>
 
 #include "defs.h"
 #include "test.h"
@@ -14,10 +20,14 @@
 
 #define IN_TEST_MAGIC	0x51deb00b		/* with fuckings to mjg */
 
+#define E_FIXTURE_SETUP 1
+#define E_FIXTURE_TEARDOWN 2
+
 
 struct SRunner
 {
 	struct list_head suites;
+	struct htable test_hash;
 };
 
 
@@ -58,7 +68,28 @@ struct test_status {
 };
 
 
+/* in srunner->test_hash */
+struct test_entry {
+	Suite *s;
+	TCase *tc;
+	struct test *test;
+	char path[];
+};
+
+
 static int in_test_key = 0;		/* ptr value, IN_TEST_MAGIC */
+
+
+static size_t rehash_test_entry(const void *ptr, void *priv) {
+	const struct test_entry *ent = ptr;
+	return hash(ent->path, strlen(ent->path), 0);
+}
+
+
+static bool test_entry_str_compare(const void *cand, void *keyptr) {
+	const struct test_entry *ent = cand;
+	return streq(ent->path, (const char *)keyptr);
+}
 
 
 Suite *suite_create(const char *name)
@@ -136,7 +167,6 @@ void tcase_add_test_full(
 
 struct test_thread_param
 {
-	Suite *s;
 	TCase *tc;
 	struct test *t;
 	int val;
@@ -213,13 +243,13 @@ static bool run_fixture_list(
 }
 
 
-static bool run_test(Suite *s, TCase *tc, struct test *t, int test_value)
+static bool run_test(TCase *tc, struct test *t, int test_value)
 {
 	bool rc = true;
 
 	struct test_thread_param *param = malloc(sizeof(*param));
 	*param = (struct test_thread_param){
-		.s = s, .tc = tc, .t = t, .val = test_value,
+		.tc = tc, .t = t, .val = test_value,
 	};
 	L4_ThreadId_t thread = start_thread(&test_wrapper_fn, param);
 	if(L4_IsNilThread(thread)) {
@@ -246,6 +276,8 @@ SRunner *srunner_create(Suite *first_suite)
 	SRunner *sr = malloc(sizeof(SRunner));
 	list_head_init(&sr->suites);
 	if(first_suite != NULL) srunner_add_suite(sr, first_suite);
+	htable_init(&sr->test_hash, &rehash_test_entry, NULL);
+
 	return sr;
 }
 
@@ -253,6 +285,165 @@ SRunner *srunner_create(Suite *first_suite)
 void srunner_add_suite(SRunner *run, Suite *s)
 {
 	list_add_tail(&run->suites, &s->runner_link);
+
+	TCase *tc;
+	list_for_each(&s->cases, tc, suite_link) {
+		struct test *t;
+		list_for_each(&tc->tests, t, tcase_link) {
+			char path[256];
+			int pchars = snprintf(path, sizeof(path), "%s:%s:%s", s->name,
+				tc->name, t->name);
+			struct test_entry *ent = malloc(sizeof(struct test_entry)
+				 + pchars + 1);
+			ent->test = t;
+			ent->tc = tc;
+			ent->s = s;
+			memcpy(ent->path, path, pchars + 1);
+			htable_add(&run->test_hash, hash(ent->path, pchars, 0), ent);
+		}
+	}
+}
+
+
+void srunner_describe(SRunner *sr)
+{
+	Suite *s;
+	list_for_each(&sr->suites, s, runner_link) {
+		printf("*** desc suite `%s'\n", s->name);
+		TCase *tc;
+		list_for_each(&s->cases, tc, suite_link) {
+			printf("*** desc tcase `%s'\n", tc->name);
+			struct test *t;
+			list_for_each(&tc->tests, t, tcase_link) {
+				printf("*** desc test `%s' low:%d high:%d\n", t->name,
+					t->low, t->high);
+			}
+		}
+	}
+}
+
+
+static void begin_suite(Suite *s)
+{
+	printf("*** begin suite `%s'\n", s->name);
+}
+
+
+static bool begin_tcase(TCase *tc)
+{
+	printf("*** begin tcase `%s'\n", tc->name);
+	return list_empty(&tc->u_fixtures)
+		|| run_fixture_list(&tc->u_fixtures, false);
+}
+
+
+static void run_test_in_case(
+	TCase *tc,
+	struct test *t,
+	int iter,
+	int report_mode)
+{
+	printf("*** begin test `%s'", t->name);
+	if(t->low < t->high) printf(" iter %d", iter); else assert(iter == 0);
+	printf("\n");
+
+	bool failed = true;
+	int rc = 0;
+
+	if(!list_empty(&tc->c_fixtures)
+		&& !run_fixture_list(&tc->c_fixtures, false))
+	{
+		/* TODO: do an exit-to-restart here just in case the microkernel has
+		 * become fucked. but note the test sequence run so far, or something.
+		 *
+		 * FIXME: at least signal that a test case was skipped!
+		 *
+		 * for now this just goes on to the next tcase, leaving fixtures
+		 * before the failed one in place. that's pretty bad.
+		 */
+		printf("*** test `%s': checked fixture setup failed\n", t->name);
+		goto end;
+	}
+
+	flush_log(false);
+	tap_reset();
+	failed = !run_test(tc, t, iter);
+
+	rc = exit_status();
+	if(rc > 0 || failed) {
+		/* TODO: gather results for unplanned and unexecuted test points,
+		 * report according to report_mode.
+		 */
+		flush_log(true);
+	}
+
+	if(!list_empty(&tc->c_fixtures)
+		&& !run_fixture_list(&tc->c_fixtures, true))
+	{
+		printf("*** test `%s': checked fixture teardown failed\n", t->name);
+		/* FIXME: do exit-to-restart or something */
+	}
+
+end:
+	if(failed) {
+		printf("*** test `%s' failed, rc %d\n", t->name, rc);
+	} else {
+		printf("*** end test `%s' rc %d\n", t->name, rc);
+	}
+}
+
+
+static bool end_tcase(TCase *tc)
+{
+	bool ok = list_empty(&tc->u_fixtures)
+		|| run_fixture_list(&tc->u_fixtures, true);
+	printf("*** end tcase `%s'\n", tc->name);
+	return ok;
+}
+
+
+static void end_suite(Suite *s)
+{
+	printf("*** end suite `%s'\n", s->name);
+}
+
+
+void srunner_run_path(SRunner *sr, const char *path, int report_mode)
+{
+	int plen = strlen(path);
+	char copy[plen + 1];
+	memcpy(copy, path, plen + 1);
+
+	/* separate iteration count from full test name. */
+	int iter = 0;
+	char *sep = strrchr(copy, ':');
+	if(sep != NULL && (sep[1] == '-' || isdigit(sep[1]))) {
+		char *colon = sep++;
+		bool neg = *sep == '-';
+		if(neg) sep++;
+		while(*sep != '\0') {
+			if(!isdigit(*sep)) {
+				printf("*** invalid integer `%s'\n", strrchr(path, ':') + 1);
+				abort();
+			}
+			iter = iter * 10 + *(sep++) - '0';
+		}
+		if(neg) iter = -iter;
+		*colon = '\0';
+	}
+
+	struct test_entry *ent = htable_get(&sr->test_hash,
+		hash(copy, strlen(copy), 0), &test_entry_str_compare, copy);
+	if(ent == NULL) {
+		printf("*** test path `%s' not found\n", path);
+		abort();
+	}
+
+	begin_suite(ent->s);
+	begin_tcase(ent->tc);
+	run_test_in_case(ent->tc, ent->test, iter, report_mode);
+	end_tcase(ent->tc);
+	end_suite(ent->s);
 }
 
 
@@ -263,13 +454,10 @@ void srunner_run_all(SRunner *sr, int report_mode)
 {
 	Suite *s;
 	list_for_each(&sr->suites, s, runner_link) {
-		printf("*** begin suite `%s'\n", s->name);
+		begin_suite(s);
 		TCase *tc;
 		list_for_each(&s->cases, tc, suite_link) {
-			printf("*** begin tcase `%s'\n", tc->name);
-			if(!list_empty(&tc->u_fixtures)
-				&& !run_fixture_list(&tc->u_fixtures, false))
-			{
+			if(!begin_tcase(tc)) {
 				/* FIXME: see below */
 				printf("*** abort tcase `%s' (unchecked fixture failed)\n",
 					tc->name);
@@ -280,64 +468,15 @@ void srunner_run_all(SRunner *sr, int report_mode)
 				int high = t->high;
 				if(high < t->low) high = t->low;
 				for(int val = t->low; val <= high; val++) {
-					printf("*** begin test `%s'", t->name);
-					if(t->low < high) printf(" iter %d", val);
-					printf("\n");
-					if(!list_empty(&tc->c_fixtures)
-						&& !run_fixture_list(&tc->c_fixtures, false))
-					{
-						/* TODO: do an exit-to-restart here just in case the
-						 * microkernel has become fucked. but note the test
-						 * sequence run so far, or something.
-						 *
-						 * FIXME: at least signal that a test case was
-						 * skipped!
-						 *
-						 * for now this just goes on to the next tcase,
-						 * leaving fixtures before the failed one in place.
-						 * that's pretty bad.
-						 */
-						printf("*** abort test `%s' (checked fixture failed)\n",
-							t->name);
-						continue;
-					}
-
-					flush_log(false);
-					tap_reset();
-					bool failed = !run_test(s, tc, t, val);
-
-					int rc = exit_status();
-					if(rc > 0 || failed) {
-						/* TODO: gather results for unplanned and unexecuted
-						 * test points.
-						 */
-						flush_log(true);
-					}
-
-					if(!list_empty(&tc->c_fixtures)
-						&& !run_fixture_list(&tc->c_fixtures, true))
-					{
-						printf("*** test `%s': checked fixture teardown failed\n",
-							t->name);
-						/* FIXME: do exit-to-restart or something */
-					}
-
-					if(failed) {
-						printf("*** test `%s' failed, rc %d\n", t->name, rc);
-					} else {
-						printf("*** end test `%s' rc %d\n", t->name, rc);
-					}
+					run_test_in_case(tc, t, val, report_mode);
 				}
 			}
-			if(!list_empty(&tc->u_fixtures)
-				&& !run_fixture_list(&tc->u_fixtures, true))
-			{
+			if(!end_tcase(tc)) {
 				printf("*** tcase `%s': unchecked fixture teardown failed\n",
 					tc->name);
 				/* FIXME: see above */
 			}
-			printf("*** end tcase `%s'\n", tc->name);
 		}
-		printf("*** end suite `%s'\n", s->name);
+		end_suite(s);
 	}
 }
