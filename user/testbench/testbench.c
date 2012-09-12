@@ -1,8 +1,11 @@
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <ctype.h>
 #include <assert.h>
 #include <ccan/compiler/compiler.h>
+#include <ccan/hash/hash.h>
 #include <ccan/htable/htable.h>
 
 #include <l4/types.h>
@@ -25,12 +28,23 @@
 #define PAGE_MASK 0xfff
 
 
+/* from CCAN */
+#define streq(a,b) (strcmp((a),(b)) == 0)
+
+
 /* pages tracked by the forkserv pager. mappings are granted to forkserv as
  * faults occur. presence of a forkserv_page means that a page was already
  * received from sigma0.
  */
 struct forkserv_page {
 	L4_Word_t address;
+};
+
+
+/* command-line options (passed in the forkserv module's cmdline field). */
+struct cmd_opt {
+	char *value;
+	char key[];		/* has internal null. value = &key[nullpos + 1]. */
 };
 
 
@@ -256,13 +270,15 @@ static void forkserv_pager_fn(void *param UNUSED)
 }
 
 
-static void start_forkserv(void)
+/* returns the raw command line. */
+static const char *start_forkserv(void)
 {
 	L4_KernelInterfacePage_t *kip = L4_GetKernelInterface();
 	L4_BootInfo_t *bootinfo = (L4_BootInfo_t *)L4_BootInfo(kip);
 
 	L4_BootRec_t *rec = L4_BootInfo_FirstEntry(bootinfo);
 	bool found = false;
+	const char *cmdline_rest = NULL;
 	for(L4_Word_t i = 0;
 		i < L4_BootInfo_Entries(bootinfo);
 		i++, rec = L4_BootRec_Next(rec))
@@ -274,8 +290,9 @@ static void start_forkserv(void)
 
 		char *cmdline = L4_Module_Cmdline(rec);
 		const char *slash = strrchr(cmdline, '/');
-		if(slash != NULL && strcmp(slash + 1, "forkserv") == 0) {
+		if(slash != NULL && memcmp(slash + 1, "forkserv", 8) == 0) {
 			found = true;
+			cmdline_rest = strchr(slash, ' ');
 			break;
 		}
 	}
@@ -356,6 +373,8 @@ static void start_forkserv(void)
 			__func__, L4_ErrorCode());
 		abort();
 	}
+
+	return cmdline_rest;
 }
 
 
@@ -484,13 +503,71 @@ static void transfer_to_forkserv(void)
 }
 
 
+static size_t rehash_cmd_opt(const void *data, void *priv) {
+	const struct cmd_opt *opt = data;
+	return hash(opt->key, strlen(opt->key), 0);
+}
+
+
+static bool cmd_opt_eq_keystr(const void *cand_ptr, void *key)
+{
+	const struct cmd_opt *opt = cand_ptr;
+	return streq(opt->key, (const char *)key);
+}
+
+
+static const char *cmd_opt(struct htable *ht, const char *key)
+{
+	struct cmd_opt *opt = htable_get(ht, hash(key, strlen(key), 0),
+		&cmd_opt_eq_keystr, key);
+	return opt != NULL ? opt->value : "";
+}
+
+
+static void parse_cmd_opts(struct htable *ht, const char *boot_cmdline)
+{
+	if(boot_cmdline == NULL) return;
+
+	while(*boot_cmdline != '\0') {
+		while(isspace(*boot_cmdline)) boot_cmdline++;
+		if(*boot_cmdline == '\0') break;
+		const char *eqpos = strchr(boot_cmdline, '=');
+		if(eqpos == NULL) {
+			printf("*** malformed command-line at `%s'\n", boot_cmdline);
+			abort();
+		}
+		const char *valptr = eqpos + 1, *val_end = valptr;
+		while(!isspace(*val_end) && *val_end != '\0') val_end++;
+		int val_len = val_end - valptr, opt_len = eqpos - boot_cmdline;
+
+		struct cmd_opt *opt = malloc(sizeof(struct cmd_opt)
+			+ val_len + opt_len + 2);
+		memcpy(opt->key, boot_cmdline, opt_len);
+		opt->key[opt_len] = '\0';
+		opt->value = &opt->key[opt_len + 1];
+		memcpy(opt->value, valptr, val_len);
+		opt->value[val_len] = '\0';
+		/* NOTE: this can add multiple values for a single option. that's by
+		 * design!
+		 */
+		htable_add(ht, rehash_cmd_opt(opt, NULL), opt);
+
+		boot_cmdline = val_end + 1;
+	}
+}
+
+
 int main(void)
 {
 	printf("hello, world!\n");
 	calibrate_delay_loop();
 
 	/* FIXME: add option to _not_ activate forkserv. */
-	start_forkserv();
+	const char *boot_cmdline = start_forkserv();
+	struct htable opts;
+	htable_init(&opts, &rehash_cmd_opt, NULL);
+	parse_cmd_opts(&opts, boot_cmdline);
+
 	transfer_to_forkserv();
 
 	/* proper test suite */
@@ -508,7 +585,26 @@ int main(void)
 		Suite *s = (*suites[i])();
 		srunner_add_suite(run, s);
 	}
-	srunner_run_all(run, 0);
+	if(!streq(cmd_opt(&opts, "describe"), "")) {
+		srunner_describe(run);
+	}
+	const char *only = cmd_opt(&opts, "runonly");
+	if(!streq(only, "")) {
+		char *copy = strdup(only), *pos = copy;
+		for(;;) {
+			char *sep = strchr(pos, '+');
+			if(sep != NULL) *sep = '\0';
+			if(streq(pos, "@")) {
+				/* the special "stop" symbol. */
+				break;
+			}
+			srunner_run_path(run, pos, 0);
+			if(sep == NULL) break; else pos = sep + 1;
+		}
+		free(copy);
+	} else {
+		srunner_run_all(run, 0);
+	}
 
 	printf("*** legacy tests follow\n");
 	legacy_tests();
