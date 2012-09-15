@@ -29,7 +29,7 @@ check: all
 	@user/testbench/report.pl
 
 
-tags: $(shell find . -iname "*.[ch]" -print)
+tags: $(shell find . -iname "*.[ch]" -or -iname "*.p[lm]" -print)
 	@ctags -R *
 
 
