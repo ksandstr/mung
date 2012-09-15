@@ -22,6 +22,21 @@ static inline int isdigit(int c) {
 }
 
 
+static inline int isupper(int c) {
+	return c >= 'A' && c <= 'Z';
+}
+
+
+static inline int toupper(int c) {
+	if(isupper(c)) return c; else return c - 32;
+}
+
+
+static inline int tolower(int c) {
+	if(!isupper(c)) return c; else return c + 32;
+}
+
+
 /* NOTE: none of this shit works!, quoth captain kirk */
 
 extern int isalnum(int c);
@@ -33,7 +48,6 @@ extern int isgraph(int c);
 extern int islower(int c);
 extern int isprint(int c);
 extern int ispunct(int c);
-extern int isupper(int c);
 extern int isxdigit(int c);
 
 #endif
