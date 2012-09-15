@@ -27,7 +27,7 @@
 struct SRunner
 {
 	struct list_head suites;
-	struct htable test_hash;
+	struct htable test_by_path, test_by_id;
 };
 
 
@@ -68,7 +68,7 @@ struct test_status {
 };
 
 
-/* in srunner->test_hash */
+/* in srunner->test_* */
 struct test_entry {
 	Suite *s;
 	TCase *tc;
@@ -89,6 +89,23 @@ static size_t rehash_test_entry(const void *ptr, void *priv) {
 static bool test_entry_str_compare(const void *cand, void *keyptr) {
 	const struct test_entry *ent = cand;
 	return streq(ent->path, (const char *)keyptr);
+}
+
+
+static struct test_entry *get_test_entry(struct htable *ht, const char *key)
+{
+	return htable_get(ht, hash(key, strlen(key), 0),
+		&test_entry_str_compare, key);
+}
+
+
+static int __attribute__((pure)) list_length(struct list_head *list)
+{
+	int count = 0;
+	for(struct list_node *n = list->n.next; n != &list->n; n = n->next) {
+		count++;
+	}
+	return count;
 }
 
 
@@ -276,7 +293,8 @@ SRunner *srunner_create(Suite *first_suite)
 	SRunner *sr = malloc(sizeof(SRunner));
 	list_head_init(&sr->suites);
 	if(first_suite != NULL) srunner_add_suite(sr, first_suite);
-	htable_init(&sr->test_hash, &rehash_test_entry, NULL);
+	htable_init(&sr->test_by_path, &rehash_test_entry, NULL);
+	htable_init(&sr->test_by_id, &rehash_test_entry, NULL);
 
 	return sr;
 }
@@ -299,24 +317,163 @@ void srunner_add_suite(SRunner *run, Suite *s)
 			ent->tc = tc;
 			ent->s = s;
 			memcpy(ent->path, path, pchars + 1);
-			htable_add(&run->test_hash, hash(ent->path, pchars, 0), ent);
+			htable_add(&run->test_by_path, hash(ent->path, pchars, 0), ent);
 		}
+	}
+}
+
+
+/* all-to-all prefix length. a disambiguating prefix for something specific
+ * could be shorter.
+ */
+static int prefix_length_all(char **names_ptr, int num_names)
+{
+	const char *names[num_names];
+	for(int i=0; i < num_names; i++) names[i] = names_ptr[i];
+
+	int pfx = 0, n_valid = num_names;
+	bool hit;
+	do {
+		hit = false;
+		bool seen[256];
+		for(int i=0; i < 256; i++) seen[i] = false;
+		for(int i=0; i < num_names && !hit; i++) {
+			if(names[i] == NULL) continue;
+			int c = (unsigned char)names[i][pfx];
+			if(c == '\0') {
+				names[i] = NULL;
+				n_valid--;
+			} else if(seen[c]) {
+				hit = true;
+			} else {
+				seen[c] = true;
+			}
+		}
+		if(hit) pfx++;
+	} while(hit && n_valid > 0);
+
+	return pfx + 1;
+}
+
+
+/* picks out a list of names as struct flexmembers, and calls
+ * prefix_length_all() on them.
+ */
+static int name_prefix_length_all(
+	struct list_head *list,
+	size_t link_offset,
+	size_t name_offset)
+{
+	int len = list_length(list);
+	char *names[len];
+	int ix = 0;
+	void *ptr;
+	list_for_each_off(list, ptr, link_offset) {
+		names[ix++] = ptr + name_offset;
+	}
+	return prefix_length_all(names, len);
+}
+
+
+static void add_test_ids(struct htable *table, SRunner *sr)
+{
+	int suite_pfx = name_prefix_length_all(&sr->suites,
+		offsetof(Suite, runner_link), offsetof(Suite, name));
+
+	Suite *s;
+	list_for_each(&sr->suites, s, runner_link) {
+		int tcase_pfx = name_prefix_length_all(&s->cases,
+			offsetof(TCase, suite_link), offsetof(TCase, name));
+		TCase *tc;
+		list_for_each(&s->cases, tc, suite_link) {
+			int test_pfx = name_prefix_length_all(&tc->tests,
+				offsetof(struct test, tcase_link),
+				offsetof(struct test, name));
+
+			/* test_pfx is sometimes quite long. */
+			if(test_pfx > 4) test_pfx = 4;
+
+			int tid_len = suite_pfx + tcase_pfx + test_pfx;
+			char tid[tid_len + 1];
+			tid[tid_len] = '\0';
+			memcpy(&tid[0], s->name, suite_pfx);
+			memcpy(&tid[suite_pfx], tc->name, tcase_pfx);
+			tid[0] = toupper(tid[0]);
+			tid[suite_pfx] = toupper(tid[suite_pfx]);
+
+			int counter = 0;
+			struct test *t;
+			list_for_each(&tc->tests, t, tcase_link) {
+				int testpos = suite_pfx + tcase_pfx;
+				memcpy(&tid[testpos], t->name, test_pfx);
+				tid[testpos] = toupper(tid[testpos]);
+
+				struct test_entry *prior;
+				while((prior = get_test_entry(table, tid)) != NULL) {
+					assert(counter <= 0xff);
+					const char *digits = "0123456789ABCDEF";
+					tid[testpos + test_pfx - 1] = digits[counter & 0xf];
+					if(counter > 0xf) {
+						tid[testpos + test_pfx - 2] = digits[(counter >> 4) & 0xf];
+					}
+					counter++;
+				}
+
+				struct test_entry *ent = malloc(sizeof(struct test_entry)
+					 + tid_len + 1);
+				memcpy(ent->path, tid, tid_len + 1);
+				ent->s = s;
+				ent->tc = tc;
+				ent->test = t;
+				htable_add(table, hash(tid, tid_len, 0), ent);
+			}
+		}
+	}
+}
+
+
+/* lazy add. */
+static void gen_test_ids(SRunner *sr)
+{
+	struct htable_iter it;
+	if(htable_first(&sr->test_by_id, &it) == NULL) {
+		add_test_ids(&sr->test_by_id, sr);
 	}
 }
 
 
 void srunner_describe(SRunner *sr)
 {
+	gen_test_ids(sr);
+
 	Suite *s;
 	list_for_each(&sr->suites, s, runner_link) {
 		printf("*** desc suite `%s'\n", s->name);
+
 		TCase *tc;
 		list_for_each(&s->cases, tc, suite_link) {
 			printf("*** desc tcase `%s'\n", tc->name);
+
 			struct test *t;
 			list_for_each(&tc->tests, t, tcase_link) {
-				printf("*** desc test `%s' low:%d high:%d\n", t->name,
-					t->low, t->high);
+				/* TODO: this could be something besides a brute force search,
+				 * if the test_ent structures were added to a hash table by
+				 * int_hash(test ^ tcase ^ suite) pointers. but meh.
+				 */
+				bool found = false;
+				struct htable_iter it;
+				for(void *cur = htable_first(&sr->test_by_id, &it);
+					cur != NULL && !found;
+					cur = htable_next(&sr->test_by_id, &it))
+				{
+					struct test_entry *ent = cur;
+					if(ent->test == t && ent->s == s && ent->tc == tc) {
+						printf("*** desc test `%s' low:%d high:%d id:%s\n",
+							t->name, t->low, t->high, ent->path);
+						found = true;
+					}
+				}
+				assert(found);
 			}
 		}
 	}
@@ -410,6 +567,8 @@ static void end_suite(Suite *s)
 
 void srunner_run_path(SRunner *sr, const char *path, int report_mode)
 {
+	gen_test_ids(sr);
+
 	int plen = strlen(path);
 	char copy[plen + 1];
 	memcpy(copy, path, plen + 1);
@@ -432,10 +591,13 @@ void srunner_run_path(SRunner *sr, const char *path, int report_mode)
 		*colon = '\0';
 	}
 
-	struct test_entry *ent = htable_get(&sr->test_hash,
-		hash(copy, strlen(copy), 0), &test_entry_str_compare, copy);
+	struct htable *tabs[] = { &sr->test_by_id, &sr->test_by_path };
+	struct test_entry *ent = NULL;
+	for(int i=0; i < NUM_ELEMENTS(tabs) && ent == NULL; i++) {
+		ent = get_test_entry(tabs[i], copy);
+	}
 	if(ent == NULL) {
-		printf("*** test path `%s' not found\n", path);
+		printf("*** test path-or-id `%s' not found\n", copy);
 		abort();
 	}
 
