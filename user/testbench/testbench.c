@@ -518,9 +518,9 @@ static bool cmd_opt_eq_keystr(const void *cand_ptr, void *key)
 
 static const char *cmd_opt(struct htable *ht, const char *key)
 {
-	struct cmd_opt *opt = htable_get(ht, hash(key, strlen(key), 0),
-		&cmd_opt_eq_keystr, key);
-	return opt != NULL ? opt->value : "";
+	struct cmd_opt *opt = htable_get(ht,
+		hash(key, strlen(key), 0), &cmd_opt_eq_keystr, key);
+	return opt != NULL ? opt->value : NULL;
 }
 
 
@@ -585,11 +585,11 @@ int main(void)
 		Suite *s = (*suites[i])();
 		srunner_add_suite(run, s);
 	}
-	if(!streq(cmd_opt(&opts, "describe"), "")) {
+	if(cmd_opt(&opts, "describe") != NULL) {
 		srunner_describe(run);
 	}
 	const char *only = cmd_opt(&opts, "runonly");
-	if(!streq(only, "")) {
+	if(only != NULL) {
 		char *copy = strdup(only), *pos = copy;
 		for(;;) {
 			char *sep = strchr(pos, '+');
@@ -598,7 +598,7 @@ int main(void)
 				/* the special "stop" symbol. */
 				break;
 			}
-			srunner_run_path(run, pos, 0);
+			if(!streq(pos, "")) srunner_run_path(run, pos, 0);
 			if(sep == NULL) break; else pos = sep + 1;
 		}
 		free(copy);
