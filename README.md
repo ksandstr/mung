@@ -28,7 +28,13 @@ figured out quite yet, but which can be satisfied from current Debian testing.
 
 To run the testbench application inside a qemu-KVM virtual machine, use the
 provided `run.sh` script. To run it inside something else, or to use another
-root server besides `testbench`, go chuck some runes of your own.
+root server besides `testbench`, go chuck some runes of your own. Proper-ish
+test reporting can be had from the `make check' target, which requires a few
+Perl packages (names from the Debian repository):
+
+    libmoose-perl
+    libtrycatch-perl
+    liblist-moreutils-perl
 
 
 ### Doesn't work. ###

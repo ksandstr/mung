@@ -2,10 +2,24 @@
 use strict;
 use warnings;
 use utf8;
+use feature "switch";
+
+use FindBin qw($Bin);
+use lib "$Bin/perl5";
 
 use IO::File;
 use IO::Pipe;
+use TryCatch;
 use List::Util qw/sum/;
+use List::MoreUtils qw/none/;
+
+use Mung::Sink;
+use Mung::Test;
+use Mung::TestResult;
+use Mung::TapError;
+use Mung::ConsoleReport;
+use Mung::Error::TestAbort;
+use Mung::Error::TestRestart;
 
 
 my $TOPLEVEL = ".";
@@ -17,306 +31,169 @@ $| = 1;
 
 
 sub start_test {
-	return IO::File->new("./run.sh -display none |");
-}
+	my %opts = @_;
 
-
-sub is_kmsg {
-	shift;
-	return /^\[(sigma0|forkserv)\]: / || /^sbrk:/;
+	my @parms;
+	foreach(keys %opts) {
+		my $key = $_;
+		my $val = $opts{$key};
+		$val = join("+", @$val) if ref($val) eq 'ARRAY';
+		$key =~ s/_//g;
+		push @parms, "$key=$val";
+	}
+	if(@parms) {
+		$ENV{TESTBENCH_OPTS} = join(" ", @parms);
+	} else {
+		delete $ENV{TESTBENCH_OPTS};
+	}
+	return IO::File->new("./run.sh -display none 2>/dev/null |");
 }
 
 
 my ($suite, $tcase, $test);
-my ($tap_low, $tap_high, $tap_next, $no_plan);
-my $msg_break;
 # %stats = (
 #   failed => integer, # of failed tests in all suites
 #   incorrect => integer, # of failed test points in all suites
 #   suites => ref to vector of values in $suite
 # )
-my %stats;
 
-# output a line without context while managing the running "Suite: x y z [X/Y
-# OK]" form nicely.
-sub report_msg {
-	my $str = shift;
-	if(!$msg_break) {
-		print "\n";
-		$msg_break = 1;
-	}
+# set of id:iter of completed tests. completion means that the test shouldn't
+# be run again.
+my %completed;
 
-	print "$str\n";
-}
-
-
-# TODO: skip stderr outputs, log diag() messages, report failed tests
-sub tap_line {
-	return unless $suite;
-	my $line = shift;
-
-	$line =~ s/^\[ERR\]: //;
-	my $diag = $1 if $line =~ s/#\s*(.+)$//;
-
-	if($line =~ /^(\d+)\.\.(\d+)(.*)$/) {
-		if(defined $tap_low && !$no_plan) {
-			# $tap_high - $tap_next + 1 planned tests went unexecuted.
-			# TODO: count and report this.
-		}
-		$no_plan = 0;
-		$tap_low = int($1);
-		$tap_high = int($2);
-		$tap_next = $tap_low;
-		$test->{planned} += $tap_high - $tap_low + 1;
-
-		if($diag && $diag =~ s/Skip //) {
-			die "malformed skip plan" unless $tap_low > $tap_high;
-			$tcase->{tests_skipped}++;
-			my $tname = test_name();
-			report_msg("test plan `$tname' skipped: $diag");
-			$diag = '';
-		}
-	} elsif($line =~ /^(not\s+)?ok\s+(\d+)\s+-\s+(.+)$/) {
-		# FIXME: the regexp above is too strict. it should have the test
-		# number and description as optional. (though testbench's tap.c
-		# doesn't output any other format.)
-		my $fail = defined($1);
-		my $id = int($2);
-		my $desc = $3;
-		# (the test boundary resets $tap_next to -1, so that new unplanned
-		# streams can be recognized.)
-		if($id != $tap_next) {
-			if($id == 1) {
-				# take this as an implicit start of a new plan_no_plan() style
-				# substream
-				$tap_low = 0;
-				$tap_high = 1;
-				$no_plan = 1;
-				$tap_next = 1;
-			} else {
-				# TODO: could invalid streams be handled in a nicer way?
-				die "plan expected" unless defined $tap_low;
-				die "identifier $id out of order (expected $tap_next, or 1)";
-			}
-		}
-		$test->{seen}++;
-		$test->{planned}++ if $no_plan;
-		$test->{passed}++ unless $fail;
-		my $tname = test_name();
-		if($fail) {
-			my $report = "not ok [$tcase->{name}:$tname] - $desc";
-			push @{$test->{not_ok}}, { report => $report, id => $id };
-			report_msg($report);
-			print "test log: $_\n" foreach @{$test->{log}};
-		}
-		if(++$tap_next > $tap_high && !$no_plan) {
-			# end of test
-			undef $tap_low;
-		}
-	} elsif($line =~ /^ok\s+(\d+)?/ && $diag =~ s/^skip\s+//i) {
-		# skip lines.
-		my $id = int($1 || '0');
-		$test->{skipped}++;
-		$test->{seen}++;
-		my $tname = test_name();
-		report_msg("skip $id - # $diag\t[$tname]");
-		undef $diag;
-	} elsif($line !~ /^\s*$/) {
-		report_msg("# *** ignored `$line'");
-		die "unrecognized";
-	}
-
-	report_msg("# $diag") if $diag;
-}
-
-
-sub test_name {
-	my $n = $test->{name};
-	$n .= " {iter $test->{iter}}" if exists $test->{iter};
+# printable name of a test. tcase and suite assumed in context.
+sub current_test_name {
+	my $n = $test->name;
+	my $iter = $test->current_result->iter;
+	$n .= " {iter $iter}" if $test->low < $test->high;
 	return $n;
 }
 
 
-sub restore_header {
-	return if !$msg_break;
-	print "Suite " . $suite->{name} . ": ";
-	$msg_break = 0;
-}
-
-
-my %begin_table = (
-	suite => sub {
-		my $name = shift;
-		print "Suite $name: ";
-		$suite = {
-			name => $name,
-			cases => [],
-		};
-		push @{$stats{suites}}, $suite;
-	},
-	tcase => sub {
-		my $name = shift;
-		restore_header() if $msg_break;
-		print "$name ";
-		$tcase = {
-			name => $name,
-			tests_skipped => 0,	# of test runs (incl. loop iters)
-			tests => [],
-		};
-	},
-	test => sub {
-		my $name = shift;
-		my $tag = shift;
-		my $value = shift;
-		$test = {
-			name => $name,
-			planned => 0,		# of test points
-			seen => 0,
-			passed => 0,
-			skipped => 0,
-			log => [],
-		};
-		$test->{iter} = int($value) if $tag eq 'iter';
-	},
-);
-
-my %end_table = (
-	suite => sub {
-		my @tests = map { @{$_->{tests}} } @{$suite->{cases}};
-		my %summary;
-		foreach my $key (qw/planned passed skipped/) {
-			$summary{$key} = sum(map { $_->{$key} } @tests);
-		}
-		restore_header() if $msg_break;
-		print "[" . $summary{passed} . "/" . $summary{planned} . " OK]";
-		print "\n";
-		undef $suite;
-	},
-	tcase => sub {
-		my $tskip = $tcase->{tests_skipped};
-		if($msg_break) {
-			restore_header();
-			print $tcase->{name} . " ";
-		}
-		print "<skipped $tskip plans> " if $tskip > 0;
-		push @{$suite->{cases}}, $tcase;
-		undef $tcase;
-	},
-	test => sub {
-		my $name = shift;
-		my %tagval = @_;
-		while(my ($tag, $val) = each %tagval) {
-			$test->{$tag} = $val;
-		}
-		if($test->{failmsg}) {
-			report_msg("test failed: $test->{failmsg}");
-			$stats{failed}++;
-		}
-		if($test->{planned} > $test->{seen}) {
-			report_msg("planned " . $test->{planned}
-				. " test(s), but executed only " . $test->{seen});
-			$stats{incorrect}++;
-		}
-		push @{$tcase->{tests}}, $test;
-		undef $test;
-		$tap_next = -1;
-	},
-);
-
-
-my $test_pipe = start_test();
 my $i = 0;
 my $status = 0;
 my @errors;
 
-# loop state
-my $failmsg;
 
-while(<$test_pipe>) {
-	chomp;
-	s/^\s+//;	# apparently sometimes there are carriage returns.
-
-	last if /^\*\*\*.+\bcompleted/;
-
-	if(/^\*\*\*\s+(.+)$/) {
-		my $msg = $1;
-		if($msg =~ /(begin|end) (suite|tcase|test) [`'](\w+)'(\s+(\w+)\s+(\d+))?/) {
-			my $tab = $1 eq 'begin' ? \%begin_table : \%end_table;
-			my $fn = $tab->{$2};
-			my $tag = $5 || '';
-			my $val = $6 && int($6);
-			&$fn($3, $tag, $val) if $fn;
-		} elsif($msg =~ /test\s+log:\s*(.+)$/) {
-			# capture test log output
-			push @{$test->{log}}, $1;
-		} elsif($msg =~ /test failed:\s+(msg\s+[`'](.+?)')?/) {
-			if($failmsg) {
-				print STDERR "WARNING: multiple test failure messages"
-					. " (last was `$failmsg')\n";
-			}
-			$failmsg = $2 || '';
-		} elsif($msg =~ /test [`'](\w+)' failed, rc (\d+)/) {
-			# TODO: output something that relates the return code to the test
-			# plan.
-			# TODO: also do that for tests that didn't fail.
-			&{$end_table{test}}($1,
-				rc => int($2) || 0,
-				failmsg => $failmsg || '');
-			undef $failmsg;
-		} elsif($msg =~ /(.+) follow/) {
-			# NOTE: should ignore from here until the next valid control
-			# message & possibly log into a hash keyed with $1
-		} else {
-			print STDERR "unknown control message `$_'\n";
+my $sink = Mung::Sink->new(
+	completed_ref => \%completed,
+	output => Mung::ConsoleReport->new);
+sub report_msg { $sink->output->out_of_line("$_\n") foreach @_; }
+my @test_remain;	# [ "$id:$iter", Mung::Test ]
+my $prev_restart_id;
+do {
+	my $test_pipe;
+	if(@test_remain) {
+		# do up to 80 characters' worth of id:iter pairs at a time.
+		my @only;
+		my $count = 0;
+		for(;;) {
+			my ($id, $test_inst) = @{shift @test_remain || last};
+			next if $completed{$id};
+			my $len = length($id) + ($count > 0 ? 1 : 0);
+			last if $count + $len > 80;
+			$count += $len;
+			push @only, $id;
 		}
-	} elsif(/^testbench abort.*called/) {
-		print "\n";
-		print STDERR "premature test abort!\n";
-		$status = 1;
-		last;
+
+		$test_pipe = start_test(run_only => \@only);
 	} else {
-		next if is_kmsg($_);
-		eval {
-			tap_line($_);
-		};
-		if($@) {
-			$@ =~ /^(.+) at/;
-			push @errors, { what => $1, line => $_ };
+		# initial run, without restart.
+		$test_pipe = start_test(describe => 1);
+	}
+
+	my $ctl_seen = 0;
+	while(<$test_pipe>) {
+		chomp;
+		s/^\s+//;	# apparently sometimes there are carriage returns.
+
+		if(!$ctl_seen) {
+			next unless /^\*\*\*\s/;
+			$ctl_seen = 1;
+		}
+
+		last if /^\*\*\*.+\bcompleted/;
+		try {
+			$sink->tb_line($_);
+		}
+		catch (Mung::Error::TestRestart $exn) {
+			my $test = $exn->test;
+			my $rest_id = $test->id . ":" . $test->current_result->iter;
+			# report_msg("restarting on `$rest_id'.");
+			$test->end_test;
+			if(defined $prev_restart_id && $prev_restart_id ne $rest_id) {
+				# first restart on this ID
+				delete $completed{$rest_id};
+			} else {
+				# would be the second, or was otherwise already the first;
+				# skip it and restart from the test after this one.
+			}
+			$prev_restart_id = $rest_id;
+
+			@test_remain = ();
+			while(my ($path, $pt) = each %{$sink->plan}) {
+				for(my $i = $pt->low; $i <= $pt->high; $i++) {
+					my $n = $pt->id . ":$i";
+					push @test_remain, [ $n, $pt ] unless exists $completed{$n};
+				}
+			}
+			# report_msg(scalar(@test_remain) . " tests remain.");
+
+			# stop processing a TAP result.
+			undef $suite;
+
+			last;
+		}
+		catch (Mung::Error $exn) {
+			report_msg("test aborted: " . $exn->to_string);
+			last;
 		}
 	}
-}
-kill "INT", -getpgrp(0);
-$test_pipe->close;
+	kill "INT", -getpgrp(0);
+	$test_pipe->close;
+} while(@test_remain);
 
 # terminate suite line
 print "\n";
 
 # reporting.
 
-# test points that failed.
-my $num_notok_suites = 0;
+# test points that failed, in plan order.
+my %notok_suites;
 my @out;
-foreach my $suite (@{$stats{suites}}) {
-	foreach my $tcase (@{$suite->{cases}}) {
-		my @notoks = map { $_->{not_ok} ? ($_) : () } @{$tcase->{tests}};
-		next unless @notoks > 0;
-		$num_notok_suites++;
+foreach my $suite (@{$sink->suites}) {
+	foreach my $tcase (@{$suite->tcases}) {
+		foreach my $test (@{$tcase->tests}) {
+			my @results = @{$test->results};
+			next if none { @{$_->not_ok} > 0 } @results;
 
-		my $sum = sum(map { scalar @{$_->{not_ok}} } @notoks);
-		die "SOFTWARE FAILURE. GURU MEDITATION" unless $sum >= @notoks;
-		push @out, "Test case `$tcase->{name}' had $sum failed test point(s):";
-		foreach my $t (@notoks) {
-			foreach my $p (@{$t->{not_ok}}) {
+			my $res = pop @results;
+			my $sum = scalar @{$res->not_ok};
+			$notok_suites{$suite->{name}} = 1;
+
+			my $tn = $test->name;
+			$tn .= ":" . $res->iter if $test->low != $test->high;
+			push @out, "Test `$tn' in case `" . $tcase->name
+				. "' had $sum failed test point(s):";
+			foreach my $p (@{$res->not_ok}) {
 				my $report = $p->{report};
 				$report =~ s/\[\w+:\w+\]\s?//;
 				push @out, "  $p->{id}:\t$report";
 			}
+
+			if(@results) {
+				# FIXME: report on differing @{$_->not_ok} lists and so forth
+				my $times = scalar(@results) + 1;
+				push @out, "  (was run $times times total; last reported.)";
+			}
 		}
 	}
 }
+my $num_notok_suites = scalar(keys %notok_suites);
 if($num_notok_suites > 0) {
+	print "\n" if @out;
 	print "$_\n" foreach(@out);
-	print "There were failed test points in $num_notok_suites suite(s).\n\n";
+	print "There were failed test points in $num_notok_suites suite(s).\n";
 }
 
 # outputs generated by die() while parsing testbench output
@@ -324,25 +201,26 @@ if(@errors) {
 	my %bywhat;
 	my @what_order;
 	foreach(@errors) {
-		my $key = $_->{what};
+		my $key = $_->{error}->text;
 		push @what_order, $key unless exists $bywhat{$key};
-		push @{$bywhat{$key}}, $_->{line};
+		push @{$bywhat{$key}}, $_;
 	}
 
 	print "There were " . scalar @errors . " errors parsing test output:\n";
-	# (and scalar @what_order kinds of error.)
+	# (and "scalar @what_order" different kinds of error.)
 	foreach my $what (@what_order) {
 		print "  $what\n";
-		foreach my $line (@{$bywhat{$what}}) {
-			print "\tline `$line'\n";
+		foreach my $err (@{$bywhat{$what}}) {
+			print "\tline `$err->{line}'\n";
 		}
 	}
 }
 
-if($stats{incorrect} || $stats{failed}) {
-	print "There were $stats{incorrect} incorrect tests";
-	if($stats{failed}) {
-		print ", and $stats{failed} test(s) failed";
+if($sink->incorrect || $sink->failed) {
+	print "There were " . $sink->incorrect . " incorrect tests";
+	my $f = $sink->failed;
+	if($f) {
+		print ", and $f test(s) failed";
 		$status = 2;
 	}
 	print ".\n";
