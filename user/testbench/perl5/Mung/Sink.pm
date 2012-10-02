@@ -14,6 +14,7 @@ has [ qw/suite tcase/ ] => ( is => 'rw' );	# FIXME: specify
 has 'test' => (
 	is => 'rw', isa => 'Maybe[Mung::Test]',
 	handles => [qw/tap_line log current_result/] );
+# FIXME: rename to just "completed" in line with Mung::Ctrl->completed
 has 'completed_ref' => (
 	is => 'ro', isa => 'HashRef[Int]',
 	default => sub { {} });
@@ -30,9 +31,10 @@ has 'suites' => (
 	default => sub { [] });
 
 # this is really just a map from iterless test name to Mung::Test. as a test
-# plan it's rather crummy.
+# plan it's rather crummy. writable so it can be cleared by the input receiver
+# loop.
 has 'plan' => (
-	is => 'ro',
+	is => 'rw',
 	isa => 'HashRef[Mung::Test]',
 	default => sub { {} } );
 

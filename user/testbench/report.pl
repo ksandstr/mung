@@ -15,6 +15,7 @@ use List::Util qw/sum/;
 use List::MoreUtils qw/none/;
 
 use Mung::Sink;
+use Mung::Ctrl;
 use Mung::Test;
 use Mung::TestResult;
 use Mung::TapError;
@@ -59,10 +60,6 @@ my ($suite, $tcase, $test);
 #   suites => ref to vector of values in $suite
 # )
 
-# set of id:iter of completed tests. completion means that the test shouldn't
-# be run again.
-my %completed;
-
 # printable name of a test. tcase and suite assumed in context.
 sub current_test_name {
 	my $n = $test->name;
@@ -76,11 +73,15 @@ my $i = 0;
 my $status = 0;
 my @errors;
 
+my %completed;
 
 my $sink = Mung::Sink->new(
 	completed_ref => \%completed,
 	output => Mung::ConsoleReport->new);
 sub report_msg { $sink->print("$_\n") foreach @_; }
+my $ctrl = Mung::Ctrl->new(
+	sink => $sink, completed => \%completed,
+	max_per_run => { id_len => 70 });
 
 # parameters affecting the test process.
 my @roles;
@@ -89,27 +90,17 @@ if(!$ENV{TEST_QUICK}) {
 }
 apply_all_roles($sink, @roles) if @roles;
 
-my @test_remain;	# [ "$id:$iter", Mung::Test ]
 my $prev_restart_id;
-do {
+while(1) {
 	my $test_pipe;
-	if(@test_remain) {
-		# do up to 80 characters' worth of id:iter pairs at a time.
-		my @only;
-		my $count = 0;
-		for(;;) {
-			my ($id, $test_inst) = @{shift @test_remain || last};
-			next if $completed{$id};
-			my $len = length($id) + ($count > 0 ? 1 : 0);
-			last if $count + $len > 80;
-			$count += $len;
-			push @only, $id;
-		}
-
-		$test_pipe = start_test(run_only => \@only);
-	} else {
-		# initial run, without restart.
+	my $test_ids = $ctrl->next_tests || last;
+	if($test_ids eq 'ALL') {
+		# initial run, without restart. toss old plan.
+		$sink->plan({});
 		$test_pipe = start_test(describe => 1);
+	} else {
+		die "expected arrayref" unless ref($test_ids) eq 'ARRAY';
+		$test_pipe = start_test(run_only => $test_ids);
 	}
 
 	my $ctl_seen = 0;
@@ -133,21 +124,14 @@ do {
 			# report_msg("restarting on `$rest_id'.");
 			if(defined $prev_restart_id && $prev_restart_id ne $rest_id) {
 				# first restart on this ID
+				$ctrl->restarted_with($rest_id);
 				delete $completed{$rest_id};
 			} else {
 				# would be the second, or was otherwise already the first;
 				# skip it and restart from the test after this one.
+				$ctrl->restarted_with();
 			}
 			$prev_restart_id = $rest_id;
-
-			@test_remain = ();
-			while(my ($path, $pt) = each %{$sink->plan}) {
-				for(my $i = $pt->low; $i <= $pt->high; $i++) {
-					my $n = $pt->id . ":$i";
-					push @test_remain, [ $n, $pt ] unless exists $completed{$n};
-				}
-			}
-			# report_msg(scalar(@test_remain) . " tests remain.");
 
 			# stop processing a TAP result.
 			undef $suite;
@@ -161,7 +145,7 @@ do {
 	}
 	kill "INT", -getpgrp(0);
 	$test_pipe->close;
-} while(@test_remain);
+}
 
 # terminate suite line
 print "\n";
