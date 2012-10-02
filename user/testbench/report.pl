@@ -10,6 +10,7 @@ use lib "$Bin/perl5";
 use IO::File;
 use IO::Pipe;
 use TryCatch;
+use Moose::Util qw/apply_all_roles/;
 use List::Util qw/sum/;
 use List::MoreUtils qw/none/;
 
@@ -17,6 +18,7 @@ use Mung::Sink;
 use Mung::Test;
 use Mung::TestResult;
 use Mung::TapError;
+use Mung::Restarting;
 use Mung::ConsoleReport;
 use Mung::Error::TestAbort;
 use Mung::Error::TestRestart;
@@ -79,6 +81,14 @@ my $sink = Mung::Sink->new(
 	completed_ref => \%completed,
 	output => Mung::ConsoleReport->new);
 sub report_msg { $sink->print("$_\n") foreach @_; }
+
+# parameters affecting the test process.
+my @roles;
+if(!$ENV{TEST_QUICK}) {
+	push @roles, 'Mung::Restarting';
+}
+apply_all_roles($sink, @roles) if @roles;
+
 my @test_remain;	# [ "$id:$iter", Mung::Test ]
 my $prev_restart_id;
 do {
@@ -118,9 +128,9 @@ do {
 		}
 		catch (Mung::Error::TestRestart $exn) {
 			my $test = $exn->test;
-			my $rest_id = $test->id . ":" . $test->current_result->iter;
+			my $result = $exn->result;
+			my $rest_id = $test->id . ":" . $result->iter;
 			# report_msg("restarting on `$rest_id'.");
-			$test->end_test;
 			if(defined $prev_restart_id && $prev_restart_id ne $rest_id) {
 				# first restart on this ID
 				delete $completed{$rest_id};

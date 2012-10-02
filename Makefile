@@ -2,6 +2,8 @@
 export CFGDIR:=$(abspath .)
 include config.mk
 
+.PHONY: all clean distclean check qcheck
+
 
 all: tags
 	+@make -C lib all
@@ -26,7 +28,13 @@ distclean: clean
 
 
 check: all
+	+@make -C user/testbench check
 	@user/testbench/report.pl
+
+
+qcheck:
+	+@make check TEST_QUICK=1
+
 
 
 tags: $(shell find . -iname "*.[ch]" -or -iname "*.p[lm]" -print)

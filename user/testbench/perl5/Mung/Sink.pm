@@ -104,7 +104,7 @@ sub _end_test {
 	my $name = shift;
 	my %args = @_;
 
-	my $res = $self->test->current_result;
+	my $res = $self->current_result;
 	if($args{failmsg}) {
 		$self->print("test failed: $args{failmsg}");
 		$self->failed($self->failed + 1);
@@ -124,12 +124,8 @@ sub _end_test {
 		push @{$self->tcase->tests}, $self->test;
 	}
 
-	# for test's sake, also restart on failed test points.
-	if($args{failmsg} || @{$res->not_ok}) {
-		die Mung::Error::TestRestart->new(test => $self->test);
-	} else {
-		$self->test->end_test;
-	}
+	# for the benefit of around '_end_test': return a Mung::TestResult object.
+	return $self->test->end_test;
 }
 
 
