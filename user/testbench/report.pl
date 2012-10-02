@@ -78,7 +78,7 @@ my @errors;
 my $sink = Mung::Sink->new(
 	completed_ref => \%completed,
 	output => Mung::ConsoleReport->new);
-sub report_msg { $sink->output->out_of_line("$_\n") foreach @_; }
+sub report_msg { $sink->print("$_\n") foreach @_; }
 my @test_remain;	# [ "$id:$iter", Mung::Test ]
 my $prev_restart_id;
 do {

@@ -10,7 +10,9 @@ has [ qw/low high/ ] => (is => 'rw', isa => 'Int', default => 0);
 has 'results' => (
 	is => 'rw', isa => 'ArrayRef[Mung::TestResult]',
 	default => sub { [] });
-has 'current_result' => (is => 'rw', isa => 'Maybe[Mung::TestResult]');
+has 'current_result' => (
+	is => 'rw', isa => 'Maybe[Mung::TestResult]',
+	handles => [ qw/log tap_line/ ]);
 
 
 
@@ -20,6 +22,8 @@ sub path {
 }
 
 
+# this, and ->end_test, were named badly. the class is already called Test.
+# you don't tell a test object to begin/end a test.
 sub begin_test {
 	my $self = shift;
 	my %args = @_;
