@@ -69,6 +69,16 @@ sub current_test_name {
 }
 
 
+# parameters affecting the test process.
+my @roles;
+my @ctrl_param = ( max_ids_len => 70 );
+if($ENV{TEST_SLOW}) {
+	push @ctrl_param, ( allow_all => 0, max_per_run => 1 );
+} elsif(!$ENV{TEST_QUICK}) {
+	push @roles, 'Mung::Restarting';
+}
+
+
 my $i = 0;
 my $status = 0;
 my @errors;
@@ -79,15 +89,9 @@ my $sink = Mung::Sink->new(
 	completed_ref => \%completed,
 	output => Mung::ConsoleReport->new);
 sub report_msg { $sink->print("$_\n") foreach @_; }
-my $ctrl = Mung::Ctrl->new(
-	sink => $sink, completed => \%completed,
-	max_per_run => { id_len => 70 });
+my $ctrl = Mung::Ctrl->new(@ctrl_param,
+	sink => $sink, completed => \%completed);
 
-# parameters affecting the test process.
-my @roles;
-if(!$ENV{TEST_QUICK}) {
-	push @roles, 'Mung::Restarting';
-}
 apply_all_roles($sink, @roles) if @roles;
 
 my $prev_restart_id;
@@ -98,6 +102,10 @@ while(1) {
 		# initial run, without restart. toss old plan.
 		$sink->plan({});
 		$test_pipe = start_test(describe => 1);
+	} elsif($test_ids eq 'NEED_PLAN') {
+		# initial run, controller wants to run specific tests but has no plan.
+		# gather it and try again.
+		$test_pipe = start_test(describe => 1, run_only => ['@']);
 	} else {
 		die "expected arrayref" unless ref($test_ids) eq 'ARRAY';
 		$test_pipe = start_test(run_only => $test_ids);
@@ -113,7 +121,11 @@ while(1) {
 			$ctl_seen = 1;
 		}
 
-		last if /^\*\*\*.+\bcompleted/;
+		if(/^\*\*\*.+\bcompleted/) {
+			$ctrl->restarted_with() if $test_ids eq 'NEED_PLAN';
+			last;
+		}
+
 		try {
 			$sink->tb_line($_);
 		}

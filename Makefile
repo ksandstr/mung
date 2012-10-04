@@ -36,6 +36,10 @@ qcheck:
 	+@make check TEST_QUICK=1
 
 
+slowcheck:
+	+@make check TEST_SLOW=1
+
+
 
 tags: $(shell find . -iname "*.[ch]" -or -iname "*.p[lm]" -print)
 	@ctags -R *

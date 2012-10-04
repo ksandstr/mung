@@ -9,6 +9,8 @@ has 'sink' => (
 	is => 'ro', isa => 'Mung::Sink',
 	required => 1, handles => [ 'plan' ] );
 
+has 'allow_all' => ( is => 'ro', isa => 'Bool', default => 1 );
+
 # set of id:iter of completed tests. completion means that the test shouldn't
 # be run again. never modified by instances.
 has 'completed' => (
@@ -18,13 +20,11 @@ has 'completed' => (
 
 # configurables.
 #
-# max_per_run:
-#   at most "tests" are returned in next_tests, but perhaps less if their IDs
-#   (and a single separator character for each besides the first) only barely
-#   fit into "id_len" characters.
-has 'max_per_run' => (
-	is => 'ro', required => 0, default => sub { {} },
-	isa => 'HashRef');
+# max_per_run, max_ids_len: at most max_per_run tests returned from
+# ->next_tests, but perhaps less if their IDs (and a single separator
+# character for each besides the first) only barely fit into "max_ids_len"
+# characters.
+has [qw/max_per_run max_ids_len/] => ( is => 'ro', isa => 'Int' );
 
 
 # internals.
@@ -36,12 +36,13 @@ has 'remain' => ( is => 'rw', default => sub { [] } );
 sub next_tests {
 	my $self = shift;
 
-	# deviates from original, which did this per whether @test_remain is empty
-	return 'ALL' unless %{$self->plan};
+	# deviates from original, which did this per whether @test_remain is
+	# empty. this should be considered better wrt how $self->sink->plan
+	# becomes filled in.
+	return ($self->allow_all ? 'ALL' : 'NEED_PLAN') if !%{$self->plan};
 
-	# do up to 80 characters' worth of id:iter pairs at a time.
-	my $ch_lim = $self->max_per_run->{id_len};
-	my $test_lim = $self->max_per_run->{tests};
+	my $ch_lim = $self->max_ids_len;
+	my $test_lim = $self->max_per_run;
 	my @only;
 	my $count = 0;		# of characters
 	while(!$test_lim || @only < $test_lim) {
@@ -52,9 +53,7 @@ sub next_tests {
 		$count += $len;
 		push @only, $id;
 	}
-	#if(@only) {
-	#	$self->sink->print("this run, restarting `" . join(", ", @only) . "'\n");
-	#}
+	# $self->sink->print("this run, restarting `" . join(", ", @only) . "'\n");
 
 	return @only ? \@only : undef;
 }

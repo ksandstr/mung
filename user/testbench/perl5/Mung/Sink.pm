@@ -271,7 +271,7 @@ sub tb_line {
 		die Mung::Error::TestAbort->new(text => "premature test abort!");
 	} elsif(is_kmsg($_)) {
 		return;
-	} elsif($self->current_result) {
+	} elsif($self->test && $self->current_result) {
 		my $input = $_;
 		try {
 			$self->tap_line($input);
