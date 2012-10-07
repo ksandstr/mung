@@ -21,7 +21,7 @@ use warnings;
 
 use Mung::Ctrl;
 
-use Test::More tests => 7;
+use Test::More tests => 10;
 
 
 # removes capitalized args. counts as one test point due to new_ok.
@@ -95,26 +95,34 @@ sub add_plan {
 }
 
 
+sub tests_done {
+	my ($ctrl, $next) = @_;
+	$ctrl->completed->{$_} = 1 foreach (@$next);
+	$ctrl->restarted_with();	# plain success.
+}
+
+
 # regardless of how many tests are run, in the absence of fail-restarts they
 # should run in plan order. confirm this for groups of 1 to 7 inclusive.
-#
-# TODO: also vary allow_all, if that makes any sense from a plan-feeding point
-# of view.
+# allow_all varies per the least significant bit in $max_per_run.
 foreach my $max_per_run (1..7) {
 	subtest "controller obeys plan for max_per_run => $max_per_run" => sub {
 		plan tests => 4;
+		my $allow_all = $max_per_run & 1;
 		my ($test_names, $observed) = ctrl_case({
-				# for now, a current failure case.
-				allow_all => 0, max_per_run => $max_per_run,
+				allow_all => $allow_all, max_per_run => $max_per_run,
 				MIDDLE => sub {
 					my $ctrl = shift;
-					ok($ctrl->next_tests eq 'NEED_PLAN',
-						"controller in !allow_all asks for test plan");
+					if($allow_all) {
+						ok($ctrl->next_tests eq 'ALL');
+					} else {
+						ok($ctrl->next_tests eq 'NEED_PLAN',
+							"controller in !allow_all asks for test plan");
+					}
 				},
 			}, sub {
 				my ($ctrl, $next) = @_;
-				$ctrl->completed->{$_} = 1 foreach (@$next);
-				$ctrl->restarted_with();	# plain success.
+				tests_done($ctrl, $next);
 			});
 		my @all = map { @$_ } @$observed;
 		ok(scalar(@all) == scalar(@$test_names),
@@ -134,4 +142,19 @@ foreach my $max_per_run (1..7) {
 	};
 }
 
-# TODO: test for max_ids_len being respected.
+# test that max_ids_len is being respected.
+foreach my $ids_limit (30, 60, 90) {
+	subtest "max_ids_len => $ids_limit is respected" => sub {
+		plan tests => 2;
+		my $max_length = 0;
+		ctrl_case({ allow_all => 0, max_ids_len => $ids_limit },
+			sub {
+				my ($ctrl, $next) = @_;
+				tests_done($ctrl, $next);
+				my $ids = join('+', @$next);
+				$max_length = length($ids) if $max_length < length($ids);
+			});
+		ok($max_length <= $ids_limit,
+			"maximum group length is under $ids_limit");
+	};
+}
