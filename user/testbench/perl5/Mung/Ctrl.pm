@@ -39,7 +39,7 @@ sub next_tests {
 	# deviates from original, which did this per whether @test_remain is
 	# empty. this should be considered better wrt how $self->sink->plan
 	# becomes filled in.
-	return ($self->allow_all ? 'ALL' : 'NEED_PLAN') if !%{$self->plan};
+	return ($self->allow_all ? 'ALL' : 'NEED_PLAN') if !@{$self->plan};
 
 	my $ch_lim = $self->max_ids_len;
 	my $test_lim = $self->max_per_run;
@@ -66,7 +66,7 @@ sub restarted_with {
 	delete $self->completed->{$_} foreach @_;
 
 	my @rem;
-	while(my ($path, $pt) = each %{$self->plan}) {
+	foreach my $pt (@{$self->plan}) {
 		for(my $i = $pt->low; $i <= $pt->high; $i++) {
 			my $n = $pt->id . ":$i";
 			push @rem, [ $n, $pt ] unless exists $self->completed->{$n};

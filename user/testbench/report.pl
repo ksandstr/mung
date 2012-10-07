@@ -100,7 +100,7 @@ while(1) {
 	my $test_ids = $ctrl->next_tests || last;
 	if($test_ids eq 'ALL') {
 		# initial run, without restart. toss old plan.
-		$sink->plan({});
+		$sink->reset;
 		$test_pipe = start_test(describe => 1);
 	} elsif($test_ids eq 'NEED_PLAN') {
 		# initial run, controller wants to run specific tests but has no plan.
@@ -137,7 +137,6 @@ while(1) {
 			if(defined $prev_restart_id && $prev_restart_id ne $rest_id) {
 				# first restart on this ID
 				$ctrl->restarted_with($rest_id);
-				delete $completed{$rest_id};
 			} else {
 				# would be the second, or was otherwise already the first;
 				# skip it and restart from the test after this one.

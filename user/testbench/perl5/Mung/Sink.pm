@@ -30,13 +30,17 @@ has 'suites' => (
 	is => 'ro', isa => 'ArrayRef[Mung::TestSuite]',
 	default => sub { [] });
 
-# this is really just a map from iterless test name to Mung::Test. as a test
-# plan it's rather crummy. writable so it can be cleared by the input receiver
-# loop.
-has 'plan' => (
+# map from iterless test name to Mung::Test. writable so it can be ->reset.
+has 'test_by_path' => (
 	is => 'rw',
 	isa => 'HashRef[Mung::Test]',
 	default => sub { {} } );
+
+# array of tests in ->desc_line() order.
+has 'plan' => (
+	is => 'rw',
+	isa => 'ArrayRef[Mung::Test]',
+	default => sub { [] } );
 
 has 'failmsg' => ( is => 'rw', isa => 'Str', default => '' );
 
@@ -47,6 +51,13 @@ has 'errors' => (
 	is => 'ro',
 	# isa => 'ArrayRef[Dict[error => Mung::TapError, line => Str]]',
 	default => sub { [] } );
+
+
+sub reset {
+	my $self = shift;
+	$self->plan([]);
+	$self->test_by_path({});
+}
 
 
 sub _begin_suite {
@@ -95,7 +106,7 @@ sub _begin_test {
 	my $sn = $self->suite->name;
 	my $tcn = $self->tcase->name;
 	my $path = "$sn:$tcn:$name";
-	$self->test($self->plan->{$path} || die "no test plan for $path");
+	$self->test($self->test_by_path->{$path} || die "no test plan for $path");
 	$self->test->begin_test(@_,
 		report_msg_hook => sub { $self->print(shift . "\n"); });
 }
@@ -246,8 +257,10 @@ sub desc_line {
 			suite => $self->desc_suite, tcase => $self->desc_tcase,
 			name => $args{name}, id => $args{id},
 			low => $args{low}, high => $args{high});
-		die "duplicated test " . $t->path if exists $self->plan->{$t->path};
-		$self->plan->{$t->path} = $t;
+		die "duplicated test " . $t->path
+			if exists $self->test_by_path->{$t->path};
+		$self->test_by_path->{$t->path} = $t;
+		push @{$self->plan}, $t;
 	} else {
 		die "desc_line undefined over `$what'";
 	}
