@@ -16,8 +16,12 @@ distclean:
 	@rm -rf .deps testbench forkserv
 
 
-check: all
+check:
 	@tests/run_all.pl
+
+
+covercheck:
+	@PERL5OPT=-MDevel::Cover tests/run_all.pl
 
 
 testbench: testbench.ld crt0.o testbench.o dlmalloc.o heap.o thread.o \

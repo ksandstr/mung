@@ -35,6 +35,7 @@ Perl packages (names from the Debian repository):
     libmoose-perl
     libtrycatch-perl
     liblist-moreutils-perl
+    libdevel-cover-perl
 
 
 ### Doesn't work. ###
