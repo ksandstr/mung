@@ -16,9 +16,8 @@ distclean:
 	@rm -rf .deps testbench forkserv
 
 
-# TODO: should run unit tests for the report script's component classes.
 check: all
-	@echo "no tests in user/testbench/"
+	@tests/run_all.pl
 
 
 testbench: testbench.ld crt0.o testbench.o dlmalloc.o heap.o thread.o \
