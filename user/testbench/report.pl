@@ -95,6 +95,7 @@ my $ctrl = Mung::Ctrl->new(@ctrl_param,
 apply_all_roles($sink, @roles) if @roles;
 
 my $prev_restart_id;
+my $panic_restart_id;
 while(1) {
 	my $test_pipe;
 	my $test_ids = $ctrl->next_tests || last;
@@ -123,6 +124,38 @@ while(1) {
 
 		if(/^\*\*\*.+\bcompleted/) {
 			$ctrl->restarted_with() if $test_ids eq 'NEED_PLAN';
+			last;
+		} elsif(/^PANIC:\s*(.+)$/) {
+			# TODO: restart in such a way as to discover the combination of
+			# tests that causes the panic, and report that.
+			#
+			# also, the test log isn't very useful -- it's just a whine from
+			# some class or another about how it doesn't understand an assert
+			# failure message.
+			#
+			# this case shouldn't even be here today.
+			$sink->print("*** test program panic: `$1'\n");
+			my $result = $sink->test->end_test;
+			my $tlog = $result->test_log;
+			if(@$tlog) {
+				my $path = $sink->test->path;
+				$path .= ":" . $result->iter
+					if $sink->test->low < $sink->test->high;
+				$sink->print("test log for `$path' follows.\n");
+				foreach (@$tlog) {
+					chomp;
+					$sink->print("  = $_\n");
+				}
+			}
+			my $prid = $sink->test->id . ":" . $result->iter;
+			if(($panic_restart_id // '') eq $prid) {
+				$sink->print("double panic, skipping `$prid' entirely\n");
+				$ctrl->completed->{$prid} = 1;
+				$ctrl->restarted_with();	# pretend it's OK.
+			} else {
+				$ctrl->restarted_with($sink->test->id . ":" . $result->iter);
+				$panic_restart_id = $prid;
+			}
 			last;
 		}
 
