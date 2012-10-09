@@ -21,7 +21,7 @@ use warnings;
 
 use Mung::Ctrl;
 
-use Test::More tests => 10;
+use Test::More tests => 11;
 
 
 # removes capitalized args. counts as one test point due to new_ok.
@@ -30,10 +30,8 @@ sub make_ctrl {
 
 	my $sink = Mung::Sink->new(output => DiscardOutput->new);
 	my @clean_args = map { uc eq $_ ? () : ($_ => $args{$_}) } keys(%args);
-	my $ctrl = new_ok('Mung::Ctrl' => [
-		@clean_args, sink => $sink,
-		completed => $sink->completed_ref,
-	]);
+	my $ctrl = new_ok('Mung::Ctrl' => [ @clean_args, sink => $sink ]);
+	$sink->on_complete_fn(sub { $ctrl->completed($_[0], $_[1]->iter); });
 
 	return $ctrl;
 }
@@ -97,7 +95,7 @@ sub add_plan {
 
 sub tests_done {
 	my ($ctrl, $next) = @_;
-	$ctrl->completed->{$_} = 1 foreach (@$next);
+	$ctrl->completed($_) foreach (@$next);
 	$ctrl->restarted_with();	# plain success.
 }
 
@@ -158,3 +156,26 @@ foreach my $ids_limit (30, 60, 90) {
 			"maximum group length is under $ids_limit");
 	};
 }
+
+# test that Mung::Ctrl->completed($test, $iter) works when $test is a
+# Mung::Test reference.
+subtest "object form of ->completed" => sub {
+	plan tests => 2;
+	my %id_to_test;
+	my ($test_names, $observed) = ctrl_case({
+		max_per_run => 1, allow_all => 0,
+	}, sub {
+		my ($ctrl, $next) = @_;
+		if(!%id_to_test) {
+			$id_to_test{$_->id} = $_ foreach (@{$ctrl->sink->plan});
+		}
+		foreach (@$next) {
+			/^(.+):(\d+)$/ || die "can't regexp `$_'";
+			$ctrl->completed($id_to_test{$1}, $2);
+		}
+		$ctrl->restarted_with();
+	});
+	my @all = map { @$_ } @$observed;		# concat
+	ok(scalar(@all) == scalar(@$test_names),
+		"correct number of tests were launched");
+};

@@ -85,12 +85,10 @@ my @errors;
 
 my %completed;
 
-my $sink = Mung::Sink->new(
-	completed_ref => \%completed,
-	output => Mung::ConsoleReport->new);
+my $sink = Mung::Sink->new(output => Mung::ConsoleReport->new);
 sub report_msg { $sink->print("$_\n") foreach @_; }
-my $ctrl = Mung::Ctrl->new(@ctrl_param,
-	sink => $sink, completed => \%completed);
+my $ctrl = Mung::Ctrl->new(@ctrl_param, sink => $sink);
+$sink->on_complete_fn(sub { $ctrl->completed($_[0], $_[1]->iter); });
 
 apply_all_roles($sink, @roles) if @roles;
 

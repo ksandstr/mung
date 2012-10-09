@@ -14,10 +14,9 @@ has [ qw/suite tcase/ ] => ( is => 'rw' );	# FIXME: specify
 has 'test' => (
 	is => 'rw', isa => 'Maybe[Mung::Test]',
 	handles => [qw/tap_line log current_result/] );
-# FIXME: rename to just "completed" in line with Mung::Ctrl->completed
-has 'completed_ref' => (
-	is => 'ro', isa => 'HashRef[Int]',
-	default => sub { {} });
+
+# hook. called when a test completes with $test, $result.
+has 'on_complete_fn' => ( is => 'rw', isa => 'CodeRef' );
 
 has 'output' => (
 	is => 'ro', does => 'Mung::Output', required => 1,
@@ -112,6 +111,14 @@ sub _begin_test {
 }
 
 
+sub _completed {
+	my $self = shift;
+
+	my $fn = $self->on_complete_fn || return;
+	&$fn(@_);
+}
+
+
 sub _end_test {
 	my $self = shift;
 	my $name = shift;
@@ -122,9 +129,7 @@ sub _end_test {
 		$self->print("test failed: $args{failmsg}");
 		$self->failed($self->failed + 1);
 	} else {
-		my $comp = $self->test->id . ":" . $res->iter;
-		$self->completed_ref->{$comp} = 1;
-		# $self->print("noted ID `$comp' as completed.");
+		$self->_completed($self->test, $res);
 	}
 	if($res->planned > $res->seen) {
 		$self->print("planned " . $res->planned

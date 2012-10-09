@@ -12,8 +12,8 @@ has 'sink' => (
 has 'allow_all' => ( is => 'ro', isa => 'Bool', default => 1 );
 
 # set of id:iter of completed tests. completion means that the test shouldn't
-# be run again. never modified by instances.
-has 'completed' => (
+# be run again.
+has 'completed_set' => (
 	is => 'ro', isa => 'HashRef[Int]',
 	default => sub { {} } );
 
@@ -29,6 +29,17 @@ has [qw/max_per_run max_ids_len/] => ( is => 'ro', isa => 'Int' );
 
 # internals.
 has 'remain' => ( is => 'rw', default => sub { [] } );
+
+
+sub completed {
+	my $self = shift;
+	my $test = shift;
+	my $iter = shift // 0;
+
+	$test = $test->id if blessed($test) && $test->isa('Mung::Test');
+	$test .= ":$iter" unless $test =~ /:/;
+	$self->completed_set->{$test} = 1;
+}
 
 
 # return value: ArrayRef['$id:$iter'] | 'ALL'
@@ -47,7 +58,7 @@ sub next_tests {
 	my $count = 0;		# of characters
 	while(!$test_lim || @only < $test_lim) {
 		my ($id, $test_inst) = @{shift @{$self->remain} || last};
-		next if $self->completed->{$id};
+		next if $self->completed_set->{$id};
 		my $len = length($id) + ($count > 0 ? 1 : 0);
 		last if $ch_lim && $count + $len > $ch_lim;
 		$count += $len;
@@ -60,16 +71,16 @@ sub next_tests {
 
 
 # called when a restart occurred. if parameters (test id:iter strings) exist
-# within $self->completed, they are removed.
+# within $self->completed_set, they are removed.
 sub restarted_with {
 	my $self = shift;
-	delete $self->completed->{$_} foreach @_;
+	delete $self->completed_set->{$_} foreach @_;
 
 	my @rem;
 	foreach my $pt (@{$self->plan}) {
 		for(my $i = $pt->low; $i <= $pt->high; $i++) {
 			my $n = $pt->id . ":$i";
-			push @rem, [ $n, $pt ] unless exists $self->completed->{$n};
+			push @rem, [ $n, $pt ] unless $self->completed_set->{$n};
 		}
 	}
 	# $self->sink->print(scalar(@rem) . " tests remain.\n");
