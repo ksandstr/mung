@@ -413,6 +413,133 @@ static bool merge_entries(
 }
 
 
+/* create a map group with a single map_entry. */
+static int add_map_group(
+	struct map_db *db,
+	L4_Word_t parent,
+	L4_Fpage_t fpage,
+	uint32_t first_page_id)
+{
+	struct map_group *g = kmem_cache_zalloc(map_group_slab);
+	if(unlikely(g == NULL)) return -ENOMEM;
+	g->entries = malloc(sizeof(struct map_entry) * 2);
+	if(unlikely(g->entries == NULL)) {
+		kmem_cache_free(map_group_slab, g);
+		return -ENOMEM;
+	}
+	g->start = GROUP_ADDR(L4_Address(fpage));
+	g->num_alloc = 2;
+	g->entries[0] = (struct map_entry){
+		.parent = parent, .range = fpage, .first_page_id = first_page_id,
+	};
+	g->entries[1].range = L4_Nilpage;
+	g->num_entries = 1;
+	bool ok = htable_add(&db->groups, int_hash(g->start), g);
+	if(unlikely(!ok)) {
+		free(g->entries);
+		kmem_cache_free(map_group_slab, g);
+		return -ENOMEM;
+	}
+
+	return 0;
+}
+
+
+static int insert_map_entry(
+	struct map_db *db,
+	struct map_group *g,
+	L4_Word_t parent,
+	L4_Fpage_t fpage,
+	uint32_t first_page_id)
+{
+	/* TODO: use a clever binary hoppity-skip algorithm here, and recycle that
+	 * in the split-placement case in mapdb_add_map().
+	 *
+	 * NOTE: this stuff requires that entries be tightly packed at the
+	 * beginning of g->entries[] . the algorithm won't compact holes to the
+	 * right of the right-side ("prev") entry.
+	 */
+	int prev = -1;
+	for(int i=0; i < g->num_entries; i++) {
+		L4_Fpage_t e = g->entries[i].range;
+		assert(L4_Address(e) + L4_Size(e) - 1 < L4_Address(fpage)
+			|| L4_Address(fpage) + L4_Size(fpage) - 1 < L4_Address(e));
+		if(L4_Address(e) < L4_Address(fpage)) prev = i; else break;
+	}
+	if(prev < 0 || !merge_entries(g, prev, parent,
+		fpage, first_page_id))
+	{
+		int dst_pos;
+		if(prev + 1 < g->num_alloc
+			&& L4_IsNilFpage(g->entries[prev + 1].range))
+		{
+			dst_pos = prev + 1;
+		} else {
+			if(g->num_entries + 1 >= g->num_alloc) {
+				int next_size = g->num_alloc > 0 ? g->num_alloc * 2 : 2;
+				TRACE("resizing group at %p from %d to %d entries\n",
+					g, g->num_alloc, next_size);
+				struct map_entry *new_ents = realloc(g->entries,
+					next_size * sizeof(struct map_entry));
+				if(unlikely(new_ents == NULL)) return -ENOMEM;
+				for(int i = g->num_alloc; i < next_size; i++) {
+					new_ents[i].range = L4_Nilpage;
+				}
+				g->num_alloc = next_size;
+				g->entries = new_ents;
+			}
+			dst_pos = prev + 1;
+			if(dst_pos < g->num_entries) {
+				struct map_entry prev_ent = g->entries[dst_pos];
+				for(int i=dst_pos + 1; i <= g->num_entries; i++) {
+					SWAP(struct map_entry, g->entries[i], prev_ent);
+				}
+			}
+		}
+		g->entries[dst_pos] = (struct map_entry){
+			.parent = parent, .range = fpage,
+			.first_page_id = first_page_id,
+		};
+		g->num_entries++;
+	}
+
+	return 0;
+}
+
+
+/* counterintuitively, if this function finds that "old" matches the page
+ * range as well, fpage's rights are added to those in "old" rather than
+ * replaced. this is consistent with the behaviour of L4's map operation in
+ * all cases.
+ */
+static void replace_map_entry(
+	struct map_db *db,
+	struct map_group *g,
+	struct map_entry *old,
+	L4_Word_t parent,
+	L4_Fpage_t fpage,
+	uint32_t first_page_id)
+{
+	if(old->first_page_id == first_page_id) {
+		/* matches content, also */
+		L4_Set_Rights(&old->range,
+			L4_Rights(old->range) | L4_Rights(fpage));
+	} else {
+		if(old->num_children > 1) {
+			/* FIXME: revert these children to referring to this
+			 * entry's parent
+			 */
+			free(old->children);
+			old->children = NULL;
+		}
+		*old = (struct map_entry){
+			.parent = parent, .range = fpage,
+			.first_page_id = first_page_id,
+		};
+	}
+}
+
+
 /* this should be split up by case. there are at least four:
  * #1 -- map_group doesn't exist (trivial case)
  * #2 -- entry doesn't exist in map_group (insert case)
@@ -425,9 +552,8 @@ int mapdb_add_map(
 	L4_Fpage_t fpage,
 	uint32_t first_page_id)
 {
-	L4_Word_t addr = L4_Address(fpage);
 	TRACE("%s: adding fpage at %#lx, size %#lx, access [%c%c%c], parent %#lx\n",
-		__func__, addr, L4_Size(fpage),
+		__func__, L4_Address(fpage), L4_Size(fpage),
 		CHECK_FLAG(L4_Rights(fpage), L4_Readable) ? 'r' : '-',
 		CHECK_FLAG(L4_Rights(fpage), L4_Writable) ? 'w' : '-',
 		CHECK_FLAG(L4_Rights(fpage), L4_eXecutable) ? 'x' : '-',
@@ -440,102 +566,21 @@ int mapdb_add_map(
 		L4_Set_Rights(&fpage, L4_Rights(fpage) | L4_eXecutable);
 	}
 
-	struct map_group *g = group_for_addr(db, addr);
+	struct map_group *g = group_for_addr(db, L4_Address(fpage));
 	if(g == NULL) {
-		/* trivial case. */
-		g = kmem_cache_zalloc(map_group_slab);
-		if(unlikely(g == NULL)) return -ENOMEM;
-		g->entries = malloc(sizeof(struct map_entry) * 2);
-		if(unlikely(g->entries == NULL)) {
-			kmem_cache_free(map_group_slab, g);
-			return -ENOMEM;
-		}
-		g->start = GROUP_ADDR(addr);
-		g->num_alloc = 2;
-		g->entries[0] = (struct map_entry){
-			.parent = parent, .range = fpage, .first_page_id = first_page_id,
-		};
-		g->entries[1].range = L4_Nilpage;
-		g->num_entries = 1;
-		bool ok = htable_add(&db->groups, int_hash(g->start), g);
-		if(unlikely(!ok)) {
-			free(g->entries);
-			kmem_cache_free(map_group_slab, g);
-			return -ENOMEM;
-		}
+		/* no group. */
+		int n = add_map_group(db, parent, fpage, first_page_id);
+		if(unlikely(n != 0)) return n;
 	} else {
 		struct map_entry *old = probe_group_range(g, fpage);
 		if(old == NULL) {
-			/* TODO: use a clever binary hoppity-skip algorithm here,
-			 * recycling it for the split-placement bit in the next case.
-			 *
-			 * this stuff requires that entries be tightly packed at the
-			 * beginning of g->entries[] . the algorithm won't compact holes
-			 * to the right of the right-side ("prev") entry.
-			 */
-			int prev = -1;
-			for(int i=0; i < g->num_entries; i++) {
-				L4_Fpage_t e = g->entries[i].range;
-				assert(L4_Address(e) + L4_Size(e) - 1 < L4_Address(fpage)
-					|| L4_Address(fpage) + L4_Size(fpage) - 1 < L4_Address(e));
-				if(L4_Address(e) < L4_Address(fpage)) prev = i; else break;
-			}
-			if(prev < 0 || !merge_entries(g, prev, parent,
-				fpage, first_page_id))
-			{
-				int dst_pos;
-				if(prev + 1 < g->num_alloc
-					&& L4_IsNilFpage(g->entries[prev + 1].range))
-				{
-					dst_pos = prev + 1;
-				} else {
-					if(g->num_entries + 1 >= g->num_alloc) {
-						int next_size = g->num_alloc > 0 ? g->num_alloc * 2 : 2;
-						TRACE("resizing group at %p from %d to %d entries\n",
-							g, g->num_alloc, next_size);
-						struct map_entry *new_ents = realloc(g->entries,
-							next_size * sizeof(struct map_entry));
-						if(unlikely(new_ents == NULL)) return -ENOMEM;
-						for(int i = g->num_alloc; i < next_size; i++) {
-							new_ents[i].range = L4_Nilpage;
-						}
-						g->num_alloc = next_size;
-						g->entries = new_ents;
-					}
-					dst_pos = prev + 1;
-					if(dst_pos < g->num_entries) {
-						struct map_entry prev_ent = g->entries[dst_pos];
-						for(int i=dst_pos + 1; i <= g->num_entries; i++) {
-							SWAP(struct map_entry, g->entries[i], prev_ent);
-						}
-					}
-				}
-				g->entries[dst_pos] = (struct map_entry){
-					.parent = parent, .range = fpage,
-					.first_page_id = first_page_id,
-				};
-				g->num_entries++;
-			}
+			/* not covered. */
+			int n = insert_map_entry(db, g, parent, fpage, first_page_id);
+			if(unlikely(n != 0)) return n;
 		} else if(L4_SizeLog2(old->range) == L4_SizeLog2(fpage)) {
 			/* exact match with old entry's form. */
 			assert(L4_Address(old->range) == L4_Address(fpage));
-			if(old->first_page_id == first_page_id) {
-				/* and content. */
-				L4_Set_Rights(&old->range,
-					L4_Rights(old->range) | L4_Rights(fpage));
-			} else {
-				if(old->num_children > 1) {
-					/* FIXME: revert these children to referring to this
-					 * entry's parent
-					 */
-					free(old->children);
-					old->children = NULL;
-				}
-				*old = (struct map_entry){
-					.parent = parent, .range = fpage,
-					.first_page_id = first_page_id,
-				};
-			}
+			replace_map_entry(db, g, old, parent, fpage, first_page_id);
 		} else {
 			/* skip the no-op. */
 			int page_offs = (L4_Address(fpage) - L4_Address(old->range)) >> PAGE_BITS;
@@ -553,6 +598,7 @@ int mapdb_add_map(
 	}
 
 #ifndef NDEBUG
+	if(g == NULL) g = group_for_addr(db, L4_Address(fpage));
 	dump_map_group(g);
 #endif
 
