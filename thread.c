@@ -379,6 +379,9 @@ void thread_start(struct thread *t)
 
 void thread_halt(struct thread *t)
 {
+	TRACE("%s: called for %lu:%lu from %p\n", __func__,
+		TID_THREADNUM(t->id), TID_VERSION(t->id), __builtin_return_address(0));
+
 	assert(!CHECK_FLAG(t->flags, TF_HALT));
 	assert(t->status != TS_STOPPED);
 	assert(t->status != TS_DEAD);
@@ -806,7 +809,7 @@ void sys_threadcontrol(struct x86_exregs *regs)
 		space_add_thread(sp, dest);
 	} else if(L4_IsNilThread(spacespec) && dest != NULL) {
 		/* thread/space deletion */
-		thread_halt(dest);
+		if(!CHECK_FLAG(dest->flags, TF_HALT)) thread_halt(dest);
 		abort_waiting_ipc(dest, 2 << 1);	/* "lost partner" */
 		post_exn_fail(dest);
 		if(dest->status != TS_STOPPED) {
