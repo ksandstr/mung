@@ -107,7 +107,6 @@ void space_free(struct space *sp)
 	{
 		free_kern_page(p);
 	}
-	assert(sp->ptab_pages.elems == 0);
 	htable_clear(&sp->ptab_pages);
 
 	list_del_from(&space_list, &sp->link);
