@@ -301,6 +301,7 @@ static struct map_entry *probe_group_addr(struct map_group *g, uintptr_t addr)
 }
 
 
+/* finds the leftmost entry in @g that overlaps @fpage. */
 static struct map_entry *probe_group_range(struct map_group *g, L4_Fpage_t fpage)
 {
 	/* when in doubt, use brute force.
@@ -520,6 +521,9 @@ static void replace_map_entry(
 	L4_Fpage_t fpage,
 	uint32_t first_page_id)
 {
+	assert(L4_Address(old->range) == L4_Address(fpage));
+	assert(L4_SizeLog2(old->range) == L4_SizeLog2(fpage));
+
 	if(old->first_page_id == first_page_id) {
 		/* matches content, also */
 		L4_Set_Rights(&old->range,
@@ -540,12 +544,6 @@ static void replace_map_entry(
 }
 
 
-/* this should be split up by case. there are at least four:
- * #1 -- map_group doesn't exist (trivial case)
- * #2 -- entry doesn't exist in map_group (insert case)
- * #3 -- entry exists and matches added map exactly (modify or no-op case)
- * #4 -- entry exists and doesn't match added map (split case)
- */
 int mapdb_add_map(
 	struct map_db *db,
 	L4_Word_t parent,
@@ -566,6 +564,14 @@ int mapdb_add_map(
 		L4_Set_Rights(&fpage, L4_Rights(fpage) | L4_eXecutable);
 	}
 
+	/* there are five cases:
+	 *
+	 * #1 -- map_group doesn't exist (trivial)
+	 * #2 -- entry doesn't exist in map_group (insert)
+	 * #3 -- entry exists and matches added map exactly (modify or no-op case)
+	 * #4 -- entry exists and contains added map (no-op or split case)
+	 * #5 -- entry exists and is contained in added map (scan & replace case)
+	 */
 	struct map_group *g = group_for_addr(db, L4_Address(fpage));
 	if(g == NULL) {
 		/* no group. */
@@ -581,19 +587,31 @@ int mapdb_add_map(
 			/* exact match with old entry's form. */
 			assert(L4_Address(old->range) == L4_Address(fpage));
 			replace_map_entry(db, g, old, parent, fpage, first_page_id);
-		} else {
-			/* skip the no-op. */
+		} else if(L4_SizeLog2(old->range) > L4_SizeLog2(fpage)) {
+			/* "contained" case. */
 			int page_offs = (L4_Address(fpage) - L4_Address(old->range)) >> PAGE_BITS;
 			if(CHECK_FLAG_ALL(L4_Rights(old->range), L4_Rights(fpage))
 				&& old->first_page_id + page_offs == first_page_id
 				&& REF_SPACE(old->parent) == REF_SPACE(parent)
 				&& (REF_ADDR(old->parent) + page_offs * PAGE_SIZE) == REF_ADDR(parent))
 			{
-				/* no-op, truley */
+				/* contained no-op. the condition is hugely complex, but
+				 * should succeed entirely after the first two.
+				 */
 			} else {
-				/* FIXME: apply discontiguate() somehow */
-				panic("discontig case not written");
+				/* break it up & replace. */
+				struct map_entry *ne = discontiguate(g, fpage);
+				if(unlikely(ne == NULL)) return -ENOMEM;
+				replace_map_entry(db, g, ne, parent, fpage, first_page_id);
 			}
+		} else {
+			assert(L4_SizeLog2(old->range) < L4_SizeLog2(fpage));
+			/* "shrimp" case.
+			 *
+			 * TODO: erase entries from here to @fpage's end, recycle one slot
+			 * for the added entry, and compress the rest of the group.
+			 */
+			panic("shrimp case not implemented");
 		}
 	}
 
