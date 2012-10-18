@@ -53,7 +53,10 @@ struct child_ref
 
 
 static size_t rehash_ref_hash(const void *, void *);
-static struct map_entry *discontiguate(struct map_group *g, L4_Fpage_t range);
+static struct map_entry *discontiguate(
+	struct map_db *db,
+	struct map_group *g,
+	L4_Fpage_t range);
 
 
 static struct kmem_cache *map_group_slab = NULL;
@@ -94,7 +97,7 @@ static void dump_map_group(struct map_group *g)
 static bool deref_child(
 	struct child_ref *cr,
 	struct map_db *home_db,
-	struct map_entry *e,
+	const struct map_entry *e,
 	int child_ix)
 {
 	assert(child_ix < e->num_children);
@@ -123,7 +126,7 @@ static bool deref_child(
 		return false;
 	}
 
-	/* check that they refer to the same physical page. */
+	/* check that the physical page is the same, too. */
 	int child_offset = (child_addr - L4_Address(ce->range)) >> PAGE_BITS;
 	cr->parent_offset = ((REF_ADDR(ce->parent) - L4_Address(e->range)) >> PAGE_BITS)
 		+ child_offset;
@@ -844,7 +847,49 @@ static int insert_blanks(
 }
 
 
+/* find which children in the previously-valid @from are valid, and add those
+ * into the corresponding current entries in @g.
+ *
+ * on alloc failure this leaves entries in an uncertain-but-valid state and
+ * returns -ENOMEM. idempotent due to mapdb_add_child() being so.
+ */
+static int distribute_children(
+	struct map_db *local_db,
+	struct map_group *g,
+	L4_Fpage_t cut,
+	const struct map_entry *from)
+{
+	if(from->num_children == 0) return 0;
+
+	/* TODO: this is nice for one or two children, and less so for more. when
+	 * hugepage support is written, this part should sort children by ref_id
+	 * when there are enough, and cache the corresponding database to avoid
+	 * hash table lookups -- 4M hugepages in a memory server would be mapped
+	 * to at least 1024 child pages under full utilization, for instance.
+	 */
+	const L4_Word_t *children = from->num_children <= 1
+		? &from->child : from->children;
+	for(int i=0; i < from->num_children; i++) {
+		struct child_ref r;
+		if(!deref_child(&r, local_db, from, i)) continue;
+
+		L4_Word_t p_addr = L4_Address(from->range) + r.parent_offset;
+		struct map_entry *p_ent = mapdb_probe(local_db, p_addr);
+		if(p_ent == NULL) {
+			/* discard child due to hole made in parent */
+			continue;
+		}
+
+		int n = mapdb_add_child(p_ent, children[i]);
+		if(n == -ENOMEM) return -ENOMEM;
+	}
+
+	return 0;
+}
+
+
 static int split_entry(
+	struct map_db *db,
 	struct map_group *g,
 	struct map_entry *e,
 	L4_Fpage_t cut)
@@ -886,7 +931,7 @@ static int split_entry(
 					: 0,
 			.first_page_id = saved.first_page_id + (addr_offset >> PAGE_BITS),
 			.access = saved.access,
-			/* num_children, child/children left undefined */
+			.num_children = 0,
 		};
 		L4_Set_Rights(&e[i].range, L4_Rights(saved.range));
 		TRACE("%s: set ents[%d] = range %#lx:%#lx, parent %#lx, first page %u, rwx %#lx\n",
@@ -896,7 +941,9 @@ static int split_entry(
 	}
 	g->num_entries += p - 1;
 
-	/* FIXME: redistribute children */
+	if(saved.num_children > 0) {
+		distribute_children(db, g, cut, &saved);
+	}
 
 	return 0;
 }
@@ -906,7 +953,10 @@ static int split_entry(
  * covered by "range" fit inside it exactly. returns the first entry covered
  * by "range".
  */
-static struct map_entry *discontiguate(struct map_group *g, L4_Fpage_t range)
+static struct map_entry *discontiguate(
+	struct map_db *db,
+	struct map_group *g,
+	L4_Fpage_t range)
 {
 	int err;
 	TRACE("%s: group %#lx, range %#lx:%#lx\n", __func__, g->start,
@@ -924,7 +974,7 @@ static struct map_entry *discontiguate(struct map_group *g, L4_Fpage_t range)
 		|| (L4_Address(e->range) == r_start
 			&& L4_Size(e->range) > L4_Size(range)))
 	{
-		err = split_entry(g, e, range);
+		err = split_entry(db, g, e, range);
 		if(err < 0) goto fail;
 		new_e = true;
 	}
@@ -942,7 +992,7 @@ static struct map_entry *discontiguate(struct map_group *g, L4_Fpage_t range)
 				|| L4_Size(last->range) != L4_Size(range))
 			&& L4_Address(last->range) < r_end)
 		{
-			err = split_entry(g, last, range);
+			err = split_entry(db, g, last, range);
 			if(err < 0) goto fail;
 			new_e = true;
 		}
@@ -999,7 +1049,7 @@ int mapdb_unmap_fpage(
 
 		struct map_entry *e = NULL;
 		if(modify) {
-			e = discontiguate(g, range);
+			e = discontiguate(db, g, range);
 			/* FIXME: discontiguate() can also fail due to ENOMEM. in this
 			 * case the operation should be put to sleep (pending restart on
 			 * some condition) and some sort of handler invoked to acquire
