@@ -498,8 +498,6 @@ static void coalesce_entries(
 
 /* attempts to merge the given parameters of mapdb_add_map() to previously
  * existing items.
- *
- * FIXME: this doesn't account for the bits in @parent !!!
  */
 static bool merge_entries(
 	struct map_group *g,
@@ -512,6 +510,9 @@ static bool merge_entries(
 	struct map_entry *pred = &g->entries[prev_pos],
 		*succ = &g->entries[prev_pos + 1];
 	if((L4_Address(pred->range) & (1 << L4_SizeLog2(fpage))) == 0
+		&& ((!REF_DEFINED(parent) && !REF_DEFINED(pred->parent))
+			|| (REF_SPACE(pred->parent) == REF_SPACE(parent)
+				&& REF_ADDR(pred->parent) + L4_Size(pred->range) == REF_ADDR(parent)))
 		&& L4_SizeLog2(pred->range) == L4_SizeLog2(fpage)
 		&& LAST_PAGE_ID(pred) + 1 == first_page_id
 		&& L4_Address(pred->range) + L4_Size(pred->range) == L4_Address(fpage))
@@ -525,6 +526,9 @@ static bool merge_entries(
 		return true;
 	} else if(succ < &g->entries[g->num_entries]
 		&& (L4_Address(succ->range) & (1 << L4_SizeLog2(fpage))) != 0
+		&& ((!REF_DEFINED(parent) && !REF_DEFINED(pred->parent))
+			|| (REF_SPACE(succ->parent) == REF_SPACE(parent)
+				&& REF_ADDR(parent) + L4_Size(fpage) == REF_ADDR(succ->parent)))
 		&& L4_SizeLog2(succ->range) == L4_SizeLog2(fpage)
 		&& succ->first_page_id == first_page_id + 1
 		&& L4_Address(fpage) + L4_Size(fpage) == L4_Address(succ->range))
