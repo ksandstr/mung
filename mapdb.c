@@ -121,8 +121,12 @@ static struct map_db *get_map_db(uint32_t ref_id)
 #ifndef NDEBUG
 #include <ukernel/invariant.h>
 
+/* "don't test this" bits */
+#define MOD_NO_CHILD_REFS (1 << 0)	/* don't check child refs */
+
+
 /* runtime invariant checks. */
-static bool check_mapdb(struct map_db *db)
+static bool check_mapdb(struct map_db *db, int opts)
 {
 	INV_CTX;
 
@@ -142,44 +146,51 @@ static bool check_mapdb(struct map_db *db)
 		 */
 		for(int i=0; i < grp->num_entries; i++) {
 			const struct map_entry *e = &grp->entries[i];
+			inv_ok1(L4_Rights(e->range) != 0);
 
 			if(!REF_DEFINED(e->parent)) continue;
-			inv_push("check entry %#lx:%#lx in ref_id %u",
-				L4_Address(e->range), L4_Size(e->range), db->ref_id);
+			inv_push("check entry %#lx:%#lx in ref_id %u; ->parent %#lx",
+				L4_Address(e->range), L4_Size(e->range), db->ref_id,
+				e->parent);
 			struct map_db *p_db = find_map_db(REF_SPACE(e->parent));
 			inv_ok1(p_db != NULL);
 
 			const struct map_entry *p_e = mapdb_probe(p_db,
 				REF_ADDR(e->parent));
 			inv_ok1(p_e != NULL);
+			inv_push("parent entry %#lx:%#lx in ref_id %u",
+				L4_Address(p_e->range), L4_Size(p_e->range), p_db->ref_id);
 			inv_ok1(ADDR_IN_FPAGE(p_e->range, REF_ADDR(e->parent)));
 			inv_ok1(L4_SizeLog2(e->range) <= L4_SizeLog2(p_e->range));
 
-			bool found = false;
-			int n_push = 0;
-			const L4_Word_t *p_cs = p_e->num_children > 1
-				? p_e->children : &p_e->child;
-			for(int j=0; j < p_e->num_children; j++) {
-				n_push++;
-				inv_push("  child %d = %#lx", j, p_cs[j]);
-				if(REF_SPACE(p_cs[j]) != db->ref_id) continue;
-				if(ADDR_IN_FPAGE(e->range, REF_ADDR(p_cs[j]))) {
-					found = true;
+			if(!CHECK_FLAG(opts, MOD_NO_CHILD_REFS)) {
+				bool found = false;
+				int n_push = 0;
+				const L4_Word_t *p_cs = p_e->num_children > 1
+					? p_e->children : &p_e->child;
+				for(int j=0; j < p_e->num_children; j++) {
+					n_push++;
+					inv_push("  child %d = %#lx", j, p_cs[j]);
+					if(REF_SPACE(p_cs[j]) != db->ref_id) continue;
+					if(ADDR_IN_FPAGE(e->range, REF_ADDR(p_cs[j]))) {
+						found = true;
 
-					/* test deref_child() since the loop provides us with
-					 * known results.
-					 */
-					struct child_ref cr;
-					bool got_child = deref_child(&cr, p_db, p_e, j);
-					inv_ok1(got_child);
-					inv_ok1(cr.child_db == db);
-					inv_ok1(cr.child_entry == e);
-					/* TODO: check parent_offset, too */
+						/* test deref_child() since the loop provides us with
+						 * known results.
+						 */
+						struct child_ref cr;
+						bool got_child = deref_child(&cr, p_db, p_e, j);
+						inv_ok1(got_child);
+						inv_ok1(cr.child_db == db);
+						inv_ok1(cr.child_entry == e);
+						/* TODO: check parent_offset, too */
+					}
 				}
+				inv_ok1(found);
+				for(int j=0; j < n_push; j++) inv_pop();
 			}
-			inv_ok1(found);
 
-			for(int j=0; j < n_push; j++) inv_pop();
+			inv_pop();
 			inv_pop();
 		}
 	}
@@ -196,7 +207,7 @@ inv_fail:
 }
 
 
-static bool check_mapdb_module(void)
+static bool check_mapdb_module(int opts)
 {
 	struct htable_iter it;
 	for(void *ptr = htable_first(&ref_hash, &it);
@@ -204,7 +215,7 @@ static bool check_mapdb_module(void)
 		ptr = htable_next(&ref_hash, &it))
 	{
 		struct map_db *db = container_of(ptr, struct map_db, ref_id);
-		assert(check_mapdb(db));
+		assert(check_mapdb(db, opts));
 	}
 
 	return true;
@@ -668,7 +679,7 @@ int mapdb_add_map(
 	L4_Fpage_t fpage,
 	uint32_t first_page_id)
 {
-	assert(check_mapdb_module());
+	assert(check_mapdb_module(0));
 
 	TRACE("%s: adding fpage at %#lx, size %#lx, access [%c%c%c], parent %#lx\n",
 		__func__, L4_Address(fpage), L4_Size(fpage),
@@ -740,7 +751,7 @@ int mapdb_add_map(
 	dump_map_group(g);
 #endif
 
-	assert(check_mapdb_module());
+	assert(check_mapdb_module(MOD_NO_CHILD_REFS));
 	return 0;
 }
 
