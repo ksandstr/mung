@@ -17,6 +17,7 @@
 #include <ukernel/slab.h>
 #include <ukernel/trace.h>
 #include <ukernel/space.h>
+#include <ukernel/bug.h>
 #include <ukernel/mapdb.h>
 
 
@@ -100,11 +101,20 @@ static void dump_map_group(struct map_group *g)
 }
 
 
-static struct map_db *find_map_db(uint32_t ref_id)
+static inline struct map_db *find_map_db(uint32_t ref_id)
 {
 	void *ptr = htable_get(&ref_hash, int_hash(ref_id),
 		&int_eq, &ref_id);
 	return ptr == NULL ? NULL : container_of(ptr, struct map_db, ref_id);
+}
+
+
+/* as above, but stricter. */
+static struct map_db *get_map_db(uint32_t ref_id)
+{
+	struct map_db *db = find_map_db(ref_id);
+	BUG_ON(db == NULL, "parameter must refer to valid map_db");
+	return db;
 }
 
 
@@ -1190,6 +1200,68 @@ fail:
 }
 
 
+static int reparent_children(struct map_db *db, struct map_entry *e)
+{
+	TRACE("%s: called; e->num_children is %u\n", __func__,
+		(unsigned)e->num_children);
+	if(e->num_children == 0) return 0;
+
+	struct map_db *parent_db = NULL;
+	struct map_entry *parent_entry = NULL;
+	if(REF_DEFINED(e->parent)) {
+		parent_db = get_map_db(REF_SPACE(e->parent));
+		parent_entry = mapdb_probe(parent_db, REF_ADDR(e->parent));
+		BUG_ON(parent_entry == NULL, "parent ref must be valid");
+	}
+
+	L4_Word_t *cs = e->num_children == 1 ? &e->child : e->children;
+	for(int i=0; i < e->num_children; i++) {
+		struct child_ref cr;
+		if(!deref_child(&cr, db, e, i)) {
+			TRACE("%s: child %#lx was stale\n", __func__, cs[i]);
+			cs[i] = REF_TOMBSTONE;
+			continue;
+		}
+
+		if(parent_db != NULL) {
+			/* FIXME: almost certainly wrong. the child and parent reference
+			 * computations should incorporate the child-in-parent offset (which
+			 * should be defined properly).
+			 */
+			if(L4_SizeLog2(e->range) > L4_SizeLog2(cr.child_entry->range)) {
+				/* EXPLODE! */
+				panic("massive fuckups!");
+			}
+
+			int n = mapdb_add_child(parent_entry, MAPDB_REF(cr.child_db->ref_id,
+				L4_Address(cr.child_entry->range)));
+			if(unlikely(n < 0)) {
+				/* on failure, this function can be called again with the same
+				 * parameters and will reach an equivalent state wrt @e, its
+				 * parent, and its children, if successful.
+				 */
+				return n;
+			}
+			cr.child_entry->parent = MAPDB_REF(parent_db->ref_id,
+				REF_ADDR(e->parent));
+		} else {
+			/* @e is a toplevel mapping. */
+			TRACE("%s: detached second-level mapping %#lx:%#lx in ref %u\n",
+				__func__, L4_Address(cr.child_entry->range),
+				L4_Size(cr.child_entry->range), cr.child_db->ref_id);
+			cr.child_entry->parent = 0;
+		}
+
+		cs[i] = REF_TOMBSTONE;	/* idempotency guarantee */
+	}
+
+	if(e->num_children > 1) free(e->children);
+	e->num_children = 0;
+
+	return 0;
+}
+
+
 int mapdb_unmap_fpage(
 	struct map_db *db,
 	L4_Fpage_t range,
@@ -1342,6 +1414,19 @@ int mapdb_unmap_fpage(
 				/* TODO: implement memmove(3), use it */
 				TRACE("%s: removing entry %#lx:%#lx\n", __func__,
 					L4_Address(e->range), L4_Size(e->range));
+				int n = reparent_children(db, e);
+				if(n < 0) {
+					/* ENOMEM can happen because children must be added to a
+					 * parent entry, which may return ENOMEM on hash resize.
+					 *
+					 * FIXME: this is HIGHLY INSUFFICIENT because of changes
+					 * made earlier in this function. the function should be
+					 * split into a children-gathering stage and three
+					 * functional stages, each invoked according to its
+					 * corresponding bool parameter.
+					 */
+					return -ENOMEM;
+				}
 				int pos = e - g->entries;
 				if(pos < g->num_entries - 1) {
 					int copy_num = g->num_entries - 1 - pos;
