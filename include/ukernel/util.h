@@ -34,6 +34,9 @@
 #define FPAGE_LOW(fp) (L4_Address((fp)))
 #define FPAGE_HIGH(fp) (FPAGE_LOW((fp)) + L4_Size((fp)) - 1)
 
+#define ADDR_IN_FPAGE(haystack, needle) \
+	BETWEEN(FPAGE_LOW((haystack)), FPAGE_HIGH((haystack)), (needle))
+
 #define MSB(x) (sizeof((x)) * 8 - __builtin_clzl((x)) - 1)
 #define POPCOUNT(x) (__builtin_popcount((x)))
 

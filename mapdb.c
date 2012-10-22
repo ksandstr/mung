@@ -53,14 +53,21 @@ struct child_ref
 
 
 static size_t rehash_ref_hash(const void *, void *);
+
 static struct map_entry *discontiguate(
 	struct map_db *db,
 	struct map_group *g,
 	L4_Fpage_t range);
 
+static bool deref_child(
+	struct child_ref *cr,
+	struct map_db *home_db,
+	const struct map_entry *e,
+	int child_ix);
+
 
 static struct kmem_cache *map_group_slab = NULL;
-static uint32_t next_ref_id = 1;
+static uint32_t next_ref_id = 1;	/* also the kernel space's ID */
 static struct htable ref_hash = HTABLE_INITIALIZER(ref_hash,
 	rehash_ref_hash, NULL);
 
@@ -93,6 +100,108 @@ static void dump_map_group(struct map_group *g)
 }
 
 
+static struct map_db *find_map_db(uint32_t ref_id)
+{
+	void *ptr = htable_get(&ref_hash, int_hash(ref_id),
+		&int_eq, &ref_id);
+	return ptr == NULL ? NULL : container_of(ptr, struct map_db, ref_id);
+}
+
+
+#ifndef NDEBUG
+#include <ukernel/invariant.h>
+
+/* runtime invariant checks. */
+static bool check_mapdb(struct map_db *db)
+{
+	INV_CTX;
+
+	/* database-side consistency. */
+	struct htable_iter grp_it;
+	for(void *grp_ptr = htable_first(&db->groups, &grp_it);
+		grp_ptr != NULL;
+		grp_ptr = htable_next(&db->groups, &grp_it))
+	{
+		struct map_group *grp = container_of(grp_ptr,
+			struct map_group, start);
+
+		/* for each entry, check that
+		 *   - it references a valid entry (one that exists)
+		 *   - it is at most as large as the parent
+		 *   - the parent has a child reference to it
+		 */
+		for(int i=0; i < grp->num_entries; i++) {
+			const struct map_entry *e = &grp->entries[i];
+
+			if(!REF_DEFINED(e->parent)) continue;
+			inv_push("check entry %#lx:%#lx in ref_id %u",
+				L4_Address(e->range), L4_Size(e->range), db->ref_id);
+			struct map_db *p_db = find_map_db(REF_SPACE(e->parent));
+			inv_ok1(p_db != NULL);
+
+			const struct map_entry *p_e = mapdb_probe(p_db,
+				REF_ADDR(e->parent));
+			inv_ok1(p_e != NULL);
+			inv_ok1(ADDR_IN_FPAGE(p_e->range, REF_ADDR(e->parent)));
+			inv_ok1(L4_SizeLog2(e->range) <= L4_SizeLog2(p_e->range));
+
+			bool found = false;
+			int n_push = 0;
+			const L4_Word_t *p_cs = p_e->num_children > 1
+				? p_e->children : &p_e->child;
+			for(int j=0; j < p_e->num_children; j++) {
+				n_push++;
+				inv_push("  child %d = %#lx", j, p_cs[j]);
+				if(REF_SPACE(p_cs[j]) != db->ref_id) continue;
+				if(ADDR_IN_FPAGE(e->range, REF_ADDR(p_cs[j]))) {
+					found = true;
+
+					/* test deref_child() since the loop provides us with
+					 * known results.
+					 */
+					struct child_ref cr;
+					bool got_child = deref_child(&cr, p_db, p_e, j);
+					inv_ok1(got_child);
+					inv_ok1(cr.child_db == db);
+					inv_ok1(cr.child_entry == e);
+					/* TODO: check parent_offset, too */
+				}
+			}
+			inv_ok1(found);
+
+			for(int j=0; j < n_push; j++) inv_pop();
+			inv_pop();
+		}
+	}
+
+	/* page table consistency. */
+	/* (TODO: iterate over the tables in db->space, check that @db agrees with
+	 * pages referenced)
+	 */
+
+	return true;
+
+inv_fail:
+	return false;
+}
+
+
+static bool check_mapdb_module(void)
+{
+	struct htable_iter it;
+	for(void *ptr = htable_first(&ref_hash, &it);
+		ptr != NULL;
+		ptr = htable_next(&ref_hash, &it))
+	{
+		struct map_db *db = container_of(ptr, struct map_db, ref_id);
+		assert(check_mapdb(db));
+	}
+
+	return true;
+}
+#endif
+
+
 /* returns false on stale child. */
 static bool deref_child(
 	struct child_ref *cr,
@@ -108,8 +217,7 @@ static bool deref_child(
 	L4_Word_t child_addr = REF_ADDR(children[child_ix]);
 	uint32_t space_id = REF_SPACE(children[child_ix]);
 	assert(space_id != home_db->ref_id);
-	struct map_db *db = htable_get(&ref_hash, int_hash(space_id),
-		&int_eq, &space_id);
+	struct map_db *db = find_map_db(space_id);
 	if(db == NULL) {
 		printf("mapdb ref_id %u not found\n", (unsigned)space_id);
 		return false;
@@ -550,6 +658,8 @@ int mapdb_add_map(
 	L4_Fpage_t fpage,
 	uint32_t first_page_id)
 {
+	assert(check_mapdb_module());
+
 	TRACE("%s: adding fpage at %#lx, size %#lx, access [%c%c%c], parent %#lx\n",
 		__func__, L4_Address(fpage), L4_Size(fpage),
 		CHECK_FLAG(L4_Rights(fpage), L4_Readable) ? 'r' : '-',
@@ -600,7 +710,7 @@ int mapdb_add_map(
 				 */
 			} else {
 				/* break it up & replace. */
-				struct map_entry *ne = discontiguate(g, fpage);
+				struct map_entry *ne = discontiguate(db, g, fpage);
 				if(unlikely(ne == NULL)) return -ENOMEM;
 				replace_map_entry(db, g, ne, parent, fpage, first_page_id);
 			}
@@ -620,6 +730,7 @@ int mapdb_add_map(
 	dump_map_group(g);
 #endif
 
+	assert(check_mapdb_module());
 	return 0;
 }
 
