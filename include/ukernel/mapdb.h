@@ -29,11 +29,17 @@
 struct space;
 
 
-/* "range" is L4_nilpage if entry is empty */
+/* L4_SizeLog2(@range) <= L4_SizeLog2(parent->range).
+ *
+ * toplevel mappings, such as those granted by sigma0, have an invalid
+ * @parent.
+ *
+ * @range == L4_nilpage is used to indicate an empty slot in map_group.
+ */
 struct map_entry
 {
 	L4_Fpage_t range;		/* incl. L4 permission bits */
-	L4_Word_t parent;		/* range start in parent */
+	L4_Word_t parent;		/* parent space id, range start in parent */
 	uint32_t first_page_id;
 	/* this field is OR'd with the page table queries to give the access bits
 	 * returned by Unmap. it's written to when a parent recursively
