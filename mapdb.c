@@ -467,7 +467,8 @@ static void coalesce_entries(
 	struct map_entry *oth = &g->entries[oth_ix];
 	if(oth_ix < 0 || oth_ix == g->num_entries
 		|| L4_Rights(oth->range) != L4_Rights(ent->range)
-		|| L4_SizeLog2(oth->range) != L4_SizeLog2(ent->range))
+		|| L4_SizeLog2(oth->range) != L4_SizeLog2(ent->range)
+		|| REF_SPACE(oth->parent) != REF_SPACE(ent->parent))
 	{
 		/* rejected. */
 		return;
@@ -479,7 +480,9 @@ static void coalesce_entries(
 	}
 
 	if(LAST_PAGE_ID(oth) + 1 == ent->first_page_id
-		&& L4_Address(oth->range) + L4_Size(oth->range) == L4_Address(ent->range))
+		&& L4_Address(oth->range) + L4_Size(oth->range) == L4_Address(ent->range)
+		&& ((!REF_DEFINED(oth->parent) && !REF_DEFINED(ent->parent))
+			|| REF_ADDR(oth->parent) + L4_Size(oth->range) == REF_ADDR(ent->parent)))
 	{
 		TRACE("%s: hit between %#lx:%#lx and %#lx:%#lx\n",
 			__func__, L4_Address(oth->range), L4_Size(oth->range),
