@@ -47,9 +47,6 @@ struct child_ref
 {
 	struct map_db *child_db;
 	struct map_entry *child_entry;
-
-	/* page offset within the deref_child() parent entry. */
-	int parent_offset;
 };
 
 
@@ -245,23 +242,31 @@ static bool deref_child(
 	}
 
 	struct map_entry *ce = mapdb_probe(db, child_addr);
-	if(ce == NULL) return false;
+	if(ce == NULL) {
+		TRACE("%s: address %#lx not found in child ref_id %u\n", __func__,
+			child_addr, space_id);
+		return false;
+	}
 
 	/* a valid child refers to the home space, and into the home range. */
 	if(REF_SPACE(ce->parent) != home_db->ref_id
 		|| !BETWEEN(FPAGE_LOW(e->range), FPAGE_HIGH(e->range),
 				REF_ADDR(ce->parent)))
 	{
+		TRACE("%s: backref %#lx mismatches space %u, or range %#lx .. %#lx\n",
+			__func__, ce->parent, home_db->ref_id,
+			FPAGE_LOW(e->range), FPAGE_HIGH(e->range));
 		return false;
 	}
 
 	/* check that the physical page is the same, too. */
-	int child_offset = (child_addr - L4_Address(ce->range)) >> PAGE_BITS;
-	cr->parent_offset = ((REF_ADDR(ce->parent) - L4_Address(e->range)) >> PAGE_BITS)
-		+ child_offset;
-	uint32_t child_page = ce->first_page_id + child_offset,
-		parent_page = e->first_page_id + cr->parent_offset;
-	if(child_page != parent_page) return false;
+	L4_Word_t off_in_parent = REF_ADDR(ce->parent) - L4_Address(e->range);
+	uint32_t off_pages = off_in_parent >> PAGE_BITS;
+	if(ce->first_page_id != e->first_page_id + off_pages) {
+		TRACE("%s: page mismatch (child first %u, parent first %u, offset %u)\n",
+			__func__, ce->first_page_id, e->first_page_id, off_pages);
+		return false;
+	}
 
 	cr->child_db = db;
 	cr->child_entry = ce;
@@ -912,13 +917,11 @@ int mapdb_map_pages(
 		/* the "entirely contained inside" case, common for 4KiB pages being
 		 * mapped from inside a hugepage
 		 */
-		int offset = (first_addr - L4_Address(first->range)) >> PAGE_BITS;
 		L4_Fpage_t p = L4_FpageLog2(dest_addr, L4_SizeLog2(map_page));
 		L4_Set_Rights(&p, L4_Rights(first->range) & L4_Rights(map_page));
 		if(L4_Rights(p) != 0) {
-			mapdb_add_map(to_db,
-				MAPDB_REF(from_db->ref_id,
-					L4_Address(first->range) + offset * PAGE_SIZE),
+			int offset = (first_addr - L4_Address(first->range)) >> PAGE_BITS;
+			mapdb_add_map(to_db, MAPDB_REF(from_db->ref_id, first_addr),
 				p, first->first_page_id + offset);
 			mapdb_add_child(first, MAPDB_REF(to_db->ref_id, L4_Address(p)));
 		}
@@ -953,6 +956,7 @@ int mapdb_map_pages(
 						PAGE_BITS);
 					L4_Set_Rights(&p, L4_Rights(ent->range) & L4_Rights(map_page));
 					if(L4_Rights(p) != 0) {
+						/* FIXME: audit both parent and child refs */
 						mapdb_add_map(to_db,
 							MAPDB_REF(from_db->ref_id,
 								L4_Address(ent->range) + p_offs * PAGE_SIZE),
@@ -1067,21 +1071,30 @@ static int distribute_children(
 	 * hash table lookups -- 4M hugepages in a memory server would be mapped
 	 * to at least 1024 child pages under full utilization, for instance.
 	 */
-	const L4_Word_t *children = from->num_children <= 1
-		? &from->child : from->children;
 	for(int i=0; i < from->num_children; i++) {
 		struct child_ref r;
 		if(!deref_child(&r, local_db, from, i)) continue;
 
-		L4_Word_t p_addr = L4_Address(from->range) + r.parent_offset;
-		struct map_entry *p_ent = mapdb_probe(local_db, p_addr);
+		struct map_entry *p_ent = mapdb_probe(local_db,
+			REF_ADDR(r.child_entry->parent));
 		if(p_ent == NULL) {
 			/* discard child due to hole made in parent */
 			continue;
 		}
 
-		int n = mapdb_add_child(p_ent, children[i]);
-		if(n == -ENOMEM) return -ENOMEM;
+		if(L4_SizeLog2(p_ent->range) < L4_SizeLog2(r.child_entry->range)) {
+			/* the larger page was split, and it had a child entry that no
+			 * longer fits in its parent range.
+			 *
+			 * FIXME
+			 */
+			panic("unimplemented complex case in distribute_children()");
+		} else {
+			/* simple case. */
+			int n = mapdb_add_child(p_ent, MAPDB_REF(r.child_db->ref_id,
+				L4_Address(r.child_entry->range)));
+			if(n == -ENOMEM) return -ENOMEM;
+		}
 	}
 
 	return 0;
@@ -1217,8 +1230,6 @@ fail:
 
 static int reparent_children(struct map_db *db, struct map_entry *e)
 {
-	TRACE("%s: called; e->num_children is %u\n", __func__,
-		(unsigned)e->num_children);
 	if(e->num_children == 0) return 0;
 
 	struct map_db *parent_db = NULL;
@@ -1370,11 +1381,12 @@ int mapdb_unmap_fpage(
 					continue;
 				}
 
-				TRACE("deref child %d (%#lx) -> %#lx:%#lx, p_o %d\n",
+				TRACE("deref child %d (%#lx) -> %#lx:%#lx\n",
 					i, e->num_children < 2 ? e->child : e->children[i],
 					L4_Address(r.child_entry->range),
-					L4_Size(r.child_entry->range), r.parent_offset);
+					L4_Size(r.child_entry->range));
 
+#if 0
 				/* intersection with e->range in the child entry. this is for
 				 * the case where the parent is large and the child is small,
 				 * as happens with hugepages.
@@ -1411,6 +1423,9 @@ int mapdb_unmap_fpage(
 					rwx_seen |= pass_rwx;
 				}
 				if(sp_changed) space_commit(r.child_db->space);
+#else
+				panic("i'm not good with computer");
+#endif
 			}
 
 			r_pos = L4_Address(e->range) + L4_Size(e->range);
