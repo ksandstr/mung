@@ -46,6 +46,7 @@
 struct child_ref
 {
 	struct map_db *child_db;
+	struct map_group *group;
 	struct map_entry *child_entry;
 };
 
@@ -56,6 +57,10 @@ static struct map_entry *discontiguate(
 	struct map_db *db,
 	struct map_group *g,
 	L4_Fpage_t range);
+
+static struct map_group *group_for_addr(struct map_db *db, uintptr_t addr);
+
+static struct map_entry *probe_group_addr(struct map_group *g, uintptr_t addr);
 
 static bool deref_child(
 	struct child_ref *cr,
@@ -241,7 +246,12 @@ static bool deref_child(
 		return false;
 	}
 
-	struct map_entry *ce = mapdb_probe(db, child_addr);
+	/* (same as mapdb_probe(), but we'll keep @g.) */
+	struct map_group *g = group_for_addr(db, child_addr);
+	if(g == NULL) return false;
+	assert(child_addr >= g->start);
+	assert(child_addr < g->start + GROUP_SIZE);
+	struct map_entry *ce = probe_group_addr(g, child_addr);
 	if(ce == NULL) {
 		TRACE("%s: address %#lx not found in child ref_id %u\n", __func__,
 			child_addr, space_id);
@@ -269,6 +279,7 @@ static bool deref_child(
 	}
 
 	cr->child_db = db;
+	cr->group = g;
 	cr->child_entry = ce;
 
 	return true;
@@ -1279,6 +1290,7 @@ static int reparent_children(struct map_db *db, struct map_entry *e)
 				__func__, L4_Address(cr.child_entry->range),
 				L4_Size(cr.child_entry->range), cr.child_db->ref_id);
 			cr.child_entry->parent = 0;
+			coalesce_entries(cr.group, cr.child_entry);
 		}
 
 		cs[i] = REF_TOMBSTONE;	/* idempotency guarantee */
