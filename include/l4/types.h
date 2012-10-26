@@ -126,7 +126,7 @@ static inline L4_Fpage_t L4_Fpage(L4_Word_t address, L4_Word_t size) {
 /* L4_Fpage_t accessors */
 
 static inline L4_Word_t L4_Address(L4_Fpage_t fp) {
-	return fp.X.b << 10;
+	return fp.raw & ~((1ul << fp.X.s) - 1);
 }
 
 static inline L4_Word_t L4_Size(L4_Fpage_t fp) {
