@@ -43,7 +43,7 @@ slowcheck:
 
 
 
-tags: $(shell find . -iname "*.[ch]" -or -iname "*.p[lm]" -print)
+tags: $(shell find . -iname "*.[ch]" -or -iname "*.p[lm]")
 	@ctags -R *
 
 
