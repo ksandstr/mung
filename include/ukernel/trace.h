@@ -9,7 +9,7 @@
 #ifndef NDEBUG
 #define TRACE_MSG(id, fmt, ...) do { \
 		if(unlikely(trace_is_enabled((id)))) { \
-			printf(fmt, __VA_ARGS__); \
+			printf(fmt, ##__VA_ARGS__); \
 		} \
 	} while(0)
 #else
