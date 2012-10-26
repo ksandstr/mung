@@ -2,6 +2,8 @@
 export CFGDIR:=$(abspath .)
 include config.mk
 
+# CFLAGS:=$(CFLAGS) -DCCAN_LIST_DEBUG -D_L4_DEBUG_ME_HARDER
+
 .PHONY: all clean distclean check qcheck
 
 
