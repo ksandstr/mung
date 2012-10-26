@@ -15,10 +15,12 @@
 #include <l4/types.h>
 #include <l4/kip.h>
 #include <l4/vregs.h>
+
 #include <ukernel/mm.h>
 #include <ukernel/x86.h>
 #include <ukernel/slab.h>
 #include <ukernel/misc.h>
+#include <ukernel/util.h>
 #include <ukernel/thread.h>
 #include <ukernel/sched.h>
 #include <ukernel/mapdb.h>
@@ -630,8 +632,9 @@ COLD void init_spaces(struct list_head *resv_list)
 	}
 
 	/* UTCB pages */
-	kernel_space->utcb_area = L4_Fpage(KERNEL_HEAP_TOP,
-		UTCB_SIZE * NUM_KERNEL_THREADS);
+	int ua_shift = size_to_shift(UTCB_SIZE * NUM_KERNEL_THREADS);
+	kernel_space->utcb_area = L4_FpageLog2(
+		ALIGN_TO_SHIFT(KERNEL_HEAP_TOP, ua_shift), ua_shift);
 	static struct page *kernel_utcb_pages[(UTCB_SIZE * NUM_KERNEL_THREADS + PAGE_SIZE - 1)
 		/ PAGE_SIZE];
 	int n_utcb_pages = sizeof(kernel_utcb_pages) / sizeof(kernel_utcb_pages[0]);

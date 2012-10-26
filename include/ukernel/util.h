@@ -39,6 +39,9 @@
 
 #define WORD_BITS (sizeof(L4_Word_t) * 8)
 
+#define ALIGN_TO_SHIFT(addr, shift) ((addr) & ~((1 << (shift)) - 1))
+#define ALIGN_TO_SIZE(addr, size) ALIGN_TO_SHIFT((addr), size_to_shift((shift)))
+
 
 /* usage:
  *
@@ -58,6 +61,12 @@
 		_A < _E; \
 		(_addr) = (_A += (1 << _S)), \
 			(_sizelog2) = _S = MIN(int, ffsl(_A) - 1, MSB(_E - _A)))
+
+
+static inline int size_to_shift(size_t size) {
+	int msb = MSB(size);
+	return (1 << msb) < size ? msb + 1 : msb;
+}
 
 
 static inline uint64_t time_in_us(L4_Time_t t)
