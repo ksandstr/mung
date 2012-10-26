@@ -225,6 +225,28 @@ static bool check_mapdb_module(int opts)
 #endif
 
 
+static inline struct map_entry *lookup_ref(
+	struct map_db **db_p,
+	struct map_group **group_p,
+	L4_Word_t ref)
+{
+	assert(REF_DEFINED(ref));
+
+	struct map_db *db = find_map_db(REF_SPACE(ref));
+	if(db == NULL) return NULL;
+
+	/* (same as mapdb_probe(), but we'll keep @g.) */
+	struct map_group *g = group_for_addr(db, REF_ADDR(ref));
+	if(g == NULL) return NULL;
+	assert(REF_ADDR(ref) >= g->start);
+	assert(REF_ADDR(ref) < g->start + GROUP_SIZE);
+
+	if(group_p != NULL) *group_p = g;
+	if(db_p != NULL) *db_p = db;
+	return probe_group_addr(g, REF_ADDR(ref));
+}
+
+
 /* returns false on stale child. */
 static bool deref_child(
 	struct child_ref *cr,
@@ -468,10 +490,28 @@ static struct map_entry *probe_group_range(struct map_group *g, L4_Fpage_t fpage
 }
 
 
+/* pass NULL for @limit_parent except to recurse. */
 static void coalesce_entries(
 	struct map_group *g,
-	struct map_entry *ent)
+	struct map_entry *ent,
+	struct map_entry *limit_parent)
 {
+	/* this function must check that children are never joined to become
+	 * larger than their parents. so the first iteration's parent should act
+	 * as a limit; skipping for toplevel mappings (for which this function is
+	 * quite rare).
+	 */
+	if(likely(REF_DEFINED(ent->parent))) {
+		if(limit_parent == NULL) {
+			limit_parent = lookup_ref(NULL, NULL, ent->parent);
+			assert(limit_parent != NULL);
+		}
+
+		if(L4_SizeLog2(ent->range) >= L4_SizeLog2(limit_parent->range)) {
+			return;
+		}
+	}
+
 	const L4_Word_t size_mask = 1 << L4_SizeLog2(ent->range);
 	bool is_low = (L4_Address(ent->range) & size_mask) == 0;
 	int ent_ix = ent - g->entries, oth_ix = ent_ix + (is_low ? 1 : -1);
@@ -510,7 +550,7 @@ static void coalesce_entries(
 			g->entries[ent_ix] = g->entries[ent_ix + 1];
 		}
 
-		coalesce_entries(g, oth);
+		coalesce_entries(g, oth, limit_parent);
 	}
 }
 
@@ -541,7 +581,7 @@ static bool merge_entries(
 		pred->range = L4_FpageLog2(L4_Address(pred->range),
 			L4_SizeLog2(pred->range) + 1);
 		L4_Set_Rights(&pred->range, access);
-		coalesce_entries(g, pred);
+		coalesce_entries(g, pred, NULL);
 		return true;
 	} else if(succ < &g->entries[g->num_entries]
 		&& (L4_Address(succ->range) & (1 << L4_SizeLog2(fpage))) != 0
@@ -559,7 +599,7 @@ static bool merge_entries(
 		succ->first_page_id--;
 		succ->parent = parent;
 		assert(succ->first_page_id == first_page_id);
-		coalesce_entries(g, succ);
+		coalesce_entries(g, succ, NULL);
 		return true;
 	} else {
 		return false;
@@ -1320,7 +1360,7 @@ static int reparent_children(struct map_db *db, struct map_entry *e)
 				__func__, L4_Address(cr.child_entry->range),
 				L4_Size(cr.child_entry->range), cr.child_db->ref_id);
 			cr.child_entry->parent = 0;
-			coalesce_entries(cr.group, cr.child_entry);
+			coalesce_entries(cr.group, cr.child_entry, NULL);
 		}
 
 		cs[i] = REF_TOMBSTONE;	/* idempotency guarantee */
