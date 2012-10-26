@@ -1086,6 +1086,7 @@ static int distribute_children(
 	 * hash table lookups -- 4M hugepages in a memory server would be mapped
 	 * to at least 1024 child pages under full utilization, for instance.
 	 */
+	const L4_Word_t old_base = L4_Address(from->range);
 	for(int i=0; i < from->num_children; i++) {
 		struct child_ref r;
 		if(!deref_child(&r, local_db, from, i)) continue;
@@ -1100,16 +1101,24 @@ static int distribute_children(
 		if(L4_SizeLog2(p_ent->range) < L4_SizeLog2(r.child_entry->range)) {
 			/* the larger page was split, and it had a child entry that no
 			 * longer fits in its parent range.
-			 *
-			 * FIXME
 			 */
-			panic("unimplemented complex case in distribute_children()");
-		} else {
-			/* simple case. */
-			int n = mapdb_add_child(p_ent, MAPDB_REF(r.child_db->ref_id,
-				L4_Address(r.child_entry->range)));
-			if(n == -ENOMEM) return -ENOMEM;
+			L4_Word_t off = L4_Address(p_ent->range) - old_base;
+			L4_Fpage_t cut = L4_FpageLog2(L4_Address(r.child_entry->range)
+				+ off, L4_SizeLog2(p_ent->range));
+#if 0
+			TRACE("  splitting child %#lx:%#lx (parent %#lx) around %#lx:%#lx\n",
+				L4_Address(r.child_entry->range), L4_Size(r.child_entry->range),
+				r.child_entry->parent, L4_Address(cut), L4_Size(cut));
+#endif
+			struct map_entry *ent = discontiguate(r.child_db, r.group, cut);
+			r.child_entry = ent;
+			/* FIXME: check return value */
 		}
+
+		/* simple case. */
+		int n = mapdb_add_child(p_ent, MAPDB_REF(r.child_db->ref_id,
+			L4_Address(r.child_entry->range)));
+		if(n == -ENOMEM) return -ENOMEM;
 	}
 
 	return 0;
@@ -1187,7 +1196,10 @@ static int split_entry(
 	g->num_entries += p - 1;
 
 	if(saved.num_children > 0) {
-		distribute_children(db, g, cut, &saved);
+		int n = distribute_children(db, g, cut, &saved);
+		if(n < 0) {
+			panic("distribute_children() failed in split_entry()");
+		}
 	}
 
 	return 0;
