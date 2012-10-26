@@ -1148,7 +1148,11 @@ static int split_entry(
 	int n = insert_blanks(g, p - 1, &e);
 	if(unlikely(n < 0)) return n;
 
-	struct map_entry saved = *e;
+	struct map_entry saved = *e, *parent_ent = NULL;
+	struct map_db *parent_db = NULL;
+	if(REF_DEFINED(saved.parent)) {
+		parent_db = find_map_db(REF_SPACE(saved.parent));
+	}
 	L4_Word_t addr_offset = 0;
 	for(int i=0; i < p; i++) {
 		e[i] = (struct map_entry){
@@ -1166,6 +1170,19 @@ static int split_entry(
 			__func__, e - g->entries + i, L4_Address(e[i].range), L4_Size(e[i].range),
 			e[i].parent, e[i].first_page_id, L4_Rights(e[i].range));
 		addr_offset += L4_Size(pg_buf[i]);
+
+		/* child references for parents. */
+		if(parent_db != NULL) {
+			L4_Word_t p_addr = REF_ADDR(e[i].parent);
+			if(parent_ent == NULL
+				|| !ADDR_IN_FPAGE(parent_ent->range, p_addr))
+			{
+				parent_ent = mapdb_probe(parent_db, p_addr);
+				assert(parent_ent != NULL);
+			}
+			mapdb_add_child(parent_ent,
+				MAPDB_REF(db->ref_id, L4_Address(e[i].range)));
+		}
 	}
 	g->num_entries += p - 1;
 
