@@ -90,12 +90,12 @@ static void dump_map_group(struct map_group *g)
 	for(int i=0; i < g->num_entries; i++) {
 		struct map_entry *e = &g->entries[i];
 		assert(!L4_IsNilFpage(e->range));
-		TRACE("  %d: [%#lx .. %#lx] (%c%c%c), pages [%u .. %lu]; nc %u\n", i,
+		TRACE("  %d: [%#lx .. %#lx] (%c%c%c) from %#lx, pages [%u .. %lu]; nc %u\n", i,
 			L4_Address(e->range), L4_Address(e->range) + L4_Size(e->range) - 1,
 			CHECK_FLAG(L4_Rights(e->range), L4_Readable) ? 'r' : '-',
 			CHECK_FLAG(L4_Rights(e->range), L4_Writable) ? 'w' : '-',
 			CHECK_FLAG(L4_Rights(e->range), L4_eXecutable) ? 'x' : '-',
-			e->first_page_id,
+			e->parent, e->first_page_id,
 			e->first_page_id + L4_Size(e->range) / PAGE_SIZE - 1,
 			(unsigned)e->num_children);
 	}
@@ -557,6 +557,7 @@ static bool merge_entries(
 		succ->range = L4_FpageLog2(L4_Address(fpage), L4_SizeLog2(fpage) + 1);
 		L4_Set_Rights(&succ->range, access);
 		succ->first_page_id--;
+		succ->parent = parent;
 		assert(succ->first_page_id == first_page_id);
 		coalesce_entries(g, succ);
 		return true;
