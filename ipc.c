@@ -145,21 +145,25 @@ static int apply_mapitem(
 	}
 
 	if(unlikely(L4_IsIoFpage(map_page))) {
+		/* FIXME: the correct acceptor has s' == 16, p == 0. reject others
+		 * quietly.
+		 */
 		if(!L4_IsIoFpage(wnd)) return 0;	/* again, error? */
 		else return apply_io_mapitem(source, s_base, dest, d_base, m, wnd);
 	}
 
+	bool is_cas = wnd.raw == L4_CompleteAddressSpace.raw;
 	TRACE("mapping 0x%lx:0x%lx, sndbase 0x%lx, rcvwindow %#lx:%#lx (%s)\n",
 		L4_Address(map_page), L4_Size(map_page),
-		L4_MapItemSndBase(m), L4_Address(wnd), L4_Size(wnd),
-		wnd.raw == L4_CompleteAddressSpace.raw ? "CompleteAddressSpace" : "<- that");
+		L4_MapItemSndBase(m), is_cas ? 0 : L4_Address(wnd),
+		is_cas ? ~0ul : L4_Size(wnd),
+		is_cas ? "CompleteAddressSpace" : "<- that");
 
-	if(wnd.raw == L4_CompleteAddressSpace.raw
-		|| L4_Size(wnd) >= L4_MapItemSndBase(m) + L4_Size(map_page))
-	{
+	if(is_cas || L4_Size(wnd) >= L4_MapItemSndBase(m) + L4_Size(map_page)) {
+		const L4_Word_t wnd_base = is_cas ? 0 : L4_Address(wnd);
 		int given = mapdb_map_pages(&source->space->mapdb,
 			&dest->space->mapdb, map_page,
-			L4_Address(wnd) + L4_MapItemSndBase(m));
+			wnd_base + L4_MapItemSndBase(m));
 		if(is_grant && given != 0) {
 			L4_Set_Rights(&map_page, given);
 			mapdb_unmap_fpage(&source->space->mapdb, map_page, true, false,
