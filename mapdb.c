@@ -264,7 +264,8 @@ static bool deref_child(
 	assert(space_id != home_db->ref_id);
 	struct map_db *db = find_map_db(space_id);
 	if(db == NULL) {
-		printf("mapdb ref_id %u not found\n", (unsigned)space_id);
+		TRACE("%s: mapdb ref_id %u not found\n", __func__,
+			(unsigned)space_id);
 		return false;
 	}
 
@@ -1479,6 +1480,7 @@ int mapdb_unmap_fpage(
 				int pass_rwx = mapdb_unmap_fpage(r.child_db, fp,
 					true, true, false);
 				if(pass_rwx < 0) {
+					/* FIXME: handle ENOMEM */
 					printf("%s: failed for child ref %u, fpage %#lx:%#lx\n",
 						__func__, r.child_db->ref_id, L4_Address(fp),
 						L4_Size(fp));
