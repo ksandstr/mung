@@ -1471,46 +1471,30 @@ int mapdb_unmap_fpage(
 					L4_Address(r.child_entry->range),
 					L4_Size(r.child_entry->range));
 
-#if 0
-				/* intersection with e->range in the child entry. this is for
-				 * the case where the parent is large and the child is small,
-				 * as happens with hugepages.
-				 */
-				int size_log2;
-				bool sp_changed = false;	/* TODO: track in struct space */
-				L4_Word_t address;
-				int ric_offs = r.parent_offset * PAGE_SIZE
-					+ (L4_Address(e->range) - L4_Address(range));
-				for_page_range(
-					MAX(L4_Word_t, L4_Address(r.child_entry->range),
-						L4_Address(r.child_entry->range) - ric_offs),
-					MIN(L4_Word_t, FPAGE_HIGH(r.child_entry->range),
-						L4_Address(r.child_entry->range) + L4_Size(range)
-							- ric_offs) + 1,
-					address, size_log2)
-				{
-					L4_Fpage_t fp = L4_FpageLog2(address, size_log2);
-					L4_Set_Rights(&fp, unmap_rights);
-					int pass_rwx = mapdb_unmap_fpage(r.child_db, fp,
-						true, true, false);
-					/* TODO: instead, call space_put_page() in
-					 * mapdb_unmap_fpage() end, or better yet, something that
-					 * modifies the MMU-level access bits.
-					 */
-					for(L4_Word_t a = L4_Address(fp);
-						a < L4_Address(fp) + L4_Size(fp);
-						a += PAGE_SIZE)
-					{
-						space_put_page(r.child_db->space, a, 0, 0);
-						sp_changed = true;
-					}
+				int rm_rights = L4_Rights(r.child_entry->range) & unmap_rights;
+				if(rm_rights == 0) continue;
 
-					rwx_seen |= pass_rwx;
+				L4_Fpage_t fp = r.child_entry->range;
+				L4_Set_Rights(&fp, unmap_rights);
+				int pass_rwx = mapdb_unmap_fpage(r.child_db, fp,
+					true, true, false);
+				if(pass_rwx < 0) {
+					printf("%s: failed for child ref %u, fpage %#lx:%#lx\n",
+						__func__, r.child_db->ref_id, L4_Address(fp),
+						L4_Size(fp));
+					panic("recursive unmap failed!");
 				}
-				if(sp_changed) space_commit(r.child_db->space);
-#else
-				panic("i'm not good with computer");
-#endif
+				rwx_seen |= pass_rwx;
+				/* TODO: remove write/execute bits if only those are
+				 * specified, instead of clearing the entire entry
+				 */
+				for(L4_Word_t a = L4_Address(fp);
+					a < L4_Address(fp) + L4_Size(fp);
+					a += PAGE_SIZE)
+				{
+					space_put_page(r.child_db->space, a, 0, 0);
+				}
+				space_commit(r.child_db->space);
 			}
 
 			r_pos = L4_Address(e->range) + L4_Size(e->range);
