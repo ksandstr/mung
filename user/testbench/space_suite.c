@@ -338,7 +338,7 @@ START_TEST(spacectl_iface)
 {
 	L4_KernelInterfacePage_t *kip = L4_GetKernelInterface();
 	int kip_s = kip->KipAreaInfo.X.s;
-	L4_Fpage_t kip_area = L4_FpageLog2(0x100000, kip_s),
+	L4_Fpage_t kip_area = L4_FpageLog2(0x111000, kip_s),
 		utcb_area = L4_FpageLog2(0x200000, 12);
 
 	/* find top of the virtual address space. */
@@ -356,7 +356,7 @@ START_TEST(spacectl_iface)
 		}
 	}
 
-	plan_tests(5);
+	plan_tests(7);
 
 	L4_ThreadId_t tid = L4_GlobalId(23042, 199), self = L4_Myself();
 	L4_Word_t res = L4_ThreadControl(tid, tid, self, L4_nilthread,
@@ -369,21 +369,28 @@ START_TEST(spacectl_iface)
 		&ctl_out);
 	ok(res == 1, "valid SpaceControl is valid");
 
-	/* simple overlap between kip_area and utcb_area */
-	L4_Fpage_t bad_utcb_area = L4_FpageLog2(L4_Address(kip_area), 14);
-	assert(RANGE_OVERLAP(FPAGE_LOW(bad_utcb_area), FPAGE_HIGH(bad_utcb_area),
-		FPAGE_LOW(kip_area), FPAGE_HIGH(kip_area)));
-	res = L4_SpaceControl(tid, 0, kip_area, bad_utcb_area,
-		L4_anythread, &ctl_out);
-	L4_Word_t ec = L4_ErrorCode();
-	ok(res == 0 && ec == 7, "error 7 on KIP/UTCB area overlap");
+	/* overlaps between kip_area and utcb_area */
+	L4_Fpage_t bad_utcb[3] = {
+		L4_FpageLog2(L4_Address(kip_area), 14),		/* low */
+		L4_FpageLog2(L4_Address(kip_area) & ~((1 << 14) - 1), 14),	/* high */
+		L4_FpageLog2(L4_Address(kip_area) & ~((1 << 16) - 1), 14),	/* in */
+	};
+	for(int i=0; i < NUM_ELEMENTS(bad_utcb); i++) {
+		L4_Fpage_t bad_utcb_area = bad_utcb[i];
+		assert(RANGE_OVERLAP(FPAGE_LOW(bad_utcb_area), FPAGE_HIGH(bad_utcb_area),
+			FPAGE_LOW(kip_area), FPAGE_HIGH(kip_area)));
+		res = L4_SpaceControl(tid, 0, kip_area, bad_utcb_area,
+			L4_anythread, &ctl_out);
+		L4_Word_t ec = L4_ErrorCode();
+		ok(res == 0 && ec == 7, "error 7 on KIP/UTCB area overlap");
+	}
 
 	/* KIP area that's too small */
 	L4_Fpage_t bad_kip_area = L4_FpageLog2(L4_Address(kip_area),
 		kip->KipAreaInfo.X.s - 1);
 	res = L4_SpaceControl(tid, 0, bad_kip_area, utcb_area,
 		L4_anythread, &ctl_out);
-	ec = L4_ErrorCode();
+	L4_Word_t ec = L4_ErrorCode();
 	ok(res == 0 && ec == 7, "kip area %#lx:%#lx is the wrong size",
 		L4_Address(bad_kip_area), L4_Size(bad_kip_area));
 
@@ -397,7 +404,7 @@ START_TEST(spacectl_iface)
 	ok(res == 0 && ec == 7, "kip area %#lx:%#lx out of range",
 		L4_Address(bad_kip_area), L4_Size(bad_kip_area));
 
-	bad_utcb_area = L4_FpageLog2(vaddr_end + 0x10000, 18);
+	L4_Fpage_t bad_utcb_area = L4_FpageLog2(vaddr_end + 0x10000, 18);
 	res = L4_SpaceControl(tid, 0, kip_area, bad_utcb_area,
 		L4_anythread, &ctl_out);
 	ec = L4_ErrorCode();
