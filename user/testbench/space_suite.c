@@ -325,7 +325,7 @@ START_TEST(spacectl_basic)
 
 	L4_Word_t ctl_out;
 	res = L4_SpaceControl(tid, 0, L4_FpageLog2(0x100000, 12),
-		L4_FpageLog2(0x101000, 14), L4_anythread, &ctl_out);
+		L4_FpageLog2(0x104000, 14), L4_anythread, &ctl_out);
 	if(res != 1) diag("SpaceControl failed, ec %#lx", L4_ErrorCode());
 	ok(res == 1, "space configured");
 
