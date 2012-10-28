@@ -370,11 +370,11 @@ START_TEST(spacectl_iface)
 	ok(res == 1, "valid SpaceControl is valid");
 
 	/* simple overlap between kip_area and utcb_area */
-	L4_Fpage_t bad_utcb_area = L4_FpageLog2(0x100000 - (0x1000 * 2), 14);
-	assert(RANGE_OVERLAP(L4_Address(bad_utcb_area), L4_Address(bad_utcb_area) + L4_Size(bad_utcb_area) - 1,
-		L4_Address(kip_area), L4_Address(kip_area) + L4_Size(kip_area) - 1));
-	res = L4_SpaceControl(tid, 0, kip_area, bad_utcb_area, L4_anythread,
-		&ctl_out);
+	L4_Fpage_t bad_utcb_area = L4_FpageLog2(L4_Address(kip_area), 14);
+	assert(RANGE_OVERLAP(FPAGE_LOW(bad_utcb_area), FPAGE_HIGH(bad_utcb_area),
+		FPAGE_LOW(kip_area), FPAGE_HIGH(kip_area)));
+	res = L4_SpaceControl(tid, 0, kip_area, bad_utcb_area,
+		L4_anythread, &ctl_out);
 	L4_Word_t ec = L4_ErrorCode();
 	ok(res == 0 && ec == 7, "error 7 on KIP/UTCB area overlap");
 
