@@ -217,7 +217,7 @@ static bool check_mapdb_module(int opts)
 		ptr = htable_next(&ref_hash, &it))
 	{
 		struct map_db *db = container_of(ptr, struct map_db, ref_id);
-		assert(check_mapdb(db, opts));
+		if(!check_mapdb(db, opts)) return false;
 	}
 
 	return true;
@@ -401,6 +401,8 @@ void mapdb_destroy(struct map_db *db)
 
 	htable_clear(&db->groups);
 	db->space = NULL;
+
+	assert(check_mapdb_module(0));
 }
 
 
@@ -556,8 +558,8 @@ static void coalesce_entries(
 }
 
 
-/* attempts to merge the given parameters of mapdb_add_map() to previously
- * existing items.
+/* attempts to record the equivalent of a map_entry with the given parameters
+ * by expanding an existing map_entry. returns true on success.
  */
 static bool merge_entries(
 	struct map_group *g,
@@ -566,7 +568,6 @@ static bool merge_entries(
 	L4_Fpage_t fpage,
 	uint32_t first_page_id)
 {
-	/* try merging. */
 	struct map_entry *pred = &g->entries[prev_pos],
 		*succ = &g->entries[prev_pos + 1];
 	if((L4_Address(pred->range) & (1 << L4_SizeLog2(fpage))) == 0
@@ -934,6 +935,8 @@ int mapdb_map_pages(
 	L4_Fpage_t map_page,
 	L4_Word_t dest_addr)
 {
+	assert(check_mapdb_module(0));
+
 	struct map_entry *first = NULL;
 	struct map_group *grp;
 	L4_Word_t first_addr = L4_Address(map_page),
@@ -1264,8 +1267,6 @@ static struct map_entry *discontiguate(
 	 */
 	struct map_entry *e = probe_group_range(g, range);
 	if(e == NULL) return NULL;
-//	TRACE("%s: e %#lx:%#lx\n", __func__, L4_Address(e->range),
-//		L4_Size(e->range));
 	bool new_e = false;
 	L4_Word_t r_start = L4_Address(range);
 	if(L4_Address(e->range) < r_start
@@ -1282,8 +1283,6 @@ static struct map_entry *discontiguate(
 		L4_Word_t r_end = r_start + L4_Size(range);
 		struct map_entry *last = probe_group_range(g, L4_FpageLog2(
 			L4_Address(range) + L4_Size(range) - PAGE_SIZE, PAGE_BITS));
-//		TRACE("%s: last %#lx:%#lx\n", __func__,
-//			L4_Address(last->range), L4_Size(last->range));
 		/* ... does this work? */
 		if(last != NULL
 			&& (L4_Address(last->range) != r_start
@@ -1297,9 +1296,6 @@ static struct map_entry *discontiguate(
 	}
 
 	if(new_e) {
-//		TRACE("%s: dumping the modified group\n", __func__);
-//		dump_map_group(g);
-
 		e = probe_group_range(g, range);
 		assert(e != NULL);		/* guaranteed by previous "e" */
 	}
@@ -1382,6 +1378,7 @@ int mapdb_unmap_fpage(
 	bool clear_stored_access)
 {
 	assert(recursive || immediate);	/* disallows the one-level status read */
+	assert(check_mapdb_module(0));
 
 	int rwx_seen = 0;
 
@@ -1560,6 +1557,7 @@ int mapdb_unmap_fpage(
 		dump_map_group(g);
 	}
 
+	assert(unmap_rights == 0 || check_mapdb_module(0));
 	return rwx_seen;
 }
 
@@ -1592,6 +1590,8 @@ COLD void mapdb_init_range(
 	unsigned int num_pages,
 	int entry_flags)
 {
+	assert(check_mapdb_module(0));
+
 #if 1
 	TRACE("%s: start_addr %#lx, num_pages %u (%#x bytes)\n", __func__,
 		(L4_Word_t)start_addr, num_pages, num_pages * PAGE_SIZE);
@@ -1630,7 +1630,6 @@ COLD void mapdb_init_range(
 		int range_len = (range_end - range_start + 1) >> PAGE_BITS;
 		while(range_pos <= range_end) {
 			int b = ffsl(range_pos);
-//			TRACE("%s: range_pos %#lx, b %d\n", __func__, range_pos, b);
 			assert(b == 0
 				|| __builtin_popcount(range_pos) == 1
 				|| ffsl(range_pos & ~(1 << (b - 1))) > b);
@@ -1669,4 +1668,5 @@ COLD void mapdb_init_range(
 	}
 
 	assert(done == num_pages);
+	assert(check_mapdb_module(0));
 }
