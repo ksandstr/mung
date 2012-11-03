@@ -290,8 +290,8 @@ struct thread *create_kthread(
 void thread_set_space(struct thread *t, struct space *sp)
 {
 	if(t->space != NULL) {
-		list_del_from(&t->space->threads, &t->space_link);
-		t->space = NULL;
+		assert(t->space == sp);
+		space_remove_thread(sp, t);
 	}
 	space_add_thread(sp, t);
 }
