@@ -215,7 +215,7 @@ static void pager_setup(void)
 	if(L4_IsNilThread(pg_pager)) {
 		fixture_fail("can't setup stats pager");
 	}
-	L4_ThreadSwitch(pg_pager);
+	for(int i=0; i < 10; i++) L4_ThreadSwitch(pg_pager);
 	if(pg_stats->n_faults != 0) {
 		fixture_fail("stats pager acting weird");
 	}
