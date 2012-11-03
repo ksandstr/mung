@@ -160,7 +160,7 @@ static bool check_mapdb(struct map_db *db, int opts)
 			const struct map_entry *p_e = mapdb_probe(p_db,
 				REF_ADDR(e->parent));
 			inv_ok1(p_e != NULL);
-			inv_push("parent entry %#lx:%#lx in ref_id %u",
+			inv_log("parent entry %#lx:%#lx in ref_id %u",
 				L4_Address(p_e->range), L4_Size(p_e->range), p_db->ref_id);
 			inv_ok1(ADDR_IN_FPAGE(p_e->range, REF_ADDR(e->parent)));
 			inv_ok1(L4_SizeLog2(e->range) <= L4_SizeLog2(p_e->range));
@@ -172,7 +172,7 @@ static bool check_mapdb(struct map_db *db, int opts)
 					? p_e->children : &p_e->child;
 				for(int j=0; j < p_e->num_children; j++) {
 					n_push++;
-					inv_push("  child %d = %#lx", j, p_cs[j]);
+					inv_log("  child %d = %#lx", j, p_cs[j]);
 					if(REF_SPACE(p_cs[j]) != db->ref_id) continue;
 					if(ADDR_IN_FPAGE(e->range, REF_ADDR(p_cs[j]))) {
 						found = true;
@@ -189,10 +189,8 @@ static bool check_mapdb(struct map_db *db, int opts)
 					}
 				}
 				inv_ok1(found);
-				for(int j=0; j < n_push; j++) inv_pop();
 			}
 
-			inv_pop();
 			inv_pop();
 		}
 	}
