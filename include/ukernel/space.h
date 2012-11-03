@@ -48,7 +48,7 @@ struct space
 
 #define UTCB_SIZE 512
 #define UTCB_PER_PAGE (PAGE_SIZE / UTCB_SIZE)
-#define NUM_UTCB_PAGES(fpage) (L4_Size((fpage)) / UTCB_SIZE)
+#define NUM_UTCB_PAGES(area) (L4_Size((area)) / UTCB_SIZE / UTCB_PER_PAGE)
 
 
 /* kernel_space->mapdb contains mappings for all non-reserved memory seen by
