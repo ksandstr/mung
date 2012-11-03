@@ -66,6 +66,28 @@ static bool check_space(struct space *sp)
 
 	inv_ok1(sp->pdirs != NULL);
 
+	/* check that pagetable pages referenced in the directory exist in
+	 * ->ptab_pages .
+	 */
+	const uint32_t *pdir_mem = sp->pdirs->vm_addr;
+	for(int i=0; i < PAGE_SIZE / sizeof(uint32_t); i++) {
+		const uint32_t pde = pdir_mem[i];
+		inv_push("checking pdir entry %d (%#x):", i, pde);
+		/* PRESENT is obvious. !USER occurs with the kernel's directories
+		 * reflected into the space's high address range.
+		 */
+		if(CHECK_FLAG_ALL(pde, PDIR_PRESENT | PDIR_USER)) {
+			uint32_t pt_id = pde >> 12;
+			struct page *ptab_page = htable_get(&sp->ptab_pages,
+				int_hash(pt_id), &cmp_page_id_to_key, &pt_id);
+			inv_ok(ptab_page != NULL, "ptab must exist for id %u", pt_id);
+			inv_ok(ptab_page->id == pt_id,
+				"expected ptab_page->id == %u, found %u\n",
+				pt_id, ptab_page->id);
+		}
+		inv_pop();
+	}
+
 	/* check that correct pages, or holes, are mapped for utcb_pages[]. */
 	if(sp->utcb_pages != NULL) {
 		inv_ok1(sp->utcb_area.raw != L4_Nilpage.raw);
@@ -73,18 +95,18 @@ static bool check_space(struct space *sp)
 			L4_Word_t page_addr = L4_Address(sp->utcb_area) + i * PAGE_SIZE;
 			inv_push("checking utcb page %d/%d at %#lx:", i,
 				(int)NUM_UTCB_PAGES(sp->utcb_area), page_addr);
-			const uint32_t *pdir_mem = sp->pdirs->vm_addr, *ptab_mem;
+
+			/* (this just accesses the page tables.) */
+			const uint32_t *ptab_mem;
 			int dir_ix = page_addr >> 22, pg_ix = (page_addr >> 12) & 0x3ff;
 			if(CHECK_FLAG(pdir_mem[dir_ix], PDIR_PRESENT)) {
-				inv_log("directory %d is present", dir_ix);
 				uint32_t pt_id = pdir_mem[dir_ix] >> 12;
 				struct page *ptab_page = htable_get(&sp->ptab_pages,
 					int_hash(pt_id), &cmp_page_id_to_key, &pt_id);
-				inv_ok1(ptab_page != NULL);
+				assert(ptab_page != NULL);		/* checked earlier */
 				ptab_mem = ptab_page->vm_addr;
-				inv_ok1(ptab_mem != NULL);
+				assert(ptab_mem != NULL);		/* if-else block output */
 			} else {
-				inv_log("directory %d isn't present", dir_ix);
 				ptab_mem = NULL;
 			}
 
@@ -343,6 +365,7 @@ void space_put_page(
 		memset(ptab_page->vm_addr, 0, PAGE_SIZE);
 		pdir_mem[dir_ix] = ptab_page->id << 12 | PDIR_PRESENT | PDIR_USER
 			| PDIR_RW;
+		/* FIXME: catch ENOMEM! */
 		htable_add(&sp->ptab_pages, int_hash(ptab_page->id), ptab_page);
 	} else {
 		uint32_t pt_id = pdir_mem[dir_ix] >> 12;
