@@ -38,7 +38,7 @@ struct space
 	struct map_db mapdb;
 
 	/* x86 specific bits */
-	struct page *pdirs;
+	struct page *pdirs;			/* toplevel page directory table */
 
 	unsigned tss_seg;
 	size_t tss_len;				/* total amount of RAM under "tss" */

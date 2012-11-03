@@ -36,11 +36,93 @@ static struct list_head space_list = LIST_HEAD_INIT(space_list);
 static struct space *current_space = NULL;
 
 
+/* get-cmp function for struct space's ptab_pages */
+static bool cmp_page_id_to_key(const void *cand, void *key) {
+	const struct page *pg = cand;
+	return pg->id == *(uint32_t *)key;
+}
+
+
+/* rehash for same */
 static size_t hash_page_by_id(const void *page_ptr, void *priv)
 {
 	const struct page *p = page_ptr;
 	return int_hash(p->id);
 }
+
+
+#ifndef NDEBUG
+#include <ukernel/invariant.h>
+
+static bool check_space(struct space *sp)
+{
+	INV_CTX;
+
+	inv_push("space of mapdb %u", sp->mapdb.ref_id);
+
+	inv_ok(!CHECK_FLAG_ANY(sp->flags, ~(uint16_t)(SF_PRIVILEGE)),
+		"no undefined flags");
+	if(sp == kernel_space) goto end;	/* TODO: move this down */
+
+	inv_ok1(sp->pdirs != NULL);
+
+	/* check that correct pages, or holes, are mapped for utcb_pages[]. */
+	if(sp->utcb_pages != NULL) {
+		inv_ok1(sp->utcb_area.raw != L4_Nilpage.raw);
+		for(int i=0; i < NUM_UTCB_PAGES(sp->utcb_area); i++) {
+			L4_Word_t page_addr = L4_Address(sp->utcb_area) + i * PAGE_SIZE;
+			inv_push("checking utcb page %d/%d at %#lx:", i,
+				(int)NUM_UTCB_PAGES(sp->utcb_area), page_addr);
+			const uint32_t *pdir_mem = sp->pdirs->vm_addr, *ptab_mem;
+			int dir_ix = page_addr >> 22, pg_ix = (page_addr >> 12) & 0x3ff;
+			if(CHECK_FLAG(pdir_mem[dir_ix], PDIR_PRESENT)) {
+				inv_log("directory %d is present", dir_ix);
+				uint32_t pt_id = pdir_mem[dir_ix] >> 12;
+				struct page *ptab_page = htable_get(&sp->ptab_pages,
+					int_hash(pt_id), &cmp_page_id_to_key, &pt_id);
+				inv_ok1(ptab_page != NULL);
+				ptab_mem = ptab_page->vm_addr;
+				inv_ok1(ptab_mem != NULL);
+			} else {
+				inv_log("directory %d isn't present", dir_ix);
+				ptab_mem = NULL;
+			}
+
+			if(sp->utcb_pages[i] == NULL) {
+				uint32_t ent = ptab_mem != NULL ? ptab_mem[pg_ix] : 0;
+				inv_log("no utcb page; ptab_mem is %p, entry %d is %#x",
+					ptab_mem, pg_ix, ent);
+				inv_ok1(ptab_mem == NULL || !CHECK_FLAG(ent, PT_PRESENT));
+			} else {
+				inv_log("utcb page present; entry %d is %#x (want id %u)",
+					pg_ix, ptab_mem[pg_ix], sp->utcb_pages[i]->id);
+				inv_ok1(!CHECK_FLAG(ptab_mem[pg_ix], PT_PRESENT)
+					|| (ptab_mem[pg_ix] >> 12) == sp->utcb_pages[i]->id);
+			}
+			inv_pop();
+		}
+	}
+
+end:
+	inv_pop();
+
+	return true;
+
+inv_fail:
+	return false;
+}
+
+
+static bool check_all_spaces(void)
+{
+	struct space *sp, *next;
+	list_for_each_safe(&space_list, sp, next, link) {
+		if(!check_space(sp)) return false;
+	}
+
+	return true;
+}
+#endif
 
 
 static void space_init(struct space *sp, struct list_head *resv_list)
@@ -242,19 +324,13 @@ struct thread *space_find_local_thread(
 }
 
 
-/* get-cmp function for struct space's ptab_pages */
-static bool cmp_page_id_to_key(const void *cand, void *key) {
-	const struct page *pg = cand;
-	return pg->id == *(uint32_t *)key;
-}
-
-
 void space_put_page(
 	struct space *sp,
 	uintptr_t addr,
 	uint32_t page_id,
 	int access)
 {
+	assert(check_space(sp));
 	assert(addr < KERNEL_SEG_START);
 
 	int dir_ix = addr >> 22, ptab_ix = (addr >> 12) & 0x3ff;
@@ -285,6 +361,8 @@ void space_put_page(
 	}
 	/* TODO: skip this if _sp_'s page table is not currently loaded */
 	x86_invalidate_page(addr & ~PAGE_MASK);
+
+	assert(check_space(sp));
 }
 
 
@@ -293,8 +371,7 @@ int space_probe_pt_access(
 	struct space *sp,
 	L4_Word_t address)
 {
-	assert(sp->pdirs != NULL);
-	assert(sp->pdirs->vm_addr != NULL);
+	assert(check_space(sp));
 
 	L4_Word_t dir = address >> 22, p_ix = (address >> 12) & 0x3ff,
 		dummy = 0, *skip_to = next_addr_p == NULL ? &dummy : next_addr_p;
@@ -347,6 +424,8 @@ size_t space_memcpy_from(
 	L4_Word_t address,
 	size_t size)
 {
+	assert(check_space(sp));
+
 	if(size == 0) return 0;
 
 	/* TODO: play weird segment games when sp == current_thread->space */
@@ -404,6 +483,7 @@ static void *alloc_tss(size_t size)
 
 bool space_add_ioperm(struct space *sp, L4_Word_t base_port, int size)
 {
+	assert(check_space(sp));
 	int last_byte = (base_port + size - 1 + 7) / 8;
 
 	int map_len = 0;
@@ -456,6 +536,7 @@ bool space_add_ioperm(struct space *sp, L4_Word_t base_port, int size)
 
 	assert(map[map_len - 1] == 0xff);
 
+	assert(check_space(sp));
 	return true;
 }
 
@@ -464,6 +545,8 @@ bool space_add_ioperm(struct space *sp, L4_Word_t base_port, int size)
 
 void sys_unmap(L4_Word_t control)
 {
+	assert(check_all_spaces());
+
 	struct thread *current = get_current_thread();
 	void *utcb = thread_get_utcb(current);
 	struct map_db *mdb = &current->space->mapdb;
@@ -502,6 +585,8 @@ void sys_unmap(L4_Word_t control)
 		}
 	}
 	if(remove_agg != 0) space_commit(current->space);
+
+	assert(check_all_spaces());
 }
 
 
@@ -518,6 +603,8 @@ L4_Word_t sys_spacecontrol(
 	L4_Word_t *old_control)
 {
 	L4_Word_t old_ctl = 0, result;
+
+	assert(check_all_spaces());
 
 	struct thread *current = get_current_thread();
 	void *utcb = thread_get_utcb(current);
@@ -601,6 +688,8 @@ L4_Word_t sys_spacecontrol(
 	old_ctl = 0;
 
 end:
+	assert(check_all_spaces());
+
 	*old_control = old_ctl;
 	return result;
 }
