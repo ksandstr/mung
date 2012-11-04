@@ -54,7 +54,10 @@ static size_t hash_page_by_id(const void *page_ptr, void *priv)
 #ifndef NDEBUG
 #include <ukernel/invariant.h>
 
-static bool check_space(struct space *sp)
+#define NO_PTAB_TO_MAPDB (1 << 0)
+
+
+static bool check_space(int opt, struct space *sp)
 {
 	INV_CTX;
 
@@ -125,6 +128,41 @@ static bool check_space(struct space *sp)
 		}
 	}
 
+	if(!CHECK_FLAG(opt, NO_PTAB_TO_MAPDB)) {
+		inv_push("checking page table to mapdb");
+		for(int pd_ix = 0; pd_ix < 1024; pd_ix++) {
+			const uint32_t pde = pdir_mem[pd_ix];
+			if(!CHECK_FLAG_ALL(pde, PDIR_PRESENT | PDIR_USER)) continue;
+
+			inv_push("pdir entry %d (%#x)", pd_ix, pde);
+			uint32_t pt_id = pde >> 12;
+			struct page *ptab_page = htable_get(&sp->ptab_pages,
+				int_hash(pt_id), &cmp_page_id_to_key, &pt_id);
+			inv_ok1(ptab_page != NULL);		/* checked earlier */
+			const uint32_t *ptab_mem = ptab_page->vm_addr;
+
+			for(int i = 0; i < 1024; i++) {
+				L4_Word_t addr = ((L4_Word_t)pd_ix << 22) | (i << 12);
+				if(ADDR_IN_FPAGE(sp->kip_area, addr)) continue;
+
+				const uint32_t ent = ptab_mem[i], page_id = ent >> 12;
+				if(!CHECK_FLAG_ALL(ent, PT_PRESENT | PT_USER)) continue;
+
+				inv_push("probing mapdb for ix %d, address %#lx, ent %#x",
+					i, addr, ent);
+				struct map_entry *e = mapdb_probe(&sp->mapdb, addr);
+				inv_ok1(e != NULL);
+				inv_ok1(mapdb_page_id_in_entry(e, addr) == page_id);
+				inv_ok1(CHECK_FLAG(ent, PT_RW)
+					== CHECK_FLAG(L4_Rights(e->range), L4_Writable));
+				inv_pop();
+			}
+
+			inv_pop();
+		}
+		inv_pop();
+	}
+
 end:
 	inv_pop();
 
@@ -135,11 +173,11 @@ inv_fail:
 }
 
 
-static bool check_all_spaces(void)
+static bool check_all_spaces(int opt)
 {
 	struct space *sp, *next;
 	list_for_each_safe(&space_list, sp, next, link) {
-		if(!check_space(sp)) return false;
+		if(!check_space(opt, sp)) return false;
 	}
 
 	return true;
@@ -352,7 +390,7 @@ void space_put_page(
 	uint32_t page_id,
 	int access)
 {
-	assert(check_space(sp));
+	assert(check_space(NO_PTAB_TO_MAPDB, sp));
 	assert(addr < KERNEL_SEG_START);
 
 	int dir_ix = addr >> 22, ptab_ix = (addr >> 12) & 0x3ff;
@@ -385,7 +423,7 @@ void space_put_page(
 	/* TODO: skip this if _sp_'s page table is not currently loaded */
 	x86_invalidate_page(addr & ~PAGE_MASK);
 
-	assert(check_space(sp));
+	assert(check_space(NO_PTAB_TO_MAPDB, sp));
 }
 
 
@@ -394,7 +432,7 @@ int space_probe_pt_access(
 	struct space *sp,
 	L4_Word_t address)
 {
-	assert(check_space(sp));
+	assert(check_space(0, sp));
 
 	L4_Word_t dir = address >> 22, p_ix = (address >> 12) & 0x3ff,
 		dummy = 0, *skip_to = next_addr_p == NULL ? &dummy : next_addr_p;
@@ -447,7 +485,7 @@ size_t space_memcpy_from(
 	L4_Word_t address,
 	size_t size)
 {
-	assert(check_space(sp));
+	assert(check_space(0, sp));
 
 	if(size == 0) return 0;
 
@@ -506,7 +544,7 @@ static void *alloc_tss(size_t size)
 
 bool space_add_ioperm(struct space *sp, L4_Word_t base_port, int size)
 {
-	assert(check_space(sp));
+	assert(check_space(0, sp));
 	int last_byte = (base_port + size - 1 + 7) / 8;
 
 	int map_len = 0;
@@ -559,7 +597,7 @@ bool space_add_ioperm(struct space *sp, L4_Word_t base_port, int size)
 
 	assert(map[map_len - 1] == 0xff);
 
-	assert(check_space(sp));
+	assert(check_space(0, sp));
 	return true;
 }
 
@@ -568,7 +606,7 @@ bool space_add_ioperm(struct space *sp, L4_Word_t base_port, int size)
 
 void sys_unmap(L4_Word_t control)
 {
-	assert(check_all_spaces());
+	assert(check_all_spaces(0));
 
 	struct thread *current = get_current_thread();
 	void *utcb = thread_get_utcb(current);
@@ -609,7 +647,7 @@ void sys_unmap(L4_Word_t control)
 	}
 	if(remove_agg != 0) space_commit(current->space);
 
-	assert(check_all_spaces());
+	assert(check_all_spaces(0));
 }
 
 
@@ -627,7 +665,7 @@ L4_Word_t sys_spacecontrol(
 {
 	L4_Word_t old_ctl = 0, result;
 
-	assert(check_all_spaces());
+	assert(check_all_spaces(0));
 
 	struct thread *current = get_current_thread();
 	void *utcb = thread_get_utcb(current);
@@ -711,7 +749,7 @@ L4_Word_t sys_spacecontrol(
 	old_ctl = 0;
 
 end:
-	assert(check_all_spaces());
+	assert(check_all_spaces(0));
 
 	*old_control = old_ctl;
 	return result;
