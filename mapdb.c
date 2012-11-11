@@ -68,6 +68,9 @@ static bool deref_child(
 	const struct map_entry *e,
 	int child_ix);
 
+/* (how come this function is both static, and prefixed?) */
+static int mapdb_add_child(struct map_entry *ent, L4_Word_t child);
+
 
 static struct kmem_cache *map_group_slab = NULL;
 static uint32_t next_ref_id = 1;	/* also the kernel space's ID */
@@ -544,6 +547,17 @@ static void coalesce_entries(
 			L4_SizeLog2(oth->range) + 1);
 		L4_Set_Rights(&oth->range, L4_Rights(ent->range));
 		assert(LAST_PAGE_ID(oth) == LAST_PAGE_ID(ent));
+		/* FIXME: handle ENOMEM in all cases! */
+		if(ent->num_children == 1 && REF_DEFINED(ent->child)) {
+			mapdb_add_child(oth, ent->child);
+		} else if(ent->num_children > 1) {
+			for(int i=0; i < ent->num_children; i++) {
+				if(!REF_DEFINED(ent->children[i])) continue;
+				mapdb_add_child(oth, ent->children[i]);
+			}
+			free(ent->children);
+			ent->num_children = 0;
+		}
 
 		/* move stuff back one step into *ent */
 		g->num_entries--;
