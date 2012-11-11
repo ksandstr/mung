@@ -1142,13 +1142,12 @@ static int distribute_children(
 	 * hash table lookups -- 4M hugepages in a memory server would be mapped
 	 * to at least 1024 child pages under full utilization, for instance.
 	 */
-	const L4_Word_t old_base = L4_Address(from->range);
 	for(int i=0; i < from->num_children; i++) {
 		struct child_ref r;
 		if(!deref_child(&r, local_db, from, i)) continue;
 
-		struct map_entry *p_ent = mapdb_probe(local_db,
-			REF_ADDR(r.child_entry->parent));
+		L4_Word_t pref_addr = REF_ADDR(r.child_entry->parent);
+		struct map_entry *p_ent = mapdb_probe(local_db, pref_addr);
 		if(p_ent == NULL) {
 			/* discard child due to hole made in parent */
 			continue;
@@ -1158,17 +1157,17 @@ static int distribute_children(
 			/* the larger page was split, and it had a child entry that no
 			 * longer fits in its parent range.
 			 */
-			L4_Word_t off = L4_Address(p_ent->range) - old_base;
+			L4_Word_t off = pref_addr - L4_Address(p_ent->range);
 			L4_Fpage_t cut = L4_FpageLog2(L4_Address(r.child_entry->range)
 				+ off, L4_SizeLog2(p_ent->range));
-#if 0
-			TRACE("  splitting child %#lx:%#lx (parent %#lx) around %#lx:%#lx\n",
-				L4_Address(r.child_entry->range), L4_Size(r.child_entry->range),
-				r.child_entry->parent, L4_Address(cut), L4_Size(cut));
-#endif
 			struct map_entry *ent = discontiguate(r.child_db, r.group, cut);
+			/* FIXME: handle ENOMEM (once discontiguate() returns that) */
 			r.child_entry = ent;
-			/* FIXME: check return value */
+
+			/* block output guarantee, and a required result from
+			 * discontiguate(): the child is known to exist.
+			 */
+			assert(r.child_entry != NULL);
 		}
 
 		/* simple case. */
@@ -1316,7 +1315,9 @@ static struct map_entry *discontiguate(
 
 fail:
 	/* FIXME: have a proper exit path here */
-	panic("split_entry() failed: out of kernel heap");
+	if(err == -ENOMEM) panic("split_entry() failed: out of kernel heap");
+	else panic("split_entry() failed: non-ENOMEM error code");
+
 	return NULL;
 }
 
