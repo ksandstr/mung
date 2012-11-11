@@ -528,7 +528,7 @@ static bool handle_new_thread(
 	}
 	if(t >= THREADS_PER_SPACE) goto fail;
 
-	L4_ThreadId_t new_tid = L4_GlobalId(space_id << TPS_SHIFT, space_id + 1),
+	L4_ThreadId_t new_tid = L4_GlobalId((space_id << TPS_SHIFT) + t, space_id + 1),
 		space_tid = t > 0 ? sp->threads[0]->tid : new_tid;
 	L4_MsgTag_t tag;
 	L4_Word_t syscall_ec, retval = fpager_threadctl(&tag, &syscall_ec,
