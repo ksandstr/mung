@@ -284,9 +284,6 @@ static void set_ipc_return_regs(
 
 static void set_ipc_return_thread(struct thread *t)
 {
-	TRACE("%s: called for %skernel thread %lu:%lu\n", __func__,
-		!IS_KERNEL_THREAD(t) ? "non-" : "", TID_THREADNUM(t->id),
-		TID_VERSION(t->id));
 	if(likely(!IS_KERNEL_THREAD(t))) {
 		set_ipc_return_regs(&t->ctx, t, thread_get_utcb(t));
 	}
@@ -472,7 +469,6 @@ bool ipc_send_half(struct thread *self)
 			return true;
 		} else {
 			/* indicate active receive. */
-			TRACE("%s: setting status to R_RECV\n", __func__);
 			self->status = TS_R_RECV;
 			if(self->wakeup_time > 0) {
 				self->wakeup_time = 0;
@@ -740,8 +736,10 @@ end:
 		current->status = TS_RUNNING;
 	}
 
+#if 0
 	TRACE("%s: IPC returning with status %d.\n", __func__,
 		(int)current->status);
+#endif
 }
 
 
