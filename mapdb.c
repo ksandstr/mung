@@ -824,11 +824,6 @@ int mapdb_add_map(
 		}
 	}
 
-#ifndef NDEBUG
-	if(g == NULL) g = group_for_addr(db, L4_Address(fpage));
-	dump_map_group(g);
-#endif
-
 	assert(check_mapdb_module(MOD_NO_CHILD_REFS));
 	return 0;
 }
@@ -893,12 +888,15 @@ static int grow_children_array(struct map_entry *ent)
 static int mapdb_add_child(struct map_entry *ent, L4_Word_t child)
 {
 	assert(REF_DEFINED(child));
+	TRACE("mapdb: add child %#lx to entry %#lx:%#lx (%p)\n", child,
+		L4_Address(ent->range), L4_Size(ent->range), ent);
 	if(ent->num_children == 0
 		|| (ent->num_children == 1 && !REF_DEFINED(ent->child)))
 	{
 		ent->child = child;
 		ent->num_children = 1;
 	} else if(ent->num_children == 1) {
+		if(ent->child == child) return -EEXIST;
 		L4_Word_t *new_children = malloc(sizeof(L4_Word_t) * 2);
 		if(new_children == NULL) return -ENOMEM;
 		int slot = int_hash(child) & 1;
@@ -930,6 +928,7 @@ static int mapdb_add_child(struct map_entry *ent, L4_Word_t child)
 		} while(got == NULL);
 		*got = child;
 	}
+	TRACE("mapdb: ok, num_children now %d\n", ent->num_children);
 
 	return 0;
 }
@@ -1244,6 +1243,7 @@ static int split_entry(
 				parent_ent = mapdb_probe(parent_db, p_addr);
 				assert(parent_ent != NULL);
 			}
+			/* FIXME: catch -ENOMEM */
 			mapdb_add_child(parent_ent,
 				MAPDB_REF(db->ref_id, L4_Address(e[i].range)));
 		}
@@ -1355,7 +1355,7 @@ static int reparent_children(struct map_db *db, struct map_entry *e)
 
 			int n = mapdb_add_child(parent_entry, MAPDB_REF(cr.child_db->ref_id,
 				L4_Address(cr.child_entry->range)));
-			if(unlikely(n < 0)) {
+			if(unlikely(n != 0 && n != -EEXIST)) {
 				/* on failure, this function can be called again with the same
 				 * parameters and will reach an equivalent state wrt @e, its
 				 * parent, and its children, if successful.
