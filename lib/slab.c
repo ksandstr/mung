@@ -11,8 +11,9 @@
 #include <ccan/alignof/alignof.h>
 #include <ccan/likely/likely.h>
 
-#include <ukernel/slab.h>
+#include <ukernel/util.h>
 #include <ukernel/mm.h>
+#include <ukernel/slab.h>
 
 
 #define SLAB_FIRST(cache, slab) \
@@ -20,6 +21,10 @@
 
 #define KMEM_CACHE_MAGIC 0x61e98d0e
 #define SLAB_MAGIC 0x99274b34
+
+
+/* struct slab -> flags */
+#define SLAB_WAS_FULL (1 << 0)	/* no more freelist bumps */
 
 
 struct kmem_cache
@@ -42,6 +47,7 @@ struct slab
 	void *freelist;			/* freelist (may be chained) */
 	uint32_t magic;
 	unsigned short in_use;
+	uint16_t flags;
 };
 
 
@@ -115,6 +121,7 @@ void *kmem_cache_alloc(struct kmem_cache *cache)
 			void *kpage = kmem_alloc_new_page();
 			if(unlikely(kpage == NULL)) return NULL;
 			slab = kpage;
+			slab->flags = 0;
 		}
 
 		slab->freelist = SLAB_FIRST(cache, slab);
@@ -122,18 +129,23 @@ void *kmem_cache_alloc(struct kmem_cache *cache)
 		slab->in_use = 0;
 		slab->magic = SLAB_MAGIC;
 		list_add(&cache->partial_list, &slab->link);
+		assert(!CHECK_FLAG(slab->flags, SLAB_WAS_FULL));
 	}
 
 	assert(slab->freelist != NULL);
 	void *ret = slab->freelist, *next = *(void **)ret;
 	slab->in_use++;
 	intptr_t bump = (cache->size + cache->align - 1) & ~(cache->align - 1);
-	if(next != NULL) slab->freelist = next;		/* pop. */
-	else if(slab->freelist + bump >= (void *)slab + PAGE_SIZE) {
-		/* became full. */
+	if(next != NULL) {
+		slab->freelist = next;		/* pop. */
+	} else if(CHECK_FLAG(slab->flags, SLAB_WAS_FULL)
+		|| slab->freelist + bump >= (void *)slab + PAGE_SIZE)
+	{
+		/* freelist and unallocated space were both exhausted. */
 		list_del_from(&cache->partial_list, &slab->link);
 		list_add(&cache->full_list, &slab->link);
 		slab->freelist = NULL;
+		slab->flags |= SLAB_WAS_FULL;
 	} else {
 		/* advance. */
 		slab->freelist += bump;
@@ -163,6 +175,7 @@ void kmem_cache_free(struct kmem_cache *cache, void *ptr)
 		/* reinstate into the partial slab list */
 		list_del_from(&cache->full_list, &slab->link);
 		list_add(&cache->partial_list, &slab->link);
+		assert(CHECK_FLAG(slab->flags, SLAB_WAS_FULL));
 	}
 
 #ifndef NDEBUG
@@ -183,6 +196,7 @@ void kmem_cache_free(struct kmem_cache *cache, void *ptr)
 		list_del_from(&cache->partial_list, &slab->link);
 		list_add(&cache->free_list, &slab->link);
 		slab->magic = 0xdeadbeef;
+		slab->flags &= ~SLAB_WAS_FULL;	/* became empty again. */
 	}
 }
 
