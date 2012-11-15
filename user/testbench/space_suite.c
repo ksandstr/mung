@@ -156,7 +156,7 @@ static bool poke(L4_ThreadId_t thread, L4_Word_t address, uint8_t value)
 	L4_LoadMR(1, address);
 	L4_LoadMR(2, value);
 	L4_MsgTag_t tag = L4_Call_Timeouts(thread, L4_Never,
-		L4_TimePeriod(50 * 1000));
+		TEST_IPC_DELAY);
 	return L4_IpcSucceeded(tag);
 }
 
@@ -167,7 +167,7 @@ static bool peek(uint8_t *value_p, L4_ThreadId_t thread, L4_Word_t address)
 	L4_LoadMR(0, (L4_MsgTag_t){ .X.label = PEEK_LABEL, .X.u = 1 }.raw);
 	L4_LoadMR(1, address);
 	L4_MsgTag_t tag = L4_Call_Timeouts(thread, L4_Never,
-		L4_TimePeriod(50 * 1000));
+		TEST_IPC_DELAY);
 	if(L4_IpcFailed(tag)) return false;
 	else {
 		L4_Word_t w;
@@ -181,7 +181,7 @@ static bool peek(uint8_t *value_p, L4_ThreadId_t thread, L4_Word_t address)
 static bool send_quit(L4_ThreadId_t thread)
 {
 	L4_LoadMR(0, (L4_MsgTag_t) { .X.label = QUIT_LABEL }.raw);
-	return L4_IpcSucceeded(L4_Send_Timeout(thread, L4_TimePeriod(50 * 1000)));
+	return L4_IpcSucceeded(L4_Send_Timeout(thread, TEST_IPC_DELAY));
 }
 
 
