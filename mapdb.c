@@ -1393,6 +1393,7 @@ int mapdb_unmap_fpage(
 	assert(recursive || immediate);	/* disallows the one-level status read */
 	assert(check_mapdb_module(0));
 
+	bool db_changed = false;		/* TODO: track elsewhere */
 	int rwx_seen = 0;
 
 	TRACE("%s: range %#lx:%#lx, %simmediate, %srecursive, ref_id %d\n",
@@ -1519,6 +1520,17 @@ int mapdb_unmap_fpage(
 				int new_r = L4_Rights(e->range) & ~unmap_rights;
 				L4_Set_Rights(&e->range, new_r);
 				if(new_r == 0) drop = true;
+				else if(new_r < L4_Rights(e->range)) {
+					/* TODO: move into a function */
+					for(L4_Word_t a = L4_Address(e->range),
+								  pgid = e->first_page_id;
+						a < L4_Address(e->range) + L4_Size(e->range);
+						a += PAGE_SIZE, pgid++)
+					{
+						space_put_page(db->space, a, pgid, L4_Rights(e->range));
+					}
+					db_changed = true;
+				}
 			}
 			if(drop) {
 				assert(modify);
@@ -1538,6 +1550,16 @@ int mapdb_unmap_fpage(
 					 */
 					return -ENOMEM;
 				}
+
+				/* TODO: move into a function */
+				for(L4_Word_t a = L4_Address(e->range);
+					a < L4_Address(e->range) + L4_Size(e->range);
+					a += PAGE_SIZE)
+				{
+					space_put_page(db->space, a, 0, 0);
+				}
+				db_changed = true;
+
 				int pos = e - g->entries;
 				if(pos < g->num_entries - 1) {
 					int copy_num = g->num_entries - 1 - pos;
@@ -1571,6 +1593,8 @@ int mapdb_unmap_fpage(
 	}
 
 	assert(unmap_rights == 0 || check_mapdb_module(0));
+	if(db_changed) space_commit(db->space);
+
 	return rwx_seen;
 }
 
