@@ -39,6 +39,39 @@ static struct kmem_cache *thread_slab = NULL;
 static int next_kthread_num = 24;
 
 
+#ifndef NDEBUG
+#include <ukernel/invariant.h>
+
+static bool check_thread(int opt, struct thread *t)
+{
+	INV_CTX;
+	inv_push("thread %lu:%lu (%p)", TID_THREADNUM(t->id),
+		TID_VERSION(t->id), t);
+	inv_ok1(GUARD_CHECK(t, sched_rb_0));
+	inv_ok1(GUARD_CHECK(t, sched_rb_1));
+	inv_pop();
+	return true;
+
+inv_fail:
+	return false;
+}
+
+
+static bool check_thread_module(int opt)
+{
+	struct htable_iter it;
+	for(void *ptr = htable_first(&thread_hash, &it);
+		ptr != NULL;
+		ptr = htable_next(&thread_hash, &it))
+	{
+		if(!check_thread(opt, (struct thread *)ptr)) return false;
+	}
+
+	return true;
+}
+#endif
+
+
 static void init_kthread_ctx(struct thread *t, L4_Word_t sp, L4_Word_t ip)
 {
 	int dsel = (is_kernel_high ? SEG_KERNEL_DATA_HIGH : SEG_KERNEL_DATA) << 3,
@@ -63,6 +96,8 @@ COLD struct thread *init_threading(thread_id boot_tid)
 
 	struct thread *boot = kmem_cache_zalloc(thread_slab);
 	init_kthread_ctx(boot, 0xdeadf123, 0xdeade123);
+	GUARD_INIT(boot, sched_rb_0);
+	GUARD_INIT(boot, sched_rb_1);
 	boot->stack_page = NULL;
 	boot->id = boot_tid;
 	boot->status = TS_RUNNING;
@@ -75,6 +110,8 @@ COLD struct thread *init_threading(thread_id boot_tid)
 	boot->total_quantum = ~(uint64_t)0;
 	htable_add(&thread_hash, int_hash(TID_THREADNUM(boot->id)), boot);
 	sq_insert_thread(boot);
+
+	assert(check_thread_module(0));
 
 	return boot;
 }
@@ -175,11 +212,11 @@ struct thread *thread_new(thread_id tid)
 	struct thread *t;
 	if(list_empty(&dead_thread_list)) {
 		t = kmem_cache_alloc(thread_slab);
-		t->stack_page = get_kern_page(0);
+		TRACE("%s: allocated new thread %p\n", __func__, t);
 	} else {
-		t = container_of(dead_thread_list.n.next, struct thread,
-			dead_link);
+		t = list_top(&dead_thread_list, struct thread, dead_link);
 		list_del_from(&dead_thread_list, &t->dead_link);
+		TRACE("%s: took dead thread %p\n", __func__, t);
 	}
 	*t = (struct thread){
 		.id = tid,
@@ -204,6 +241,8 @@ struct thread *thread_new(thread_id tid)
 		},
 	};
 
+	GUARD_INIT(t, sched_rb_0);
+	GUARD_INIT(t, sched_rb_1);
 	hook_init(&t->post_exn_call, NULL);
 	htable_add(&thread_hash, int_hash(TID_THREADNUM(t->id)), t);
 
@@ -235,6 +274,8 @@ static void thread_destroy(struct thread *t)
 		printf("WARNING: %s: thread %lu:%lu not found in thread_hash\n",
 			__func__, TID_THREADNUM(t->id), TID_VERSION(t->id));
 	}
+
+	TRACE("%s: freeing %p\n", __func__, t);
 	kmem_cache_free(thread_slab, t);
 }
 
@@ -581,6 +622,8 @@ L4_Word_t sys_exregs(
 	L4_Word_t *udh_p,
 	L4_ThreadId_t *pager_p)
 {
+	assert(check_thread_module(0));
+
 	struct thread *current = get_current_thread(), *dest_thread = NULL;
 
 #if 0
@@ -744,6 +787,7 @@ L4_Word_t sys_exregs(
 	}
 
 end:
+	assert(check_thread_module(0));
 	return result.raw;
 
 fail:
@@ -759,6 +803,8 @@ fail:
  */
 void sys_threadcontrol(struct x86_exregs *regs)
 {
+	assert(check_thread_module(0));
+
 	L4_ThreadId_t dest_tid = { .raw = regs->eax },
 		pager = { .raw = regs->ecx },
 		scheduler = { .raw = regs->edx },
@@ -809,6 +855,9 @@ void sys_threadcontrol(struct x86_exregs *regs)
 		space_add_thread(sp, dest);
 	} else if(L4_IsNilThread(spacespec) && dest != NULL) {
 		/* thread/space deletion */
+		TRACE("%s: deleting thread %lu:%lu (ptr %p)\n", __func__,
+			TID_THREADNUM(dest_tid.raw), TID_VERSION(dest_tid.raw),
+			dest);
 		if(!CHECK_FLAG(dest->flags, TF_HALT)) thread_halt(dest);
 		abort_waiting_ipc(dest, 2 << 1);	/* "lost partner" */
 		post_exn_fail(dest);
@@ -820,6 +869,9 @@ void sys_threadcontrol(struct x86_exregs *regs)
 		goto dead;
 	} else if(!L4_IsNilThread(spacespec) && dest != NULL) {
 		/* modification only. (rest shared with creation.) */
+		TRACE("%s: modifying thread %lu:%lu (ptr %p)\n", __func__,
+			TID_THREADNUM(dest_tid.raw), TID_VERSION(dest_tid.raw),
+			dest);
 		if(spacespec.raw != dest_tid.raw) {
 			struct space *to_sp = space_find(spacespec.raw);
 			if(to_sp != dest->space) {
@@ -898,4 +950,6 @@ dead:
 end:
 	L4_VREG(utcb, L4_TCR_ERRORCODE) = ec;
 	regs->eax = result;
+
+	assert(check_thread_module(0));
 }

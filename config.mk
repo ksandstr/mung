@@ -5,7 +5,7 @@ CFLAGS=-O2 -Wall -march=native -mno-sse -mno-avx -std=gnu99 -m32 \
 	-I $(CCAN_DIR) \
 	-D_GNU_SOURCE -D__KERNEL__ \
 	-mno-avx -mno-sse -mno-sse2 \
-	-fno-builtin -nostdlib #-DCCAN_LIST_DEBUG
+	-fno-builtin -nostdlib #-DCCAN_LIST_DEBUG -DDEBUG_ME_HARDER
 
 
 %.o: %.c
