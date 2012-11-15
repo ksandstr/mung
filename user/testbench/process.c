@@ -280,6 +280,7 @@ int fork(void)
 		L4_Set_ExceptionHandler(old_exh);
 	} else {
 		/* child side */
+		mgr_tid = L4_nilthread;
 	}
 
 	return retval;
