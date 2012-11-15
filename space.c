@@ -398,6 +398,8 @@ void space_put_page(
 	uint32_t *pdir_mem = sp->pdirs->vm_addr;
 	struct page *ptab_page;
 	if(unlikely(!CHECK_FLAG(pdir_mem[dir_ix], PDIR_PRESENT))) {
+		if(page_id == 0) goto end;
+
 		ptab_page = get_kern_page(0);
 		/* TODO: prefill it? */
 		memset(ptab_page->vm_addr, 0, PAGE_SIZE);
@@ -420,6 +422,8 @@ void space_put_page(
 		ptab_mem[ptab_ix] = page_id << 12 | PT_PRESENT | PT_USER
 			| (CHECK_FLAG(access, L4_Writable) ? PT_RW : 0);
 	}
+
+end:
 	/* TODO: skip this if _sp_'s page table is not currently loaded */
 	x86_invalidate_page(addr & ~PAGE_MASK);
 
