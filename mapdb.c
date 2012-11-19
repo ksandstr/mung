@@ -188,7 +188,6 @@ static bool check_mapdb(struct map_db *db, int opts)
 						inv_ok1(got_child);
 						inv_ok1(cr.child_db == db);
 						inv_ok1(cr.child_entry == e);
-						/* TODO: check parent_offset, too */
 					}
 				}
 				inv_ok1(found);
@@ -414,7 +413,6 @@ static struct map_group *group_for_addr(struct map_db *db, uintptr_t addr)
 }
 
 
-/* TODO: needs thorough testing. */
 static struct map_entry *probe_group_addr(struct map_group *g, uintptr_t addr)
 {
 	if(g->num_entries == 0) return NULL;
@@ -437,6 +435,8 @@ static struct map_entry *probe_group_addr(struct map_group *g, uintptr_t addr)
 			 *
 			 * NOTE: handling of nil ranges should be added to everywhere that
 			 * iterates over map_entries. that might be ugly.
+			 *
+			 * TODO: needs thorough testing.
 			 */
 			for(int i = probe - 1;
 				i >= imin && L4_IsNilFpage(ent->range);
@@ -660,8 +660,8 @@ static int insert_map_entry(
 	L4_Fpage_t fpage,
 	uint32_t first_page_id)
 {
-	/* TODO: use a clever binary hoppity-skip algorithm here, and recycle that
-	 * in the split-placement case in mapdb_add_map().
+	/* [v1] TODO: use a clever binary hoppity-skip algorithm here, and recycle
+	 * that in the split-placement case in mapdb_add_map().
 	 *
 	 * NOTE: this stuff requires that entries be tightly packed at the
 	 * beginning of g->entries[] . the algorithm won't compact holes to the
@@ -835,8 +835,9 @@ static int grow_children_array(struct map_entry *ent)
 	 * succeed due to exceeded probe depth, try with larger tables until
 	 * calloc() fails.
 	 *
-	 * (TODO: this could be exploitable. perhaps the hash should be randomized
-	 * per map_entry from a pool seeded with the low 2 bits of rdtsc output.)
+	 * (ISSUE: this could be exploitable. perhaps the hash should be
+	 * randomized per map_entry from a pool seeded with the low 2 bits of
+	 * rdtsc output.)
 	 */
 	int new_size = ent->num_children * 2;
 	L4_Word_t *new_children;
