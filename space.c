@@ -417,9 +417,10 @@ void space_put_page(
 	assert(ptab_page->vm_addr != NULL);
 
 	uint32_t *ptab_mem = ptab_page->vm_addr;
-	if(page_id == 0) {
+	if(page_id == 0 || !CHECK_FLAG(access, L4_Readable)) {
 		ptab_mem[ptab_ix] = 0;
 	} else {
+		assert(CHECK_FLAG(access, L4_Readable));
 		ptab_mem[ptab_ix] = page_id << 12 | PT_PRESENT | PT_USER
 			| (CHECK_FLAG(access, L4_Writable) ? PT_RW : 0);
 	}
