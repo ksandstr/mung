@@ -1509,16 +1509,6 @@ int mapdb_unmap_fpage(
 					panic("recursive unmap failed!");
 				}
 				rwx_seen |= pass_rwx;
-				/* TODO: remove write/execute bits if only those are
-				 * specified, instead of clearing the entire entry
-				 */
-				for(L4_Word_t a = L4_Address(fp);
-					a < L4_Address(fp) + L4_Size(fp);
-					a += PAGE_SIZE)
-				{
-					space_put_page(r.child_db->space, a, 0, 0);
-				}
-				space_commit(r.child_db->space);
 			}
 
 			r_pos = L4_Address(e->range) + L4_Size(e->range);
@@ -1528,17 +1518,20 @@ int mapdb_unmap_fpage(
 				assert(L4_Address(e->range) >= L4_Address(range));
 				assert(L4_Address(e->range) + L4_Size(e->range) <= r_end);
 
-				int new_r = L4_Rights(e->range) & ~unmap_rights;
-				L4_Set_Rights(&e->range, new_r);
-				if(new_r == 0) drop = true;
-				else if(new_r < L4_Rights(e->range)) {
+				int old_access = L4_Rights(e->range),
+					new_access = old_access & ~unmap_rights;
+				L4_Set_Rights(&e->range, new_access);
+				if(new_access == 0) drop = true;
+				else if(new_access < old_access) {
 					/* TODO: move into a function */
 					for(L4_Word_t a = L4_Address(e->range),
 								  pgid = e->first_page_id;
 						a < L4_Address(e->range) + L4_Size(e->range);
 						a += PAGE_SIZE, pgid++)
 					{
-						space_put_page(db->space, a, pgid, L4_Rights(e->range));
+						TRACE("setting page at %#lx to pgid %lu, access %#x in ref_id %d\n",
+							a, pgid, (unsigned)new_access, (int)db->ref_id);
+						space_put_page(db->space, a, pgid, new_access);
 					}
 					db_changed = true;
 				}
@@ -1567,6 +1560,8 @@ int mapdb_unmap_fpage(
 					a < L4_Address(e->range) + L4_Size(e->range);
 					a += PAGE_SIZE)
 				{
+					TRACE("dropping page at %#lx in ref_id %d\n",
+						a, (int)db->ref_id);
 					space_put_page(db->space, a, 0, 0);
 				}
 				db_changed = true;
