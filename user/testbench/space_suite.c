@@ -27,9 +27,14 @@
 #define POKE_LABEL 0x05e7	/* "set" */
 #define PEEK_LABEL 0x06e7	/* "get" */
 
+#define LOG_SIZE 64
 
-struct pager_stats {
+
+struct pager_stats
+{
 	int n_faults, n_read, n_write, n_exec, n_fail;
+	int log_top;	/* [0 .. LOG_SIZE) */
+	L4_Fpage_t log[LOG_SIZE];
 };
 
 
@@ -70,6 +75,9 @@ static void stats_pager_fn(void *param_ptr)
 				if(CHECK_FLAG(rwx, L4_Readable)) stats->n_read++;
 				if(CHECK_FLAG(rwx, L4_Writable)) stats->n_write++;
 				if(CHECK_FLAG(rwx, L4_eXecutable)) stats->n_exec++;
+				stats->log_top = (stats->log_top + 1) % LOG_SIZE;
+				stats->log[stats->log_top] = L4_FpageLog2(faddr, 12);
+				L4_Set_Rights(&stats->log[stats->log_top], rwx);
 #if 0
 				diag("%s: pf in %lu:%lu at %#lx, ip %#lx", __func__,
 					L4_ThreadNo(from), L4_Version(from), faddr, fip);
@@ -211,6 +219,7 @@ static void pager_setup(void)
 {
 	pg_stats = malloc(sizeof(*pg_stats));
 	pg_stats->n_faults = 12345;
+	pg_stats->log_top = LOG_SIZE - 1;	/* to start at 0 */
 	pg_pager = start_thread(&stats_pager_fn, pg_stats);
 	if(L4_IsNilThread(pg_pager)) {
 		fixture_fail("can't setup stats pager");
@@ -480,7 +489,7 @@ START_LOOP_TEST(partial_flush, iter)
 	const bool recursive = CHECK_FLAG(iter, 1);
 
 	assert(pg_stats != NULL);
-	plan_tests(2);
+	plan_tests(4);
 
 	const size_t mem_size = 3 * 4096;
 	void *ptr = valloc(mem_size);
@@ -506,7 +515,12 @@ START_LOOP_TEST(partial_flush, iter)
 	int old_w = pg_stats->n_write;
 	ok = poke(pg_poker, (L4_Word_t)ptr, 0x22);
 	fail_unless(ok);
-	ok(pg_stats->n_write == old_w + 1, "poke caused a fault");
+	ok(pg_stats->n_write == old_w + 1, "poke caused one fault");
+	L4_Fpage_t last = pg_stats->log[pg_stats->log_top];
+	ok(L4_Address(last) == ((L4_Word_t)ptr & ~PAGE_MASK),
+		"last fault on %#lx", (L4_Word_t)ptr & ~PAGE_MASK);
+	ok(CHECK_FLAG_ALL(L4_Rights(last), L4_Readable | L4_Writable),
+		"last fault was r/w");
 
 	free(ptr);
 }
