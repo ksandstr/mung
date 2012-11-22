@@ -1494,6 +1494,9 @@ int mapdb_unmap_fpage(
 					L4_Address(r.child_entry->range),
 					L4_Size(r.child_entry->range));
 
+				if(!ADDR_IN_FPAGE(range, REF_ADDR(r.child_entry->parent))) {
+					continue;
+				}
 				int rm_rights = L4_Rights(r.child_entry->range) & unmap_rights;
 				if(rm_rights == 0) continue;
 
