@@ -1447,6 +1447,9 @@ int mapdb_unmap_fpage(
 			 *
 			 * TODO: extend to support big pages as specified in the related
 			 * KIP field.
+			 *
+			 * TODO: only do this if the caller provides a location for the
+			 * out-parameter.
 			 */
 			int e_mask = 0;
 			do {
@@ -1468,15 +1471,22 @@ int mapdb_unmap_fpage(
 
 			rwx_seen |= (e_mask | e->access);
 
-			/* Urist McBreedington cancels store item in stockpile: seeking
-			 * infant.
+			/* dereference children, and call mapdb_unmap_fpage() on them when
+			 * their address in @db fits within @range.
+			 *
+			 * NOTE: do the loop in a deref_children() call to save on mapdb
+			 * ref_id lookups when @range is small compared to @e->range.
 			 */
 			for(int i=0; recursive && i < e->num_children; i++) {
 				struct child_ref r;
 				if(!deref_child(&r, db, e, i)) {
-					if(e->num_children < 2) e->child = 0;
-					else e->children[i] = REF_TOMBSTONE;
-					continue;
+					if(e->num_children < 2) {
+						e->child = 0;
+						break;
+					} else {
+						e->children[i] = REF_TOMBSTONE;
+						continue;
+					}
 				}
 
 				TRACE("deref child %d (%#lx) -> %#lx:%#lx\n",
