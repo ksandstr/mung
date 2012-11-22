@@ -153,8 +153,9 @@ static bool check_space(int opt, struct space *sp)
 				struct map_entry *e = mapdb_probe(&sp->mapdb, addr);
 				inv_ok1(e != NULL);
 				inv_ok1(mapdb_page_id_in_entry(e, addr) == page_id);
-				inv_ok1(CHECK_FLAG(ent, PT_RW)
-					== CHECK_FLAG(L4_Rights(e->range), L4_Writable));
+				inv_ok(!CHECK_FLAG(ent, PT_RW) ||
+					CHECK_FLAG(L4_Rights(e->range), L4_Writable),
+					"PT_RW implies L4_Writable");
 				inv_pop();
 			}
 
