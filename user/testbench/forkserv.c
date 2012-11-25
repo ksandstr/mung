@@ -333,10 +333,12 @@ static bool handle_pf(
 			sp->id, sp->prog_brk);
 #endif
 		return false;
-	} else if(page->page->refcount == 1) {
-		/* no restrictions. */
+	} else if(page->page->refcount == 1
+		&& !CHECK_FLAG_ALL(page->access, fault_access))
+	{
+		/* always give access. */
 #if 0
-		printf("%s: old page %#lx, access %#x -> %#x\n", __func__,
+		printf("%s: expand access at %#lx: old %#x -> new %#x\n", __func__,
 			page->address, (unsigned)page->access,
 			(unsigned)(page->access | fault_access));
 #endif
@@ -359,7 +361,7 @@ static bool handle_pf(
 		page->access |= L4_Writable;
 	} else {
 #if 0
-		printf("%s: old page at %#lx (access %#x)\n", __func__,
+		printf("%s: remap old page at %#lx (access %#x)\n", __func__,
 			page->page->local_addr, (unsigned)page->access);
 #endif
 	}
