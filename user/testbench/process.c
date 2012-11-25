@@ -120,10 +120,11 @@ static bool handle_int(
 
 	/* create the child process' entry thread. */
 	L4_LoadMR(0, (L4_MsgTag_t){ .X.label = FORKSERV_NEW_THREAD,
-		.X.u = 3 }.raw);
+		.X.u = 4 }.raw);
 	L4_LoadMR(1, retval);		/* space ID */
 	L4_LoadMR(2, (L4_Word_t)&child_starter_fn);	/* ip */
 	L4_LoadMR(3, (L4_Word_t)stk_pos); /* sp */
+	L4_LoadMR(4, (L4_Word_t)-1);	/* req_tnum (FIXME: use the manager tnum!) */
 	tag = L4_Call(L4_Pager());
 	if(L4_IpcFailed(tag)) {
 		/* TODO: cleanup */
@@ -272,6 +273,7 @@ int fork(void)
 
 	L4_ThreadId_t old_exh = L4_ExceptionHandler();
 	L4_Set_ExceptionHandler(mgr_tid);
+
 	int retval;
 	asm volatile ("int $23": "=a" (retval) :: "memory");
 

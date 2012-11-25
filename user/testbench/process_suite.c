@@ -32,15 +32,26 @@ START_TEST(basic_fork_and_wait)
 END_TEST
 
 
+L4_Word_t __attribute__((noinline)) get_utcb_noinline(void) {
+	return (L4_Word_t)__L4_Get_UtcbAddress();
+}
+
+
 START_TEST(ipc_with_child)
 {
 	plan_tests(2);
 
 	L4_ThreadId_t parent_tid = L4_Myself();
+	diag("parent (%lu:%lu) UTCB base is %p",
+		L4_ThreadNo(parent_tid), L4_Version(parent_tid),
+		__L4_Get_UtcbAddress());
 	int spid = fork();
 	if(spid == 0) {
-		diag("%s: child %#lx sending to parent %#lx\n", __func__,
-			L4_Myself().raw, parent_tid.raw);
+		L4_ThreadId_t ctid = L4_Myself();
+		diag("child UTCB looks like %p", __L4_Get_UtcbAddress());
+		diag("real UTCB base is %#lx", get_utcb_noinline());
+		diag("child %#lx sending to parent %#lx", ctid.raw, parent_tid.raw);
+
 		L4_LoadMR(0, (L4_MsgTag_t){ .X.label = 0x2323, .X.u = 1 }.raw);
 		L4_LoadMR(1, L4_Myself().raw);
 		L4_MsgTag_t tag = L4_Call(parent_tid);
@@ -64,6 +75,8 @@ START_TEST(ipc_with_child)
 
 	L4_ThreadId_t reported_tid;
 	L4_StoreMR(1, &reported_tid.raw);
+	diag("IPC child TID is %#lx (%lu:%lu)", child_tid.raw,
+		L4_ThreadNo(child_tid), L4_Version(child_tid));
 	ok(reported_tid.raw == child_tid.raw, "child knows its own TID");
 
 	/* reply with an incrementable value. */
@@ -82,7 +95,7 @@ START_TEST(ipc_with_child)
 
 	int status = 0, dead_pid = wait(&status);
 	if(dead_pid != spid) {
-		diag("wait() failed: status %d, retval %d\n", status, dead_pid);
+		diag("wait() failed: status %d, retval %d", status, dead_pid);
 	}
 }
 END_TEST

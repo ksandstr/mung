@@ -514,7 +514,8 @@ static bool handle_new_thread(
 	L4_ThreadId_t from,
 	L4_Word_t space_id,
 	L4_Word_t instptr,
-	L4_Word_t stkptr)
+	L4_Word_t stkptr,
+	int req_threadnum)
 {
 	const char *what;
 
@@ -530,10 +531,16 @@ static bool handle_new_thread(
 	 * behalf.
 	 */
 	int t;
-	for(t = 0; t < THREADS_PER_SPACE; t++) {
-		if(sp->threads[t] == NULL) break;
+	if(req_threadnum >= 0 && req_threadnum < THREADS_PER_SPACE
+		&& sp->threads[req_threadnum] == NULL)
+	{
+		t = req_threadnum;
+	} else {
+		for(t = 0; t < THREADS_PER_SPACE; t++) {
+			if(sp->threads[t] == NULL) break;
+		}
+		if(t >= THREADS_PER_SPACE) goto fail;
 	}
-	if(t >= THREADS_PER_SPACE) goto fail;
 
 	L4_ThreadId_t new_tid = L4_GlobalId((space_id << TPS_SHIFT) + t, space_id + 1),
 		space_tid = t > 0 ? sp->threads[0]->tid : new_tid;
@@ -845,10 +852,11 @@ static void forkserv_dispatch_loop(void)
 					break;
 
 				case FORKSERV_NEW_THREAD: {
-					L4_Word_t space_id, ip, sp;
+					L4_Word_t space_id, ip, sp, req_tnum;
 					L4_StoreMR(1, &space_id);
 					L4_StoreMR(2, &ip);
 					L4_StoreMR(3, &sp);
+					L4_StoreMR(4, &req_tnum);
 					/* pass it to the queued handler */
 					L4_Word_t aid = next_async_id++;
 					struct async_op *op = malloc(sizeof(*op));
@@ -856,17 +864,18 @@ static void forkserv_dispatch_loop(void)
 					op->from = from;
 					htable_add(&async_hash, int_hash(op->id), &op->id);
 					struct helper_work *w = malloc(sizeof(struct helper_work)
-						+ 6 * sizeof(L4_Word_t));
+						+ 7 * sizeof(L4_Word_t));
 					w->from = from;
 					/* FIXME: this format is bizarre. */
 					w->mrs[0] = (L4_MsgTag_t){
-							.X.u = 5, .X.label = FSHELPER_CHOPCHOP,
+							.X.u = 6, .X.label = FSHELPER_CHOPCHOP,
 						}.raw;
 					w->mrs[1] = aid;
 					w->mrs[2] = tag.raw;
 					w->mrs[3] = space_id;
 					w->mrs[4] = ip;
 					w->mrs[5] = sp;
+					w->mrs[6] = req_tnum;
 					L4_LoadMR(0, (L4_MsgTag_t){
 							.X.u = 1, .X.label = FSHELPER_CHOPCHOP,
 						}.raw);
@@ -961,15 +970,16 @@ static struct helper_work *reverse_work(struct helper_work *w)
 static void helper_chopchop(L4_ThreadId_t reply_tid, struct helper_work *w)
 {
 	L4_Word_t async_id = w->mrs[1], space_id = w->mrs[3],
-		ip = w->mrs[4], sp = w->mrs[5];
+		ip = w->mrs[4], sp = w->mrs[5], req_tnum = w->mrs[6];
 	L4_MsgTag_t tag = { .raw = w->mrs[2] };
 	L4_ThreadId_t from = w->from;
 	free(w);
 	bool reply;
 	switch(tag.X.label) {
-		case FORKSERV_NEW_THREAD:
-			reply = handle_new_thread(from, space_id, ip, sp);
+		case FORKSERV_NEW_THREAD: {
+			reply = handle_new_thread(from, space_id, ip, sp, req_tnum);
 			break;
+		}
 
 		default:
 			printf("%s: unknown label %#lx\n", __func__,

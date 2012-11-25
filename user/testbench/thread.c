@@ -91,9 +91,13 @@ static COLD void init_threading(void)
 		threads[i] = (struct thread){ };
 	}
 
-	base_tnum = L4_ThreadNo(L4_Myself()) + 2;
-	/* TODO: pull mask, UTCB size from KIP */
-	utcb_base = (L4_MyLocalId().raw & ~511ul) + 512 + 512;
+	base_tnum = L4_ThreadNo(L4_Myself());
+	utcb_base = L4_MyLocalId().raw & ~511ul;	/* TODO: get mask from KIP */
+
+	struct thread *self = &threads[0];
+	self->stack = NULL;
+	self->version = L4_Version(L4_Myself());
+	self->alive = true;
 }
 
 
@@ -119,18 +123,20 @@ int thread_on_fork(
 	}
 
 	L4_LoadMR(0, (L4_MsgTag_t){ .X.label = FORKSERV_NEW_THREAD,
-		.X.u = 3 }.raw);
+		.X.u = 4 }.raw);
 	L4_LoadMR(1, ~(L4_Word_t)0);
 	L4_LoadMR(2, caller_ip);
 	L4_LoadMR(3, caller_sp);
+	L4_LoadMR(4, caller);
 	L4_MsgTag_t tag = L4_Call(L4_Pager());
 	if(L4_IpcFailed(tag)) {
 		return 1;		/* TODO: not a proper errno. */
 	}
 
 	L4_StoreMR(1, &caller_tid->raw);
-	caller = L4_ThreadNo(*caller_tid) - base_tnum;
-	threads[caller] = copy;
+	int new_caller = L4_ThreadNo(*caller_tid) - base_tnum;
+	assert(new_caller == caller);	/* avoids cleaning threads[caller] */
+	threads[new_caller] = copy;
 
 	return 0;
 }
