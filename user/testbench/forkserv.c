@@ -553,13 +553,19 @@ static bool handle_new_thread(
 	}
 
 	L4_ThreadId_t new_tid = L4_GlobalId((space_id << TPS_SHIFT) + t, space_id + 1),
-		space_tid = t > 0 ? sp->threads[0]->tid : new_tid;
+		space_tid = new_tid;
+	for(int i=0; i < THREADS_PER_SPACE; i++) {
+		if(sp->threads[i] != NULL) {
+			space_tid = sp->threads[i]->tid;
+			break;
+		}
+	}
 	L4_MsgTag_t tag;
 	L4_Word_t syscall_ec, retval = fpager_threadctl(&tag, &syscall_ec,
 		new_tid, space_tid, L4_Myself(), L4_Myself(), (void *)-1);
 	if(retval != 1) goto tc_fail;
 
-	if(t == 0) {
+	if(space_tid.raw == new_tid.raw) {
 		/* also initialize the new address space. */
 		L4_Word_t ctl_out;
 		retval = fpager_spacectl(&tag, &syscall_ec,

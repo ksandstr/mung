@@ -101,16 +101,22 @@ static COLD void init_threading(void)
 }
 
 
+int thread_self(void) {
+	return L4_ThreadNo(L4_Myself()) - base_tnum;
+}
+
+
 int thread_on_fork(
 	L4_ThreadId_t *caller_tid,
 	L4_Word_t caller_ip,
-	L4_Word_t caller_sp)
+	L4_Word_t caller_sp,
+	int new_base_tnum)
 {
 	/* TODO: run atfork-style child-side hooks? */
 
 	int caller = L4_ThreadNo(*caller_tid) - base_tnum;
 	struct thread copy = threads[caller];
-	base_tnum = L4_ThreadNo(L4_Myself());
+	base_tnum = new_base_tnum;
 	for(int i=0; i < MAX_THREADS; i++) {
 		if(!threads[i].alive || i == caller) continue;
 

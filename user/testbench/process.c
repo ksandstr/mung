@@ -124,7 +124,7 @@ static bool handle_int(
 	L4_LoadMR(1, retval);		/* space ID */
 	L4_LoadMR(2, (L4_Word_t)&child_starter_fn);	/* ip */
 	L4_LoadMR(3, (L4_Word_t)stk_pos); /* sp */
-	L4_LoadMR(4, (L4_Word_t)-1);	/* req_tnum (FIXME: use the manager tnum!) */
+	L4_LoadMR(4, thread_self());
 	tag = L4_Call(L4_Pager());
 	if(L4_IpcFailed(tag)) {
 		/* TODO: cleanup */
@@ -134,12 +134,13 @@ static bool handle_int(
 	L4_ThreadId_t cp_tid;
 	L4_StoreMR(1, &cp_tid.raw);
 
-	/* send it off.
+	/* send it off. hand it the new base tnum also.
 	 *
 	 * TODO: could handshake with the child to confirm its side of the fork
 	 * has succeeded in recreating the caller thread etc.
 	 */
-	L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 0 }.raw);
+	L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 1 }.raw);
+	L4_LoadMR(1, L4_ThreadNo(cp_tid) - thread_self());
 	L4_Send(cp_tid);
 
 end:
@@ -207,9 +208,8 @@ static void child_starter_fn(struct child_param *param)
 		printf("%s: init IPC failed, code %#lx\n", __func__, L4_ErrorCode());
 		goto fail;
 	}
-	/* it doesn't carry any information we'd like to save, though. just a
-	 * synchronization.
-	 */
+	L4_Word_t new_base_tnum;
+	L4_StoreMR(1, &new_base_tnum);
 
 	/* the technique is this: create a page-sized temporary stack for
 	 * pop_int24_to(), which contains the exception handler parameter that
@@ -222,7 +222,7 @@ static void child_starter_fn(struct child_param *param)
 	*(--top) = 0xb44dc0d3;		/* baaaaad. */
 	L4_ThreadId_t caller_tid = param->fork_tid;
 	if(thread_on_fork(&caller_tid, (L4_Word_t)&pop_int24_to,
-		(L4_Word_t)top) != 0)
+		(L4_Word_t)top, new_base_tnum) != 0)
 	{
 		printf("%s: thread_on_fork failed\n", __func__);
 		/* FIXME: abort properly */
