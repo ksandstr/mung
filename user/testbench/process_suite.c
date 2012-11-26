@@ -42,15 +42,20 @@ START_TEST(ipc_with_child)
 	plan_tests(2);
 
 	L4_ThreadId_t parent_tid = L4_Myself();
+#if 0
 	diag("parent (%lu:%lu) UTCB base is %p",
 		L4_ThreadNo(parent_tid), L4_Version(parent_tid),
 		__L4_Get_UtcbAddress());
+#endif
 	int spid = fork();
 	if(spid == 0) {
-		L4_ThreadId_t ctid = L4_Myself();
+#if 0
 		diag("child UTCB looks like %p", __L4_Get_UtcbAddress());
 		diag("real UTCB base is %#lx", get_utcb_noinline());
+
+		L4_ThreadId_t ctid = L4_Myself();
 		diag("child %#lx sending to parent %#lx", ctid.raw, parent_tid.raw);
+#endif
 
 		L4_LoadMR(0, (L4_MsgTag_t){ .X.label = 0x2323, .X.u = 1 }.raw);
 		L4_LoadMR(1, L4_Myself().raw);
@@ -75,8 +80,6 @@ START_TEST(ipc_with_child)
 
 	L4_ThreadId_t reported_tid;
 	L4_StoreMR(1, &reported_tid.raw);
-	diag("IPC child TID is %#lx (%lu:%lu)", child_tid.raw,
-		L4_ThreadNo(child_tid), L4_Version(child_tid));
 	ok(reported_tid.raw == child_tid.raw, "child knows its own TID");
 
 	/* reply with an incrementable value. */
@@ -94,9 +97,8 @@ START_TEST(ipc_with_child)
 	ok(out_val == in_val + 1, "child incremented given value");
 
 	int status = 0, dead_pid = wait(&status);
-	if(dead_pid != spid) {
-		diag("wait() failed: status %d, retval %d", status, dead_pid);
-	}
+	fail_unless(dead_pid == spid, "wait() failed (status %d, retval %d)",
+		status, dead_pid);
 }
 END_TEST
 

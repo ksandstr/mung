@@ -8,6 +8,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
+#include <ccan/list/list.h>
 #include <ccan/htable/htable.h>
 #include <ccan/likely/likely.h>
 #include <ccan/container_of/container_of.h>
@@ -46,10 +47,14 @@ struct fs_thread;
 
 struct fs_space
 {
-	L4_Word_t id, prog_brk;
+	L4_Word_t id, parent_id, prog_brk;
 	struct htable pages;
 	struct fs_thread *threads[THREADS_PER_SPACE];
 	L4_Fpage_t utcb_area, kip_area;
+	struct list_head dead_children;
+	struct list_head waiting_threads;
+	struct list_node dead_link;		/* in parent's dead_children */
+	int exit_status;
 };
 
 
@@ -72,6 +77,7 @@ struct fs_thread
 {
 	L4_ThreadId_t tid;
 	struct fs_space *space;
+	struct list_node wait_link;	/* in space's waiting_threads */
 };
 
 
@@ -131,10 +137,12 @@ static struct fs_space *get_space(L4_Word_t id)
 	else {
 		sp = malloc(sizeof(*sp));
 		*sp = (struct fs_space){
-			.id = id, .prog_brk = find_phys_mem_top(),
+			.id = id, .parent_id = 0, .prog_brk = find_phys_mem_top(),
 			.utcb_area = L4_Fpage(0x30000, UTCB_SIZE * THREADS_PER_SPACE),
 			.kip_area = L4_FpageLog2(0x2f000, 12),
 		};
+		list_head_init(&sp->dead_children);
+		list_head_init(&sp->waiting_threads);
 		htable_init(&sp->pages, &hash_word, NULL);
 		htable_add(&space_hash, int_hash(id), &sp->id);
 	}
@@ -651,9 +659,12 @@ static bool handle_fork(L4_ThreadId_t from)
 		&copy_id) != NULL);
 	struct fs_space *copy_space = malloc(sizeof(*copy_space));
 	copy_space->id = copy_id;
+	copy_space->parent_id = sp->id;
 	copy_space->prog_brk = sp->prog_brk;
 	copy_space->utcb_area = sp->utcb_area;
 	copy_space->kip_area = sp->kip_area;
+	list_head_init(&copy_space->dead_children);
+	list_head_init(&copy_space->waiting_threads);
 	htable_init(&copy_space->pages, &hash_word, NULL);
 	htable_add(&space_hash, int_hash(copy_space->id), &copy_space->id);
 
@@ -751,6 +762,118 @@ static bool handle_unmap(
 	*n_p = outpos;
 
 	return true;
+}
+
+
+static void destroy_space(struct fs_space *sp)
+{
+	struct fs_space *cur, *next, *parent = get_space(sp->parent_id);
+	assert(parent != NULL);
+	assert(parent != sp);
+	list_for_each_safe(&sp->dead_children, cur, next, dead_link) {
+		list_del(&cur->dead_link);
+		list_add_tail(&parent->dead_children, &cur->dead_link);
+	}
+	free(sp);
+}
+
+
+static bool handle_wait(L4_ThreadId_t ipc_from)
+{
+	struct fs_space *sp = get_space_by_tid(ipc_from);
+	if(sp == NULL) return false;
+
+	if(list_empty(&sp->dead_children)) {
+		struct fs_thread *t = get_thread(ipc_from);
+		list_add_tail(&sp->waiting_threads, &t->wait_link);
+		return false;
+	} else {
+		struct fs_space *dead = list_top(&sp->dead_children,
+			struct fs_space, dead_link);
+		list_del_from(&sp->dead_children, &dead->dead_link);
+		L4_Word_t wait_id = dead->id;
+		int status = dead->exit_status;
+		destroy_space(dead);
+
+		L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 2 }.raw);
+		L4_LoadMR(1, wait_id);
+		L4_LoadMR(2, status);
+		return true;
+	}
+}
+
+
+static bool handle_exit(L4_ThreadId_t *ipc_from, int status)
+{
+	struct fs_thread *t = get_thread(*ipc_from);
+	if(t == NULL) {
+		printf("forkserv/exit: unknown TID %lu:%lu\n",
+			L4_ThreadNo(*ipc_from), L4_Version(*ipc_from));
+		return false;
+	}
+
+	struct fs_space *sp = t->space;
+	int tnum = L4_ThreadNo(t->tid) - (sp->id << TPS_SHIFT);
+	assert(sp->threads[tnum] == t);
+	sp->threads[tnum] = NULL;
+
+	L4_MsgTag_t tag;
+	L4_Word_t ec, res = fpager_threadctl(&tag, &ec, *ipc_from, L4_nilthread,
+		L4_nilthread, L4_nilthread, (void *)-1);
+	if(res != 1) {
+		printf("forkserv/exit: threadctl failed, %s ec %#lx\n",
+			L4_IpcFailed(tag) ? "ipc" : "syscall", ec);
+		/* can't do much else. */
+	}
+	htable_del(&thread_hash, int_hash(L4_ThreadNo(t->tid)), &t->tid);
+	free(t);
+
+	/* stop here if other threads remain. */
+	for(int i=0; i < THREADS_PER_SPACE; i++) {
+		if(sp->threads[i] != NULL) return false;
+	}
+
+	/* destroy the virtual memory bits and zombify the address space */
+	assert(list_empty(&sp->waiting_threads));
+	htable_del(&space_hash, int_hash(sp->id), &sp->id);
+	struct htable_iter it;
+	for(struct fs_vpage *vp = htable_first(&sp->pages, &it);
+		vp != NULL;
+		vp = htable_next(&sp->pages, &it))
+	{
+		if(vp->page != NULL) {
+			if(--vp->page->refcount == 0) {
+				/* FIXME: add to free page list */
+			}
+		}
+		free(vp);
+	}
+	htable_clear(&sp->pages);
+	sp->utcb_area = L4_Nilpage;
+	L4_Word_t dead_id = sp->id;
+
+	/* activate waiting thread, or go to eternal sleep */
+	struct fs_space *parent = get_space(t->space->parent_id);
+	assert(parent != NULL);
+	assert(sp != parent);		/* space 0 cannot die */
+	if(!list_empty(&parent->waiting_threads)) {
+		struct fs_thread *wakeup = list_top(&parent->waiting_threads,
+			struct fs_thread, wait_link);
+		list_del_from(&parent->waiting_threads, &wakeup->wait_link);
+		/* move own dead children over to parent */
+		destroy_space(sp);
+
+		L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 2 }.raw);
+		L4_LoadMR(1, dead_id);
+		L4_LoadMR(2, status);
+		*ipc_from = wakeup->tid;
+		return true;
+	} else {
+		/* the dead walk */
+		list_add_tail(&parent->dead_children, &sp->dead_link);
+		sp->exit_status = status;
+		return false;
+	}
 }
 
 
@@ -917,19 +1040,14 @@ static void forkserv_dispatch_loop(void)
 					break;
 				}
 
-				case FORKSERV_WAIT:
-					/* stub to let tests exit */
-					L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 2 }.raw);
-					L4_LoadMR(1, (L4_Word_t)-1);
-					L4_LoadMR(2, 0);
-					reply = true;
-					break;
+				case FORKSERV_WAIT: reply = handle_wait(from); break;
 
-				case FORKSERV_EXIT:
-					printf("label %#x not implemented yet\n",
-						(unsigned)tag.X.label);
-					reply = false;
+				case FORKSERV_EXIT: {
+					L4_Word_t status;
+					L4_StoreMR(1, &status);
+					reply = handle_exit(&from, status);
 					break;
+				}
 
 				default:
 					if((tag.X.label & 0xfff0) == 0xffe0

@@ -256,12 +256,11 @@ static void child_starter_fn(struct child_param *param)
 		goto fail;
 	}
 
-	/* FIXME: do proper thread exit here. arrange freeing of
-	 * param->stk_top .
-	 */
+	/* FIXME: arrange freeing of param->stk_top . */
+	exit(0);
 
 fail:
-	asm volatile ("int $1");
+	exit(6789);		/* slightly magical */
 }
 
 
@@ -298,12 +297,23 @@ int wait(int *status)
 	L4_Word_t st, id;
 	L4_StoreMR(1, &id);
 	L4_StoreMR(2, &st);
+	*status = st;
 	return id;
 }
 
 
 void exit(int status)
 {
+	for(int retry = 0; retry < 5; retry++) {
+		L4_LoadMR(0, (L4_MsgTag_t){ .X.label = FORKSERV_EXIT, .X.u = 1 }.raw);
+		L4_LoadMR(1, status);
+		L4_Call(L4_Pager());
+	}
+	/* ultimate failure path */
+	asm volatile ("int $1");
+
+	/* double ultimate failure path */
+	L4_Set_ExceptionHandler(L4_nilthread);
 	for(;;) {
 		asm volatile ("int $1");
 	}
