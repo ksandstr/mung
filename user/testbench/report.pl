@@ -29,7 +29,6 @@ my $TOPLEVEL = ".";
 -f "$TOPLEVEL/run.sh" || die "can't find run.sh in path `$TOPLEVEL'";
 
 $SIG{PIPE} = "IGNORE";		# and smoke it.
-$SIG{INT} = "IGNORE";		# my regards to 007
 $| = 1;
 
 
@@ -185,7 +184,12 @@ while(1) {
 			last;
 		}
 	}
-	kill "INT", -getpgrp(0);
+
+	{
+		# don't drown yourself in the bathwater
+		local $SIG{INT} = 'IGNORE';
+		kill "INT", -getpgrp(0);
+	}
 	$test_pipe->close;
 }
 
@@ -261,6 +265,7 @@ if($sink->incorrect || $sink->failed) {
 	}
 	print ".\n";
 }
+
 
 # exit codes: 1 for premature testbench abort, 2 for test failures.
 exit $status;
