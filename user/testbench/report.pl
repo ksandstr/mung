@@ -192,9 +192,8 @@ while(1) {
 	}
 	$test_pipe->close;
 }
+$sink->done;
 
-# terminate suite line
-print "\n";
 
 # reporting.
 

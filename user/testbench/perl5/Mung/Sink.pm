@@ -59,6 +59,12 @@ sub reset {
 }
 
 
+sub done {
+	my $self = shift;
+	$self->close_suite;
+}
+
+
 sub _begin_suite {
 	my $self = shift;
 	my $name = shift;
