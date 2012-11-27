@@ -23,11 +23,6 @@
 #include "elf.h"
 
 
-/* FIXME: derive these from the kernel interface page at runtime */
-#define PAGE_SIZE 4096
-#define PAGE_MASK 0xfff
-
-
 /* from CCAN */
 #define streq(a,b) (strcmp((a),(b)) == 0)
 

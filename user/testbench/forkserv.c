@@ -27,10 +27,6 @@
 #include "forkserv.h"
 
 
-/* FIXME: get these from KIP... */
-#define PAGE_SIZE 4096
-#define UTCB_SIZE 512
-
 #define TPS_SHIFT 3
 #define THREADS_PER_SPACE (1 << TPS_SHIFT)
 

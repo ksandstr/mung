@@ -10,8 +10,10 @@
 #include <l4/types.h>
 
 /* TODO: fetch from KIP at init */
-#define PAGE_SIZE 4096
-#define PAGE_MASK 0xfff
+#define PAGE_BITS 12
+#define PAGE_SIZE (1 << PAGE_BITS)
+#define PAGE_MASK (PAGE_SIZE - 1)
+#define UTCB_SIZE 512
 
 /* the appropriate delay for IPC reception before failure */
 #define TEST_IPC_DELAY L4_TimePeriod(150000)
