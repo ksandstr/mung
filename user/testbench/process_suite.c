@@ -78,6 +78,51 @@ START_TEST(copy_on_write)
 END_TEST
 
 
+static void wait_and_exit(int rc, L4_Word_t wait_ms)
+{
+	L4_Sleep(L4_TimePeriod(wait_ms * 1000));
+	exit(rc);
+}
+
+
+START_LOOP_TEST(multi_fork_and_wait, iter)
+{
+	bool do_wait = (iter & 1) != 0, many = (iter & 2) != 0;
+
+	plan_tests(1);
+
+	const int num_subs = many ? 16 : 1;
+	int subs[num_subs];
+	for(int i=0; i < num_subs; i++) {
+		int child = fork();
+		fail_if(child == -1, "fork() failed");
+		if(child != 0) {
+			subs[i] = child;
+			if(!do_wait) L4_Sleep(L4_TimePeriod(5 * 1000));
+		} else {
+			/* child side */
+			if(do_wait) wait_and_exit(0, 10); else exit(0);
+		}
+	}
+
+	int got = 0;
+	for(int i=0; i < num_subs; i++) {
+		int status = 0, id = wait(&status);
+		fail_if(id < 0, "wait() failed: %d", id);
+
+		for(int j=0; j < num_subs; j++) {
+			if(subs[j] == id) {
+				got++;
+				subs[j] = -1;
+				break;
+			}
+		}
+	}
+	ok(got == num_subs, "waited for all child processes");
+}
+END_TEST
+
+
 L4_Word_t __attribute__((noinline)) get_utcb_noinline(void) {
 	return (L4_Word_t)__L4_Get_UtcbAddress();
 }
@@ -156,6 +201,7 @@ Suite *process_suite(void)
 	TCase *fork_case = tcase_create("fork");
 	tcase_add_test(fork_case, basic_fork_and_wait);
 	tcase_add_test(fork_case, copy_on_write);
+	tcase_add_loop_test(fork_case, multi_fork_and_wait, 0, 3);
 	tcase_add_test(fork_case, ipc_with_child);
 	suite_add_tcase(s, fork_case);
 

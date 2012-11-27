@@ -227,8 +227,8 @@ L4_ThreadId_t start_thread_long(
 {
 	static bool first = true;
 	if(unlikely(first)) {
-		init_threading();
 		first = false;
+		init_threading();
 	}
 
 	int t;
@@ -247,7 +247,7 @@ L4_ThreadId_t start_thread_long(
 
 	L4_ThreadId_t self = L4_Myself(), tid = tid_of(t);
 #if 0
-	printf("%s: creating thread %u:%u, utcb at %#lx\n", __func__,
+	printf("%s: creating thread %lu:%lu, utcb at %#lx\n", __func__,
 		L4_ThreadNo(tid), L4_Version(tid), utcb_base + t * 512);
 #endif
 	L4_Word_t r = L4_ThreadControl(tid, self, self, L4_Pager(),

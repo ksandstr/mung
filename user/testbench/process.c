@@ -277,10 +277,10 @@ int fork(void)
 	asm volatile ("int $23": "=a" (retval) :: "memory");
 
 	if(retval != 0) {
-		/* only restore this in the parent */
+		/* parent */
 		L4_Set_ExceptionHandler(old_exh);
 	} else {
-		/* child side */
+		/* child */
 		mgr_tid = L4_nilthread;
 	}
 
