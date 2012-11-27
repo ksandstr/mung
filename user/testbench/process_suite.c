@@ -4,6 +4,8 @@
  * whole test sequence rather than going unnoticed.
  */
 
+#include <stdlib.h>
+#include <string.h>
 #include <assert.h>
 
 #include <l4/types.h>
@@ -28,6 +30,50 @@ START_TEST(basic_fork_and_wait)
 	int status = 0, dead = wait(&status);
 	ok(dead > 0 && dead == spid, "child exited");
 	/* TODO: test the status, too */
+}
+END_TEST
+
+
+START_TEST(copy_on_write)
+{
+	plan_tests(2);
+	const int buffer_size = 256;
+
+	const char *teststr = "the quick brown fox jumps over the lazy dog";
+	uint8_t *buffer = malloc(buffer_size);
+	for(int i=0; i < 256; i++) buffer[i] = i;
+	strlcpy((void *)buffer, teststr, buffer_size);
+
+	int spid = fork();
+	if(spid != 0) {
+		fail_if(spid < 0, "fork failed");
+		int status = 0, dead = wait(&status);
+		fail_if(dead < 0, "wait failed");
+		fail_if(dead != spid, "expected %d from wait, got %d", spid, dead);
+		ok(status == (int)buffer[0] + 1 + (int)(buffer[255] + 1) % 256,
+			"exit status is correct");
+
+		bool bad = false;
+		int testlen = strlen(teststr);
+		for(int i = 0; i < 256 && !bad; i++) {
+			uint8_t expect;
+			if(i < testlen) expect = teststr[i];
+			else if(i == testlen) expect = 0;
+			else expect = i;
+			if(buffer[i] != expect) {
+				diag("at position %d: expected %#x, found %#x", i,
+					(unsigned)expect, (unsigned)buffer[i]);
+				bad = true;
+			}
+		}
+		ok(!bad, "parent's buffer was not modified");
+
+		free(buffer);
+	} else {
+		/* alter the buffer's contents. */
+		for(int i=0; i < 256; i++) buffer[i]++;
+		exit((int)buffer[0] + (int)buffer[255]);
+	}
 }
 END_TEST
 
@@ -109,6 +155,7 @@ Suite *process_suite(void)
 
 	TCase *fork_case = tcase_create("fork");
 	tcase_add_test(fork_case, basic_fork_and_wait);
+	tcase_add_test(fork_case, copy_on_write);
 	tcase_add_test(fork_case, ipc_with_child);
 	suite_add_tcase(s, fork_case);
 
