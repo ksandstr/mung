@@ -13,6 +13,8 @@
 #include <ccan/likely/likely.h>
 #include <ccan/container_of/container_of.h>
 
+#include <ukernel/guard.h>
+
 #include <l4/types.h>
 #include <l4/ipc.h>
 #include <l4/syscall.h>
@@ -43,14 +45,18 @@ struct fs_thread;
 
 struct fs_space
 {
+	GUARD_MEMBER(g_0);
 	L4_Word_t id, parent_id, prog_brk;
 	struct htable pages;
+	GUARD_MEMBER(g_1);
 	struct fs_thread *threads[THREADS_PER_SPACE];
+	GUARD_MEMBER(g_2);
 	L4_Fpage_t utcb_area, kip_area;
 	struct list_head dead_children;
 	struct list_head waiting_threads;
 	struct list_node dead_link;		/* in parent's dead_children */
 	int exit_status;
+	GUARD_MEMBER(g_3);
 };
 
 
@@ -125,6 +131,69 @@ static struct fs_thread *get_thread(L4_ThreadId_t tid) {
 }
 
 
+#ifndef NDEBUG
+#include <ukernel/invariant.h>
+
+static bool invariants(const char *context)
+{
+	INV_CTX;
+	inv_push("checking from `%s'", context);
+
+	struct htable_iter it;
+	for(void *space_ptr = htable_first(&space_hash, &it);
+		space_ptr != NULL;
+		space_ptr = htable_next(&space_hash, &it))
+	{
+		struct fs_space *sp = container_of(space_ptr, struct fs_space, id);
+		inv_push("check space %d (%p)", (int)sp->id, sp);
+
+		inv_ok1(GUARD_CHECK(sp, g_0));
+		inv_ok1(GUARD_CHECK(sp, g_1));
+		inv_ok1(GUARD_CHECK(sp, g_2));
+		inv_ok1(GUARD_CHECK(sp, g_3));
+
+		for(int i=0; i < THREADS_PER_SPACE; i++) {
+			if(sp->threads[i] == NULL) continue;
+			inv_ok1(!L4_IsNilThread(sp->threads[i]->tid));
+		}
+
+		inv_ok(list_empty(&sp->dead_children) || list_empty(&sp->waiting_threads),
+			"either dead children, or waiting threads");
+
+		struct htable_iter page_iter;
+		for(void *page_ptr = htable_first(&sp->pages, &page_iter);
+			page_ptr != NULL;
+			page_ptr = htable_next(&sp->pages, &page_iter))
+		{
+			struct fs_vpage *vp = container_of(page_ptr, struct fs_vpage,
+				address);
+			inv_push("checking page at %#lx, access [%c%c%c]", vp->address,
+				(vp->access & L4_Readable) != 0 ? 'r' : '-',
+				(vp->access & L4_Writable) != 0 ? 'w' : '-',
+				(vp->access & L4_eXecutable) != 0 ? 'x' : '-');
+			inv_ok1(vp->page != NULL);
+			inv_log("  phys at %#lx, refct %d", vp->page->local_addr,
+				vp->page->refcount);
+			if(vp->page->refcount > 1) {
+				inv_ok((vp->access & L4_Writable) == 0,
+					"when refcount > 1, write must be off");
+			}
+			inv_pop();
+		}
+
+		inv_pop();
+	}
+
+	inv_pop();
+
+	return true;
+
+inv_fail:
+	return false;
+}
+#endif
+
+
 static struct fs_space *get_space(L4_Word_t id)
 {
 	struct fs_space *sp;
@@ -137,6 +206,10 @@ static struct fs_space *get_space(L4_Word_t id)
 			.utcb_area = L4_Fpage(0x30000, UTCB_SIZE * THREADS_PER_SPACE),
 			.kip_area = L4_FpageLog2(0x2f000, 12),
 		};
+		GUARD_INIT(sp, g_0);
+		GUARD_INIT(sp, g_1);
+		GUARD_INIT(sp, g_2);
+		GUARD_INIT(sp, g_3);
 		list_head_init(&sp->dead_children);
 		list_head_init(&sp->waiting_threads);
 		htable_init(&sp->pages, &hash_word, NULL);
@@ -327,14 +400,14 @@ static bool handle_pf(
 		page->page = alloc_new_page();
 		page->access = L4_FullyAccessible;
 #if 0
-		printf("%s: new page %#lx at address %#lx\n", __func__,
+		printf("%s: new page %#lx -> %#lx\n", __func__,
 			page->page->local_addr, page->address);
 #endif
 		htable_add(&sp->pages, int_hash(page_addr), &page->address);
 	} else if(page == NULL) {
 #if 0
-		printf("segfault in thread %#lx, space %lu (brk %#lx)\n", from.raw,
-			sp->id, sp->prog_brk);
+		printf("segfault in thread %lu:%lu, space %lu (brk %#lx)\n",
+			L4_ThreadNo(from), L4_Version(from), sp->id, sp->prog_brk);
 #endif
 		return false;
 	} else if(page->page->refcount == 1
@@ -352,7 +425,7 @@ static bool handle_pf(
 	{
 		/* duplicate, drop reference, and remap on top of the old page. */
 #if 0
-		printf("%s: duplicating rc %d phys page %#lx for write into %#lx\n",
+		printf("%s: duplicating rc %d phys page %#lx -> %#lx\n",
 			__func__, page->page->refcount, page->page->local_addr,
 			page_addr);
 #endif
@@ -365,12 +438,12 @@ static bool handle_pf(
 		page->access |= L4_Writable;
 	} else {
 #if 0
-		printf("%s: remap old page at %#lx (access %#x)\n", __func__,
-			page->page->local_addr, (unsigned)page->access);
+		printf("%s: remap old page %#lx -> %#lx (access %#x)\n", __func__,
+			page->page->local_addr, page_addr, (unsigned)page->access);
 #endif
 	}
 
-	L4_Fpage_t fp = L4_Fpage(page->page->local_addr, PAGE_SIZE);
+	L4_Fpage_t fp = L4_FpageLog2(page->page->local_addr, PAGE_BITS);
 	L4_Set_Rights(&fp, page->access & fault_access);
 	L4_MapItem_t mi = L4_MapItem(fp, page->address);
 	L4_LoadMR(0, (L4_MsgTag_t){ .X.t = 2 }.raw);
@@ -667,6 +740,10 @@ static bool handle_fork(L4_ThreadId_t from)
 	copy_space->prog_brk = sp->prog_brk;
 	copy_space->utcb_area = sp->utcb_area;
 	copy_space->kip_area = sp->kip_area;
+	GUARD_INIT(copy_space, g_0);
+	GUARD_INIT(copy_space, g_1);
+	GUARD_INIT(copy_space, g_2);
+	GUARD_INIT(copy_space, g_3);
 	list_head_init(&copy_space->dead_children);
 	list_head_init(&copy_space->waiting_threads);
 	htable_init(&copy_space->pages, &hash_word, NULL);
@@ -847,7 +924,8 @@ static bool handle_exit(L4_ThreadId_t *ipc_from, int status)
 	{
 		if(vp->page != NULL) {
 			if(--vp->page->refcount == 0) {
-				/* FIXME: add to free page list */
+				/* FIXME: add the page to a free_list */
+				vp->page = NULL;
 			}
 		}
 		free(vp);
@@ -914,12 +992,14 @@ static void forkserv_dispatch_loop(void)
 					L4_StoreMR(1, &space_id);
 					L4_StoreMR(2, &kip_area.raw);
 					L4_StoreMR(3, &utcb_area.raw);
+					assert(invariants("as_cfg"));
 					reply = handle_as_cfg(from, space_id,
 						kip_area, utcb_area);
 					break;
 				}
 
 				case FORKSERV_SEND_PAGE:
+					assert(invariants("send_page"));
 					reply = handle_send_page(from);
 					break;
 
@@ -928,6 +1008,7 @@ static void forkserv_dispatch_loop(void)
 					L4_ThreadId_t tid;
 					L4_StoreMR(1, &space_id);
 					L4_StoreMR(2, &tid.raw);
+					assert(invariants("add_tid"));
 					reply = handle_add_tid(space_id, tid);
 					break;
 				}
@@ -935,11 +1016,13 @@ static void forkserv_dispatch_loop(void)
 				case FORKSERV_SBRK: {
 					L4_Word_t new_break;
 					L4_StoreMR(1, &new_break);
+					assert(invariants("sbrk"));
 					reply = handle_sbrk(from, new_break);
 					break;
 				}
 
 				case FORKSERV_FORK:
+					assert(invariants("fork"));
 					reply = handle_fork(from);
 					break;
 
@@ -950,6 +1033,7 @@ static void forkserv_dispatch_loop(void)
 					L4_StoreMR(2, &reply_tag.raw);
 					L4_Word_t words[62];
 					L4_StoreMRs(3, reply_tag.X.u + reply_tag.X.t, words);
+					assert(invariants("chopchop_reply"));
 					size_t hash = int_hash(async_id);
 					struct async_op *op = htable_get(&async_hash, hash,
 						&word_cmp, &async_id);
@@ -970,6 +1054,7 @@ static void forkserv_dispatch_loop(void)
 
 				case FSHELPER_CHOPCHOP_DONE:
 					/* check the queue for our armless friend. */
+					assert(invariants("chopchop_done"));
 					if(helper_queue != NULL) {
 						L4_LoadMR(0, (L4_MsgTag_t){
 								.X.u = 1, .X.label = FSHELPER_CHOPCHOP,
@@ -986,6 +1071,7 @@ static void forkserv_dispatch_loop(void)
 					L4_StoreMR(2, &ip);
 					L4_StoreMR(3, &sp);
 					L4_StoreMR(4, &req_tnum);
+					assert(invariants("new_thread"));
 					/* pass it to the queued handler */
 					L4_Word_t aid = next_async_id++;
 					struct async_op *op = malloc(sizeof(*op));
@@ -1036,6 +1122,7 @@ static void forkserv_dispatch_loop(void)
 					L4_Fpage_t pages[63];
 					L4_Word_t n = tag.X.u;
 					L4_StoreMRs(1, n, &pages[0].raw);
+					assert(invariants("unmap"));
 					reply = handle_unmap(from, &n, pages);
 					if(reply) {
 						L4_LoadMR(0, (L4_MsgTag_t){ .X.u = n }.raw);
@@ -1044,11 +1131,15 @@ static void forkserv_dispatch_loop(void)
 					break;
 				}
 
-				case FORKSERV_WAIT: reply = handle_wait(from); break;
+				case FORKSERV_WAIT:
+					assert(invariants("wait"));
+					reply = handle_wait(from);
+					break;
 
 				case FORKSERV_EXIT: {
 					L4_Word_t status;
 					L4_StoreMR(1, &status);
+					assert(invariants("exit"));
 					reply = handle_exit(&from, status);
 					break;
 				}
@@ -1061,6 +1152,7 @@ static void forkserv_dispatch_loop(void)
 						L4_Word_t ip, addr;
 						L4_StoreMR(1, &addr);
 						L4_StoreMR(2, &ip);
+						assert(invariants("pf"));
 						reply = handle_pf(from, addr, ip, tag.X.label & 0xf);
 					} else {
 						printf("label %#x not recognized\n",

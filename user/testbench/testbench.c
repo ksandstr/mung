@@ -143,15 +143,16 @@ static void forkserv_pager_fn(void *param UNUSED)
 				break;
 			}
 
+			bool reply = true;
 			if(tag.X.label >> 4 == 0xffe
 				&& tag.X.u == 2 && tag.X.t == 0)
 			{
 				L4_Word_t faddr, fip;
 				L4_StoreMR(1, &faddr);
 				L4_StoreMR(2, &fip);
-#if 0
-				printf("%s: pf in %#lx: ip %#lx, addr %#lx\n", __func__, from.raw,
-					fip, faddr);
+#if 1
+				printf("fpager: pf in %lu:%lu; ip %#lx, addr %#lx\n",
+					L4_ThreadNo(from), L4_Version(from), fip, faddr);
 #endif
 				int rwx = tag.X.label & 0x000f;
 
@@ -167,6 +168,10 @@ static void forkserv_pager_fn(void *param UNUSED)
 					L4_LoadMR(0, (L4_MsgTag_t){ .X.t = 2 }.raw);
 					L4_LoadMR(1, mi.raw[0]);
 					L4_LoadMR(2, mi.raw[1]);
+				} else if(page_addr == 0) {
+					printf("fpager: null page access from %lu:%lu ip %#lx\n",
+						L4_ThreadNo(from), L4_Version(from), fip);
+					reply = false;
 				} else {
 					/* pass the fault up to our pager (sigma0). */
 					L4_LoadMR(0, (L4_MsgTag_t){ .X.label = 0xffe0 | rwx,
@@ -176,12 +181,10 @@ static void forkserv_pager_fn(void *param UNUSED)
 					L4_LoadBR(0, L4_CompleteAddressSpace.raw);
 					tag = L4_Call(L4_Pager());
 					if(L4_IpcFailed(tag)) {
-						//diag("stats-to-pager IPC failed, ec %lu",
-						//	L4_ErrorCode());
+						/* FIXME: report somehow */
 						break;
 					} else if(tag.X.t != 2 || tag.X.u != 0) {
-						//diag("stats-to-pager IPC returned weird tag %#lx",
-						//	tag.raw);
+						/* ... wat? */
 						break;
 					}
 				}
@@ -257,6 +260,7 @@ static void forkserv_pager_fn(void *param UNUSED)
 					from.raw, (L4_Word_t)tag.X.label);
 				break;
 			}
+			if(!reply) break;
 
 			/* reply. */
 			tag = L4_ReplyWait(from, &from);
