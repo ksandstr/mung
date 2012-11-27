@@ -935,8 +935,9 @@ static bool handle_exit(L4_ThreadId_t *ipc_from, int status)
 	L4_Word_t dead_id = sp->id;
 
 	/* activate waiting thread, or go to eternal sleep */
-	struct fs_space *parent = get_space(t->space->parent_id);
+	struct fs_space *parent = get_space(sp->parent_id);
 	assert(parent != NULL);
+	assert(parent->id == sp->parent_id);
 	assert(sp != parent);		/* space 0 cannot die */
 	if(!list_empty(&parent->waiting_threads)) {
 		struct fs_thread *wakeup = list_top(&parent->waiting_threads,
