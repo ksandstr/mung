@@ -93,6 +93,7 @@ struct helper_work {
 
 static size_t hash_word(const void *, void *);
 static size_t hash_threadno(const void *, void *);
+static struct fs_space *get_space(L4_Word_t id);
 
 
 /* thread_hash is hashed by threadno, but compared for equality with full TID
@@ -152,6 +153,9 @@ static bool invariants(const char *context)
 		inv_ok1(GUARD_CHECK(sp, g_2));
 		inv_ok1(GUARD_CHECK(sp, g_3));
 
+		inv_ok(get_space(sp->parent_id) != NULL,
+			"parent space (id %d) must exist", (int)sp->parent_id);
+
 		for(int i=0; i < THREADS_PER_SPACE; i++) {
 			if(sp->threads[i] == NULL) continue;
 			inv_ok1(!L4_IsNilThread(sp->threads[i]->tid));
@@ -194,29 +198,32 @@ inv_fail:
 #endif
 
 
-static struct fs_space *get_space(L4_Word_t id)
+static struct fs_space *make_initial_space(int id)
 {
-	struct fs_space *sp;
-	void *ptr = htable_get(&space_hash, int_hash(id), &word_cmp, &id);
-	if(ptr != NULL) sp = container_of(ptr, struct fs_space, id);
-	else {
-		sp = malloc(sizeof(*sp));
-		*sp = (struct fs_space){
-			.id = id, .parent_id = 0, .prog_brk = find_phys_mem_top(),
-			.utcb_area = L4_Fpage(0x30000, UTCB_SIZE * THREADS_PER_SPACE),
-			.kip_area = L4_FpageLog2(0x2f000, 12),
-		};
-		GUARD_INIT(sp, g_0);
-		GUARD_INIT(sp, g_1);
-		GUARD_INIT(sp, g_2);
-		GUARD_INIT(sp, g_3);
-		list_head_init(&sp->dead_children);
-		list_head_init(&sp->waiting_threads);
-		htable_init(&sp->pages, &hash_word, NULL);
-		htable_add(&space_hash, int_hash(id), &sp->id);
-	}
+	struct fs_space *sp = malloc(sizeof(*sp));
+	*sp = (struct fs_space){
+		.id = id, .parent_id = 0, .prog_brk = find_phys_mem_top(),
+		.utcb_area = L4_Fpage(0x30000, UTCB_SIZE * THREADS_PER_SPACE),
+		.kip_area = L4_FpageLog2(0x2f000, 12),
+	};
+	GUARD_INIT(sp, g_0);
+	GUARD_INIT(sp, g_1);
+	GUARD_INIT(sp, g_2);
+	GUARD_INIT(sp, g_3);
+	list_head_init(&sp->dead_children);
+	list_head_init(&sp->waiting_threads);
+	htable_init(&sp->pages, &hash_word, NULL);
+	htable_add(&space_hash, int_hash(id), &sp->id);
 
 	return sp;
+}
+
+
+static struct fs_space *get_space(L4_Word_t id)
+{
+	void *ptr = htable_get(&space_hash, int_hash(id), &word_cmp, &id);
+	if(ptr != NULL) return container_of(ptr, struct fs_space, id);
+	else return NULL;
 }
 
 
@@ -300,6 +307,7 @@ static bool handle_send_page(L4_ThreadId_t from)
 
 	L4_Fpage_t window;
 	struct fs_space *sp = get_space(space_id);
+	if(sp == NULL) sp = make_initial_space(space_id);
 	if(space_id == 0) {
 		window = L4_Fpage(phys_addr, PAGE_SIZE);
 	} else {
@@ -460,6 +468,9 @@ static bool handle_pf(
  */
 static bool handle_add_tid(L4_Word_t space_id, L4_ThreadId_t tid)
 {
+	struct fs_space *sp = get_space(space_id);
+	if(sp == NULL) sp = make_initial_space(space_id);
+
 	size_t tno_hash = int_hash(L4_ThreadNo(tid));
 	struct fs_thread *t;
 
@@ -474,7 +485,7 @@ static bool handle_add_tid(L4_Word_t space_id, L4_ThreadId_t tid)
 
 	if(t != NULL) {
 		t->tid = tid;
-		t->space = get_space(space_id);
+		t->space = sp;
 		if(t->tid.raw != tid.raw) {
 			htable_delval(&thread_hash, &it);
 			t->tid = tid;
@@ -482,7 +493,7 @@ static bool handle_add_tid(L4_Word_t space_id, L4_ThreadId_t tid)
 		}
 	} else {
 		t = malloc(sizeof(struct fs_thread));
-		*t = (struct fs_thread){ .tid = tid, .space = get_space(space_id) };
+		*t = (struct fs_thread){ .tid = tid, .space = sp };
 		htable_add(&thread_hash, tno_hash, &t->tid);
 
 		int slot;
@@ -604,6 +615,10 @@ static bool handle_new_thread(
 		space_id = sp->id;
 	} else {
 		sp = get_space(space_id);
+		if(sp == NULL) {
+			printf("%s: space %lu not found\n", __func__, space_id);
+			return false;
+		}
 	}
 
 	/* forkserv's initial pager will do privileged operations on forkserv's
@@ -793,6 +808,7 @@ static bool handle_as_cfg(
 	L4_Fpage_t utcb_area)
 {
 	struct fs_space *sp = get_space(space_id);
+	if(sp == NULL) sp = make_initial_space(space_id);
 	if(!L4_IsNilFpage(kip_area)) sp->kip_area = kip_area;
 	if(!L4_IsNilFpage(utcb_area)) sp->utcb_area = utcb_area;
 
@@ -851,6 +867,8 @@ static void destroy_space(struct fs_space *sp)
 	struct fs_space *cur, *next, *parent = get_space(sp->parent_id);
 	assert(parent != NULL);
 	assert(parent != sp);
+	assert(parent->id == sp->parent_id);
+
 	list_for_each_safe(&sp->dead_children, cur, next, dead_link) {
 		list_del(&cur->dead_link);
 		list_add_tail(&parent->dead_children, &cur->dead_link);
