@@ -552,6 +552,7 @@ static bool handle_new_thread(
 		space_tid = new_tid;
 	for(int i=0; i < THREADS_PER_SPACE; i++) {
 		if(sp->threads[i] != NULL) {
+			assert(!L4_IsNilThread(sp->threads[i]->tid));
 			space_tid = sp->threads[i]->tid;
 			break;
 		}
@@ -660,6 +661,7 @@ static bool handle_fork(L4_ThreadId_t from)
 	} while(htable_get(&space_hash, int_hash(copy_id), &word_cmp,
 		&copy_id) != NULL);
 	struct fs_space *copy_space = malloc(sizeof(*copy_space));
+	for(int i=0; i < THREADS_PER_SPACE; i++) copy_space->threads[i] = NULL;
 	copy_space->id = copy_id;
 	copy_space->parent_id = sp->id;
 	copy_space->prog_brk = sp->prog_brk;
