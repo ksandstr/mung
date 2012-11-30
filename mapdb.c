@@ -965,6 +965,15 @@ int mapdb_map_pages(
 		return 0;
 	}
 
+	/* TODO: modify the page tables in mapdb_add_map() at some future time.
+	 * right now it leaves them out of sync, i.e. potentially pointing to
+	 * other pages entirely, so clear the page tables out and let the pf
+	 * handler fill them in.
+	 */
+	for(L4_Word_t a = 0; a < L4_Size(map_page); a += PAGE_SIZE) {
+		space_put_page(to_db->space, dest_addr + a, 0, 0);
+	}
+
 	if(L4_Address(first->range) == L4_Address(map_page)
 		&& L4_Size(first->range) >= L4_Size(map_page))
 	{
