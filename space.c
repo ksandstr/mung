@@ -57,11 +57,42 @@ static size_t hash_page_by_id(const void *page_ptr, void *priv)
 #define NO_PTAB_TO_MAPDB (1 << 0)
 
 
+static uint32_t max_page_id(void)
+{
+	static uint32_t max_page = 0;
+	if(unlikely(max_page == 0)) {
+		L4_Word_t md_num = 0;
+		L4_MemoryDesc_t *md;
+		while((md = L4_MemoryDesc(kip_mem, md_num)) != NULL) {
+			if(L4_MemoryDescType(md) == L4_ConventionalMemoryType
+				&& !L4_IsMemoryDescVirtual(md))
+			{
+				L4_Word_t hi = L4_MemoryDescHigh(md);
+				if((hi >> 12) > max_page) max_page = hi >> 12;
+			}
+			md_num++;
+		}
+	}
+	return max_page;
+}
+
+
 static bool check_space(int opt, struct space *sp)
 {
 	INV_CTX;
 
-	inv_push("space of mapdb %u", sp->mapdb.ref_id);
+	L4_ThreadId_t sp_tid = L4_nilthread;
+	if(!list_empty(&sp->threads)) {
+		sp_tid.raw = list_top(&sp->threads, struct thread, space_link)->id;
+		struct thread *t;
+		list_for_each(&sp->threads, t, space_link) {
+			if(TID_THREADNUM(sp_tid.raw) < TID_THREADNUM(t->id)) {
+				sp_tid.raw = t->id;
+			}
+		}
+	}
+	inv_push("space of mapdb %u (%lu:%lu)", sp->mapdb.ref_id,
+		TID_THREADNUM(sp_tid.raw), TID_VERSION(sp_tid.raw));
 
 	inv_ok(!CHECK_FLAG_ANY(sp->flags, ~(uint16_t)(SF_PRIVILEGE)),
 		"no undefined flags");
@@ -81,11 +112,13 @@ static bool check_space(int opt, struct space *sp)
 		 */
 		if(CHECK_FLAG_ALL(pde, PDIR_PRESENT | PDIR_USER)) {
 			uint32_t pt_id = pde >> 12;
+			inv_log("pt_id %u", pt_id);
+			inv_ok1(pt_id <= max_page_id());
 			struct page *ptab_page = htable_get(&sp->ptab_pages,
 				int_hash(pt_id), &cmp_page_id_to_key, &pt_id);
-			inv_ok(ptab_page != NULL, "ptab must exist for id %u", pt_id);
+			inv_ok(ptab_page != NULL, "ptab must exist");
 			inv_ok(ptab_page->id == pt_id,
-				"expected ptab_page->id == %u, found %u\n",
+				"expected ptab_page->id == %u, found %u",
 				pt_id, ptab_page->id);
 		}
 		inv_pop();
@@ -147,8 +180,12 @@ static bool check_space(int opt, struct space *sp)
 
 				const uint32_t ent = ptab_mem[i], page_id = ent >> 12;
 				if(!CHECK_FLAG_ALL(ent, PT_PRESENT | PT_USER)) continue;
+				inv_push("table entry at %d is %#x (page_id %u)", i, ent,
+					page_id);
+				inv_ok(page_id <= max_page_id(),
+					"page_id must be <= %u", max_page_id());
 
-				inv_push("probing mapdb for ix %d, address %#lx, ent %#x",
+				inv_log("probing mapdb for ix %d, address %#lx, ent %#x",
 					i, addr, ent);
 				struct map_entry *e = mapdb_probe(&sp->mapdb, addr);
 				inv_ok1(e != NULL);
