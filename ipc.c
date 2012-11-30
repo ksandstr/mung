@@ -168,21 +168,6 @@ static int apply_mapitem(
 			L4_Set_Rights(&map_page, given);
 			mapdb_unmap_fpage(&source->space->mapdb, map_page, true, false,
 				false);
-			/* TODO: this revokes all access and destroys access bits.
-			 * fortunately the latter will have been saved for child mappings
-			 * by mapdb_unmap_fpage(), but for this one that's a problem.
-			 *
-			 * also there'll be a few invisible page faults when this bit is
-			 * accessed again, which is silly.
-			 */
-			for(L4_Word_t addr = L4_Address(map_page);
-				addr < L4_Address(map_page) + L4_Size(map_page);
-				addr += PAGE_SIZE)
-			{
-				space_put_page(source->space, addr, 0, 0);
-			}
-			/* FIXME: move this out of the "one map item" function. */
-			space_commit(source->space);
 		}
 		return given;
 	} else {
