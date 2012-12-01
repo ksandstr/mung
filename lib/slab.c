@@ -139,7 +139,7 @@ void *kmem_cache_alloc(struct kmem_cache *cache)
 	if(next != NULL) {
 		slab->freelist = next;		/* pop. */
 	} else if(CHECK_FLAG(slab->flags, SLAB_WAS_FULL)
-		|| slab->freelist + bump >= (void *)slab + PAGE_SIZE)
+		|| slab->freelist + bump * 2 >= (void *)slab + PAGE_SIZE)
 	{
 		/* freelist and unallocated space were both exhausted. */
 		list_del_from(&cache->partial_list, &slab->link);
@@ -152,6 +152,7 @@ void *kmem_cache_alloc(struct kmem_cache *cache)
 		*(void **)slab->freelist = NULL;
 	}
 
+	assert((uintptr_t)(ret + cache->size) <= ((uintptr_t)slab | 0xfff));
 	return ret;
 }
 
