@@ -1,8 +1,5 @@
 
-/* tests of forkserv's own process management features. these are of limited
- * utility when those mechanisms are broken, but at least that'll break the
- * whole test sequence rather than going unnoticed.
- */
+/* tests of forkserv's own process management features. */
 
 #include <stdlib.h>
 #include <string.h>
@@ -91,7 +88,7 @@ START_LOOP_TEST(multi_fork_and_wait, iter)
 
 	plan_tests(1);
 
-	const int num_subs = many ? 16 : 1;
+	const int num_subs = many ? 6 : 1;
 	int subs[num_subs];
 	for(int i=0; i < num_subs; i++) {
 		int child = fork();
@@ -119,6 +116,60 @@ START_LOOP_TEST(multi_fork_and_wait, iter)
 		}
 	}
 	ok(got == num_subs, "waited for all child processes");
+}
+END_TEST
+
+
+/* test that the exit status is communicated back correctly. note that this
+ * hits the waiting and non-waiting cases equally.
+ */
+START_TEST(return_exit_status)
+{
+	plan_tests(1);
+
+	int expect_sum = 0, observe_sum = 0;
+	for(int i=0; i < 16; i++) {
+		expect_sum += (i + 1);
+		int child = fork();
+		if(child != 0) {
+			fail_if(child == -1);
+			int status = 0, dead = wait(&status);
+			fail_unless(dead == child);
+			observe_sum += status;
+		} else {
+			int rc = i + 1;
+			if((i & 1) != 0) wait_and_exit(rc, 2); else exit(rc);
+		}
+	}
+	ok1(expect_sum == observe_sum);
+}
+END_TEST
+
+
+/* fork a child process, and fork another child process from inside that. wait
+ * on one, and then the other.
+ */
+START_TEST(deep_fork)
+{
+	plan_tests(1);
+	const int exit_magic = 23;
+
+	int child = fork();
+	if(child != 0) {
+		fail_if(child < 0);
+		int status = 0, dead = wait(&status);
+		fail_if(dead < 0);
+		ok1(dead == child && status == 0);
+	} else {
+		child = fork();
+		if(child != 0) {
+			int status = 0, dead = wait(&status);
+			exit(dead == child && status == exit_magic ? 0 : 1);
+		} else {
+			exit(exit_magic);
+		}
+		assert(false);
+	}
 }
 END_TEST
 
@@ -201,8 +252,10 @@ Suite *process_suite(void)
 	TCase *fork_case = tcase_create("fork");
 	tcase_add_test(fork_case, basic_fork_and_wait);
 	tcase_add_test(fork_case, copy_on_write);
-	tcase_add_loop_test(fork_case, multi_fork_and_wait, 0, 3);
+	tcase_add_test(fork_case, return_exit_status);
 	tcase_add_test(fork_case, ipc_with_child);
+	tcase_add_test(fork_case, deep_fork);
+	tcase_add_loop_test(fork_case, multi_fork_and_wait, 0, 3);
 	suite_add_tcase(s, fork_case);
 
 	return s;
