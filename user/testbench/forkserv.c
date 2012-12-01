@@ -62,6 +62,7 @@ struct fs_space
 
 struct fs_phys_page
 {
+	struct list_node link;	/* in free_page_list */
 	L4_Word_t local_addr;	/* address in forkserv */
 	int refcount;			/* 1 for exclusive, 0 for dead */
 };
@@ -103,6 +104,7 @@ static struct htable thread_hash = HTABLE_INITIALIZER(thread_hash,
 	&hash_threadno, NULL);
 static struct htable space_hash = HTABLE_INITIALIZER(space_hash,
 	&hash_word, NULL);
+static LIST_HEAD(free_page_list);
 
 static L4_ThreadId_t console_tid, fpager_tid, helper_tid, forkserv_tid;
 static L4_Word_t map_range_pos = 0, next_space_id = 100, next_async_id = 1;
@@ -236,11 +238,18 @@ static struct fs_space *get_space_by_tid(L4_ThreadId_t tid)
 
 static struct fs_phys_page *alloc_new_page(void)
 {
-	struct fs_phys_page *phys = malloc(sizeof(*phys));
-	void *ptr = valloc(PAGE_SIZE);
-	memset(ptr, 0, PAGE_SIZE);
-	phys->local_addr = (L4_Word_t)ptr;
+	struct fs_phys_page *phys = list_top(&free_page_list,
+		struct fs_phys_page, link);
+	if(phys != NULL) {
+		list_del_from(&free_page_list, &phys->link);
+	} else {
+		assert(list_empty(&free_page_list));
+		phys = malloc(sizeof(*phys));
+		void *ptr = valloc(PAGE_SIZE);
+		phys->local_addr = (L4_Word_t)ptr;
+	}
 	phys->refcount = 1;
+	memset((void *)phys->local_addr, 0, PAGE_SIZE);
 	return phys;
 }
 
@@ -942,7 +951,7 @@ static bool handle_exit(L4_ThreadId_t *ipc_from, int status)
 	{
 		if(vp->page != NULL) {
 			if(--vp->page->refcount == 0) {
-				/* FIXME: add the page to a free_list */
+				list_add(&free_page_list, &vp->page->link);
 				vp->page = NULL;
 			}
 		}
