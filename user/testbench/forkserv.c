@@ -603,12 +603,7 @@ static L4_Word_t fpager_spacectl(
 }
 
 
-/* TODO: this function just plain doesn't clean up on failure.
- *
- * FIXME: it should also execute somewhere besides the pager's main thread, as
- * it involves calls to a thread that's paged by the former, therefore call
- * recursion and infinite fuckery.
- */
+/* (this function just plain doesn't clean up on failure.) */
 static bool handle_new_thread(
 	L4_ThreadId_t from,
 	L4_Word_t space_id,
@@ -621,6 +616,7 @@ static bool handle_new_thread(
 	struct fs_space *sp;
 	if(space_id == ~(L4_Word_t)0) {
 		sp = get_space_by_tid(from);
+		assert(sp != NULL);
 		space_id = sp->id;
 	} else {
 		sp = get_space(space_id);
@@ -654,6 +650,12 @@ static bool handle_new_thread(
 			break;
 		}
 	}
+
+	sp->threads[t] = malloc(sizeof(struct fs_thread));
+	*sp->threads[t] = (struct fs_thread){ .space = sp, .tid = new_tid };
+	htable_add(&thread_hash, int_hash(L4_ThreadNo(new_tid)),
+		&sp->threads[t]->tid);
+
 	L4_MsgTag_t tag;
 	L4_Word_t syscall_ec, retval = fpager_threadctl(&tag, &syscall_ec,
 		new_tid, space_tid, L4_Myself(), L4_Myself(), (void *)-1);
@@ -708,11 +710,6 @@ static bool handle_new_thread(
 		abort();
 	}
 
-	sp->threads[t] = malloc(sizeof(struct fs_thread));
-	*sp->threads[t] = (struct fs_thread){ .space = sp, .tid = new_tid };
-	htable_add(&thread_hash, int_hash(L4_ThreadNo(new_tid)),
-		&sp->threads[t]->tid);
-
 	L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 1 }.raw);
 	L4_LoadMR(1, new_tid.raw);
 	return true;
@@ -725,6 +722,12 @@ sc_fail:
 	what = "spacectl";
 
 syscall_fail:
+	if(sp->threads[t] != NULL) {
+		htable_del(&thread_hash, int_hash(L4_ThreadNo(new_tid)),
+			&sp->threads[t]->tid);
+		free(sp->threads[t]);
+		sp->threads[t] = NULL;
+	}
 	if(retval == 2) {
 		printf("%s: ipc fail in %s: ec %#lx\n", __func__, what,
 			L4_ErrorCode());
