@@ -16,6 +16,9 @@
 #include "forkserv.h"
 
 
+#define SYNC_CHILD_LABEL 0xface
+
+
 struct child_param
 {
 	L4_ThreadId_t parent_tid;	/* init message sender */
@@ -27,9 +30,16 @@ struct child_param
 
 
 static L4_ThreadId_t mgr_tid = { .raw = 0 };
+static bool is_roottask = true;
 
 
 static void child_starter_fn(struct child_param *param);
+
+
+bool is_privileged(void)
+{
+	return is_roottask;
+}
 
 
 static void stop_local_thread(L4_ThreadId_t tid, void *ptr)
@@ -252,10 +262,22 @@ static void child_starter_fn(struct child_param *param)
 		goto fail;
 	}
 
-	exit(0);
+	/* sync with the child side so that this thread can be properly joined off
+	 * without interfering with process exit.
+	 */
+	L4_LoadMR(0, (L4_MsgTag_t){ .X.label = SYNC_CHILD_LABEL }.raw);
+	tag = L4_Call(caller_tid);
+	if(L4_IpcFailed(tag)) {
+		printf("%s: child sync failed, ec %#lx\n", __func__, L4_ErrorCode());
+		/* FIXME? */
+		goto fail;
+	}
+
+	L4_Set_ExceptionHandler(caller_tid);
+	exit_thread(NULL);
 
 fail:
-	exit(6789);		/* slightly magical */
+	exit_thread("child_starter_fn failed");
 }
 
 
@@ -268,6 +290,8 @@ int fork(void)
 	L4_ThreadId_t old_exh = L4_ExceptionHandler();
 	L4_Set_ExceptionHandler(mgr_tid);
 
+	bool was_roottask = is_roottask;
+	is_roottask = false;
 	int retval;
 	struct child_param *param_ptr = NULL;
 	asm volatile ("int $23": "=a" (retval), "=c" (param_ptr) :: "memory");
@@ -275,15 +299,46 @@ int fork(void)
 	if(retval != 0) {
 		/* parent */
 		L4_Set_ExceptionHandler(old_exh);
+		is_roottask = was_roottask;
 	} else {
 		/* child */
 		mgr_tid = L4_nilthread;
+		assert(!is_roottask);
+
+		/* ensure sync with child_starter_fn(), which is seen as the exception
+		 * handler due to pop_int24_to()
+		 */
+		L4_ThreadId_t starter = L4_ExceptionHandler();
+		L4_MsgTag_t tag = L4_Receive(starter);
+		if(L4_IpcFailed(tag) || tag.X.label != SYNC_CHILD_LABEL) {
+			printf("fork (child side): sync failed, ec %#lx (label %#lx)\n",
+				L4_ErrorCode(), (L4_Word_t)tag.X.label);
+			goto child_fail;
+		}
+		L4_LoadMR(0, 0);
+		tag = L4_Reply(starter);
+		if(L4_IpcFailed(tag)) {
+			printf("fork (child side): sync reply failed, ec %#lx\n",
+				L4_ErrorCode());
+			goto child_fail;
+		}
+
+		void *start_val = join_thread(starter);
+		if(start_val != NULL) {
+			printf("fork (child side): starter join failed\n");
+			goto child_fail;
+		}
+
+		L4_Set_ExceptionHandler(L4_nilthread);
 	}
 	if(param_ptr != NULL) {
 		free(param_ptr->stk_top);	/* also destroys param */
 	}
 
 	return retval;
+
+child_fail:
+	for(;;) exit(-1);		/* or something */
 }
 
 

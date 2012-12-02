@@ -113,6 +113,8 @@ extern int fork(void);
 extern int wait(int *status);
 extern NORETURN void exit(int status);
 
+extern bool is_privileged(void);
+
 
 /* from log.c */
 

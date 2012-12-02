@@ -115,6 +115,7 @@ int thread_on_fork(
 	/* TODO: run atfork-style child-side hooks? */
 
 	int caller = L4_ThreadNo(*caller_tid) - base_tnum;
+	assert(caller < MAX_THREADS);
 	struct thread copy = threads[caller];
 	base_tnum = new_base_tnum;
 	for(int i=0; i < MAX_THREADS; i++) {
@@ -125,8 +126,22 @@ int thread_on_fork(
 		}
 		threads[i].stack = NULL;
 		threads[i].alive = false;
+		threads[i].version = -threads[i].version;
+		assert(threads[i].version <= 0);
 		threads[i].retval = NULL;
+
+		/* TODO: destroy TSD bits for threads[i] */
 	}
+
+	/* set up thread context for the child starter thread */
+	int starter = L4_ThreadNo(L4_Myself()) - base_tnum;
+	assert(starter < MAX_THREADS);
+	threads[starter] = (struct thread){
+		.version = L4_Version(L4_Myself()), .alive = true,
+		/* (could use .stack to free the starter thread's param->stk_top. why
+		 * bother though.)
+		 */
+	};
 
 	L4_LoadMR(0, (L4_MsgTag_t){ .X.label = FORKSERV_NEW_THREAD,
 		.X.u = 4 }.raw);
@@ -148,9 +163,8 @@ int thread_on_fork(
 }
 
 
-static void thread_wrapper(void)
+static void thread_wrapper(L4_ThreadId_t parent)
 {
-	L4_ThreadId_t parent = { .raw = L4_UserDefinedHandle() };
 	L4_Set_UserDefinedHandle(0);
 	L4_Set_ExceptionHandler(parent);
 
@@ -199,11 +213,9 @@ void exit_thread(void *return_value)
 		L4_Set_UserDefinedHandle(0);
 	}
 
-#if 0
-	printf("testbench thread %d (%u:%u) terminating\n", (int)tnum,
-		L4_ThreadNo(self), L4_Version(self));
-#endif
-
+	/* exit via the exception to the parent thread, i.e. join_thread()
+	 * caller.
+	 */
 	for(;;) {
 		asm volatile ("int $1");
 	}
@@ -241,29 +253,10 @@ L4_ThreadId_t start_thread_long(
 		}
 	}
 	if(t == MAX_THREADS) return L4_nilthread;
+	L4_ThreadId_t self = L4_Myself(), tid = tid_of(t);
 
 	threads[t].alive = true;
 	assert(threads[t].version > 0);
-
-	L4_ThreadId_t self = L4_Myself(), tid = tid_of(t);
-#if 0
-	printf("%s: creating thread %lu:%lu, utcb at %#lx\n", __func__,
-		L4_ThreadNo(tid), L4_Version(tid), utcb_base + t * 512);
-#endif
-	L4_Word_t r = L4_ThreadControl(tid, self, self, L4_Pager(),
-		(void *)(utcb_base + t * 512));
-	if(r == 0) {
-		printf("%s: ThreadControl failed, ErrorCode %#lx\n", __func__,
-			L4_ErrorCode());
-		threads[t].version = -threads[t].version;
-		assert(!threads[t].alive);
-		assert(threads[t].version <= 0);
-		return L4_nilthread;
-	}
-
-	/* let forkserv know this should be paged for testbench */
-	add_fs_tid(1, tid);
-
 	uint8_t *stack = malloc(THREAD_STACK_SIZE);
 	if(stack == NULL) {
 		printf("%s: can't allocate stack for thread!\n", __func__);
@@ -271,18 +264,56 @@ L4_ThreadId_t start_thread_long(
 	}
 	threads[t].stack = stack;
 	L4_Word_t stk_top = (L4_Word_t)stack + THREAD_STACK_SIZE - 16;
-	L4_Set_UserDefinedHandleOf(tid, self.raw);
-	if(priority != -1) {
-		L4_Word_t r = L4_Set_Priority(tid, priority);
-		if(r == L4_SCHEDRESULT_ERROR) {
-			printf("%s: L4_Set_Priority() failed: errorcode %lu\n",
-				__func__, L4_ErrorCode());
-			/* TODO: cleanups? */
+	L4_Word_t *sptr = (void *)stk_top;
+	*(--sptr) = self.raw;
+	*(--sptr) = 0xbabecafe;		/* >implying human trafficking */
+	stk_top = (L4_Word_t)sptr;
+
+	if(!is_privileged()) {
+		/* FIXME: add setting of timeslice and priority, i.e. change forkserv
+		 * to set the new_thread caller as the new thread's scheduler.
+		 */
+		L4_ThreadId_t out_tid;
+		L4_MsgTag_t tag = forkserv_new_thread(&out_tid, ~0ul,
+			(L4_Word_t)&thread_wrapper, stk_top, t);
+		if(L4_IpcFailed(tag) || L4_ThreadNo(out_tid) - base_tnum != t) {
+			printf("%s: forkserv_new_thread() failed, ec %#lx, out_tid %lu:%lu (%d)\n",
+				__func__, L4_ErrorCode(), L4_ThreadNo(out_tid),
+				L4_Version(out_tid), (int)L4_ThreadNo(out_tid) - base_tnum);
+			/* TODO: problem, officer? */
 			return L4_nilthread;
 		}
+
+		tid = out_tid;
+		threads[t].version = L4_Version(tid);
+	} else {
+		L4_Word_t r = L4_ThreadControl(tid, self, self, L4_Pager(),
+			(void *)(utcb_base + t * 512));
+		if(r == 0) {
+			printf("%s: ThreadControl failed, ErrorCode %#lx\n", __func__,
+				L4_ErrorCode());
+			threads[t].version = -threads[t].version;
+			assert(!threads[t].alive);
+			assert(threads[t].version <= 0);
+			return L4_nilthread;
+		}
+
+		/* let forkserv know this should be paged for testbench */
+		add_fs_tid(1, tid);
+
+		if(priority != -1) {
+			L4_Word_t r = L4_Set_Priority(tid, priority);
+			if(r == L4_SCHEDRESULT_ERROR) {
+				printf("%s: L4_Set_Priority() failed: errorcode %lu\n",
+					__func__, L4_ErrorCode());
+				/* TODO: cleanups? */
+				return L4_nilthread;
+			}
+		}
+		L4_Set_Timeslice(tid, ts_len, total_quantum);
+		L4_Start_SpIp(tid, stk_top, (L4_Word_t)&thread_wrapper);
 	}
-	L4_Set_Timeslice(tid, ts_len, total_quantum);
-	L4_Start_SpIp(tid, stk_top, (L4_Word_t)&thread_wrapper);
+
 	L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 3 }.raw);
 	L4_LoadMR(1, (L4_Word_t)fn);
 	L4_LoadMR(2, (L4_Word_t)param);
@@ -316,12 +347,24 @@ void *join_thread(L4_ThreadId_t tid)
 	/* TODO: verify the exception message (label, GP#) */
 
 	/* destroy the thread. */
-	L4_Word_t res = L4_ThreadControl(tid_of(t), L4_nilthread,
-		L4_nilthread, L4_nilthread, (void *)-1);
-	if(res == 0) {
-		printf("%s: deleting ThreadControl failed, ec %#lx\n", __func__,
-			L4_ErrorCode());
-		return NULL;
+	if(is_privileged()) {
+		L4_Word_t res = L4_ThreadControl(tid_of(t), L4_nilthread,
+			L4_nilthread, L4_nilthread, (void *)-1);
+		if(res == 0) {
+			printf("%s: deleting ThreadControl failed, ec %#lx\n", __func__,
+				L4_ErrorCode());
+			return NULL;
+		}
+	} else {
+		L4_LoadMR(0, (L4_MsgTag_t){ .X.label = FORKSERV_EXIT_THREAD,
+			.X.u = 1}.raw);
+		L4_LoadMR(1, tid.raw);
+		tag = L4_Call(L4_Pager());
+		if(L4_IpcFailed(tag) || tag.X.u != 0) {
+			printf("%s: forkserv_exit_thread failed, ec %#lx (tag %#lx)\n",
+				__func__, L4_ErrorCode(), tag.raw);
+			/* FIXME: ... and then what? */
+		}
 	}
 
 	threads[t].alive = false;

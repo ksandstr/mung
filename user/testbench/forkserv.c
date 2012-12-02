@@ -914,14 +914,10 @@ static bool handle_wait(L4_ThreadId_t ipc_from)
 }
 
 
-static bool handle_exit(L4_ThreadId_t *ipc_from, int status)
+static bool end_thread(L4_ThreadId_t tid)
 {
-	struct fs_thread *t = get_thread(*ipc_from);
-	if(t == NULL) {
-		printf("forkserv/exit: unknown TID %lu:%lu\n",
-			L4_ThreadNo(*ipc_from), L4_Version(*ipc_from));
-		return false;
-	}
+	struct fs_thread *t = get_thread(tid);
+	if(t == NULL) return false;
 
 	struct fs_space *sp = t->space;
 	int tnum = L4_ThreadNo(t->tid) - (sp->id << TPS_SHIFT);
@@ -929,19 +925,30 @@ static bool handle_exit(L4_ThreadId_t *ipc_from, int status)
 	sp->threads[tnum] = NULL;
 
 	L4_MsgTag_t tag;
-	L4_Word_t ec, res = fpager_threadctl(&tag, &ec, *ipc_from, L4_nilthread,
+	L4_Word_t ec, res = fpager_threadctl(&tag, &ec, tid, L4_nilthread,
 		L4_nilthread, L4_nilthread, (void *)-1);
 	if(res != 1) {
-		printf("forkserv/exit: threadctl failed, %s ec %#lx\n",
+		printf("forkserv/end_thread: threadctl failed, %s ec %#lx\n",
 			L4_IpcFailed(tag) ? "ipc" : "syscall", ec);
 		/* can't do much else. */
 	}
 	htable_del(&thread_hash, int_hash(L4_ThreadNo(t->tid)), &t->tid);
 	free(t);
 
-	/* stop here if other threads remain. */
+	return true;
+}
+
+
+static bool handle_exit(L4_ThreadId_t *ipc_from, int status)
+{
+	struct fs_space *sp = get_space_by_tid(*ipc_from);
+	if(sp == NULL) {
+		printf("forkserv/exit: unknown TID %lu:%lu\n",
+			L4_ThreadNo(*ipc_from), L4_Version(*ipc_from));
+		return false;
+	}
 	for(int i=0; i < THREADS_PER_SPACE; i++) {
-		if(sp->threads[i] != NULL) return false;
+		if(sp->threads[i] != NULL) end_thread(sp->threads[i]->tid);
 	}
 
 	/* destroy the virtual memory bits and zombify the address space */
@@ -985,6 +992,37 @@ static bool handle_exit(L4_ThreadId_t *ipc_from, int status)
 		/* the dead walk */
 		list_add_tail(&parent->dead_children, &sp->dead_link);
 		sp->exit_status = status;
+		return false;
+	}
+}
+
+
+static bool handle_exit_thread(
+	L4_ThreadId_t *from_p,
+	L4_ThreadId_t dest_tid)
+{
+	if(dest_tid.raw == L4_nilthread.raw) dest_tid = *from_p;
+
+	struct fs_space *sp = get_space_by_tid(dest_tid);
+	if(sp == NULL || !end_thread(dest_tid)) return false;
+
+	/* check if this was the last thread. */
+	for(int i=0; i < THREADS_PER_SPACE; i++) {
+		if(sp->threads[i] != NULL) {
+			/* nopes. */
+			if(dest_tid.raw == from_p->raw) return false;
+			L4_LoadMR(0, 0);
+			return true;
+		}
+	}
+
+	/* yeah, drop the space too. */
+	if(dest_tid.raw == from_p->raw) return handle_exit(from_p, 0);
+	else {
+		/* would do exit of a process via exit_thread() from a foreign address
+		 * space. which is weird.
+		 */
+		printf("forkserv: weird exit_thread case not handled\n");
 		return false;
 	}
 }
@@ -1172,6 +1210,14 @@ static void forkserv_dispatch_loop(void)
 					L4_StoreMR(1, &status);
 					assert(invariants("exit"));
 					reply = handle_exit(&from, status);
+					break;
+				}
+
+				case FORKSERV_EXIT_THREAD: {
+					L4_ThreadId_t dest_tid;
+					L4_StoreMR(1, &dest_tid.raw);
+					assert(invariants("exit_thread"));
+					reply = handle_exit_thread(&from, dest_tid);
 					break;
 				}
 
