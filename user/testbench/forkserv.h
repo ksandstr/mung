@@ -46,6 +46,27 @@ static inline L4_MsgTag_t forkserv_unmap(
 }
 
 
+static inline L4_MsgTag_t forkserv_new_thread(
+	L4_ThreadId_t *tid_p,
+	L4_Word_t space_id,
+	L4_Word_t ip,
+	L4_Word_t sp,
+	int req_threadno)
+{
+	L4_LoadMR(0, (L4_MsgTag_t){ .X.label = FORKSERV_NEW_THREAD,
+		.X.u = 4 }.raw);
+	L4_LoadMR(1, space_id);
+	L4_LoadMR(2, ip);
+	L4_LoadMR(3, sp);
+	L4_LoadMR(4, req_threadno);
+	L4_MsgTag_t tag = L4_Call(L4_Pager());
+	if(L4_IpcSucceeded(tag)) {
+		L4_StoreMR(1, &tid_p->raw);
+	}
+	return tag;
+}
+
+
 /* forkserv-to-pager API for doing privileged system calls.
  *
  * input: untyped in-parameters in spec order, one per word, starting from MR1.

@@ -119,20 +119,14 @@ static bool handle_int(
 	if(CHECK_FLAG(retval, 0x80000000ul)) goto end;
 
 	/* create the child process' entry thread. */
-	L4_LoadMR(0, (L4_MsgTag_t){ .X.label = FORKSERV_NEW_THREAD,
-		.X.u = 4 }.raw);
-	L4_LoadMR(1, retval);		/* space ID */
-	L4_LoadMR(2, (L4_Word_t)&child_starter_fn);	/* ip */
-	L4_LoadMR(3, (L4_Word_t)stk_pos); /* sp */
-	L4_LoadMR(4, thread_self());
-	tag = L4_Call(L4_Pager());
+	L4_ThreadId_t cp_tid;
+	tag = forkserv_new_thread(&cp_tid, retval, (L4_Word_t)&child_starter_fn,
+		(L4_Word_t)stk_pos,	thread_self());
 	if(L4_IpcFailed(tag)) {
 		/* TODO: cleanup */
 		printf("%s: ffffuuuuuu (ec %#lx)\n", __func__, L4_ErrorCode());
 		abort();
 	}
-	L4_ThreadId_t cp_tid;
-	L4_StoreMR(1, &cp_tid.raw);
 
 	/* send it off. hand it the new base tnum also.
 	 *
