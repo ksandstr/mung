@@ -149,6 +149,7 @@ end:
 	 */
 	L4_LoadMR(0, (L4_MsgTag_t){ .X.u = num_exn_regs }.raw);
 	assert(num_exn_regs >= 12);
+	exn_regs[10] = 0;			/* %ecx */
 	exn_regs[11] = retval;		/* %eax */
 	exn_regs[0] += 2;			/* %eip; bump for INT $n (2 bytes) */
 	L4_LoadMRs(1, num_exn_regs, exn_regs);
@@ -244,6 +245,7 @@ static void child_starter_fn(struct child_param *param)
 	int frame_len = MIN(int, 63, tag.X.u + tag.X.t);
 	L4_StoreMRs(1, frame_len, &frame[1]);
 	frame[0] = tag.raw;
+	param->exn_frame[10] = (L4_Word_t)param;	/* %ecx */
 	param->exn_frame[11] = 0;		/* %eax */
 	param->exn_frame[0] += 2;		/* skip INT $n (2 bytes) */
 	assert(param->exn_size >= frame_len + 1);
@@ -256,7 +258,6 @@ static void child_starter_fn(struct child_param *param)
 		goto fail;
 	}
 
-	/* FIXME: arrange freeing of param->stk_top . */
 	exit(0);
 
 fail:
@@ -274,7 +275,8 @@ int fork(void)
 	L4_Set_ExceptionHandler(mgr_tid);
 
 	int retval;
-	asm volatile ("int $23": "=a" (retval) :: "memory");
+	struct child_param *param_ptr = NULL;
+	asm volatile ("int $23": "=a" (retval), "=c" (param_ptr) :: "memory");
 
 	if(retval != 0) {
 		/* parent */
@@ -282,6 +284,9 @@ int fork(void)
 	} else {
 		/* child */
 		mgr_tid = L4_nilthread;
+	}
+	if(param_ptr != NULL) {
+		free(param_ptr->stk_top);	/* also destroys param */
 	}
 
 	return retval;

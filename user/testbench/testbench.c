@@ -89,8 +89,9 @@ void __assert_failure(
 			condition, file, line);
 		exit_on_fail();
 	} else {
-		printf("testbench %s(`%s', `%s', %u, `%s')\n", __func__,
-			condition, file, line, function);
+		printf("testbench %lu:%lu %s(`%s', `%s', %u, `%s')\n",
+			L4_ThreadNo(L4_Myself()), L4_Version(L4_Myself()),
+			__func__, condition, file, line, function);
 		abort();
 		for(;;) { asm volatile("int $1"); }
 	}
