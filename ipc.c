@@ -194,7 +194,7 @@ static L4_Word_t do_typed_transfer(
 				/* MapItem (0x8), GrantItem (0xa) */
 				if(unlikely(pos + 1 > last)) goto too_short;
 				L4_MapItem_t m = {
-					.raw = { w0, L4_VREG(s_base, pos + 1) },
+					.raw = { w0, L4_VREG(s_base, L4_TCR_MR(pos + 1)) },
 				};
 				int given = apply_mapitem(source, s_base, dest, d_base, m);
 				if(unlikely(given == -ENOMEM)) {
@@ -206,8 +206,8 @@ static L4_Word_t do_typed_transfer(
 				m.X.snd_fpage.X.b = 0;
 				m.X.snd_fpage.X.rwx = given;
 				m.X.C = (pos + 2 <= last);
-				L4_VREG(d_base, pos) = m.raw[0];
-				L4_VREG(d_base, pos + 1) = m.raw[1];
+				L4_VREG(d_base, L4_TCR_MR(pos)) = m.raw[0];
+				L4_VREG(d_base, L4_TCR_MR(pos + 1)) = m.raw[1];
 				pos += 2;
 				break;
 			}
@@ -218,9 +218,34 @@ static L4_Word_t do_typed_transfer(
 				/* FIXME: return an IPC error instead */
 				panic("reserved map type");
 				break;
-			default:
-				panic("can't handle string transfers yet");
+
+			default: {
+				/* string items. */
+				assert((w0 & 8) == 0);
+				/* skip it properly. (FIXME: write a test for this, i.e. that
+				 * map items are handled correctly after a stringitem.)
+				 */
+				L4_StringItem_t *si = (L4_StringItem_t *)&L4_VREG(s_base,
+					L4_TCR_MR(pos)), *prev;
+				do {
+					prev = si;
+					assert(pos + 1 <= last);
+					int subs = L4_Substrings(si);
+					if(pos + subs > last) {
+						/* FIXME: have some sort of a scanner, first, that
+						 * parses and validates string items before e.g. the
+						 * map database is accessed, or previous string
+						 * transfers are set up.
+						 */
+						panic("invalid stringitem = invalid IPC (FIXME)");
+					}
+
+					pos += subs + 1;
+					si = (L4_StringItem_t *)&L4_VREG(s_base, L4_TCR_MR(pos));
+				} while(L4_CompoundString(prev));
+				/* FIXME: do string transfer! */
 				break;
+			}
 		}
 	}
 
