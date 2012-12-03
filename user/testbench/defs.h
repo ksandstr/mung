@@ -28,6 +28,7 @@ extern struct Suite *process_suite(void);
 extern struct Suite *sched_suite(void);
 extern struct Suite *space_suite(void);
 extern struct Suite *thread_suite(void);
+extern struct Suite *string_suite(void);
 
 
 /* pre-formal tests */

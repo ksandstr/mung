@@ -27,7 +27,7 @@ covercheck:
 testbench: testbench.ld crt0.o testbench.o dlmalloc.o heap.o thread.o \
 		delay.o process.o exn-store.o log.o tap.o test.o \
 		sched_suite.o space_suite.o thread_suite.o \
-		process_suite.o \
+		process_suite.o string_suite.o \
 		legacy.o thread_test.o \
 		syscalls.o ccan-list.o ccan-htable.o ccan-hash.o
 	@echo "  LD $@"
