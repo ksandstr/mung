@@ -109,9 +109,11 @@ static int sigma0_ipc_loop(void *kip_base)
 				L4_Word_t ip, addr;
 				L4_StoreMR(1, &addr);
 				L4_StoreMR(2, &ip);
+#if 0
 				printf("pf in %d:%d (ip %#lx, addr %#lx)\n",
 					from.global.X.thread_no, from.global.X.version,
 					ip, addr);
+#endif
 				static L4_Word_t last_fault = 0;
 				if(last_fault == addr) {
 					printf("... two faults at the same address! s0 rejects this.\n");

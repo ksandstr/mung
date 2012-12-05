@@ -151,7 +151,7 @@ static void forkserv_pager_fn(void *param UNUSED)
 				L4_Word_t faddr, fip;
 				L4_StoreMR(1, &faddr);
 				L4_StoreMR(2, &fip);
-#if 1
+#if 0
 				printf("fpager: pf in %lu:%lu; ip %#lx, addr %#lx\n",
 					L4_ThreadNo(from), L4_Version(from), fip, faddr);
 #endif
