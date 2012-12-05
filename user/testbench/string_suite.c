@@ -28,15 +28,15 @@ static L4_ThreadId_t test_tid;
 static void string_test_thread(void *param UNUSED)
 {
 	const int rbuf_len = 2048;
-	char *recvbuf = malloc(rbuf_len);
-	/* simple acceptor over the entire recvbuf. */
-	L4_LoadBR(0, 1);		/* only stringitems */
+	char *recvbuf = calloc(rbuf_len, 1);
 	L4_StringItem_t recv_si = L4_StringItem(rbuf_len, recvbuf);
-	L4_LoadBRs(1, 2, recv_si.raw);
 
 	bool running = true;
 	while(running) {
 		L4_ThreadId_t from;
+		/* simple acceptor over the entire recvbuf. */
+		L4_LoadBR(0, 1);		/* only stringitems */
+		L4_LoadBRs(1, 2, recv_si.raw);
 		L4_MsgTag_t tag = L4_Wait(&from);
 		if(L4_IpcFailed(tag)) continue;
 
@@ -71,7 +71,12 @@ static void string_test_thread(void *param UNUSED)
 					L4_LoadMR(0, 0);
 			}
 
-			if(running) tag = L4_ReplyWait(from, &from);
+			if(running) {
+				/* simple acceptor over the entire recvbuf. */
+				L4_LoadBR(0, 1);		/* only stringitems */
+				L4_LoadBRs(1, 2, recv_si.raw);
+				tag = L4_ReplyWait(from, &from);
+			}
 		}
 	}
 
