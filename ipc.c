@@ -38,6 +38,16 @@ struct ipc_wait
 };
 
 
+struct stritem_iter
+{
+	L4_Word_t *words;
+	int hdr, sub;
+
+	uintptr_t ptr;
+	L4_Word_t len;
+};
+
+
 static struct kmem_cache *ipc_wait_slab = NULL;
 static struct htable sendwait_hash;
 
@@ -48,6 +58,42 @@ static inline void set_ipc_error(void *utcb, L4_Word_t ec)
 	L4_VREG(utcb, L4_TCR_MR(0)) = ((L4_MsgTag_t){ .X.flags = 0x8 }).raw;
 	L4_VREG(utcb, L4_TCR_MR(1)) = 0;
 	L4_VREG(utcb, L4_TCR_MR(2)) = 0;
+}
+
+
+static void stritem_first(L4_StringItem_t *si, struct stritem_iter *it)
+{
+	assert(L4_IsStringItem(si));
+
+	it->words = (L4_Word_t *)si;
+	it->hdr = 0;
+	it->sub = 0;
+	it->ptr = (uintptr_t)si->X.str.substring_ptr[0];
+	it->len = si->X.string_length;
+}
+
+
+static bool stritem_next(struct stritem_iter *it)
+{
+	L4_StringItem_t *si = (L4_StringItem_t *)&it->words[it->hdr];
+	assert(L4_IsStringItem(si));
+	if(it->sub >= L4_Substrings(si) && !L4_CompoundString(si)) {
+		/* simple string items are the most common. */
+		return false;
+	} else if(it->sub < L4_Substrings(si)) {
+		it->ptr = (uintptr_t)si->X.str.substring_ptr[++it->sub];
+		assert(it->len == si->X.string_length);
+		return true;
+	} else if(L4_CompoundString(si)) {
+		L4_Word_t *next = (L4_Word_t *)&si->X.str.substring_ptr[it->sub + 1];
+		assert(L4_IsStringItem((L4_StringItem_t *)next));
+		it->hdr = next - it->words;
+		it->sub = -1;
+		return stritem_next(it);
+	} else {
+		/* end of compound string. */
+		return false;
+	}
 }
 
 
@@ -178,6 +224,90 @@ static int apply_mapitem(
 }
 
 
+static int stritemlen(L4_StringItem_t *si)
+{
+	int len = 0;
+	L4_StringItem_t *prev;
+	do {
+		prev = si;
+		len += si->X.string_length * L4_Substrings(si);
+		L4_Word_t *wp = (L4_Word_t *)si;
+		si = (L4_StringItem_t *)&wp[L4_Substrings(si) + 1];
+	} while(L4_CompoundString(prev));
+	return len;
+}
+
+
+static bool stritem_is_mapped(
+	struct space *sp,
+	L4_StringItem_t *si,
+	int access)
+{
+	/* FIXME */
+	return true;
+}
+
+
+/* (this should be interspace, but w/e; the unit tests have no support for
+ * that now.)
+ */
+static void copy_intraspace_stritem(
+	struct space *sp,
+	L4_StringItem_t *src,
+	L4_StringItem_t *dest)
+{
+	uintptr_t copy_dst = reserve_heap_page();
+	struct stritem_iter src_iter, dst_iter;
+	stritem_first(src, &src_iter);
+	stritem_first(dest, &dst_iter);
+	uint32_t copy_page = 0;
+	int s_off = 0, d_off = 0;
+	do {
+		int seg = MIN(int, PAGE_SIZE - ((dst_iter.ptr + d_off) & PAGE_MASK),
+				MIN(int, src_iter.len - s_off, dst_iter.len - d_off));
+		/* TODO: avoid repeated probe */
+		struct map_entry *e = mapdb_probe(&sp->mapdb, dst_iter.ptr & ~PAGE_MASK);
+		if(e == NULL) {
+			/* FIXME: pop a write fault */
+			printf("*** no mapdb entry for %#lx in space %d\n",
+				(L4_Word_t)dst_iter.ptr, (int)sp->mapdb.ref_id);
+			panic("would pop string transfer fault");
+		}
+		uint32_t d_page = mapdb_page_id_in_entry(e, dst_iter.ptr & ~PAGE_MASK);
+		if(d_page != copy_page) {
+			put_supervisor_page(copy_dst, d_page);
+			copy_page = d_page;
+			x86_flush_tlbs();		/* FIXME: just invalidate copy_dst */
+		}
+
+		int d_pos = (dst_iter.ptr & PAGE_MASK) + d_off;
+		assert(d_pos < PAGE_SIZE);
+		assert(d_pos + seg <= PAGE_SIZE);
+		size_t n = space_memcpy_from(sp, (void *)(copy_dst + d_pos),
+			src_iter.ptr, seg);
+		if(n < seg) {
+			/* FIXME: pop a read fault */
+			printf("*** memcpy_from %#lx:%#x in space %d returned only %#x bytes\n",
+				(L4_Word_t)src_iter.ptr, (unsigned)seg, (int)sp->mapdb.ref_id,
+				(unsigned)n);
+			panic("short memcpy_from in string transfer");
+		}
+
+		/* bump the iterators. */
+		s_off += seg;
+		d_off += seg;
+		if(d_off == dst_iter.len) {
+			bool ok UNNEEDED = stritem_next(&dst_iter);
+			assert(ok);
+		}
+	} while(s_off < src_iter.len || stritem_next(&src_iter));
+
+	put_supervisor_page(copy_dst, 0);
+	x86_flush_tlbs();
+	free_heap_page(copy_dst);
+}
+
+
 static L4_Word_t do_typed_transfer(
 	struct thread *source,
 	const void *s_base,
@@ -185,7 +315,10 @@ static L4_Word_t do_typed_transfer(
 	void *d_base,
 	L4_MsgTag_t tag)
 {
-	int pos = tag.X.u + 1, last = tag.X.u + tag.X.t;
+	assert(tag.X.t > 0);
+
+	L4_Word_t str_offset = 0;		/* # of bytes copied over this IPC */
+	int pos = tag.X.u + 1, last = tag.X.u + tag.X.t, dbr_pos = 0;
 	while(pos <= last) {
 		L4_Word_t w0 = L4_VREG(s_base, L4_TCR_MR(pos));
 		switch(w0 & 0xe) {
@@ -220,16 +353,19 @@ static L4_Word_t do_typed_transfer(
 				break;
 
 			default: {
-				/* string items. */
+				/* string transfers. */
 				assert((w0 & 8) == 0);
-				/* skip it properly. (FIXME: write a test for this, i.e. that
-				 * map items are handled correctly after a stringitem.)
+
+				/* parse, validate, and copy the sender's string item. (FIXME:
+				 * write a test for this, i.e. that map items are handled
+				 * correctly after a stringitem.)
 				 */
+				int si_start = pos;
 				L4_StringItem_t *si = (L4_StringItem_t *)&L4_VREG(s_base,
 					L4_TCR_MR(pos)), *prev;
 				do {
 					prev = si;
-					assert(pos + 1 <= last);
+					if(pos + 1 > last) goto too_short;
 					int subs = L4_Substrings(si);
 					if(pos + subs > last) {
 						/* FIXME: have some sort of a scanner, first, that
@@ -240,10 +376,57 @@ static L4_Word_t do_typed_transfer(
 						panic("invalid stringitem = invalid IPC (FIXME)");
 					}
 
+					for(int i=0; i < subs + 1; i++) {
+						int reg = L4_TCR_MR(pos + i);
+						L4_VREG(d_base, reg) = L4_VREG(s_base, reg);
+					}
+
 					pos += subs + 1;
 					si = (L4_StringItem_t *)&L4_VREG(s_base, L4_TCR_MR(pos));
 				} while(L4_CompoundString(prev));
-				/* FIXME: do string transfer! */
+				L4_StringItem_t *send_si = (L4_StringItem_t *)&L4_VREG(s_base,
+					L4_TCR_MR(si_start));
+
+				/* some clever buttenoid saw fit to lay the buffer registers
+				 * out backwards in memory, so they have to be copied one by
+				 * one to look like a proper StringItem, instead of just
+				 * pointing them out from the destination thread's UTCB.
+				 */
+				if(dbr_pos == 0) {
+					if((L4_VREG(d_base, L4_TCR_BR(0)) & 1) == 0) {
+						/* no string items. */
+						goto msg_overflow;
+					}
+					dbr_pos = 1;
+				}
+				union {
+					L4_Word_t raw[63];
+					L4_StringItem_t si;
+				} brs;
+				brs.raw[0] = L4_VREG(d_base, L4_TCR_BR(dbr_pos));
+				brs.raw[1] = L4_VREG(d_base, L4_TCR_BR(dbr_pos + 1));
+				if(unlikely(!L4_IsStringItem(&brs.si))) goto msg_overflow;
+				int tot_br_words = MAX(int, 64 - dbr_pos,
+					L4_Substrings(&brs.si) + 2);
+				for(int i=2; i < tot_br_words; i++) {
+					brs.raw[i] = L4_VREG(d_base, L4_TCR_BR(dbr_pos + i));
+				}
+				dbr_pos += tot_br_words;
+				L4_StringItem_t *recv_si = &brs.si;
+
+				int send_len = stritemlen(send_si);
+				if(send_len > stritemlen(recv_si)) goto msg_overflow;
+				if(source->space == dest->space
+					&& stritem_is_mapped(source->space, send_si, L4_Readable)
+					&& stritem_is_mapped(dest->space, recv_si, L4_Writable))
+				{
+					/* special case for intra-space transfers */
+					copy_intraspace_stritem(source->space, send_si, recv_si);
+					str_offset += send_len;
+				} else {
+					/* FIXME: cheerfully skipping other cases */
+				}
+
 				break;
 			}
 		}
@@ -251,10 +434,16 @@ static L4_Word_t do_typed_transfer(
 
 	return 0;
 
+	/* FIXME: these failure cases don't properly un-set the C bit in the last
+	 * typed word that's copied.
+	 */
 too_short:
 	/* FIXME: return a proper error */
 	panic("not enough typed message words");
 	return 0;
+
+msg_overflow:
+	return (str_offset << 4) | 0x8;
 }
 
 
