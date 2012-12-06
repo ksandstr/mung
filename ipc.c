@@ -67,7 +67,7 @@ static void stritem_first(L4_StringItem_t *si, struct stritem_iter *it)
 
 	it->words = (L4_Word_t *)si;
 	it->hdr = 0;
-	it->sub = 0;
+	it->sub = 1;
 	it->ptr = (uintptr_t)si->X.str.substring_ptr[0];
 	it->len = si->X.string_length;
 }
@@ -81,7 +81,7 @@ static bool stritem_next(struct stritem_iter *it)
 		/* simple string items are the most common. */
 		return false;
 	} else if(it->sub < L4_Substrings(si)) {
-		it->ptr = (uintptr_t)si->X.str.substring_ptr[++it->sub];
+		it->ptr = (uintptr_t)si->X.str.substring_ptr[it->sub++];
 		assert(it->len == si->X.string_length);
 		return true;
 	} else if(L4_CompoundString(si)) {
@@ -263,28 +263,36 @@ static void copy_intraspace_stritem(
 	uint32_t copy_page = 0;
 	int s_off = 0, d_off = 0;
 	do {
-		int seg = MIN(int, PAGE_SIZE - ((dst_iter.ptr + d_off) & PAGE_MASK),
-				MIN(int, src_iter.len - s_off, dst_iter.len - d_off));
+#if 0
+		printf("start of loop; s_off %d, d_off %d\n", s_off, d_off);
+		printf("  src len %d, ptr %#lx\n", (int)src_iter.len, (L4_Word_t)src_iter.ptr);
+		printf("  dst len %d, ptr %#lx\n", (int)dst_iter.len, (L4_Word_t)dst_iter.ptr);
+#endif
+
 		/* TODO: avoid repeated probe */
-		struct map_entry *e = mapdb_probe(&sp->mapdb, dst_iter.ptr & ~PAGE_MASK);
+		uintptr_t dest_page = (dst_iter.ptr + d_off) & ~PAGE_MASK;
+		struct map_entry *e = mapdb_probe(&sp->mapdb, dest_page);
 		if(e == NULL) {
 			/* FIXME: pop a write fault */
 			printf("*** no mapdb entry for %#lx in space %d\n",
-				(L4_Word_t)dst_iter.ptr, (int)sp->mapdb.ref_id);
+				(L4_Word_t)dest_page, (int)sp->mapdb.ref_id);
 			panic("would pop string transfer fault");
 		}
-		uint32_t d_page = mapdb_page_id_in_entry(e, dst_iter.ptr & ~PAGE_MASK);
+		uint32_t d_page = mapdb_page_id_in_entry(e, dest_page);
 		if(d_page != copy_page) {
 			put_supervisor_page(copy_dst, d_page);
 			copy_page = d_page;
 			x86_flush_tlbs();		/* FIXME: just invalidate copy_dst */
 		}
 
-		int d_pos = (dst_iter.ptr & PAGE_MASK) + d_off;
-		assert(d_pos < PAGE_SIZE);
+		int seg = MIN(int, PAGE_SIZE - ((dst_iter.ptr + d_off) & PAGE_MASK),
+				MIN(int, src_iter.len - s_off, dst_iter.len - d_off));
+
+		int d_pos = ((dst_iter.ptr & PAGE_MASK) + d_off) & PAGE_MASK;
+		assert(d_pos >= 0 && seg > 0);
 		assert(d_pos + seg <= PAGE_SIZE);
 		size_t n = space_memcpy_from(sp, (void *)(copy_dst + d_pos),
-			src_iter.ptr, seg);
+			src_iter.ptr + s_off, seg);
 		if(n < seg) {
 			/* FIXME: pop a read fault */
 			printf("*** memcpy_from %#lx:%#x in space %d returned only %#x bytes\n",
@@ -293,14 +301,14 @@ static void copy_intraspace_stritem(
 			panic("short memcpy_from in string transfer");
 		}
 
-		/* bump the iterators. */
 		s_off += seg;
 		d_off += seg;
 		if(d_off == dst_iter.len) {
 			bool ok UNNEEDED = stritem_next(&dst_iter);
 			assert(ok);
+			d_off = 0;
 		}
-	} while(s_off < src_iter.len || stritem_next(&src_iter));
+	} while(s_off < src_iter.len || (s_off = 0, stritem_next(&src_iter)));
 
 	put_supervisor_page(copy_dst, 0);
 	x86_flush_tlbs();
