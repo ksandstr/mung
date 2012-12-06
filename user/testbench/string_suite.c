@@ -8,6 +8,7 @@
 #include <ccan/str/str.h>
 
 #include <l4/types.h>
+#include <l4/space.h>
 #include <l4/ipc.h>
 #include <l4/thread.h>
 #include <l4/message.h>
@@ -137,11 +138,54 @@ START_TEST(echo_simple)
 	L4_StringItem_t got_si;
 	echo(test_tid, replybuf, sizeof(replybuf), &got_si, echostr);
 
+	fail_unless(L4_IsStringItem(&got_si));
 	replybuf[MIN(int, sizeof(replybuf) - 1, got_si.X.string_length)] = '\0';
 	int rlen = strlen(replybuf);
 	ok(rlen >= strlen(echostr), "reply length >= input length");
 	ok(streq(&replybuf[rlen - strlen(echostr)], echostr),
 		"echo output ends with input");
+}
+END_TEST
+
+
+/* like echo_simple, but flushes mappings from some of the memory where
+ * strings are sent and/or received.
+ */
+START_TEST(echo_with_hole)
+{
+	plan_tests(2);
+	const size_t buf_size = 16 * 1024;
+	const char *echostr = "what did the pope say to the bear?";
+
+	char *replybuf = calloc(1, buf_size), *sendbuf = calloc(1, buf_size);
+	assert(buf_size > 4100);
+	char *sendstr = &sendbuf[4100];
+	memcpy(sendstr, echostr, strlen(echostr) + 1);
+
+	/* unmap the largish-enough page around both, ensuring a pagefault on both
+	 * sides
+	 */
+	L4_Fpage_t flush[2] = {
+		L4_FpageLog2((L4_Word_t)sendbuf & ~PAGE_MASK, PAGE_BITS),
+		L4_FpageLog2((L4_Word_t)replybuf & ~PAGE_MASK, PAGE_BITS),
+	};
+	for(int i=0; i < NUM_ELEMENTS(flush); i++) {
+		L4_Set_Rights(&flush[i], L4_FullyAccessible);
+	}
+	L4_FlushFpages(2, flush);
+
+	L4_StringItem_t got_si;
+	echo(test_tid, replybuf, buf_size, &got_si, sendstr);
+
+	fail_unless(L4_IsStringItem(&got_si));
+	replybuf[MIN(int, buf_size - 1, got_si.X.string_length)] = '\0';
+	int rlen = strlen(replybuf);
+	ok(rlen >= strlen(sendstr), "reply length >= input length");
+	ok(streq(&replybuf[MAX(int, 0, rlen - strlen(echostr))], echostr),
+		"echo output ends with input");
+
+	free(replybuf);
+	free(sendbuf);
 }
 END_TEST
 
@@ -196,12 +240,14 @@ Suite *string_suite(void)
 	TCase *basic = tcase_create("basic");
 	tcase_add_checked_fixture(basic, &stt_setup, &stt_teardown);
 	tcase_add_test(basic, echo_simple);
+	tcase_add_test(basic, echo_with_hole);
 	suite_add_tcase(s, basic);
 
 	/* inter-space cases, i.e. mapdb interactions and so forth. */
 	TCase *space = tcase_create("space");
 	tcase_add_checked_fixture(space, &fork_stt_setup, &fork_stt_teardown);
 	tcase_add_test(space, echo_simple);
+	tcase_add_test(space, echo_with_hole);
 	suite_add_tcase(s, space);
 
 	return s;
