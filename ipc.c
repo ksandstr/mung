@@ -243,7 +243,19 @@ static bool stritem_is_mapped(
 	L4_StringItem_t *si,
 	int access)
 {
-	/* FIXME */
+	struct stritem_iter it;
+	stritem_first(si, &it);
+	do {
+		L4_Word_t addr = it.ptr;
+		do {
+			struct map_entry *e = mapdb_probe(&sp->mapdb, addr);
+			if(e == NULL || !CHECK_FLAG_ALL(L4_Rights(e->range), access)) {
+				return false;
+			}
+			addr += L4_Size(e->range) - (addr - L4_Address(e->range));
+		} while(addr < it.ptr + it.len);
+	} while(stritem_next(&it));
+
 	return true;
 }
 
@@ -270,9 +282,9 @@ static void copy_interspace_stritem(
 		/* TODO: avoid repeated probe */
 		uintptr_t dest_page = (dst_iter.ptr + d_off) & ~PAGE_MASK;
 		struct map_entry *e = mapdb_probe(&dest_space->mapdb, dest_page);
-		if(e == NULL) {
+		if(e == NULL || !CHECK_FLAG(L4_Rights(e->range), L4_Writable)) {
 			/* FIXME: pop a write fault */
-			printf("*** no mapdb entry for %#lx in space %d\n",
+			printf("*** no writable mapdb entry for %#lx in space %d\n",
 				(L4_Word_t)dest_page, (int)dest_space->mapdb.ref_id);
 			panic("would pop string transfer fault");
 		}
@@ -289,6 +301,7 @@ static void copy_interspace_stritem(
 		int d_pos = ((dst_iter.ptr & PAGE_MASK) + d_off) & PAGE_MASK;
 		assert(d_pos >= 0 && seg > 0);
 		assert(d_pos + seg <= PAGE_SIZE);
+		/* FIXME: check for read access in src_space! */
 		size_t n = space_memcpy_from(src_space, (void *)(copy_dst + d_pos),
 			src_iter.ptr + s_off, seg);
 		if(n < seg) {
