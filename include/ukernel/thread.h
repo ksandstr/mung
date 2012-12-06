@@ -105,6 +105,9 @@ struct thread
 	 *
 	 * NOTE: before a thread is activated, saved_regs[0] is used for the pager
 	 * value set by ThreadControl before a thread's pager TCR is available.
+	 * NOTE #2: buffer registers are stored in a reverse order at
+	 * saved_regs[saved_mrs .. saved_brs - 1], i.e. high number to low. this
+	 * is due to the spec's UTCB layout.
 	 */
 	uint8_t saved_mrs, saved_brs;
 	L4_Word_t saved_regs[14];

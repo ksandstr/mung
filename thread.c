@@ -148,8 +148,8 @@ static void restore_saved_regs(struct hook *hook, uintptr_t code, void *priv)
 	void *utcb = thread_get_utcb(t);
 	memcpy(&L4_VREG(utcb, L4_TCR_MR(0)), t->saved_regs,
 		sizeof(L4_Word_t) * (int)t->saved_mrs);
-	memcpy(&L4_VREG(utcb, L4_TCR_BR(0)), &t->saved_regs[t->saved_mrs],
-		sizeof(L4_Word_t) * (int)t->saved_brs);
+	memcpy(&L4_VREG(utcb, L4_TCR_BR(t->saved_brs - 1)),
+		&t->saved_regs[t->saved_mrs], sizeof(L4_Word_t) * (int)t->saved_brs);
 	t->saved_mrs = 0;
 	t->saved_brs = 0;
 
@@ -174,7 +174,7 @@ void save_ipc_regs(struct thread *t, int mrs, int brs)
 	void *utcb = thread_get_utcb(t);
 	memcpy(t->saved_regs, &L4_VREG(utcb, L4_TCR_MR(0)),
 		sizeof(L4_Word_t) * mrs);
-	memcpy(&t->saved_regs[mrs], &L4_VREG(utcb, L4_TCR_BR(0)),
+	memcpy(&t->saved_regs[mrs], &L4_VREG(utcb, L4_TCR_BR(brs - 1)),
 		sizeof(L4_Word_t) * brs);
 
 	hook_push_back(&t->post_exn_call, &restore_saved_regs, NULL);
