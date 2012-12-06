@@ -101,29 +101,42 @@ static void stt_teardown(void)
 	void *value = join_thread(test_tid);
 	fail_unless(value == NULL,
 		"unexpected return from string test thread: `%s'", (char *)value);
+	test_tid = L4_nilthread;
 }
 
 
-START_TEST(simple_intraspace)
+/* simple echo. send string, receev bacon. */
+static void echo(
+	L4_ThreadId_t serv_tid,
+	char *replybuf,
+	size_t reply_size,
+	L4_StringItem_t *got_si,
+	const char *echostr)
 {
-	plan_tests(2);
-
-	/* simple echo. send string, receev bacon. */
-	char replybuf[1024];
-	L4_StringItem_t rep_si = L4_StringItem(sizeof(replybuf), replybuf);
+	L4_StringItem_t rep_si = L4_StringItem(reply_size, replybuf);
 	L4_LoadBR(0, 1);
 	L4_LoadBRs(1, 2, rep_si.raw);
-	const char *echostr = "does a polar bear crap in the woods?";
 	L4_StringItem_t si = L4_StringItem(strlen(echostr) + 1, (void *)echostr);
 	L4_LoadMR(0, (L4_MsgTag_t){ .X.label = ECHO_LABEL, .X.t = 2 }.raw);
 	L4_LoadMRs(1, 2, si.raw);
-	L4_MsgTag_t tag = L4_Call_Timeouts(test_tid, TEST_IPC_DELAY,
+	L4_MsgTag_t tag = L4_Call_Timeouts(serv_tid, TEST_IPC_DELAY,
 		TEST_IPC_DELAY);
 	fail_unless(L4_IpcSucceeded(tag), "ipc failed: ec %#lx", L4_ErrorCode());
 	fail_unless(tag.X.t == 2, "reply tag is weird (%#lx)", tag.raw);
 
+	if(got_si != NULL) L4_StoreMRs(1, 2, got_si->raw);
+}
+
+
+START_TEST(echo_simple)
+{
+	plan_tests(2);
+	const char *echostr = "does a polar bear crap in the woods?";
+
+	char replybuf[1024];
 	L4_StringItem_t got_si;
-	L4_StoreMRs(1, 2, got_si.raw);
+	echo(test_tid, replybuf, sizeof(replybuf), &got_si, echostr);
+
 	replybuf[MIN(int, sizeof(replybuf) - 1, got_si.X.string_length)] = '\0';
 	int rlen = strlen(replybuf);
 	ok(rlen >= strlen(echostr), "reply length >= input length");
@@ -133,14 +146,63 @@ START_TEST(simple_intraspace)
 END_TEST
 
 
+static void fork_stt_setup(void)
+{
+	assert(L4_IsNilThread(test_tid));
+
+	L4_ThreadId_t parent_tid = L4_Myself();
+	int child = fork();
+	if(child == 0) {
+		L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 1 }.raw);
+		L4_LoadMR(1, L4_Myself().raw);
+		L4_MsgTag_t tag = L4_Send_Timeout(parent_tid, TEST_IPC_DELAY);
+		if(L4_IpcFailed(tag)) exit(L4_ErrorCode());
+		else {
+			string_test_thread(NULL);
+			exit(0);
+		}
+	}
+	fail_if(child < 0, "fork() failed: child = %d", child);
+
+	L4_Word_t got_ctid;
+	do {
+		L4_MsgTag_t tag = L4_Wait_Timeout(TEST_IPC_DELAY, &test_tid);
+		fail_if(L4_IpcFailed(tag));
+		L4_StoreMR(1, &got_ctid);
+	} while(test_tid.raw != got_ctid);
+	fail_unless(!L4_IsNilThread(test_tid));
+}
+
+
+static void fork_stt_teardown(void)
+{
+	/* FIXME: move this into a shared IPC stub */
+	L4_LoadMR(0, (L4_MsgTag_t){ .X.label = QUIT_LABEL }.raw);
+	L4_MsgTag_t tag = L4_Send_Timeout(test_tid, TEST_IPC_DELAY);
+	fail_unless(L4_IpcSucceeded(tag));
+
+	int status, pid = wait(&status);
+	fail_unless(pid > 0);
+	fail_unless(status == 0);
+
+	test_tid = L4_nilthread;
+}
+
+
 Suite *string_suite(void)
 {
 	Suite *s = suite_create("string");
 
 	TCase *basic = tcase_create("basic");
 	tcase_add_checked_fixture(basic, &stt_setup, &stt_teardown);
-	tcase_add_test(basic, simple_intraspace);
+	tcase_add_test(basic, echo_simple);
 	suite_add_tcase(s, basic);
+
+	/* inter-space cases, i.e. mapdb interactions and so forth. */
+	TCase *space = tcase_create("space");
+	tcase_add_checked_fixture(space, &fork_stt_setup, &fork_stt_teardown);
+	tcase_add_test(space, echo_simple);
+	suite_add_tcase(s, space);
 
 	return s;
 }
