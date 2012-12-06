@@ -248,12 +248,10 @@ static bool stritem_is_mapped(
 }
 
 
-/* (this should be interspace, but w/e; the unit tests have no support for
- * that now.)
- */
-static void copy_intraspace_stritem(
-	struct space *sp,
+static void copy_interspace_stritem(
+	struct space *src_space,
 	L4_StringItem_t *src,
+	struct space *dest_space,
 	L4_StringItem_t *dest)
 {
 	uintptr_t copy_dst = reserve_heap_page();
@@ -271,11 +269,11 @@ static void copy_intraspace_stritem(
 
 		/* TODO: avoid repeated probe */
 		uintptr_t dest_page = (dst_iter.ptr + d_off) & ~PAGE_MASK;
-		struct map_entry *e = mapdb_probe(&sp->mapdb, dest_page);
+		struct map_entry *e = mapdb_probe(&dest_space->mapdb, dest_page);
 		if(e == NULL) {
 			/* FIXME: pop a write fault */
 			printf("*** no mapdb entry for %#lx in space %d\n",
-				(L4_Word_t)dest_page, (int)sp->mapdb.ref_id);
+				(L4_Word_t)dest_page, (int)dest_space->mapdb.ref_id);
 			panic("would pop string transfer fault");
 		}
 		uint32_t d_page = mapdb_page_id_in_entry(e, dest_page);
@@ -291,13 +289,13 @@ static void copy_intraspace_stritem(
 		int d_pos = ((dst_iter.ptr & PAGE_MASK) + d_off) & PAGE_MASK;
 		assert(d_pos >= 0 && seg > 0);
 		assert(d_pos + seg <= PAGE_SIZE);
-		size_t n = space_memcpy_from(sp, (void *)(copy_dst + d_pos),
+		size_t n = space_memcpy_from(src_space, (void *)(copy_dst + d_pos),
 			src_iter.ptr + s_off, seg);
 		if(n < seg) {
 			/* FIXME: pop a read fault */
 			printf("*** memcpy_from %#lx:%#x in space %d returned only %#x bytes\n",
-				(L4_Word_t)src_iter.ptr, (unsigned)seg, (int)sp->mapdb.ref_id,
-				(unsigned)n);
+				(L4_Word_t)src_iter.ptr, (unsigned)seg,
+				(int)src_space->mapdb.ref_id, (unsigned)n);
 			panic("short memcpy_from in string transfer");
 		}
 
@@ -313,6 +311,15 @@ static void copy_intraspace_stritem(
 	put_supervisor_page(copy_dst, 0);
 	x86_flush_tlbs();
 	free_heap_page(copy_dst);
+}
+
+
+static void copy_intraspace_stritem(
+	struct space *sp,
+	L4_StringItem_t *src,
+	L4_StringItem_t *dest)
+{
+	copy_interspace_stritem(sp, src, sp, dest);
 }
 
 
@@ -424,12 +431,16 @@ static L4_Word_t do_typed_transfer(
 
 				int send_len = stritemlen(send_si);
 				if(send_len > stritemlen(recv_si)) goto msg_overflow;
-				if(source->space == dest->space
-					&& stritem_is_mapped(source->space, send_si, L4_Readable)
+				if(stritem_is_mapped(source->space, send_si, L4_Readable)
 					&& stritem_is_mapped(dest->space, recv_si, L4_Writable))
 				{
-					/* special case for intra-space transfers */
-					copy_intraspace_stritem(source->space, send_si, recv_si);
+					if(source->space == dest->space) {
+						/* special case for intra-space transfers */
+						copy_intraspace_stritem(source->space, send_si, recv_si);
+					} else {
+						copy_interspace_stritem(source->space, send_si,
+							dest->space, recv_si);
+					}
 					str_offset += send_len;
 				} else {
 					/* FIXME: cheerfully skipping other cases */
