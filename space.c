@@ -57,7 +57,7 @@ static size_t hash_page_by_id(const void *page_ptr, void *priv)
 #define NO_PTAB_TO_MAPDB (1 << 0)
 
 
-static uint32_t max_page_id(void)
+static UNNEEDED uint32_t max_page_id(void)
 {
 	static uint32_t max_page = 0;
 	if(unlikely(max_page == 0)) {
@@ -77,8 +77,10 @@ static uint32_t max_page_id(void)
 }
 
 
+/* FIXME: this function is needlessly heavy. it makes unit tests very slow. */
 static bool check_space(int opt, struct space *sp)
 {
+#ifdef DEBUG_ME_HARDER
 	INV_CTX;
 
 	L4_ThreadId_t sp_tid = L4_nilthread;
@@ -208,6 +210,9 @@ end:
 
 inv_fail:
 	return false;
+#else
+	return true;
+#endif
 }
 
 
