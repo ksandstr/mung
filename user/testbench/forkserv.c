@@ -254,27 +254,6 @@ static struct fs_phys_page *alloc_new_page(void)
 }
 
 
-/* if removed, a serial I/O con_putstr() will be linked in from under lib/ . */
-#if 0
-/* FIXME: copypasta'd from user/sigma0.c . merge these. */
-void con_putstr(const char *str)
-{
-	size_t len = strlen(str);
-	L4_LoadMR(0, (L4_MsgTag_t){
-		.X.label = 0x5370, /* "pS" */
-		.X.u = (len + 3) / 4,
-	}.raw);
-	for(int i=0; i * 4 < len; i++) {
-		L4_LoadMR(i + 1, *(L4_Word_t *)&str[i * 4]);
-	}
-	L4_MsgTag_t tag = L4_Call(console_tid);
-	if(L4_IpcFailed(tag)) {
-		asm volatile ("int $23");
-	}
-}
-#endif
-
-
 void __assert_failure(
 	const char *condition,
 	const char *file,
