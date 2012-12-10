@@ -386,7 +386,9 @@ bool ipc_send_half(struct thread *self)
 	/* override TS_R_RECV? */
 	int status = dest->status;
 	uint64_t now_us = read_global_timer() * 1000;
-	if(status == TS_R_RECV && dest->ipc_from.raw == self_id.raw) {
+	if(status == TS_R_RECV && (dest->ipc_from.raw == self_id.raw
+		|| dest->ipc_from.raw == L4_anythread.raw))
+	{
 		if(now_us >= dest->wakeup_time) {
 			/* nah, time the peer out instead. */
 			dest->status = TS_RECV_WAIT;	/* required by thread_wake() */
