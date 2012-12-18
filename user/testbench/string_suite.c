@@ -39,9 +39,13 @@ static void string_test_thread(void *param UNUSED)
 		L4_LoadBR(0, 1);		/* only stringitems */
 		L4_LoadBRs(1, 2, recv_si.raw);
 		L4_MsgTag_t tag = L4_Wait(&from);
-		if(L4_IpcFailed(tag)) continue;
 
 		while(running) {
+			if(L4_IpcFailed(tag)) {
+				diag("helper got ipc failure, ec %#lx", L4_ErrorCode());
+				break;
+			}
+
 			switch(tag.X.label) {
 				case QUIT_LABEL: running = false; break;
 				case ECHO_LABEL: {
@@ -97,7 +101,8 @@ static void stt_teardown(void)
 {
 	L4_LoadMR(0, (L4_MsgTag_t){ .X.label = QUIT_LABEL }.raw);
 	L4_MsgTag_t tag = L4_Send_Timeout(test_tid, TEST_IPC_DELAY);
-	fail_unless(L4_IpcSucceeded(tag));
+	fail_unless(L4_IpcSucceeded(tag),
+		"QUIT_LABEL failed, ec %#lx", L4_ErrorCode());
 
 	void *value = join_thread(test_tid);
 	fail_unless(value == NULL,
@@ -112,12 +117,14 @@ static void echo(
 	char *replybuf,
 	size_t reply_size,
 	L4_StringItem_t *got_si,
-	const char *echostr)
+	const char *echostr,
+	size_t echo_len)
 {
 	L4_StringItem_t rep_si = L4_StringItem(reply_size, replybuf);
 	L4_LoadBR(0, 1);
 	L4_LoadBRs(1, 2, rep_si.raw);
-	L4_StringItem_t si = L4_StringItem(strlen(echostr) + 1, (void *)echostr);
+	if(echo_len == 0) echo_len = strlen(echostr);
+	L4_StringItem_t si = L4_StringItem(echo_len + 1, (void *)echostr);
 	L4_LoadMR(0, (L4_MsgTag_t){ .X.label = ECHO_LABEL, .X.t = 2 }.raw);
 	L4_LoadMRs(1, 2, si.raw);
 	L4_MsgTag_t tag = L4_Call_Timeouts(serv_tid, TEST_IPC_DELAY,
@@ -125,7 +132,10 @@ static void echo(
 	fail_unless(L4_IpcSucceeded(tag), "ipc failed: ec %#lx", L4_ErrorCode());
 	fail_unless(tag.X.t == 2, "reply tag is weird (%#lx)", tag.raw);
 
-	if(got_si != NULL) L4_StoreMRs(1, 2, got_si->raw);
+	if(got_si != NULL) {
+		L4_StoreMRs(1, 2, got_si->raw);
+		fail_unless(L4_IsStringItem(got_si));
+	}
 }
 
 
@@ -136,7 +146,7 @@ START_TEST(echo_simple)
 
 	char replybuf[1024];
 	L4_StringItem_t got_si;
-	echo(test_tid, replybuf, sizeof(replybuf), &got_si, echostr);
+	echo(test_tid, replybuf, sizeof(replybuf), &got_si, echostr, 0);
 
 	fail_unless(L4_IsStringItem(&got_si));
 	replybuf[MIN(int, sizeof(replybuf) - 1, got_si.X.string_length)] = '\0';
@@ -158,7 +168,7 @@ START_TEST(echo_with_hole)
 	const char *echostr = "what did the pope say to the bear?";
 
 	char *replybuf = calloc(1, buf_size), *sendbuf = calloc(1, buf_size);
-	assert(buf_size > 4100);
+	assert(buf_size > 4200);
 	char *sendstr = &sendbuf[4100];
 	memcpy(sendstr, echostr, strlen(echostr) + 1);
 
@@ -166,7 +176,7 @@ START_TEST(echo_with_hole)
 	 * sides
 	 */
 	L4_Fpage_t flush[2] = {
-		L4_FpageLog2((L4_Word_t)sendbuf & ~PAGE_MASK, PAGE_BITS),
+		L4_FpageLog2((L4_Word_t)sendstr & ~PAGE_MASK, PAGE_BITS),
 		L4_FpageLog2((L4_Word_t)replybuf & ~PAGE_MASK, PAGE_BITS),
 	};
 	for(int i=0; i < NUM_ELEMENTS(flush); i++) {
@@ -175,9 +185,8 @@ START_TEST(echo_with_hole)
 	L4_FlushFpages(2, flush);
 
 	L4_StringItem_t got_si;
-	echo(test_tid, replybuf, buf_size, &got_si, sendstr);
-
-	fail_unless(L4_IsStringItem(&got_si));
+	echo(test_tid, replybuf, buf_size - (sendstr - sendbuf),
+		&got_si, sendstr, strlen(echostr));
 	replybuf[MIN(int, buf_size - 1, got_si.X.string_length)] = '\0';
 	int rlen = strlen(replybuf);
 	ok(rlen >= strlen(sendstr), "reply length >= input length");
@@ -223,7 +232,8 @@ static void fork_stt_teardown(void)
 	/* FIXME: move this into a shared IPC stub */
 	L4_LoadMR(0, (L4_MsgTag_t){ .X.label = QUIT_LABEL }.raw);
 	L4_MsgTag_t tag = L4_Send_Timeout(test_tid, TEST_IPC_DELAY);
-	fail_unless(L4_IpcSucceeded(tag));
+	fail_unless(L4_IpcSucceeded(tag),
+		"QUIT_LABEL failed, ec %#lx", L4_ErrorCode());
 
 	int status, pid = wait(&status);
 	fail_unless(pid > 0);
