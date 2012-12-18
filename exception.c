@@ -18,13 +18,6 @@
 #include <ukernel/misc.h>
 
 
-static struct thread *get_thread_pager(struct thread *t, void *utcb)
-{
-	L4_ThreadId_t pager_id = { .raw = L4_VREG(utcb, L4_TCR_PAGER) };
-	return !L4_IsNilThread(pager_id) ? thread_find(pager_id.raw) : NULL;
-}
-
-
 void isr_exn_de_bottom(struct x86_exregs *regs)
 {
 	printf("#DE(0x%lx) at eip 0x%lx, esp 0x%lx\n", regs->error,
@@ -270,7 +263,7 @@ static void handle_io_fault(struct thread *current, struct x86_exregs *regs)
 	}
 #else
 	void *utcb = thread_get_utcb(current);
-	struct thread *pager = get_thread_pager(current, utcb);
+	struct thread *pager = thread_get_pager(current, utcb);
 	if(pager == NULL) goto fail;
 	save_ipc_regs(current, 3, 1);
 	L4_VREG(utcb, L4_TCR_BR(0)) = L4_IoFpageLog2(0, 16).raw;
@@ -489,7 +482,7 @@ void isr_exn_pf_bottom(struct x86_exregs *regs)
 
 		thread_save_ctx(current, regs);
 		void *utcb = thread_get_utcb(current);
-		struct thread *pager = get_thread_pager(current, utcb);
+		struct thread *pager = thread_get_pager(current, utcb);
 		if(unlikely(pager == NULL)) {
 			printf("thread %lu:%lu has no pager, stopping it\n",
 				TID_THREADNUM(current->id), TID_VERSION(current->id));
@@ -498,14 +491,28 @@ void isr_exn_pf_bottom(struct x86_exregs *regs)
 			assert(current->status == TS_STOPPED);
 			return_to_scheduler();
 		} else {
-			save_ipc_regs(current, 3, 1);
-			L4_VREG(utcb, L4_TCR_BR(0)) = L4_CompleteAddressSpace.raw;
-			L4_VREG(utcb, L4_TCR_MR(0)) = ((-2) & 0xfff) << 20		/* label */
-				| fault_access << 16	/* access */
-				| 2;		/* "u" for msgtag */
-			L4_VREG(utcb, L4_TCR_MR(1)) = fault_addr;
-			L4_VREG(utcb, L4_TCR_MR(2)) = regs->eip;
+			set_pf_msg(current, utcb, fault_addr, regs->eip, fault_access);
 			return_to_ipc(pager);
 		}
 	}
+}
+
+
+/* functions exported in <ukernel/ipc.h> */
+
+void set_pf_msg(
+	struct thread *t,
+	void *utcb,
+	L4_Word_t fault_addr,
+	L4_Word_t ip,
+	int fault_access)
+{
+	save_ipc_regs(t, 3, 1);
+	if(utcb == NULL) utcb = thread_get_utcb(t);
+	L4_VREG(utcb, L4_TCR_BR(0)) = L4_CompleteAddressSpace.raw;
+	L4_VREG(utcb, L4_TCR_MR(0)) = ((-2) & 0xfff) << 20		/* label */
+		| fault_access << 16	/* access */
+		| 2;		/* "u" for msgtag */
+	L4_VREG(utcb, L4_TCR_MR(1)) = fault_addr;
+	L4_VREG(utcb, L4_TCR_MR(2)) = ip;
 }

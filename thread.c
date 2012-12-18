@@ -528,6 +528,14 @@ void *thread_get_utcb(struct thread *t)
 }
 
 
+struct thread *thread_get_pager(struct thread *t, void *utcb)
+{
+	if(utcb == NULL) utcb = thread_get_utcb(t);
+	L4_ThreadId_t pager_id = { .raw = L4_VREG(utcb, L4_TCR_PAGER) };
+	return !L4_IsNilThread(pager_id) ? thread_find(pager_id.raw) : NULL;
+}
+
+
 void thread_save_ctx(struct thread *t, const struct x86_exregs *regs)
 {
 	size_t flen = x86_frame_len(regs);

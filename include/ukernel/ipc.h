@@ -61,4 +61,14 @@ extern bool ipc_send_half(struct thread *sender);
 extern void set_ipc_error_thread(struct thread *t, L4_Word_t ec);
 
 
+
+/* actually from exception.c */
+extern void set_pf_msg(
+	struct thread *t,
+	void *utcb,
+	L4_Word_t fault_addr,
+	L4_Word_t ip,
+	int fault_access);
+
+
 #endif
