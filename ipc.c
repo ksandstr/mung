@@ -48,6 +48,32 @@ struct stritem_iter
 };
 
 
+/* in-progress typed transfer. */
+struct ipc_state
+{
+	/* non-derived parameters to do_typed_transfer(). (UTCB pointers aren't
+	 * retained in sleep, to avoid kernel address space pinning.)
+	 */
+	struct thread *from, *to;
+	L4_MsgTag_t tag;
+
+	/* do_typed_transfer() outer state */
+	L4_Word_t str_offset;
+	int pos, last, dbr_pos;
+
+	/* stringitem copy state */
+	int src_off;
+	struct stritem_iter src_iter, dst_iter;
+
+	uint16_t n_srcf, n_dstf;	/* at most 4M per strxfer = 2*1024 pages */
+	uint16_t fp_src, fp_dst;	/* positions in faults[] */
+	/* (first nf_src are for the source thread, next nf_dst are for dest,
+	 * after that are words for dst_iter's contents.)
+	 */
+	L4_Fpage_t faults[];	/* sizelog2 = PAGE_BITS, access = ro/rw */
+};
+
+
 static struct kmem_cache *ipc_wait_slab = NULL;
 static struct htable sendwait_hash;
 
@@ -58,6 +84,34 @@ static inline void set_ipc_error(void *utcb, L4_Word_t ec)
 	L4_VREG(utcb, L4_TCR_MR(0)) = ((L4_MsgTag_t){ .X.flags = 0x8 }).raw;
 	L4_VREG(utcb, L4_TCR_MR(1)) = 0;
 	L4_VREG(utcb, L4_TCR_MR(2)) = 0;
+}
+
+
+static void set_ipc_return_regs(
+	struct x86_exregs *regs,
+	struct thread *current,
+	void *utcb)
+{
+	assert(utcb == thread_get_utcb(current));
+	regs->eax = current->ipc_from.raw;
+	regs->esi = L4_VREG(utcb, L4_TCR_MR(0));
+	regs->ebx = L4_VREG(utcb, L4_TCR_MR(1));
+	regs->ebp = L4_VREG(utcb, L4_TCR_MR(2));
+}
+
+
+static void set_ipc_return_thread(struct thread *t)
+{
+	if(likely(!IS_KERNEL_THREAD(t))) {
+		set_ipc_return_regs(&t->ctx, t, thread_get_utcb(t));
+	}
+}
+
+
+void set_ipc_error_thread(struct thread *t, L4_Word_t ec)
+{
+	set_ipc_error(thread_get_utcb(t), ec);
+	set_ipc_return_thread(t);
 }
 
 
@@ -238,49 +292,185 @@ static int stritemlen(L4_StringItem_t *si)
 }
 
 
-static bool stritem_is_mapped(
+static int stritem_faults(
+	L4_Fpage_t *faults,
+	size_t faults_len,
 	struct space *sp,
 	L4_StringItem_t *si,
-	int access)
+	int access,
+	int max_fail)
 {
+	int n_faults = 0;
 	struct stritem_iter it;
 	stritem_first(si, &it);
 	do {
 		L4_Word_t addr = it.ptr;
 		do {
+			/* TODO: using mapdb_probe() here causes multiple lookups of the
+			 * first-level mapdb structure (i.e. map_group) where at most two
+			 * per a single string segment would suffice.
+			 */
 			struct map_entry *e = mapdb_probe(&sp->mapdb, addr);
 			if(e == NULL || !CHECK_FLAG_ALL(L4_Rights(e->range), access)) {
-				return false;
+				if(faults != NULL && n_faults < faults_len) {
+					L4_Fpage_t f = L4_FpageLog2(addr & ~PAGE_MASK, 12);
+					L4_Set_Rights(&f, access);
+					faults[n_faults] = f;
+				}
+				n_faults++;
+				if(max_fail >= 0 && n_faults > max_fail) return n_faults;
 			}
-			addr += L4_Size(e->range) - (addr - L4_Address(e->range));
+			addr += e == NULL ? PAGE_SIZE
+				: L4_Size(e->range) - (addr - L4_Address(e->range));
 		} while(addr < it.ptr + it.len);
 	} while(stritem_next(&it));
 
+	return n_faults;
+}
+
+
+/* FIXME: handle the abort case, too! */
+static void prexfer_ipc_hook(struct hook *hook, uintptr_t code, void *dataptr)
+{
+	assert(code == 0);
+
+	struct thread *t = container_of(hook, struct thread, post_exn_call);
+	assert(&t->post_exn_call == hook);
+	assert(t->ipc != NULL);
+
+	t->ipc_from.raw = t->saved_regs[12];
+	t->ipc_to.raw = t->saved_regs[13];
+
+	/* FIXME: restore send, recv timeouts (needed for other IPC stage) */
+	/* FIXME: do the next pagefault, too */
+	if(CHECK_FLAG(t->flags, TF_SENDER)) {
+		t->ipc->fp_src++;
+		assert(t->ipc->fp_src == t->ipc->n_srcf);
+	} else {
+		SWAP(L4_ThreadId_t, t->ipc_from, t->ipc_to);
+		t->ipc->fp_dst++;
+		assert(t->ipc->fp_dst == t->ipc->n_dstf);
+	}
+	t->status = TS_XFER;
+	if(ipc_partner(t)->status != TS_XFER) {
+		/* wait for partner. */
+		thread_sleep(t, L4_Never);		/* FIXME: apply xfer timeout */
+	}
+
+	hook_detach(hook);
+}
+
+
+static void send_prexfer_fault(
+	struct thread *t,
+	L4_Fpage_t fault,
+	L4_Word_t ip)
+{
+	TRACE("ipc: prexfer fault %#lx (ip %#lx) in %lu:%lu\n",
+		L4_Address(fault), ip, TID_THREADNUM(t->id), TID_VERSION(t->id));
+
+	void *utcb = thread_get_utcb(t);
+	struct thread *pager = thread_get_pager(t, utcb);
+	t->saved_regs[12] = t->ipc_from.raw;
+	t->saved_regs[13] = t->ipc_to.raw;
+	set_pf_msg(t, utcb, L4_Address(fault), ip, L4_Rights(fault));
+	hook_push_back(&t->post_exn_call, &prexfer_ipc_hook, NULL);
+	TRACE("%s: before ipc_user, status is %d\n", __func__, (int)t->status);
+	ipc_user(t, pager);
+}
+
+
+/* FIXME: this must copy recv_si out, as it is present in the caller's stack
+ * (due to copying of BRs so that they'll be in the correct order).
+ */
+static bool set_prexfer_fault_state(
+	L4_MsgTag_t tag,
+	struct thread *source,
+	L4_StringItem_t *send_si,
+	int nf_send,
+	struct thread *dest,
+	L4_StringItem_t *recv_si,
+	int recv_si_words,
+	int nf_recv)
+{
+	TRACE("%s: entered. source %lu:%lu, dest %lu:%lu\n", __func__,
+		TID_THREADNUM(source->id), TID_VERSION(source->id),
+		TID_THREADNUM(dest->id), TID_VERSION(dest->id));
+
+	assert(nf_send + nf_recv >= 0);
+	assert(source->ipc == dest->ipc);
+	size_t is_size = sizeof(struct ipc_state)
+		+ (nf_send + nf_recv) * sizeof(L4_Fpage_t)
+		+ recv_si_words * sizeof(L4_Word_t);
+	struct ipc_state *st = realloc(source->ipc, is_size);
+	if(unlikely(st == NULL)) {
+		free(source->ipc);
+		source->ipc = NULL;
+		dest->ipc = NULL;
+		st = malloc(is_size);
+		if(unlikely(st == NULL)) return false;
+	}
+	*st = (struct ipc_state){
+		.from = source, .to = dest, .tag = tag,
+		.n_srcf = nf_send, .n_dstf = nf_recv,
+	};
+	memcpy(&st->faults[nf_send + nf_recv], recv_si->raw,
+		recv_si_words * sizeof(L4_Word_t));
+	stritem_first(send_si, &st->src_iter);
+	stritem_first((L4_StringItem_t *)&st->faults[nf_send + nf_recv],
+		&st->dst_iter);
+
+	source->ipc = st;
+	dest->ipc = st;
+	source->flags |= TF_SENDER;
+	assert(!CHECK_FLAG(dest->flags, TF_SENDER));
+
+	if(nf_send > 0) {
+		stritem_faults(&st->faults[0], nf_send, source->space, send_si,
+			L4_Readable, -1);
+		send_prexfer_fault(source, st->faults[0], source->ctx.eip);
+		assert(IS_IPC_WAIT(source->status));
+	} else {
+		source->status = TS_XFER;
+		thread_sleep(source, L4_Never);		/* FIXME: xfer timeout? */
+	}
+
+	if(nf_recv > 0) {
+		stritem_faults(&st->faults[nf_send], nf_recv, dest->space, recv_si,
+			L4_Writable | L4_Readable, -1);
+
+		send_prexfer_fault(dest, st->faults[nf_send], dest->ctx.eip);
+		assert(IS_IPC_WAIT(dest->status));
+	} else {
+		dest->status = TS_XFER;
+		thread_sleep(dest, L4_Never);		/* FIXME: xfer timeout? */
+	}
+
+	TRACE("%s: exited.\n", __func__);
 	return true;
 }
 
 
 static void copy_interspace_stritem(
 	struct space *src_space,
-	L4_StringItem_t *src,
+	struct stritem_iter *src_iter,
 	struct space *dest_space,
-	L4_StringItem_t *dest)
+	struct stritem_iter *dst_iter)
 {
 	uintptr_t copy_dst = reserve_heap_page();
-	struct stritem_iter src_iter, dst_iter;
-	stritem_first(src, &src_iter);
-	stritem_first(dest, &dst_iter);
 	uint32_t copy_page = 0;
 	int s_off = 0, d_off = 0;
 	do {
 #if 0
 		printf("start of loop; s_off %d, d_off %d\n", s_off, d_off);
-		printf("  src len %d, ptr %#lx\n", (int)src_iter.len, (L4_Word_t)src_iter.ptr);
-		printf("  dst len %d, ptr %#lx\n", (int)dst_iter.len, (L4_Word_t)dst_iter.ptr);
+		printf("  src len %d, ptr %#lx\n", (int)src_iter->len,
+			(L4_Word_t)src_iter->ptr);
+		printf("  dst len %d, ptr %#lx\n", (int)dst_iter->len,
+			(L4_Word_t)dst_iter->ptr);
 #endif
 
 		/* TODO: avoid repeated probe */
-		uintptr_t dest_page = (dst_iter.ptr + d_off) & ~PAGE_MASK;
+		uintptr_t dest_page = (dst_iter->ptr + d_off) & ~PAGE_MASK;
 		struct map_entry *e = mapdb_probe(&dest_space->mapdb, dest_page);
 		if(e == NULL || !CHECK_FLAG(L4_Rights(e->range), L4_Writable)) {
 			/* FIXME: pop a write fault */
@@ -295,31 +485,31 @@ static void copy_interspace_stritem(
 			x86_flush_tlbs();		/* FIXME: just invalidate copy_dst */
 		}
 
-		int seg = MIN(int, PAGE_SIZE - ((dst_iter.ptr + d_off) & PAGE_MASK),
-				MIN(int, src_iter.len - s_off, dst_iter.len - d_off));
+		int seg = MIN(int, PAGE_SIZE - ((dst_iter->ptr + d_off) & PAGE_MASK),
+				MIN(int, src_iter->len - s_off, dst_iter->len - d_off));
 
-		int d_pos = ((dst_iter.ptr & PAGE_MASK) + d_off) & PAGE_MASK;
+		int d_pos = ((dst_iter->ptr & PAGE_MASK) + d_off) & PAGE_MASK;
 		assert(d_pos >= 0 && seg > 0);
 		assert(d_pos + seg <= PAGE_SIZE);
 		/* FIXME: check for read access in src_space! */
 		size_t n = space_memcpy_from(src_space, (void *)(copy_dst + d_pos),
-			src_iter.ptr + s_off, seg);
+			src_iter->ptr + s_off, seg);
 		if(n < seg) {
 			/* FIXME: pop a read fault */
 			printf("*** memcpy_from %#lx:%#x in space %d returned only %#x bytes\n",
-				(L4_Word_t)src_iter.ptr, (unsigned)seg,
+				(L4_Word_t)src_iter->ptr, (unsigned)seg,
 				(int)src_space->mapdb.ref_id, (unsigned)n);
 			panic("short memcpy_from in string transfer");
 		}
 
 		s_off += seg;
 		d_off += seg;
-		if(d_off == dst_iter.len) {
-			bool ok UNNEEDED = stritem_next(&dst_iter);
+		if(d_off == dst_iter->len) {
+			bool ok UNNEEDED = stritem_next(dst_iter);
 			assert(ok);
 			d_off = 0;
 		}
-	} while(s_off < src_iter.len || (s_off = 0, stritem_next(&src_iter)));
+	} while(s_off < src_iter->len || (s_off = 0, stritem_next(src_iter)));
 
 	put_supervisor_page(copy_dst, 0);
 	x86_flush_tlbs();
@@ -329,13 +519,36 @@ static void copy_interspace_stritem(
 
 static void copy_intraspace_stritem(
 	struct space *sp,
-	L4_StringItem_t *src,
-	L4_StringItem_t *dest)
+	struct stritem_iter *src,
+	struct stritem_iter *dest)
 {
 	copy_interspace_stritem(sp, src, sp, dest);
 }
 
 
+/* FIXME: catch and propagate errors from the copy_*() functions, as they gain
+ * indicators
+ */
+static void do_string_transfer(
+	struct thread *source,
+	struct stritem_iter *send_si,
+	struct thread *dest,
+	struct stritem_iter *recv_si)
+{
+	if(source->space == dest->space) {
+		/* special case for intra-space transfers */
+		copy_intraspace_stritem(source->space, send_si, recv_si);
+	} else {
+		copy_interspace_stritem(source->space, send_si,
+			dest->space, recv_si);
+	}
+}
+
+
+/* when source->ipc != NULL, this function resumes from the next typed item
+ * indicated in the ipc_state structure, and may replace source->ipc with
+ * another as page faults are generated.
+ */
 static L4_Word_t do_typed_transfer(
 	struct thread *source,
 	const void *s_base,
@@ -343,10 +556,24 @@ static L4_Word_t do_typed_transfer(
 	void *d_base,
 	L4_MsgTag_t tag)
 {
-	assert(tag.X.t > 0);
-
 	L4_Word_t str_offset = 0;		/* # of bytes copied over this IPC */
 	int pos = tag.X.u + 1, last = tag.X.u + tag.X.t, dbr_pos = 0;
+
+	if(source->ipc != NULL) {
+		/* IPC state reload. */
+		assert(CHECK_FLAG(source->flags, TF_SENDER));
+		assert(ipc_partner(source) == dest);
+
+		struct ipc_state *st = source->ipc;
+		str_offset = st->str_offset;
+		pos = st->pos;
+		last = st->last;
+		dbr_pos = st->dbr_pos;
+	} else {
+		/* parameter checks in init case only */
+		assert(tag.X.t > 0);
+	}
+
 	while(pos <= last) {
 		L4_Word_t w0 = L4_VREG(s_base, L4_TCR_MR(pos));
 		switch(w0 & 0xe) {
@@ -384,9 +611,9 @@ static L4_Word_t do_typed_transfer(
 				/* string transfers. */
 				assert((w0 & 8) == 0);
 
-				/* parse, validate, and copy the sender's string item. (FIXME:
-				 * write a test for this, i.e. that map items are handled
-				 * correctly after a stringitem.)
+				/* parse, validate, and copy the sender's string item.
+				 * (FIXME: write a test for this, i.e. that map items are
+				 * handled correctly after a stringitem.)
 				 */
 				int si_start = pos;
 				L4_StringItem_t *si = (L4_StringItem_t *)&L4_VREG(s_base,
@@ -404,6 +631,9 @@ static L4_Word_t do_typed_transfer(
 						panic("invalid stringitem = invalid IPC (FIXME)");
 					}
 
+					/* FIXME: clear sender's string address in interspace
+					 * transfers for security's sake.
+					 */
 					for(int i=0; i < subs + 1; i++) {
 						int reg = L4_TCR_MR(pos + i);
 						L4_VREG(d_base, reg) = L4_VREG(s_base, reg);
@@ -427,6 +657,7 @@ static L4_Word_t do_typed_transfer(
 					}
 					dbr_pos = 1;
 				}
+				assert(dbr_pos < 64);
 				union {
 					L4_Word_t raw[63];
 					L4_StringItem_t si;
@@ -434,7 +665,7 @@ static L4_Word_t do_typed_transfer(
 				brs.raw[0] = L4_VREG(d_base, L4_TCR_BR(dbr_pos));
 				brs.raw[1] = L4_VREG(d_base, L4_TCR_BR(dbr_pos + 1));
 				if(unlikely(!L4_IsStringItem(&brs.si))) goto msg_overflow;
-				int tot_br_words = MAX(int, 64 - dbr_pos,
+				int tot_br_words = MIN(int, 64 - dbr_pos,
 					L4_Substrings(&brs.si) + 2);
 				for(int i=2; i < tot_br_words; i++) {
 					brs.raw[i] = L4_VREG(d_base, L4_TCR_BR(dbr_pos + i));
@@ -444,24 +675,51 @@ static L4_Word_t do_typed_transfer(
 
 				int send_len = stritemlen(send_si);
 				if(send_len > stritemlen(recv_si)) goto msg_overflow;
-				if(stritem_is_mapped(source->space, send_si, L4_Readable)
-					&& stritem_is_mapped(dest->space, recv_si, L4_Writable))
-				{
-					if(source->space == dest->space) {
-						/* special case for intra-space transfers */
-						copy_intraspace_stritem(source->space, send_si, recv_si);
-					} else {
-						copy_interspace_stritem(source->space, send_si,
-							dest->space, recv_si);
-					}
+				int nf_src = stritem_faults(NULL, 0, source->space, send_si, L4_Readable, -1),
+					nf_dst = stritem_faults(NULL, 0, dest->space, recv_si,
+						L4_Readable | L4_Writable, -1);
+				if(nf_src == 0 && nf_dst == 0) {
+					/* FIXME: catch errors from this! */
+					struct stritem_iter s, r;
+					stritem_first(send_si, &s);
+					stritem_first(recv_si, &r);
+					do_string_transfer(source, &s, dest, &r);
 					str_offset += send_len;
 				} else {
-					/* FIXME: cheerfully skipping other cases */
+					bool ok = set_prexfer_fault_state(tag,
+						source, send_si, nf_src,
+						dest, recv_si, tot_br_words, nf_dst);
+					if(!ok) {
+						/* FIXME: this should be handled with the syscall
+						 * restart on malloc fail mechanism that unmap (and
+						 * granting IPC) would use, and which isn't written.
+						 */
+						panic("out of memory in a critical spot!");
+					}
+					source->ipc->str_offset = str_offset;
+					source->ipc->pos = pos;
+					source->ipc->last = last;
+					source->ipc->dbr_pos = dbr_pos;
+
+					/* this, with source->ipc != NULL, means that the
+					 * operation didn't complete and that another thread
+					 * should be scheduled.
+					 */
+					return 0;
 				}
 
 				break;
 			}
 		}
+	}
+
+	/* successful exit; the typed transfer has completed. */
+	if(source->ipc != NULL) {
+		assert(source->ipc == dest->ipc);
+		free(source->ipc);
+		source->ipc = NULL;
+		dest->ipc = NULL;
+		source->flags &= ~TF_SENDER;
 	}
 
 	return 0;
@@ -476,6 +734,82 @@ too_short:
 
 msg_overflow:
 	return (str_offset << 4) | 0x8;
+}
+
+
+bool ipc_resume(struct thread *t, bool *preempt_p)
+{
+	assert(t->status == TS_XFER);
+	assert(t->ipc != NULL);
+	struct ipc_state *st = t->ipc;
+	struct thread *dest = st->to, *source = st->from;
+
+	/* right now, only the pre-transfer faults' case winds up here, so there's
+	 * no "this position in the string" information in ipc_state.
+	 *
+	 * nor are any errors propagated from do_string_transfer() on mid-xfer
+	 * faults.
+	 *
+	 * FIXME: also, a pointer to the sender's UTCB range has been retained in
+	 * the ipc_state. it should instead have a pointer to a copy, like it does
+	 * of the receiver's buffer items.
+	 */
+	do_string_transfer(st->from, &st->src_iter, st->to, &st->dst_iter);
+
+	/* bump the typed IPC state just as do_typed_transfer() would after a
+	 * single stringitem iteration
+	 */
+	L4_StringItem_t *src_si = (L4_StringItem_t *)&st->src_iter.words[0];
+	assert(L4_IsStringItem(src_si));
+
+	assert(!L4_CompoundString(src_si));		/* FIXME */
+	st->pos += L4_Substrings(src_si) + 2;	/* ^ */
+
+	st->str_offset += stritemlen(src_si);
+
+	L4_Word_t err = do_typed_transfer(st->from, thread_get_utcb(st->from),
+		st->to, thread_get_utcb(st->to), (L4_MsgTag_t){ });
+	if(unlikely(err != 0)) {
+		/* FIXME: set error as though it had happened in ipc_send_half()'s
+		 * do_ipc_transfer() callsite
+		 */
+		panic("can't propagate resumed typed-transfer errors");
+	}
+
+	assert(dest->ipc == NULL);
+	dest->status = TS_READY;
+	dest->wakeup_time = 0;
+	sq_update_thread(dest);
+	dest->ipc_from.raw = source->id;
+	set_ipc_return_thread(dest);
+
+	assert(source->ipc == NULL);
+	source->wakeup_time = 0;
+	if(L4_IsNilThread(source->ipc_from)) {
+		source->status = TS_READY;
+		set_ipc_return_thread(source);
+	} else {
+		source->status = TS_R_RECV;
+	}
+	sq_update_thread(source);
+
+	/* assumed to have always completed. wheeee (FIXME: lies!) */
+	*preempt_p = false;		/* FIXME */
+	return true;
+}
+
+
+struct thread *ipc_partner(struct thread *t)
+{
+	assert(t->status == TS_XFER);
+	assert(t->ipc != NULL);
+	assert(!CHECK_FLAG(t->flags, TF_SENDER) || t == t->ipc->from);
+	assert(CHECK_FLAG(t->flags, TF_SENDER) || t == t->ipc->to);
+
+	struct thread *partner = CHECK_FLAG(t->flags, TF_SENDER) ? t->ipc->to : t->ipc->from;
+	assert(partner->status == TS_XFER);
+	assert(partner->ipc == t->ipc);
+	return partner;
 }
 
 
@@ -497,34 +831,6 @@ static L4_Word_t do_ipc_transfer(
 	else {
 		return do_typed_transfer(source, s_base, dest, d_base, tag);
 	}
-}
-
-
-static void set_ipc_return_regs(
-	struct x86_exregs *regs,
-	struct thread *current,
-	void *utcb)
-{
-	assert(utcb == thread_get_utcb(current));
-	regs->eax = current->ipc_from.raw;
-	regs->esi = L4_VREG(utcb, L4_TCR_MR(0));
-	regs->ebx = L4_VREG(utcb, L4_TCR_MR(1));
-	regs->ebp = L4_VREG(utcb, L4_TCR_MR(2));
-}
-
-
-static void set_ipc_return_thread(struct thread *t)
-{
-	if(likely(!IS_KERNEL_THREAD(t))) {
-		set_ipc_return_regs(&t->ctx, t, thread_get_utcb(t));
-	}
-}
-
-
-void set_ipc_error_thread(struct thread *t, L4_Word_t ec)
-{
-	set_ipc_error(thread_get_utcb(t), ec);
-	set_ipc_return_thread(t);
 }
 
 
@@ -659,6 +965,8 @@ bool ipc_send_half(struct thread *self)
 			TID_THREADNUM(self_id.raw), TID_VERSION(self_id.raw),
 			TID_THREADNUM(self->id), TID_VERSION(self->id));
 
+		assert(self->ipc == NULL || tag.X.t == 0);
+		bool had_no_ipc = self->ipc == NULL;
 		L4_Word_t error = do_ipc_transfer(self, dest);
 		if(unlikely(error != 0)) {
 			TRACE("%s: active send caused errorcode %#lx\n", __func__, error);
@@ -675,11 +983,18 @@ bool ipc_send_half(struct thread *self)
 			set_ipc_error(thread_get_utcb(self), error & ~1ul);
 			assert(self->status == TS_RUNNING);
 			return false;
+		} else if(self->ipc != NULL && had_no_ipc) {
+			/* (may be in send_wait, to pager; recv_wait and r_recv, from
+			 * pager; and xfer, waiting for partner's pager thing.)
+			 */
+			assert(IS_IPC(self->status));
+			return false;
 		}
 
 		/* receiver's IPC return */
 		dest->ipc_from = self_id;
-		if(likely(!post_exn_ok(dest))) {
+		bool regular = !post_exn_ok(dest);
+		if(regular) {
 			/* ordinary IPC; set up the IPC return registers. */
 			set_ipc_return_thread(dest);
 			if(propagated) {
@@ -689,12 +1004,28 @@ bool ipc_send_half(struct thread *self)
 				L4_VREG(dest_utcb, L4_TCR_VA_SENDER) = self->id;
 			}
 		}
-		/* join with the overridden status. this satisfies thread_wake()'s
-		 * precondition.
-		 */
-		assert(dest->status == TS_RECV_WAIT || dest->status == TS_R_RECV);
-		dest->status = status;
-		thread_wake(dest);
+
+		if(dest->ipc != NULL) {
+			/* a string transfer's post-exception hook put @dest in another
+			 * IPC operation, or into waiting for ipc_resume() when the
+			 * scheduler notes its TS_XFER.
+			 */
+			assert(!regular);
+			if(dest->status == TS_XFER
+				&& ipc_partner(dest)->status == TS_XFER)
+			{
+				thread_wake(dest);
+			} else {
+				thread_sleep(dest, L4_Never);	/* FIXME: apply xfer timeout */
+			}
+		} else {
+			/* wake the receiver up, joining with the overridden status. this
+			 * satisfies thread_wake()'s precondition.
+			 */
+			assert(dest->status == TS_RECV_WAIT || dest->status == TS_R_RECV);
+			dest->status = status;
+			thread_wake(dest);
+		}
 
 		if(L4_IsNilThread(self->ipc_from)) {
 			/* send-only, and done. */
@@ -748,6 +1079,9 @@ void ipc_simple(struct thread *dest)
 }
 
 
+/* FIXME: have caller set send, recv timeouts. #PF uses never/never, and
+ * string transfer faults should time out according to the xfer timeout.
+ */
 void ipc_user(struct thread *from, struct thread *to)
 {
 	from->ipc_to.raw = to->id;
@@ -888,7 +1222,9 @@ bool ipc_recv_half(struct thread *self, bool *preempt_p)
 }
 
 
-/* IPC in a kernel thread. */
+/* IPC in a kernel thread. string transfers are forbidden, enforced by
+ * checking that BR0.s == 0 .
+ */
 L4_MsgTag_t kipc(
 	L4_ThreadId_t to,
 	L4_ThreadId_t *from_p,
@@ -896,6 +1232,7 @@ L4_MsgTag_t kipc(
 {
 	struct thread *current = get_current_thread();
 	void *utcb = thread_get_utcb(current);
+	assert(!CHECK_FLAG(L4_VREG(utcb, L4_TCR_BR(0)), 0x2));
 
 	current->ipc_from = *from_p;
 	current->ipc_to = to;
@@ -915,6 +1252,7 @@ L4_MsgTag_t kipc(
 			return tag;
 		}
 	}
+	assert(current->status != TS_XFER);
 
 	if(likely(!L4_IsNilThread(current->ipc_from))) {
 		bool preempt = false;
@@ -934,6 +1272,7 @@ L4_MsgTag_t kipc(
 		tag.raw = L4_VREG(utcb, L4_TCR_MR(0));
 		if(likely(L4_IpcSucceeded(tag))) *from_p = current->ipc_from;
 	}
+	assert(current->status != TS_XFER);
 
 	return tag;
 }
@@ -997,7 +1336,9 @@ void sys_ipc(struct x86_exregs *regs)
 
 	bool preempt = false;
 	ipc(current, utcb, &preempt);
-	if(current->status == TS_SEND_WAIT || current->status == TS_RECV_WAIT) {
+	if(current->status == TS_SEND_WAIT || current->status == TS_RECV_WAIT
+		|| current->status == TS_XFER)
+	{
 		TRACE("%s: returning to scheduler\n", __func__);
 		thread_save_ctx(current, regs);
 		/* TODO: schedule the waitee */

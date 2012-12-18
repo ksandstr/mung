@@ -25,9 +25,10 @@ typedef L4_Word_t thread_id;
 #define TID_VERSION(tid) ((tid) & TID_VERSION_MASK)
 
 /* values of <struct thread>.flags */
-#define TF_HALT 0x1		/* after IPC completion, go to TS_STOPPED */
+#define TF_HALT		0x1		/* after IPC completion, go to TS_STOPPED */
+#define TF_SENDER	0x2		/* is the sender of a suspended typed transfer */
 
-/* thread states (<struct thread>.status) */
+/* thread states (<struct thread>.status); see also sched_status_str() */
 #define TS_STOPPED 0
 #define TS_DEAD 1		/* (kthread only) thread waits for pruning */
 #define TS_RUNNING 2
@@ -35,12 +36,13 @@ typedef L4_Word_t thread_id;
 #define TS_R_RECV 4		/* (user only) ready to do IPC receive phase */
 #define TS_SEND_WAIT 5
 #define TS_RECV_WAIT 6
+#define TS_XFER 7		/* see TF_SENDER */
 
 
 /* TODO: clean these up. */
-#define IS_READY(st) (st == TS_READY || st == TS_R_RECV)
+#define IS_READY(st) ((st) == TS_READY || (st) == TS_R_RECV)
 #define IS_IPC_WAIT(st) (st == TS_SEND_WAIT || st == TS_RECV_WAIT)
-#define IS_IPC(st) (IS_IPC_WAIT(st) || st == TS_R_RECV)
+#define IS_IPC(st) (IS_IPC_WAIT(st) || st == TS_R_RECV || st == TS_XFER)
 #define IS_SCHED(thread) ((thread)->status >= TS_RUNNING)
 
 /* (requires inclusion of <ukernel/space.h>) */
@@ -53,6 +55,7 @@ typedef L4_Word_t thread_id;
 
 
 struct space;
+struct ipc_state;		/* private to ipc.c */
 
 struct thread
 {
@@ -108,9 +111,20 @@ struct thread
 	 * NOTE #2: buffer registers are stored in a reverse order at
 	 * saved_regs[saved_mrs .. saved_brs - 1], i.e. high number to low. this
 	 * is due to the spec's UTCB layout.
+	 * NOTE #3: send_prexfer_fault() and its hook function keep the original
+	 * ipc_from & ipc_to values in saved_regs[12, 13] respectively, as it's
+	 * known that set_pf_msg() only uses the first four.
 	 */
 	uint8_t saved_mrs, saved_brs;
 	L4_Word_t saved_regs[14];
+
+	/* context of the IPC state machine. emitted by do_typed_transfer()
+	 * whenever a string transfer becomes complex and doesn't immediately
+	 * abort. when this field is not NULL, threads coming out of RECV_WAIT
+	 * (for pager replies) transition into SENDING/RECVING per the presence or
+	 * absence, respectively, of the TF_SENDER bit in @flags.
+	 */
+	struct ipc_state *ipc;
 
 	struct list_node dead_link;	/* link in dead_thread_list */
 };
@@ -184,13 +198,16 @@ extern void thread_ipc_fail(struct thread *t);
 /* sets a thread's wakeup timer and updates its scheduling. if "period" is
  * L4_ZeroTime, the thread wakes up immediately.
  *
- * requires that status \in {RECV_WAIT, SEND_WAIT}.
+ * (see thread_wake() for the period = L4_Never case.)
+ *
+ * requires that status \in {RECV_WAIT, SEND_WAIT, XFER}.
  */
 extern void thread_sleep(struct thread *t, L4_Time_t period);
 
 /* interrupts an IPC wait (incl. R_RECV state) and sets state to STOPPED or
- * READY, depending on TF_HALT as you'd expect. low-level function; doesn't
- * set error codes or invoke exception IPC callbacks. exactly equivalent to
+ * READY, depending on TF_HALT as you'd expect; or retains it as XFER if it
+ * was already XFER. this is a low-level function: it doesn't set error codes
+ * or invoke exception IPC callbacks. it's exactly equivalent to
  * thread_sleep(t, L4_ZeroTime), but this is better documentation.
  *
  * requires that status \in {RECV_WAIT, SEND_WAIT}.

@@ -10,6 +10,7 @@
 
 
 struct thread;
+struct ipc_state;
 
 
 extern void init_ipc(void);
@@ -56,6 +57,14 @@ extern void sys_ipc(struct x86_exregs *regs);
  */
 extern bool ipc_recv_half(struct thread *receiver, bool *preempt_p);
 extern bool ipc_send_half(struct thread *sender);
+
+/* similar to ipc_recv_half(), but @peer->state == TS_XFER */
+extern bool ipc_resume(struct thread *peer, bool *preempt_p);
+
+/* partner thread of a thread in TS_XFER. accessor of the ipc_state
+ * structure.
+ */
+extern struct thread *ipc_partner(struct thread *t);
 
 /* used by the scheduler */
 extern void set_ipc_error_thread(struct thread *t, L4_Word_t ec);

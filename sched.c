@@ -112,6 +112,7 @@ const char *sched_status_str(struct thread *t)
 		[TS_R_RECV] = "r_recv",
 		[TS_SEND_WAIT] = "send_wait",
 		[TS_RECV_WAIT] = "recv_wait",
+		[TS_XFER] = "xfer",
 	};
 	assert(status >= 0 && status < (sizeof(table) / sizeof(table[0])));
 	return table[status];
@@ -306,6 +307,14 @@ static struct thread *schedule_next_thread(
 			 */
 			timeout_ipc(cand);
 			if(cand->status != TS_READY) continue;
+		} else if(cand->status == TS_XFER) {
+			assert(cand->ipc != NULL);
+
+			/* FIXME: check for xfer timeout? (partner's xfer timeout comes up
+			 * when it gets scheduled, and not otherwise.)
+			 */
+			struct thread *partner = ipc_partner(cand);
+			if(partner->status != TS_XFER) continue;
 		}
 
 		/* ignore lower-priority threads if a zero-quantum thread was seen
@@ -398,17 +407,33 @@ bool schedule(void)
 		return schedule();
 	}
 
-	if(next->status == TS_R_RECV) {
-		/* FIXME: handle halted threads properly; they should leave the
-		 * scheduling queue after the receive phase.
-		 */
-		assert(!IS_KERNEL_THREAD(next));
-		bool preempt = false, r_done = ipc_recv_half(next, &preempt);
-		if((!r_done && next->status == TS_RECV_WAIT) || (r_done && preempt)) {
-			/* either entered passive receive (and not eligible to run
-			 * anymore), or preempted by the sender. try again.
+	switch(next->status) {
+		case TS_R_RECV: {
+			/* FIXME: handle halted threads properly; they should leave the
+			 * scheduling queue after the receive phase.
 			 */
-			return schedule();
+			assert(!IS_KERNEL_THREAD(next));
+			bool preempt = false, r_done = ipc_recv_half(next, &preempt);
+			if((!r_done && next->status == TS_RECV_WAIT) || (r_done && preempt)) {
+				/* either entered passive receive (and not eligible to run
+				 * anymore), or preempted by the sender. try again.
+				 */
+				return schedule();
+			}
+			break;
+		}
+
+		case TS_XFER: {
+			assert(!IS_KERNEL_THREAD(next));
+			bool preempt = false, done = ipc_resume(next, &preempt);
+			if(!done || preempt) {
+				/* the only case where @next continues is where the typed
+				 * transfer completed, and @next wasn't preempted by the
+				 * partner.
+				 */
+				return schedule();
+			}
+			break;
 		}
 	}
 

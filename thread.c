@@ -463,7 +463,8 @@ uint64_t wakeup_at(L4_Time_t period)
 
 void thread_sleep(struct thread *t, L4_Time_t period)
 {
-	assert(t->status == TS_SEND_WAIT || t->status == TS_RECV_WAIT);
+	assert(t->status == TS_SEND_WAIT || t->status == TS_RECV_WAIT
+		|| (t->status == TS_XFER && t->ipc != NULL));
 	/* NOTE: this function was merged with thread_wake(), which asserted
 	 * against {STOPPED, DEAD} rather than for the IPC wait states. callers
 	 * should handle R_RECV separately as it doesn't instantly promote to
@@ -481,7 +482,7 @@ void thread_sleep(struct thread *t, L4_Time_t period)
 			sq_remove_thread(t);
 		} else {
 			/* extreme napping */
-			t->status = TS_READY;
+			if(t->status != TS_XFER) t->status = TS_READY;
 			t->wakeup_time = 0;
 			sq_update_thread(t);
 		}
