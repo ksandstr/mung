@@ -36,9 +36,15 @@ sub completed {
 	my $test = shift;
 	my $iter = shift // 0;
 
-	$test = $test->id if blessed($test) && $test->isa('Mung::Test');
-	$test .= ":$iter" unless $test =~ /:/;
-	$self->completed_set->{$test} = 1;
+	my $cid;
+	if(blessed($test) && $test->isa('Mung::Test')) {
+		$cid = $test->id;
+		$cid .= ":$iter" unless $cid =~ /:/;
+	} else {
+		# $test may also be just the identifier.
+		$cid = $test;
+	}
+	$self->completed_set->{$cid} = 1;
 }
 
 

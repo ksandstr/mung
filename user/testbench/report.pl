@@ -147,10 +147,10 @@ while(1) {
 			my $prid = $sink->test->id . ":" . $result->iter;
 			if(($panic_restart_id // '') eq $prid) {
 				$sink->print("double panic, skipping `$prid' entirely\n");
-				$ctrl->completed->{$prid} = 1;
+				$ctrl->completed($prid);
 				$ctrl->restarted_with();	# pretend it's OK.
 			} else {
-				$ctrl->restarted_with($sink->test->id . ":" . $result->iter);
+				$ctrl->restarted_with($prid);
 				$panic_restart_id = $prid;
 			}
 			last;
