@@ -38,6 +38,16 @@ Perl packages (names from the Debian repository):
 
 ### Doesn't work. ###
 
+#### Library was skipped because of format ####
+
+On amd64 Debian this is remedied with the
+
+    binutils-gold
+
+package, along with the relevant 32-bit multiarch GCC and so forth.
+
+#### ... no, not that one ####
+
 Figure it out. File an issue. Or don't.
 
 
