@@ -18,7 +18,7 @@ around '_end_test' => sub {
 
 	my $UNUSED_name = shift;
 	my %args = @_;
-	if($args{failmsg} || @{$result->not_ok}) {
+	if($args{failmsg} || $result->failed) {
 		die Mung::Error::TestRestart->new(
 			test => $self->test, result => $result);
 	} else {

@@ -2,6 +2,7 @@ package Mung::TestResult;
 use Moose;
 
 use TryCatch;
+use Struct::Compare qw/compare/;
 use Mung::TapError;
 
 
@@ -26,6 +27,13 @@ has [qw/planned seen passed skipped/] => (
 	is => 'rw', isa => 'Int',
 	default => 0);
 
+# either false, or "PANIC"
+has 'status' => (is => 'rw', isa => 'Str');
+
+# defined when $self->status isn't false
+has 'fail_msg' => (is => 'rw', isa => 'Str');
+
+
 # could model each test point separately, but for now just record each point
 # as a failure.
 has 'not_ok' => (
@@ -44,10 +52,51 @@ has 'tap_high' => (is => 'rw', isa => 'Int');
 has 'tap_next' => (is => 'rw', isa => 'Int');
 
 
-# called at the "*** end test" control line regardless of plan status. does
-# nothing for now; should synthesize return code on incomplete TAP stream.
+# compares the test results. this predicate controls how double results are
+# presented.
+sub eqv_to {
+	my $self = shift;
+	my $other = shift;
+
+	die "type mismatch" unless blessed($other)
+		&& $other->isa('Mung::TestResult');
+	my $scd = "*** something completely different! ***";
+	my @fields = (qw/test_id iter no_plan tap_low tap_high planned seen passed/,
+		qw/skipped not_ok test_log report_log status fail_msg/);
+	foreach my $name (@fields) {
+		my $ours = $self->$name // $scd;
+		my $theirs = $other->$name // $scd;
+		return 0 unless compare($ours, $theirs);
+	}
+
+	return 1;
+}
+
+
+# called at the "*** end test" control line regardless of plan.
+# recognizes a test's panic and fail results; should also record the return
+# code (if that makes any sense at all).
 sub done {
-	# fnord
+	my $self = shift;
+	my %args = @_;
+
+	if(exists $args{panic}) {
+		$self->status('PANIC');
+		$self->fail_msg($args{panic});
+	} elsif(exists $args{failmsg}) {
+		$self->status('FAIL');
+		$self->fail_msg($args{failmsg});
+	} else {
+		$self->status('');
+	}
+}
+
+
+# whether the test failed (i.e. had not_ok test points, or panicked, or
+# something)
+sub failed {
+	my $self = shift;
+	return $self->status || @{$self->not_ok} > 0;
 }
 
 

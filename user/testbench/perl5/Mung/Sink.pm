@@ -65,6 +65,7 @@ sub done {
 }
 
 
+# all _{begin,end}_suite functions are called from ctl_line.
 sub _begin_suite {
 	my $self = shift;
 	my $name = shift;
@@ -112,11 +113,12 @@ sub _begin_test {
 	my $tcn = $self->tcase->name;
 	my $path = "$sn:$tcn:$name";
 	$self->test($self->test_by_path->{$path} || die "no test plan for $path");
-	$self->test->begin_test(@_,
+	$self->test->begin(@_,
 		report_msg_hook => sub { $self->print(shift . "\n"); });
 }
 
 
+# FIXME: what's this doing here? what's it for, anyway?
 sub _completed {
 	my $self = shift;
 
@@ -125,31 +127,45 @@ sub _completed {
 }
 
 
+# args: $name, (as for Mung::Test->done)
+# returns the relevant Mung::TestResult object, mostly for the benefit of
+# Moose "around"s.
 sub _end_test {
 	my $self = shift;
 	my $name = shift;
-	my %args = @_;
 
-	my $res = $self->current_result;
-	if($args{failmsg}) {
-		$self->print("test failed: $args{failmsg}");
+	# TODO: report a stream error when $name ne $self->test->name
+
+	my $first = @{$self->test->results} == 0;
+	my $res = $self->test->end(@_);
+	if($res->status) {
 		$self->failed($self->failed + 1);
 	} else {
 		$self->_completed($self->test, $res);
-	}
-	if($res->planned > $res->seen) {
-		$self->print("planned " . $res->planned
-			. " test(s), but executed only " . $res->seen);
-		$self->incorrect($self->incorrect + 1);
+		if($res->planned > $res->seen) {
+			$self->print("planned " . $res->planned
+				. " test(s), but executed only " . $res->seen . "\n");
+			$self->incorrect($self->incorrect + 1);
+		}
 	}
 
-	if(@{$self->test->results} == 1) {
+	if($first) {
 		# record execution. consumed by close_suite()
 		push @{$self->tcase->tests}, $self->test;
 	}
 
-	# for the benefit of around '_end_test': return a Mung::TestResult object.
-	return $self->test->end_test;
+	return $res;
+}
+
+
+# panic lines are received from outside as they are relevant to process
+# restarts, which the Sink doesn't control.
+#
+# returns Mung::TestResult . leaves $self->test as it was before the call.
+sub test_panic {
+	my $self = shift;
+	my $msg = shift // '<<no message>>';
+	return $self->_end_test($self->test->name, panic => $msg);
 }
 
 
@@ -230,11 +246,8 @@ sub ctl_line {
 		$self->failmsg($2 || '');
 	} elsif($msg =~ /test [`'](\w+)' failed, rc (\d+)/) {
 		# TODO: output something that relates the return code to the test
-		# plan.
-		# TODO: also do that for tests that didn't fail.
-		$self->_end_test($1,
-			rc => int($2) || 0,
-			failmsg => $self->failmsg);
+		# plan. do that for tests that didn't fail, too.
+		$self->_end_test($1, rc => int($2) || 0, failmsg => $self->failmsg);
 		$self->failmsg('');
 	} elsif($msg =~ /desc (test|tcase|suite) `(\w+)'(\s*low:(\d+)\s*high:(\d+)\s*id:([a-zA-Z0-9]+))?/) {
 		my @args = (name => $2);

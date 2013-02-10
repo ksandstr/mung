@@ -85,7 +85,6 @@ my @errors;
 my %completed;
 
 my $sink = Mung::Sink->new(output => Mung::ConsoleReport->new);
-sub report_msg { $sink->print("$_\n") foreach @_; }
 my $ctrl = Mung::Ctrl->new(@ctrl_param, sink => $sink);
 $sink->on_complete_fn(sub { $ctrl->completed($_[0], $_[1]->iter); });
 
@@ -126,30 +125,36 @@ while(1) {
 			# TODO: restart in such a way as to discover the combination of
 			# tests that causes the panic, and report that.
 			#
-			# also, the test log isn't very useful -- it's just a whine from
-			# some class or another about how it doesn't understand an assert
-			# failure message.
-			#
-			# this case shouldn't even be here today.
-			$sink->print("*** test program panic: `$1'\n");
-			my $result = $sink->test->end_test;
+			# FIXME: this code should reasonably be in Mung::Sink->tb_line, or
+			# something under that, as it duplicates the restart-on-failure
+			# function entirely; just the error messages need be specialized.
+			my $result;
+			try {
+				$result = $sink->test_panic($1);
+			}
+			catch (Mung::Error::TestRestart $exn) {
+				$result = $exn->result;
+			}
+			my $prid = $sink->test->id . ":" . $result->iter;
+
 			my $tlog = $result->test_log;
-			if(@$tlog) {
-				my $path = $sink->test->path;
-				$path .= ":" . $result->iter
-					if $sink->test->low < $sink->test->high;
-				$sink->print("test log for `$path' follows.\n");
+			if($ENV{VERBOSE} && @$tlog) {
+				$sink->print("test log for `$prid' follows.\n");
 				foreach (@$tlog) {
 					chomp;
 					$sink->print("  = $_\n");
 				}
 			}
-			my $prid = $sink->test->id . ":" . $result->iter;
+
+			my $path = $sink->test->path;
+			$path .= ':' . $result->iter
+				if $sink->test->low < $sink->test->high;
 			if(($panic_restart_id // '') eq $prid) {
-				$sink->print("double panic, skipping `$prid' entirely\n");
+				$sink->print("- double panic, skipping `$path'\n");
 				$ctrl->completed($prid);
 				$ctrl->restarted_with();	# pretend it's OK.
 			} else {
+				$sink->print("- program exited with panic in `$path'\n");
 				$ctrl->restarted_with($prid);
 				$panic_restart_id = $prid;
 			}
@@ -163,7 +168,7 @@ while(1) {
 			my $test = $exn->test;
 			my $result = $exn->result;
 			my $rest_id = $test->id . ":" . $result->iter;
-			# report_msg("restarting on `$rest_id'.");
+			# $sink->print("restarting on `$rest_id'.\n");
 			if(defined $prev_restart_id && $prev_restart_id ne $rest_id) {
 				# first restart on this ID
 				$ctrl->restarted_with($rest_id);
@@ -180,7 +185,8 @@ while(1) {
 			last;
 		}
 		catch (Mung::Error $exn) {
-			report_msg("test aborted: " . $exn->to_string);
+			$sink->print("- test aborted with exception: "
+				. $exn->to_string . "\n");
 			last;
 		}
 	}
@@ -203,28 +209,52 @@ my @out;
 foreach my $suite (@{$sink->suites}) {
 	foreach my $tcase (@{$suite->tcases}) {
 		foreach my $test (@{$tcase->tests}) {
-			my @results = @{$test->results};
-			next if none { @{$_->not_ok} > 0 } @results;
+			my @fails = map { $_->failed ? ($_) : () } @{$test->results};
+			next unless @fails;
 
-			my $res = pop @results;
-			my $sum = scalar @{$res->not_ok};
-			$notok_suites{$suite->{name}} = 1;
+			# there are roughly two kinds of test failures. first are the
+			# failed test points, and second is the outright test panic.
+			#
+			# TODO: for now they're reported one after the other, however,
+			# it'd be useful to dump the entire TAP output on panic instead of
+			# just the not-ok report log.
+			#
+			# TODO: there's a third kind, akin to the second, where the test
+			# hits a Check-style fail_if() assertion, but that's not handled
+			# here.
 
-			my $tn = $test->name;
-			$tn .= ":" . $res->iter if $test->low != $test->high;
-			push @out, "Test `$tn' in case `" . $tcase->name
-				. "' had $sum failed test point(s):";
-			foreach my $p (@{$res->not_ok}) {
-				my $report = $p->{report};
-				$report =~ s/\[\w+:\w+\]\s?//;
-				push @out, "  $p->{id}:\t$report";
+			my $sum_notok = 0;
+			my $num_skipped = 0;
+			while(@fails) {
+				my $res = shift @fails;
+				if(@fails && $res->eqv_to($fails[0])) {
+					$num_skipped++;
+					next;
+				}
+
+				my $tn = $test->name;
+				$tn .= ":" . $res->iter if $test->low != $test->high;
+				my $nfails = $res->failed;
+				$sum_notok += $nfails;
+
+				push @out, "Test `$tn' in case `" . $tcase->name
+					. "' had $nfails failed test point(s)";
+				push @out, "  " . join(" ", $res->failed);
+
+				if($res->status eq 'FAIL') {
+					push @out, "  and exited with failed assertion: " . $res->fail_msg;
+				} elsif($res->status eq 'PANIC') {
+					push @out, "  and hit panic condition: " . $res->fail_msg;
+				}
+
+				if($num_skipped > 0) {
+					# (add note to the previous test's output.)
+					my $times = $num_skipped + 1;
+					push @out, "  (was run $times times total; last reported.)";
+					$num_skipped = 0;
+				}
 			}
-
-			if(@results) {
-				# FIXME: report on differing @{$_->not_ok} lists and so forth
-				my $times = scalar(@results) + 1;
-				push @out, "  (was run $times times total; last reported.)";
-			}
+			$notok_suites{$suite->{name}} = 1 if $sum_notok > 0;
 		}
 	}
 }

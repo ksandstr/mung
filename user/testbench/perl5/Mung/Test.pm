@@ -9,7 +9,8 @@ has [ qw/low high/ ] => (is => 'rw', isa => 'Int', default => 0);
 
 has 'results' => (
 	is => 'rw', isa => 'ArrayRef[Mung::TestResult]',
-	default => sub { [] });
+	default => sub { [] },
+	documentation => q{Completed results for this test.});
 has 'current_result' => (
 	is => 'rw', isa => 'Maybe[Mung::TestResult]',
 	handles => [ qw/log tap_line/ ]);
@@ -22,35 +23,34 @@ sub path {
 }
 
 
-# this, and ->end_test, were named badly. the class is already called Test.
-# you don't tell a test object to begin/end a test.
-sub begin_test {
+# open a result object on this test.
+sub begin {
 	my $self = shift;
-	my %args = @_;
+	die "double begin" if $self->current_result;
 
-	if($self->current_result) {
-		warn "test result wasn't ended properly";
-		$self->end_test;
-	}
+	my %args = @_;
+	my $iter = $args{iter} // 0;
+	my $report_hook = $args{report_msg_hook};
+
 	# TODO: pass prior_tests also!
-	my @parms = (test_id => $self->id, iter => $args{iter} || 0);
-	if($args{report_msg_hook}) {
-		push @parms, (report_msg_hook => $args{report_msg_hook});
+	my @parms = (test_id => $self->id, iter => $iter);
+	if($report_hook) {
+		push @parms, (report_msg_hook => $report_hook);
 	}
 	$self->current_result(Mung::TestResult->new(@parms));
-	push @{$self->results}, $self->current_result;
 
 	return $self->current_result;
 }
 
 
-sub end_test {
+# close the result object. arguments as for Mung::TestResult->done .
+sub end {
 	my $self = shift;
-	my $cr = $self->current_result || die "no test active";
-	my $result = $self->current_result;
-	$result->done(@_);
+	my $cr = $self->current_result || die "no active test";
+	$cr->done(@_);
+	push @{$self->results}, $cr;
 	$self->current_result(undef);
-	return $result;
+	return $cr;
 }
 
 

@@ -32,10 +32,8 @@ root server besides `testbench`, go chuck some runes of your own. Proper-ish
 test reporting can be had from the `make check' target, which requires a few
 Perl packages (names from the Debian repository):
 
-    libmoose-perl
-    libtrycatch-perl
-    liblist-moreutils-perl
-    libdevel-cover-perl
+    libmoose-perl libtrycatch-perl liblist-moreutils-perl libdevel-cover-perl
+    libstruct-compare-perl
 
 
 ### Doesn't work. ###
