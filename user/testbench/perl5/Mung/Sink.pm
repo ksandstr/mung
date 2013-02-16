@@ -13,7 +13,7 @@ use Mung::TapError;
 has [ qw/suite tcase/ ] => ( is => 'rw' );	# FIXME: specify
 has 'test' => (
 	is => 'rw', isa => 'Maybe[Mung::Test]',
-	handles => [qw/tap_line log current_result/] );
+	handles => [qw/log/] );
 
 # hook. called when a test completes with $test, $result.
 has 'on_complete_fn' => ( is => 'rw', isa => 'CodeRef' );
@@ -113,8 +113,7 @@ sub _begin_test {
 	my $tcn = $self->tcase->name;
 	my $path = "$sn:$tcn:$name";
 	$self->test($self->test_by_path->{$path} || die "no test plan for $path");
-	$self->test->begin(@_,
-		report_msg_hook => sub { $self->print(shift . "\n"); });
+	return $self->test->begin(@_);
 }
 
 
@@ -142,9 +141,9 @@ sub _end_test {
 		$self->failed($self->failed + 1);
 	} else {
 		$self->_completed($self->test, $res);
-		if($res->planned > $res->seen) {
-			$self->print("planned " . $res->planned
-				. " test(s), but executed only " . $res->seen . "\n");
+		if($res->tests_planned > $res->tests_run) {
+			$self->print("planned " . $res->tests_planned
+				. " test(s), but executed only " . $res->tests_run . "\n");
 			$self->incorrect($self->incorrect + 1);
 		}
 	}
@@ -192,10 +191,10 @@ sub close_suite {
 	}
 	$suite->{results} = \@tests;
 	my %summary;
-	foreach my $key (qw/planned passed skipped/) {
+	foreach my $key (qw/tests_planned passed skipped/) {
 		$summary{$key} = sum(0, map { $_->[1]->$key || () } @tests);
 	}
-	$self->status("[$summary{passed}/$summary{planned} OK]\n");
+	$self->status("[$summary{passed}/$summary{tests_planned} OK]\n");
 	$self->status("note: $_\n") foreach @comment;
 
 	$self->suite(undef);
@@ -308,10 +307,10 @@ sub tb_line {
 		die Mung::Error::TestAbort->new(text => "premature test abort!");
 	} elsif(is_kmsg($_)) {
 		return;
-	} elsif($self->test && $self->current_result) {
+	} elsif($self->test) {
 		my $input = $_;
 		try {
-			$self->tap_line($input);
+			$self->test->tap_line($input);
 		}
 		catch (Mung::TapError $err) {
 			push @{$self->errors}, { error => $err, line => $input };

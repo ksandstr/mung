@@ -1,7 +1,21 @@
 package Mung::Test;
 use Moose;
 
+use TAP::Parser;
 use Mung::TestResult;
+
+
+=head1 NAME
+
+Mung::Test - encapsulation of each test program in a suite's test case
+
+=head1 DESCRIPTION
+
+This class retains the test program's metadata, i.e. the suite name, tcase
+name, test name, and the test ID as communicated by the "describe" protocol.
+The "low" and "high" iteration parameters are kept because they were there.
+
+=cut
 
 
 has [ qw/suite tcase name id/ ] => (is => 'ro', isa => 'Str', required => 1);
@@ -11,9 +25,12 @@ has 'results' => (
 	is => 'rw', isa => 'ArrayRef[Mung::TestResult]',
 	default => sub { [] },
 	documentation => q{Completed results for this test.});
-has 'current_result' => (
-	is => 'rw', isa => 'Maybe[Mung::TestResult]',
-	handles => [ qw/log tap_line/ ]);
+has 'log_lines' => ( is => 'rw', isa => 'ArrayRef[Str]', default => sub { [] } );
+has 'iter' => ( is => 'rw', isa => 'Int' );
+
+
+# private bits
+has 'tap_buf' => ( is => 'rw', isa => 'ArrayRef[Str]', default => sub { [] } );
 
 
 
@@ -23,34 +40,45 @@ sub path {
 }
 
 
-# open a result object on this test.
-sub begin {
+sub log {
 	my $self = shift;
-	die "double begin" if $self->current_result;
-
-	my %args = @_;
-	my $iter = $args{iter} // 0;
-	my $report_hook = $args{report_msg_hook};
-
-	# TODO: pass prior_tests also!
-	my @parms = (test_id => $self->id, iter => $iter);
-	if($report_hook) {
-		push @parms, (report_msg_hook => $report_hook);
-	}
-	$self->current_result(Mung::TestResult->new(@parms));
-
-	return $self->current_result;
+	push @{$self->log_lines}, @_;
 }
 
 
-# close the result object. arguments as for Mung::TestResult->done .
+sub tap_line {
+	my $self = shift;
+	push @{$self->tap_buf}, @_;
+	$self->log(@_);
+}
+
+
+# open a result object on this test.
+sub begin {
+	my $self = shift;
+
+	my %args = @_;
+	$self->iter($args{iter} // 0);
+	$self->tap_buf([]);
+	$self->log_lines([]);
+}
+
+
+# close the result object. arguments as for Mung::TestResult->done, i.e. panic
+# or failmsg where appropriate
 sub end {
 	my $self = shift;
-	my $cr = $self->current_result || die "no active test";
-	$cr->done(@_);
-	push @{$self->results}, $cr;
-	$self->current_result(undef);
-	return $cr;
+
+	my $tap = join("\n", @{$self->tap_buf});
+	my $result = Mung::TestResult->new(@_,
+		test => $self, iter => $self->iter,
+		parser => TAP::Parser->new({ tap => $tap }),
+		test_log => $self->log_lines);
+	push @{$self->results}, $result;
+
+	$self->begin(iter => $self->iter + 1);	# clear the log bufs
+
+	return $result;
 }
 
 
