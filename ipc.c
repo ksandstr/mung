@@ -818,13 +818,14 @@ bool ipc_resume(struct thread *t, bool *preempt_p)
 	set_ipc_return_thread(dest);
 
 	assert(source->ipc == NULL);
-	source->wakeup_time = 0;
 	if(L4_IsNilThread(source->ipc_from)) {
 		source->status = TS_READY;
+		source->wakeup_time = 0;
 		set_ipc_return_thread(source);
 		TRACE("%s: source returns to userspace\n", __func__);
 	} else {
 		source->status = TS_R_RECV;
+		source->wakeup_time = wakeup_at(L4_Never);	/* FIXME: xfer timeout */
 		TRACE("%s: source receives from %lu:%lu\n", __func__,
 			L4_ThreadNo(source->ipc_from), L4_Version(source->ipc_from));
 	}
@@ -1003,7 +1004,11 @@ bool ipc_send_half(struct thread *self)
 			TID_THREADNUM(self_id.raw), TID_VERSION(self_id.raw),
 			TID_THREADNUM(self->id), TID_VERSION(self->id));
 
-		assert(self->ipc == NULL || tag.X.t == 0);
+		/* pre-transfer faults cause a recipient of the pager's IPC to have a
+		 * saved IPC operation. this "had no ipc" condition suffices to
+		 * distinguish such a transfer from one where the string transfer
+		 * fault is generated.
+		 */
 		bool had_no_ipc = self->ipc == NULL;
 		L4_Word_t error = do_ipc_transfer(self, dest);
 		if(unlikely(error != 0)) {
@@ -1194,6 +1199,9 @@ bool ipc_recv_half(struct thread *self, bool *preempt_p)
 			}
 			set_ipc_error(thread_get_utcb(self), error | 1);
 			assert(self->status == TS_RUNNING);
+			return false;
+		} else if(self->ipc != NULL) {
+			assert(IS_IPC(self->status));
 			return false;
 		}
 
