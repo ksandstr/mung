@@ -31,6 +31,7 @@ static void string_test_thread(void *param UNUSED)
 	const int rbuf_len = 2048;
 	char *recvbuf = calloc(rbuf_len, 1);
 	L4_StringItem_t recv_si = L4_StringItem(rbuf_len, recvbuf);
+	char tmp[512];		/* sendbuf */
 
 	bool running = true;
 	while(running) {
@@ -62,7 +63,6 @@ static void string_test_thread(void *param UNUSED)
 						break;
 					}
 					recvbuf[MIN(int, rbuf_len - 1, si.X.string_length)] = '\0';
-					char tmp[512];
 					snprintf(tmp, sizeof(tmp), "echo, echo! %s", recvbuf);
 					strlcpy(recvbuf, tmp, rbuf_len);
 					si = L4_StringItem(strlen(recvbuf) + 1, recvbuf);
@@ -72,7 +72,8 @@ static void string_test_thread(void *param UNUSED)
 				}
 
 				default:
-					diag("unknown label %#lx", (L4_Word_t)tag.X.label);
+					diag("unknown label %#lx (tag %#lx)", (L4_Word_t)tag.X.label,
+						tag.raw);
 					L4_LoadMR(0, 0);
 			}
 
@@ -160,10 +161,13 @@ END_TEST
 
 /* like echo_simple, but flushes mappings from some of the memory where
  * strings are sent and/or received.
+ *
+ * TODO: check that faults occurred
  */
 START_TEST(echo_with_hole)
 {
 	plan_tests(2);
+
 	const size_t buf_size = 16 * 1024;
 	const char *echostr = "what did the pope say to the bear?";
 
