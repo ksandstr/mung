@@ -408,13 +408,7 @@ bool schedule(void)
 	if(next->status == TS_XFER) {
 		assert(!IS_KERNEL_THREAD(next));
 		bool preempt = false, done = ipc_resume(next, &preempt);
-		if(!done || preempt) {
-			/* the only case where @next continues is where the typed
-			 * transfer completed, and @next wasn't preempted by the
-			 * partner.
-			 */
-			return schedule();
-		}
+		if(!done || preempt) return schedule();
 	}
 	/* not exclusive with previous, as ipc_resume() sets @next to TS_R_RECV
 	 * when it was the sender of a call
