@@ -463,8 +463,13 @@ uint64_t wakeup_at(L4_Time_t period)
 
 void thread_sleep(struct thread *t, L4_Time_t period)
 {
-	assert(t->status == TS_SEND_WAIT || t->status == TS_RECV_WAIT
-		|| (t->status == TS_XFER && t->ipc != NULL));
+	if(!IS_IPC_WAIT(t->status) && t->status != TS_XFER) {
+		printf("%s: thread %lu:%lu status is %s\n", __func__,
+			TID_THREADNUM(t->id), TID_VERSION(t->id),
+			sched_status_str(t));
+	}
+
+	assert(IS_IPC_WAIT(t->status) || t->status == TS_XFER);
 	/* NOTE: this function was merged with thread_wake(), which asserted
 	 * against {STOPPED, DEAD} rather than for the IPC wait states. callers
 	 * should handle R_RECV separately as it doesn't instantly promote to

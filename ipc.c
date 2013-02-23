@@ -65,6 +65,7 @@ struct ipc_state
 	int src_off;
 	struct stritem_iter src_iter, dst_iter;
 
+	/* (FIXME: these are horrible and result in too much code.) */
 	uint16_t n_srcf, n_dstf;	/* at most 4M per strxfer = 2*1024 pages */
 	uint16_t fp_src, fp_dst;	/* positions in faults[] */
 	/* (first nf_src are for the source thread, next nf_dst are for dest,
@@ -342,22 +343,40 @@ static void prexfer_ipc_hook(struct hook *hook, uintptr_t code, void *dataptr)
 	t->ipc_to.raw = t->saved_regs[13];
 
 	/* FIXME: restore send, recv timeouts (needed for other IPC stage) */
+
+	bool is_sender = CHECK_FLAG(t->flags, TF_SENDER);
 	/* FIXME: do the next pagefault, too */
-	if(CHECK_FLAG(t->flags, TF_SENDER)) {
+
+	bool other_ready;
+	if(is_sender) {
 		t->ipc->fp_src++;
+		other_ready = t->ipc->fp_dst == t->ipc->n_dstf;
 		assert(t->ipc->fp_src == t->ipc->n_srcf);
 	} else {
 		SWAP(L4_ThreadId_t, t->ipc_from, t->ipc_to);
 		t->ipc->fp_dst++;
+		other_ready = t->ipc->fp_src == t->ipc->n_srcf;
 		assert(t->ipc->fp_dst == t->ipc->n_dstf);
-	}
-	t->status = TS_XFER;
-	if(ipc_partner(t)->status != TS_XFER) {
-		/* wait for partner. */
-		thread_sleep(t, L4_Never);		/* FIXME: apply xfer timeout */
 	}
 
 	hook_detach(hook);
+
+	if(!other_ready) {
+		/* wait for partner. */
+		assert(ipc_partner(t)->status != TS_XFER);
+		TRACE("%s: waiting for partner in %s thread %lu:%lu\n", __func__,
+			CHECK_FLAG(t->flags, TF_SENDER) ? "sender" : "receiver",
+			TID_THREADNUM(t->id), TID_VERSION(t->id));
+		t->status = is_sender ? TS_SEND_WAIT : TS_RECV_WAIT;
+		thread_sleep(t, L4_Never);		/* FIXME: apply xfer timeout */
+	} else {
+		TRACE("%s: partner %lu:%lu ready, scheduling\n", __func__,
+			TID_THREADNUM(t->id), TID_VERSION(t->id));
+		t->status = TS_XFER;
+		thread_wake(t);
+		ipc_partner(t)->status = TS_XFER;
+		thread_wake(ipc_partner(t));
+	}
 }
 
 
@@ -380,8 +399,12 @@ static void send_prexfer_fault(
 }
 
 
-/* FIXME: this must copy recv_si out, as it is present in the caller's stack
- * (due to copying of BRs so that they'll be in the correct order).
+/* starts the pre-transfer fault process. sets thread states and reallocates
+ * the saved IPC context to fit the fault pages and relevant receive-side
+ * string item. returns true on success and false on out-of-memory.
+ *
+ * @recv_si must be a pointer to the string item in the buffer registers in
+ * the _correct_ order, i.e. reverse from the BR order.
  */
 static bool set_prexfer_fault_state(
 	L4_MsgTag_t tag,
@@ -426,27 +449,29 @@ static bool set_prexfer_fault_state(
 	assert(!CHECK_FLAG(dest->flags, TF_SENDER));
 
 	if(nf_send > 0) {
+		TRACE("%s: %d faults for sender\n", __func__, nf_send);
 		stritem_faults(&st->faults[0], nf_send, source->space, send_si,
 			L4_Readable, -1);
 		send_prexfer_fault(source, st->faults[0], source->ctx.eip);
 		assert(IS_IPC_WAIT(source->status));
 	} else {
-		source->status = TS_XFER;
+		source->status = TS_SEND_WAIT;
 		thread_sleep(source, L4_Never);		/* FIXME: xfer timeout? */
 	}
 
 	if(nf_recv > 0) {
+		TRACE("%s: %d faults for receiver\n", __func__, nf_recv);
 		stritem_faults(&st->faults[nf_send], nf_recv, dest->space, recv_si,
 			L4_Writable | L4_Readable, -1);
 
 		send_prexfer_fault(dest, st->faults[nf_send], dest->ctx.eip);
 		assert(IS_IPC_WAIT(dest->status));
 	} else {
-		dest->status = TS_XFER;
+		dest->status = TS_RECV_WAIT;
 		thread_sleep(dest, L4_Never);		/* FIXME: xfer timeout? */
 	}
 
-	TRACE("%s: exited.\n", __func__);
+	TRACE("%s: exiting.\n", __func__);
 	return true;
 }
 
@@ -678,7 +703,7 @@ static L4_Word_t do_typed_transfer(
 				int nf_src = stritem_faults(NULL, 0, source->space, send_si, L4_Readable, -1),
 					nf_dst = stritem_faults(NULL, 0, dest->space, recv_si,
 						L4_Readable | L4_Writable, -1);
-				if(nf_src == 0 && nf_dst == 0) {
+				if(likely(nf_src == 0 && nf_dst == 0)) {
 					/* FIXME: catch errors from this! */
 					struct stritem_iter s, r;
 					stritem_first(send_si, &s);
@@ -696,6 +721,8 @@ static L4_Word_t do_typed_transfer(
 						 */
 						panic("out of memory in a critical spot!");
 					}
+					assert(source->ipc != NULL);
+					assert(source->ipc == dest->ipc);
 					source->ipc->str_offset = str_offset;
 					source->ipc->pos = pos;
 					source->ipc->last = last;
@@ -744,6 +771,10 @@ bool ipc_resume(struct thread *t, bool *preempt_p)
 	struct ipc_state *st = t->ipc;
 	struct thread *dest = st->to, *source = st->from;
 
+	TRACE("%s: called on %lu:%lu -> %lu:%lu\n",
+		__func__, TID_THREADNUM(source->id), TID_VERSION(source->id),
+		TID_THREADNUM(dest->id), TID_VERSION(dest->id));
+
 	/* right now, only the pre-transfer faults' case winds up here, so there's
 	 * no "this position in the string" information in ipc_state.
 	 *
@@ -774,6 +805,9 @@ bool ipc_resume(struct thread *t, bool *preempt_p)
 		 * do_ipc_transfer() callsite
 		 */
 		panic("can't propagate resumed typed-transfer errors");
+	} else if(t->ipc != NULL) {
+		/* FIXME */
+		panic("can't handle more faults from resumed typed xfer");
 	}
 
 	assert(dest->ipc == NULL);
@@ -788,8 +822,11 @@ bool ipc_resume(struct thread *t, bool *preempt_p)
 	if(L4_IsNilThread(source->ipc_from)) {
 		source->status = TS_READY;
 		set_ipc_return_thread(source);
+		TRACE("%s: source returns to userspace\n", __func__);
 	} else {
 		source->status = TS_R_RECV;
+		TRACE("%s: source receives from %lu:%lu\n", __func__,
+			L4_ThreadNo(source->ipc_from), L4_Version(source->ipc_from));
 	}
 	sq_update_thread(source);
 
@@ -801,13 +838,13 @@ bool ipc_resume(struct thread *t, bool *preempt_p)
 
 struct thread *ipc_partner(struct thread *t)
 {
-	assert(t->status == TS_XFER);
+	assert(t->status == TS_XFER || IS_IPC_WAIT(t->status));
 	assert(t->ipc != NULL);
 	assert(!CHECK_FLAG(t->flags, TF_SENDER) || t == t->ipc->from);
 	assert(CHECK_FLAG(t->flags, TF_SENDER) || t == t->ipc->to);
 
 	struct thread *partner = CHECK_FLAG(t->flags, TF_SENDER) ? t->ipc->to : t->ipc->from;
-	assert(partner->status == TS_XFER);
+	assert(IS_IPC(partner->status));
 	assert(partner->ipc == t->ipc);
 	return partner;
 }
@@ -852,8 +889,9 @@ void abort_waiting_ipc(struct thread *t, L4_Word_t errcode)
 		struct ipc_wait *w = container_of(ptr, struct ipc_wait, dest_tid);
 		if(w->dest_tid.raw != t->id) continue;
 
-		assert(w->thread->status == TS_SEND_WAIT);
-		assert(w->thread->ipc_to.raw == t->id);
+		struct thread *peer = w->thread;
+		assert(peer->ipc_to.raw == t->id);
+		assert(IS_IPC_WAIT(peer->status) || peer->status == TS_XFER);
 		if(!post_exn_fail(w->thread)) {
 			/* ordinary non-exception IPC. for exceptions, a silent return via
 			 * the callback
@@ -978,6 +1016,7 @@ bool ipc_send_half(struct thread *self)
 					set_ipc_error(thread_get_utcb(dest), error | 1);
 					set_ipc_return_thread(dest);
 				}
+				printf("%s: it doesn't happen here\n", __func__);
 				thread_wake(dest);
 			}
 			set_ipc_error(thread_get_utcb(self), error & ~1ul);
@@ -1006,18 +1045,9 @@ bool ipc_send_half(struct thread *self)
 		}
 
 		if(dest->ipc != NULL) {
-			/* a string transfer's post-exception hook put @dest in another
-			 * IPC operation, or into waiting for ipc_resume() when the
-			 * scheduler notes its TS_XFER.
-			 */
+			/* string transfers have slightly different rules. */
 			assert(!regular);
-			if(dest->status == TS_XFER
-				&& ipc_partner(dest)->status == TS_XFER)
-			{
-				thread_wake(dest);
-			} else {
-				thread_sleep(dest, L4_Never);	/* FIXME: apply xfer timeout */
-			}
+			thread_sleep(dest, L4_Never);		/* FIXME: xfer timeouts */
 		} else {
 			/* wake the receiver up, joining with the overridden status. this
 			 * satisfies thread_wake()'s precondition.
@@ -1145,7 +1175,7 @@ bool ipc_recv_half(struct thread *self, bool *preempt_p)
 			TID_THREADNUM(from_tid.raw), TID_VERSION(from_tid.raw),
 			TID_THREADNUM(from->id), TID_VERSION(from->id),
 			TID_THREADNUM(self->id), TID_VERSION(self->id));
-		assert(from->status == TS_SEND_WAIT);
+		assert(from->status == TS_SEND_WAIT || from->status == TS_XFER);
 
 		L4_Word_t error = do_ipc_transfer(from, self);
 		if(unlikely(error != 0)) {

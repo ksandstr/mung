@@ -36,7 +36,7 @@ typedef L4_Word_t thread_id;
 #define TS_R_RECV 4		/* (user only) ready to do IPC receive phase */
 #define TS_SEND_WAIT 5
 #define TS_RECV_WAIT 6
-#define TS_XFER 7		/* see TF_SENDER */
+#define TS_XFER 7		/* ready to resume suspended typed IPC */
 
 
 /* TODO: clean these up. */
