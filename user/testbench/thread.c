@@ -88,7 +88,7 @@ static bool int_eq(const void *cand, void *ref) {
 static COLD void init_threading(void)
 {
 	for(int i=0; i < MAX_THREADS; i++) {
-		threads[i] = (struct thread){ };
+		threads[i] = (struct thread){ .version = -1 };
 	}
 
 	base_tnum = L4_ThreadNo(L4_Myself());
@@ -247,13 +247,20 @@ L4_ThreadId_t start_thread_long(
 	for(t = 0; t < MAX_THREADS; t++) {
 		if(!threads[t].alive) {
 			assert(threads[t].version <= 0);
-			threads[t].version = -threads[t].version + 1;
-			if(threads[t].version >= 1 << 14) threads[t].version = 1;
+			int newver = -threads[t].version + 1;
+			if(newver >= 1 << 14) newver = 2;	/* wrap */
+			else if((newver & 63) == 0) {
+				/* avoid looking like a local thread ID */
+				newver |= 1;
+			}
+			assert((newver & 63) != 0 && newver != 1);
+			threads[t].version = newver;
 			break;
 		}
 	}
 	if(t == MAX_THREADS) return L4_nilthread;
 	L4_ThreadId_t self = L4_Myself(), tid = tid_of(t);
+	assert(L4_IsGlobalId(tid));
 
 	threads[t].alive = true;
 	assert(threads[t].version > 0);
