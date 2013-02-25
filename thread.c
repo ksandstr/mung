@@ -640,16 +640,21 @@ L4_Word_t sys_exregs(
 
 	struct thread *current = get_current_thread(), *dest_thread = NULL;
 
-#if 0
-	printf("%s: called from %d:%d on %d:%d (state %d); control %#lx (", __func__,
-		TID_THREADNUM(current->id), TID_VERSION(current->id),
-		TID_THREADNUM(dest.raw), TID_VERSION(dest.raw), current->status,
-		*control_p);
-	const char *ctl_chars = "HRSsifuphd";
-	for(int i=0; ctl_chars[i] != '\0'; i++) {
-		if(CHECK_FLAG(*control_p, 1 << i)) printf("%c", ctl_chars[i]);
+#ifndef NDEBUG
+	if(trace_is_enabled(TRID_THREAD)) {
+		char ctl_buf[16];
+		int cp = 0;
+		const char *ctl_chars = "HRSsifuphd";
+		for(int i=0; ctl_chars[i] != '\0'; i++) {
+			if(CHECK_FLAG(*control_p, 1 << i)) ctl_buf[cp++] = ctl_chars[i];
+		}
+		ctl_buf[cp] = '\0';
+		TRACE("%s: called from %lu:%lu on %lu:%lu; control %#lx (%s)\n",
+			__func__,
+			TID_THREADNUM(current->id), TID_VERSION(current->id),
+			TID_THREADNUM(dest.raw), TID_VERSION(dest.raw),
+			*control_p, ctl_buf);
 	}
-	printf(")\n");
 #endif
 
 	if(!L4_IsNilThread(dest)) {

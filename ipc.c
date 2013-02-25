@@ -394,7 +394,6 @@ static void send_prexfer_fault(
 	t->saved_regs[13] = t->ipc_to.raw;
 	set_pf_msg(t, utcb, L4_Address(fault), ip, L4_Rights(fault));
 	hook_push_back(&t->post_exn_call, &prexfer_ipc_hook, NULL);
-	TRACE("%s: before ipc_user, status is %d\n", __func__, (int)t->status);
 	ipc_user(t, pager);
 }
 
@@ -1359,7 +1358,8 @@ void sys_ipc(struct x86_exregs *regs)
 	current->ipc_to.raw = regs->eax;
 	current->ipc_from.raw = regs->edx;
 	L4_Word_t timeouts = regs->ecx;
-	TRACE("%s: ipc_to %#lx, ipc_from %#lx, timeouts %#lx\n", __func__,
+	TRACE("%s: called in %lu:%lu; to %#lx, from %#lx, timeouts %#lx\n",
+		__func__, TID_THREADNUM(current->id), TID_VERSION(current->id),
 		regs->eax, regs->edx, regs->ecx);
 	current->send_timeout.raw = timeouts >> 16;
 	current->recv_timeout.raw = timeouts & 0xffff;
