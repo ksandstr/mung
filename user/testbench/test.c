@@ -245,8 +245,17 @@ static bool run_fixture_list(
 			return false;
 		}
 
-		struct test_status *status = join_thread(thread);
-		if(status != NULL) {
+		L4_Word_t ec = 0;
+		struct test_status *status = join_thread_long(thread,
+			L4_TimePeriod(500000), &ec);	/* half a second */
+		if(status == NULL) {
+			if(ec == 3) {
+				printf("*** error: test fixture timed out\n");
+			} else if(ec != 0) {
+				printf("*** error: join of fixture thread failed, ec %#lx\n",
+					ec);
+			}
+		} else {
 			rc = status->rc;
 			free(status);
 		}

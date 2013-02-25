@@ -337,7 +337,7 @@ L4_ThreadId_t start_thread_long(
 }
 
 
-void *join_thread(L4_ThreadId_t tid)
+void *join_thread_long(L4_ThreadId_t tid, L4_Time_t timeout, L4_Word_t *ec_p)
 {
 	if(L4_IsNilThread(tid)) return NULL;
 
@@ -345,10 +345,13 @@ void *join_thread(L4_ThreadId_t tid)
 	assert(t < MAX_THREADS);
 	assert(abs(threads[t].version) == L4_Version(tid));
 
-	L4_MsgTag_t tag = L4_Receive(tid_of(t));
+	L4_MsgTag_t tag = L4_Receive_Timeout(tid_of(t), timeout);
 	if(L4_IpcFailed(tag)) {
-		printf("%s: receive from thread failed, ec %#lx\n", __func__,
-			L4_ErrorCode());
+		L4_Word_t ec = L4_ErrorCode();
+		if(ec != 3) {
+			printf("%s: receive from thread failed, ec %#lx\n", __func__, ec);
+		}
+		*ec_p = ec;
 		return NULL;
 	}
 	/* TODO: verify the exception message (label, GP#) */
@@ -381,6 +384,12 @@ void *join_thread(L4_ThreadId_t tid)
 	void *rv = threads[t].retval;
 	threads[t].retval = NULL;
 	return rv;
+}
+
+
+void *join_thread(L4_ThreadId_t tid) {
+	L4_Word_t dummy = 0;
+	return join_thread_long(tid, L4_Never, &dummy);
 }
 
 

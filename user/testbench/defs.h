@@ -55,6 +55,10 @@ extern L4_ThreadId_t start_thread_long(
 
 extern NORETURN void exit_thread(void *return_value);
 extern void *join_thread(L4_ThreadId_t tid);
+extern void *join_thread_long(
+	L4_ThreadId_t tid,
+	L4_Time_t timeout,
+	L4_Word_t *ec_p);
 extern void for_each_thread(
 	void (*fn)(L4_ThreadId_t tid, void *ptr),
 	void *ptr);
