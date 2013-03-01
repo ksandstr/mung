@@ -16,8 +16,7 @@ with 'Mung::Output';
 
 
 package main;
-use strict;
-use warnings;
+use Modern::Perl '2012';
 
 use Mung::Ctrl;
 

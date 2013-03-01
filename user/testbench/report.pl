@@ -1,6 +1,5 @@
 #!/usr/bin/perl
-use strict;
-use warnings;
+use Modern::Perl '2012';
 use utf8;
 use feature "switch";
 
@@ -21,6 +20,7 @@ use Mung::TestResult;
 use Mung::TapError;
 use Mung::Restarting;
 use Mung::ConsoleReport;
+use Mung::ProcessModule;
 use Mung::Error::TestAbort;
 use Mung::Error::TestRestart;
 
@@ -30,26 +30,6 @@ my $TOPLEVEL = ".";
 
 $SIG{PIPE} = "IGNORE";		# and smoke it.
 $| = 1;
-
-
-sub start_test {
-	my %opts = @_;
-
-	my @parms;
-	foreach(keys %opts) {
-		my $key = $_;
-		my $val = $opts{$key};
-		$val = join("+", @$val) if ref($val) eq 'ARRAY';
-		$key =~ s/_//g;
-		push @parms, "$key=$val";
-	}
-	if(@parms) {
-		$ENV{TESTBENCH_OPTS} = join(" ", @parms);
-	} else {
-		delete $ENV{TESTBENCH_OPTS};
-	}
-	return IO::File->new("./run.sh -display none 2>/dev/null |");
-}
 
 
 my ($suite, $tcase, $test);
@@ -84,6 +64,7 @@ my @errors;
 
 my %completed;
 
+my $module = Mung::ProcessModule->new(command => './run.sh -display none');
 my $sink = Mung::Sink->new(output => Mung::ConsoleReport->new);
 my $ctrl = Mung::Ctrl->new(@ctrl_param, sink => $sink);
 $sink->on_complete_fn(sub { $ctrl->completed($_[0], $_[1]->iter); });
@@ -93,23 +74,22 @@ apply_all_roles($sink, @roles) if @roles;
 my $prev_restart_id;
 my $panic_restart_id;
 while(1) {
-	my $test_pipe;
 	my $test_ids = $ctrl->next_tests || last;
 	if($test_ids eq 'ALL') {
 		# initial run, without restart. toss old plan.
 		$sink->reset;
-		$test_pipe = start_test(describe => 1);
+		$module->start_test(describe => 1);
 	} elsif($test_ids eq 'NEED_PLAN') {
 		# initial run, controller wants to run specific tests but has no plan.
 		# gather it and try again.
-		$test_pipe = start_test(describe => 1, run_only => ['@']);
+		$module->start_test(describe => 1, run_only => ['@']);
 	} else {
 		die "expected arrayref" unless ref($test_ids) eq 'ARRAY';
-		$test_pipe = start_test(run_only => $test_ids);
+		$module->start_test(run_only => $test_ids);
 	}
 
 	my $ctl_seen = 0;
-	while(<$test_pipe>) {
+	while($_ = $module->next_line) {
 		chomp;
 		s/^\s+//;	# apparently sometimes there are carriage returns.
 
@@ -191,12 +171,7 @@ while(1) {
 		}
 	}
 
-	{
-		# don't drown yourself in the bathwater
-		local $SIG{INT} = 'IGNORE';
-		kill "INT", -getpgrp(0);
-	}
-	$test_pipe->close;
+	$module->close;
 }
 $sink->done;
 
