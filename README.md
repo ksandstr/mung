@@ -33,7 +33,7 @@ test reporting can be had from the `make check' target, which requires a few
 Perl packages (names from the Debian repository):
 
     libmoose-perl libtrycatch-perl liblist-moreutils-perl libdevel-cover-perl
-    libstruct-compare-perl
+    libstruct-compare-perl libmodern-perl-perl
 
 
 ### Doesn't work. ###
