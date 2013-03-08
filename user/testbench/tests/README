@@ -1,2 +1,2 @@
 This confusingly-named directory contains Perl unit tests for the testbench
-reporting script's components.
+reporting script's components. A test suite for a test harness, so to say.
