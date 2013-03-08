@@ -61,6 +61,7 @@ sub reset {
 
 sub done {
 	my $self = shift;
+	$self->close_tcase;
 	$self->close_suite;
 }
 
