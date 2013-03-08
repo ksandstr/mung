@@ -244,7 +244,7 @@ sub ctl_line {
 				. " (last was `" . $self->failmsg . "')\n";
 		}
 		$self->failmsg($2 || '');
-	} elsif($msg =~ /test [`'](\w+)' failed, rc (\d+)/) {
+	} elsif($msg =~ /test [`'](\w+)' failed, rc (-?\d+)/) {
 		# TODO: output something that relates the return code to the test
 		# plan. do that for tests that didn't fail, too.
 		$self->_end_test($1, rc => int($2) || 0, failmsg => $self->failmsg);
