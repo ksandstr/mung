@@ -134,7 +134,7 @@ sub ok {
 	my $self = shift;
 	my $desc = shift;
 	my $what = shift // 'ok';
-	my $num = $self->plan_ctr;
+	my $num = $self->plan_ctr || die "plan() wasn't called";
 	$self->plan_ctr($num + 1);
 	return "$what $num - $desc\n";
 }
@@ -143,6 +143,13 @@ sub ok {
 sub not_ok {
 	my $self = shift;
 	return $self->ok(@_, 'not ok');
+}
+
+
+sub test_fail {
+	my $self = shift;
+	my $msg = shift;
+	return "*** test failed: msg `$msg'\n";
 }
 
 
