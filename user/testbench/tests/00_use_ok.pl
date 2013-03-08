@@ -2,7 +2,7 @@
 use strict;
 use warnings;
 
-use Test::More tests => 15;
+use Test::More tests => 16;
 
 
 use_ok('Mung::Ctrl');
@@ -10,6 +10,7 @@ use_ok('Mung::Restarting');
 use_ok('Mung::Sink');
 use_ok('Mung::Module');
 use_ok('Mung::ProcessModule');
+use_ok('Mung::Loop');
 use_ok('Mung::Error');
 use_ok('Mung::Error::TestAbort');
 use_ok('Mung::Error::TestRestart');
