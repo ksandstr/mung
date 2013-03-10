@@ -11,7 +11,7 @@ use Mung::Loop;
 use ScriptModule;
 use BufferOutput;
 
-use Test::More tests => 4;
+use Test::More tests => 5;
 
 
 sub make_loop {
@@ -78,3 +78,29 @@ foreach my $pad_size (0, 1, 2) {
 		like($res->fail_msg, qr/bogon\s+overflow/, "correct fail message");
 	};
 }
+
+
+subtest "fail before plan" => sub {
+	plan tests => 5;
+
+	my $m = ScriptModule->new;
+	$m->plan(666);		# initializes the ok-line counter
+	$m->add_test('s', 'tc', 'noplanfail', failed => 1, rc => 666,
+		body => [
+			# FIXME: the thing with the comma? it eats babies, man
+			$m->test_fail("wont even plan this out"),
+		]);
+
+	my $loop = make_loop($m);
+	$loop->run;
+	my $sink = $loop->sink;
+	$sink->output->dump_to_diag if $ENV{VERBOSE};
+
+	my $test = $sink->suites->[0]->tcases->[0]->tests->[0];
+	ok(@{$test->results} == 1, "module was run once");
+	my $res = $test->results->[0];
+	ok($res->status eq 'FAIL', "test broke");
+	like($res->fail_msg, qr/even plan this/, "fail message was delivered");
+	ok($res->passed == 0, "no tests passed");
+	ok($res->failed == 0, "no tests failed");
+};
