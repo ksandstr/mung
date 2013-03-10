@@ -78,13 +78,13 @@ static L4_Word_t r_recv_timeout_case(int priority, bool spin, bool send)
 	param[1] = L4_TimePeriod(timeout_ms * 1000).raw;
 	L4_ThreadId_t helper = start_thread(&r_recv_timeout_fn, param);
 	/* FIXME: replace these with nonlocal, diag()-printing exits */
-	assert(!L4_IsNilThread(helper));
+	fail_unless(!L4_IsNilThread(helper));
 
 	L4_Word_t res = L4_Set_Priority(helper, priority);
-	assert((res & 0xff) != 0);
+	fail_unless((res & 0xff) != 0);
 
 	L4_MsgTag_t tag = L4_Receive(helper);
-	assert(L4_IpcSucceeded(tag));
+	fail_unless(L4_IpcSucceeded(tag));
 
 	if(spin) {
 		L4_Clock_t start = L4_SystemClock();
@@ -269,12 +269,12 @@ static bool preempt_exn_case(
 	int my_pri = find_own_priority();
 	L4_ThreadId_t spinner = start_spinner(my_pri - 2, spin_time_ms,
 		spinner_ts, signal_preempt, false, false);
-	assert(!L4_IsNilThread(spinner));
+	fail_unless(!L4_IsNilThread(spinner));
 
 	L4_ThreadId_t preempt;
 	if(preempt_delay > 0) {
 		preempt = start_preempt(preempt_delay);
-		assert(!L4_IsNilThread(preempt));
+		fail_unless(!L4_IsNilThread(preempt));
 	} else {
 		preempt = L4_nilthread;
 	}
@@ -380,7 +380,7 @@ START_TEST(simple_preempt_test)
 	struct preempt_wakeup *w;
 	list_for_each(&res->wakeups, w, result_link) {
 		if(prev == 0) {
-			assert(w == list_top(&res->wakeups, struct preempt_wakeup,
+			fail_unless(w == list_top(&res->wakeups, struct preempt_wakeup,
 				result_link));
 			prev = w->clock.raw;
 		} else {
@@ -398,7 +398,7 @@ END_TEST
 
 START_LOOP_TEST(preempt_exn_test, t)
 {
-	assert(t >= 0 && t < 8);
+	fail_unless(t >= 0 && t < 8);
 
 	/* there are three boolean variables here. the first is timeslice length,
 	 * the second is the preemption signaling switch, and the third is whether
@@ -423,7 +423,7 @@ START_LOOP_TEST(preempt_exn_test, t)
 		goto end;
 	}
 
-	assert(res->num_exn <= res->num_wake);
+	fail_unless(res->num_exn <= res->num_wake);
 	if(!sig_pe) {
 		/* no preemption signaling implies no preemptions were signaled,
 		 * regardless of the other variables.
@@ -463,7 +463,7 @@ START_LOOP_TEST(preempt_exn_test, t)
 			ok(diff < 8,
 				"short timeslice should cause preemption before 10 ms");
 		} else {
-			assert(!big_ts && !has_pe);
+			fail_unless(!big_ts && !has_pe);
 			ok1(res->num_exn == 6);		/* see above */
 			ok1(diff < 8);
 		}

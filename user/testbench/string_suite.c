@@ -3,7 +3,6 @@
 
 #include <stdlib.h>
 #include <string.h>
-#include <assert.h>
 #include <ccan/compiler/compiler.h>
 #include <ccan/str/str.h>
 
@@ -92,7 +91,7 @@ static void string_test_thread(void *param UNUSED)
 
 static void stt_setup(void)
 {
-	assert(L4_IsNilThread(test_tid));
+	fail_unless(L4_IsNilThread(test_tid));
 	test_tid = start_thread(&string_test_thread, NULL);
 	fail_unless(!L4_IsNilThread(test_tid));
 }
@@ -172,7 +171,7 @@ START_TEST(echo_with_hole)
 	const char *echostr = "what did the pope say to the bear?";
 
 	char *replybuf = calloc(1, buf_size), *sendbuf = calloc(1, buf_size);
-	assert(buf_size > 4200);
+	fail_unless(buf_size > 4200);
 	char *sendstr = &sendbuf[4100];
 	memcpy(sendstr, echostr, strlen(echostr) + 1);
 

@@ -199,48 +199,25 @@ static struct pager_stats *pg_stats = NULL;
 static L4_ThreadId_t pg_pager, pg_poker;
 
 
-static void fixture_fail(const char *fmt, ...)
-{
-	va_list al;
-	va_start(al, fmt);
-	char buf[1024];
-	vsnprintf(buf, sizeof(buf), fmt, al);
-	va_end(al);
-	fprintf(stderr, "fixture failed: `%s'\n", buf);
-
-	/* FIXME: add a way for fixtures to fail in a cleaner way, i.e.
-	 * setjmp/longjmp
-	 */
-	abort();
-}
-
-
 static void pager_setup(void)
 {
 	pg_stats = malloc(sizeof(*pg_stats));
 	pg_stats->n_faults = 12345;
 	pg_stats->log_top = LOG_SIZE - 1;	/* to start at 0 */
 	pg_pager = start_thread(&stats_pager_fn, pg_stats);
-	if(L4_IsNilThread(pg_pager)) {
-		fixture_fail("can't setup stats pager");
-	}
+	fail_if(L4_IsNilThread(pg_pager), "can't setup stats pager");
 	for(int i=0; i < 10; i++) L4_ThreadSwitch(pg_pager);
-	if(pg_stats->n_faults != 0) {
-		fixture_fail("stats pager acting weird");
-	}
+	fail_if(pg_stats->n_faults != 0, "stats pager acting weird");
 
 	pg_poker = start_thread(&poke_peek_fn, NULL);
-	if(L4_IsNilThread(pg_poker)) {
-		fixture_fail("can't start poke/peek thread");
-	}
+	fail_if(L4_IsNilThread(pg_poker), "can't start poke/peek thread");
 
-	assert(L4_IsGlobalId(pg_pager));
+	fail_unless(L4_IsGlobalId(pg_pager));
 	L4_Set_PagerOf(pg_poker, pg_pager);
 /* FIXME: restore when the sys_exregs() can handle readouts */
 #if 0
-	if(L4_PagerOf(pg_poker).raw != pg_pager.raw) {
-		fixture_fail("poker's pager TCR wasn't set");
-	}
+	fail_if(L4_PagerOf(pg_poker).raw != pg_pager.raw,
+		"poker's pager TCR wasn't set");
 #endif
 }
 
@@ -250,11 +227,11 @@ static void pager_teardown(void)
 	if(send_quit(pg_poker)) join_thread(pg_poker);
 	else {
 		/* FIXME: do forced teardown of a failed poker thread */
-		fixture_fail("can't stop hung poker thread");
+		fail_if(true, "can't stop hung poker thread");
 	}
 
 	if(send_quit(pg_pager)) join_thread(pg_pager);
-	else fixture_fail("can't stop pager thread");
+	else fail_if(true, "can't stop pager thread");
 
 	free(pg_stats);
 	pg_stats = NULL;
@@ -386,7 +363,7 @@ START_TEST(spacectl_iface)
 	};
 	for(int i=0; i < NUM_ELEMENTS(bad_utcb); i++) {
 		L4_Fpage_t bad_utcb_area = bad_utcb[i];
-		assert(RANGE_OVERLAP(FPAGE_LOW(bad_utcb_area), FPAGE_HIGH(bad_utcb_area),
+		fail_unless(RANGE_OVERLAP(FPAGE_LOW(bad_utcb_area), FPAGE_HIGH(bad_utcb_area),
 			FPAGE_LOW(kip_area), FPAGE_HIGH(kip_area)));
 		res = L4_SpaceControl(tid, 0, kip_area, bad_utcb_area,
 			L4_anythread, &ctl_out);
@@ -434,7 +411,7 @@ START_TEST(simple_flush)
 {
 	const uint8_t poke_val = 0x22;
 
-	assert(pg_stats != NULL);
+	fail_unless(pg_stats != NULL);
 	plan_tests(8);
 
 	const size_t mem_size = 3 * 4096;
@@ -488,7 +465,7 @@ START_LOOP_TEST(partial_flush, iter)
 	/* variants */
 	const bool recursive = CHECK_FLAG(iter, 1);
 
-	assert(pg_stats != NULL);
+	fail_unless(pg_stats != NULL);
 	plan_tests(4);
 
 	const size_t mem_size = 3 * 4096;
