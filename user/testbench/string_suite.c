@@ -202,6 +202,67 @@ START_TEST(echo_with_hole)
 END_TEST
 
 
+static void *bump_and_align(void *ptr, size_t bump, size_t align)
+{
+	assert(((align - 1) & align) == 0);		/* has 0 or 1 bits set */
+	uintptr_t p = (uintptr_t)ptr + bump;
+	diag("ptr %p, bump %lu, align %lu; p is %p", ptr, bump, align, (void *)p);
+	return (void *)((p + align - 1) & ~(align - 1)) - bump;
+}
+
+
+/* like echo_with_hole, but makes two pages' worth of holes and sends/receives
+ * at the border.
+ *
+ * TODO: check that two faults occurred on this side.
+ */
+START_TEST(echo_with_long_hole)
+{
+	plan_tests(2);
+
+	const size_t buf_size = 16 * 1024;
+	const char *echostr = "what did the pope say to the bear?";
+	const int echo_len = strlen(echostr);
+
+	char *replybuf = calloc(1, buf_size), *sendbuf = calloc(1, buf_size);
+	diag("replybuf %p, sendbuf %p", replybuf, sendbuf);
+	char *replyptr = bump_and_align(replybuf, echo_len / 2 - 1, PAGE_SIZE),
+		*sendptr = bump_and_align(sendbuf, echo_len / 2, PAGE_SIZE);
+	diag("replyptr %p, sendptr %p", replyptr, sendptr);
+	fail_unless(((uintptr_t)replyptr & PAGE_MASK) != 0);
+	fail_unless(((uintptr_t)sendptr & PAGE_MASK) != 0);
+	memcpy(sendptr, echostr, echo_len + 1);
+
+	/* unmap two primitive pages' worth, starting from the first page. */
+	L4_Word_t sndpage = (L4_Word_t)sendptr & ~PAGE_MASK,
+		rpypage = (L4_Word_t)replyptr & ~PAGE_MASK;
+	L4_Fpage_t flush[] = {
+		L4_FpageLog2(sndpage, PAGE_BITS),
+		L4_FpageLog2(sndpage + PAGE_SIZE, PAGE_BITS),
+		L4_FpageLog2(rpypage, PAGE_BITS),
+		L4_FpageLog2(rpypage + PAGE_SIZE, PAGE_BITS),
+	};
+	for(int i=0; i < NUM_ELEMENTS(flush); i++) {
+		L4_Set_Rights(&flush[i], L4_FullyAccessible);
+		diag("flushing %#lx:%#lx", L4_Address(flush[i]), L4_Size(flush[i]));
+	}
+	L4_FlushFpages(NUM_ELEMENTS(flush), flush);
+
+	L4_StringItem_t got_si;
+	echo(test_tid, replybuf, buf_size - (sendptr - sendbuf),
+		&got_si, sendptr, strlen(echostr));
+	replybuf[MIN(int, buf_size - 1, got_si.X.string_length)] = '\0';
+	int rlen = strlen(replybuf);
+	ok(rlen >= strlen(sendptr), "reply length >= input length");
+	ok(streq(&replybuf[MAX(int, 0, rlen - strlen(echostr))], echostr),
+		"echo output ends with input");
+
+	free(replybuf);
+	free(sendbuf);
+}
+END_TEST
+
+
 static void fork_stt_setup(void)
 {
 	assert(L4_IsNilThread(test_tid));
@@ -254,6 +315,7 @@ Suite *string_suite(void)
 	tcase_add_checked_fixture(basic, &stt_setup, &stt_teardown);
 	tcase_add_test(basic, echo_simple);
 	tcase_add_test(basic, echo_with_hole);
+	tcase_add_test(basic, echo_with_long_hole);
 	suite_add_tcase(s, basic);
 
 	/* inter-space cases, i.e. mapdb interactions and so forth. */
