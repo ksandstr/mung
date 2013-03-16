@@ -293,6 +293,12 @@ static int stritemlen(L4_StringItem_t *si)
 }
 
 
+/* TODO: the calling convention shouldn't test whether @faults is NULL,
+ * because probing the mapping database twice [once to see how many faults
+ * there were, and the other to gather them] is silly. instead the caller
+ * should start with, say, 16 faults' worth of memory and double that every
+ * time stritem_faults() returns a "not enough room" indication.
+ */
 static int stritem_faults(
 	L4_Fpage_t *faults,
 	size_t faults_len,
@@ -306,6 +312,8 @@ static int stritem_faults(
 	stritem_first(si, &it);
 	do {
 		L4_Word_t addr = it.ptr;
+		int first_seg = PAGE_SIZE - (addr & PAGE_MASK);
+		if(first_seg == 0) first_seg = PAGE_SIZE;
 		do {
 			/* TODO: using mapdb_probe() here causes multiple lookups of the
 			 * first-level mapdb structure (i.e. map_group) where at most two
@@ -321,8 +329,13 @@ static int stritem_faults(
 				n_faults++;
 				if(max_fail >= 0 && n_faults > max_fail) return n_faults;
 			}
-			addr += e == NULL ? PAGE_SIZE
-				: L4_Size(e->range) - (addr - L4_Address(e->range));
+
+			if(e == NULL) {
+				addr += first_seg;
+				first_seg = PAGE_SIZE;
+			} else {
+				addr = L4_Address(e->range) + L4_Size(e->range);
+			}
 		} while(addr < it.ptr + it.len);
 	} while(stritem_next(&it));
 
