@@ -21,7 +21,8 @@
 #define ECHO_LABEL	0x6857		/* "hW" */
 
 
-static L4_ThreadId_t test_tid;
+static L4_ThreadId_t test_tid, stats_tid;
+static struct pager_stats *stats;
 
 
 static void string_test_thread(void *param UNUSED)
@@ -203,29 +204,38 @@ static void *bump_and_align(void *ptr, size_t bump, size_t align)
 {
 	assert(((align - 1) & align) == 0);		/* has 0 or 1 bits set */
 	uintptr_t p = (uintptr_t)ptr + bump;
-	diag("ptr %p, bump %lu, align %lu; p is %p", ptr, bump, align, (void *)p);
 	return (void *)((p + align - 1) & ~(align - 1)) - bump;
+}
+
+
+static bool read_fault(L4_Word_t addr) {
+	return CHECK_FLAG(L4_Rights(get_fault(stats, addr)), L4_Readable);
+}
+
+
+static bool write_fault(L4_Word_t addr) {
+	return CHECK_FLAG(L4_Rights(get_fault(stats, addr)), L4_Writable);
 }
 
 
 /* like echo_with_hole, but makes two pages' worth of holes and sends/receives
  * at the border.
- *
- * TODO: check that two faults occurred on this side.
  */
 START_TEST(echo_with_long_hole)
 {
-	plan_tests(2);
+	plan_tests(8);
 
 	const size_t buf_size = 16 * 1024;
 	const char *echostr = "what did the pope say to the bear?";
 	const int echo_len = strlen(echostr);
 
 	char *replybuf = calloc(1, buf_size), *sendbuf = calloc(1, buf_size);
-	diag("replybuf %p, sendbuf %p", replybuf, sendbuf);
-	char *replyptr = bump_and_align(replybuf, echo_len / 2 - 1, PAGE_SIZE),
-		*sendptr = bump_and_align(sendbuf, echo_len / 2, PAGE_SIZE);
-	diag("replyptr %p, sendptr %p", replyptr, sendptr);
+	// diag("replybuf %p, sendbuf %p", replybuf, sendbuf);
+	char *replyptr = bump_and_align(replybuf + PAGE_SIZE,
+			echo_len / 2 - 1, PAGE_SIZE),
+		*sendptr = bump_and_align(sendbuf + PAGE_SIZE,
+			echo_len / 2, PAGE_SIZE);
+	// diag("replyptr %p, sendptr %p", replyptr, sendptr);
 	fail_unless(((uintptr_t)replyptr & PAGE_MASK) != 0);
 	fail_unless(((uintptr_t)sendptr & PAGE_MASK) != 0);
 	memcpy(sendptr, echostr, echo_len + 1);
@@ -239,20 +249,43 @@ START_TEST(echo_with_long_hole)
 		L4_FpageLog2(rpypage, PAGE_BITS),
 		L4_FpageLog2(rpypage + PAGE_SIZE, PAGE_BITS),
 	};
+	L4_ThreadId_t old_pager = L4_Pager();
+	L4_Set_Pager(stats_tid);
 	for(int i=0; i < NUM_ELEMENTS(flush); i++) {
 		L4_Set_Rights(&flush[i], L4_FullyAccessible);
+#if 0
 		diag("flushing %#lx:%#lx", L4_Address(flush[i]), L4_Size(flush[i]));
+#endif
 	}
 	L4_FlushFpages(NUM_ELEMENTS(flush), flush);
 
 	L4_StringItem_t got_si;
-	echo(test_tid, replybuf, buf_size - (sendptr - sendbuf),
+	fail_unless(stats->n_faults == 0, "had %d faults before test",
+		stats->n_faults);
+	echo(test_tid, replyptr, buf_size - (sendptr - sendbuf),
 		&got_si, sendptr, strlen(echostr));
-	replybuf[MIN(int, buf_size - 1, got_si.X.string_length)] = '\0';
-	int rlen = strlen(replybuf);
+	L4_Set_Pager(old_pager);
+
+	/* echo result */
+	replyptr[MIN(int, buf_size - 1, got_si.X.string_length)] = '\0';
+	int rlen = strlen(replyptr);
 	ok(rlen >= strlen(sendptr), "reply length >= input length");
-	ok(streq(&replybuf[MAX(int, 0, rlen - strlen(echostr))], echostr),
+	ok(streq(&replyptr[MAX(int, 0, rlen - strlen(echostr))], echostr),
 		"echo output ends with input");
+
+	/* fault entrails */
+	ok1(stats->n_faults == 4);
+	ok1(stats->n_write == 2);
+#if 0
+	for(int i=0; i <= stats->log_top; i++) {
+		diag("fault: %#lx:%#lx, %#x", L4_Address(stats->log[i]),
+			L4_Size(stats->log[i]), L4_Rights(stats->log[i]));
+	}
+#endif
+	ok1(read_fault(sndpage));
+	ok1(read_fault(sndpage + PAGE_SIZE));
+	ok1(write_fault(rpypage));
+	ok1(write_fault(rpypage + PAGE_SIZE));
 
 	free(replybuf);
 	free(sendbuf);
@@ -260,6 +293,7 @@ START_TEST(echo_with_long_hole)
 END_TEST
 
 
+/* start string_test_thread in a forked space. */
 static void fork_stt_setup(void)
 {
 	assert(L4_IsNilThread(test_tid));
@@ -301,12 +335,29 @@ static void fork_stt_teardown(void)
 }
 
 
+/* start the stats-collecting pager thread. */
+static void stats_setup(void)
+{
+	stats = malloc(sizeof(*stats));
+	fail_unless(stats != NULL);
+	stats_tid = start_stats_pager(stats);
+}
+
+
+static void stats_teardown(void)
+{
+	L4_Word_t ec = stop_stats_pager(stats_tid);
+	fail_if(ec != 0, "stop_stats_pager() failed, ec %#lx", ec);
+}
+
+
 Suite *string_suite(void)
 {
 	Suite *s = suite_create("string");
 
 	TCase *basic = tcase_create("basic");
 	tcase_add_checked_fixture(basic, &stt_setup, &stt_teardown);
+	tcase_add_checked_fixture(basic, &stats_setup, &stats_teardown);
 	tcase_add_test(basic, echo_simple);
 	tcase_add_test(basic, echo_with_hole);
 	tcase_add_test(basic, echo_with_long_hole);
@@ -315,6 +366,7 @@ Suite *string_suite(void)
 	/* inter-space cases, i.e. mapdb interactions and so forth. */
 	TCase *space = tcase_create("space");
 	tcase_add_checked_fixture(space, &fork_stt_setup, &fork_stt_teardown);
+	tcase_add_checked_fixture(space, &stats_setup, &stats_teardown);
 	tcase_add_test(space, echo_simple);
 	tcase_add_test(space, echo_with_hole);
 	tcase_add_test(space, echo_with_long_hole);

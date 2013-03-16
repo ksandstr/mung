@@ -152,5 +152,10 @@ extern void flush_log(bool print);
 extern L4_ThreadId_t start_stats_pager(struct pager_stats *stats_mem);
 extern L4_Word_t stop_stats_pager(L4_ThreadId_t tid);
 
+/* returns L4_Nilpage when the address wasn't in the log, with rights
+ * cleared.
+ */
+extern L4_Fpage_t get_fault(struct pager_stats *stats, L4_Word_t addr);
+
 
 #endif

@@ -112,3 +112,13 @@ L4_Word_t stop_stats_pager(L4_ThreadId_t tid)
 		return L4_ErrorCode();
 	}
 }
+
+
+L4_Fpage_t get_fault(struct pager_stats *stats, L4_Word_t addr)
+{
+	addr &= ~PAGE_MASK;
+	for(int i=0; i <= stats->log_top; i++) {
+		if(ADDR_IN_FPAGE(stats->log[i], addr)) return stats->log[i];
+	}
+	return L4_Nilpage;
+}
