@@ -9,6 +9,7 @@
 
 #include <l4/types.h>
 
+
 /* TODO: fetch from KIP at init */
 #define PAGE_BITS 12
 #define PAGE_SIZE (1 << PAGE_BITS)
@@ -18,8 +19,21 @@
 /* the appropriate delay for IPC reception before failure */
 #define TEST_IPC_DELAY L4_TimePeriod(150000)
 
+/* common IPC labels */
+#define QUIT_LABEL 0xdead
+
+#define LOG_SIZE 64			/* size of pager stats log */
+
 
 struct Suite;
+
+
+struct pager_stats
+{
+	int n_faults, n_read, n_write, n_exec, n_fail;
+	int log_top;	/* [0 .. LOG_SIZE) */
+	L4_Fpage_t log[LOG_SIZE];
+};
 
 
 /* various test suites */
@@ -121,9 +135,22 @@ extern NORETURN void exit(int status);
 extern bool is_privileged(void);
 
 
+/* from util.c */
+
+extern bool send_quit(L4_ThreadId_t thread);
+
+
 /* from log.c */
 
 extern int log_f(const char *fmt, ...);
 extern void flush_log(bool print);
+
+
+/* from pg_stats.c */
+
+/* call these from a checked fixture. */
+extern L4_ThreadId_t start_stats_pager(struct pager_stats *stats_mem);
+extern L4_Word_t stop_stats_pager(L4_ThreadId_t tid);
+
 
 #endif

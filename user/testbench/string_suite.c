@@ -18,7 +18,6 @@
 #include "test.h"
 
 
-#define QUIT_LABEL	0x7151		/* "qQ", implying suicide */
 #define ECHO_LABEL	0x6857		/* "hW" */
 
 
@@ -99,10 +98,8 @@ static void stt_setup(void)
 
 static void stt_teardown(void)
 {
-	L4_LoadMR(0, (L4_MsgTag_t){ .X.label = QUIT_LABEL }.raw);
-	L4_MsgTag_t tag = L4_Send_Timeout(test_tid, TEST_IPC_DELAY);
-	fail_unless(L4_IpcSucceeded(tag),
-		"QUIT_LABEL failed, ec %#lx", L4_ErrorCode());
+	bool quit_ok = send_quit(test_tid);
+	fail_unless(quit_ok, "send_quit() failed, ec %#lx", L4_ErrorCode());
 
 	void *value = join_thread(test_tid);
 	fail_unless(value == NULL,
@@ -293,11 +290,8 @@ static void fork_stt_setup(void)
 
 static void fork_stt_teardown(void)
 {
-	/* FIXME: move this into a shared IPC stub */
-	L4_LoadMR(0, (L4_MsgTag_t){ .X.label = QUIT_LABEL }.raw);
-	L4_MsgTag_t tag = L4_Send_Timeout(test_tid, TEST_IPC_DELAY);
-	fail_unless(L4_IpcSucceeded(tag),
-		"QUIT_LABEL failed, ec %#lx", L4_ErrorCode());
+	bool quit_ok = send_quit(test_tid);
+	fail_unless(quit_ok, "send_quit() failed, ec %#lx", L4_ErrorCode());
 
 	int status, pid = wait(&status);
 	fail_unless(pid > 0);
@@ -323,6 +317,7 @@ Suite *string_suite(void)
 	tcase_add_checked_fixture(space, &fork_stt_setup, &fork_stt_teardown);
 	tcase_add_test(space, echo_simple);
 	tcase_add_test(space, echo_with_hole);
+	tcase_add_test(space, echo_with_long_hole);
 	suite_add_tcase(s, space);
 
 	return s;

@@ -23,96 +23,8 @@
 #include "forkserv.h"
 
 
-#define QUIT_LABEL 0xdead
 #define POKE_LABEL 0x05e7	/* "set" */
 #define PEEK_LABEL 0x06e7	/* "get" */
-
-#define LOG_SIZE 64
-
-
-struct pager_stats
-{
-	int n_faults, n_read, n_write, n_exec, n_fail;
-	int log_top;	/* [0 .. LOG_SIZE) */
-	L4_Fpage_t log[LOG_SIZE];
-};
-
-
-/* a statistics-gathering pager thread that passes faults up to sigma0, so
- * that the reply (ignored as it is) will result in a situation where the
- * faulting thread recovers properly.
- *
- * the mapped pages aren't tracked. (TODO: this would be a good candidate for
- * a test case where each test is started from a clean slate.)
- */
-static void stats_pager_fn(void *param_ptr)
-{
-	struct pager_stats *stats = param_ptr;
-	*stats = (struct pager_stats){ };
-
-	bool run = true;
-	while(run) {
-		L4_ThreadId_t from;
-		L4_MsgTag_t tag = L4_Wait(&from);
-
-		for(;;) {
-			if(L4_IpcFailed(tag)) {
-				diag("reply/wait failed, ec %#lx", L4_ErrorCode());
-				break;
-			}
-
-			if(tag.X.label == QUIT_LABEL) {
-				run = false;
-				break;
-			} else if(tag.X.label >> 4 == 0xffe
-				&& tag.X.u == 2 && tag.X.t == 0)
-			{
-				L4_Word_t faddr, fip;
-				L4_StoreMR(1, &faddr);
-				L4_StoreMR(2, &fip);
-				int rwx = tag.X.label & 0x000f;
-				stats->n_faults++;
-				if(CHECK_FLAG(rwx, L4_Readable)) stats->n_read++;
-				if(CHECK_FLAG(rwx, L4_Writable)) stats->n_write++;
-				if(CHECK_FLAG(rwx, L4_eXecutable)) stats->n_exec++;
-				stats->log_top = (stats->log_top + 1) % LOG_SIZE;
-				stats->log[stats->log_top] = L4_FpageLog2(faddr, 12);
-				L4_Set_Rights(&stats->log[stats->log_top], rwx);
-#if 0
-				diag("%s: pf in %lu:%lu at %#lx, ip %#lx", __func__,
-					L4_ThreadNo(from), L4_Version(from), faddr, fip);
-#endif
-
-				/* pass it on. */
-				L4_LoadMR(0, (L4_MsgTag_t){ .X.label = 0xffe0 | rwx,
-					.X.u = 2 }.raw);
-				L4_LoadMR(1, faddr);
-				L4_LoadMR(2, fip);
-				L4_LoadBR(0, L4_CompleteAddressSpace.raw);
-				tag = L4_Call(L4_Pager());
-				if(L4_IpcFailed(tag)) {
-					diag("stats-to-pager IPC failed, ec %lu",
-						L4_ErrorCode());
-					stats->n_fail++;
-					break;
-				} else if(tag.X.t != 2 || tag.X.u != 0) {
-					diag("stats-to-pager IPC returned weird tag %#lx",
-						tag.raw);
-					stats->n_fail++;
-					break;
-				} else {
-					/* reply. */
-					L4_LoadMR(0, 0);
-					tag = L4_ReplyWait(from, &from);
-				}
-			} else {
-				diag("pager got weird IPC from %#lx (label %#lx)",
-					from.raw, tag.X.label);
-				break;
-			}
-		}
-	}
-}
 
 
 /* poke/peek thread. obeys POKE, PEEK, and QUIT. */
@@ -186,13 +98,6 @@ static bool peek(uint8_t *value_p, L4_ThreadId_t thread, L4_Word_t address)
 }
 
 
-static bool send_quit(L4_ThreadId_t thread)
-{
-	L4_LoadMR(0, (L4_MsgTag_t) { .X.label = QUIT_LABEL }.raw);
-	return L4_IpcSucceeded(L4_Send_Timeout(thread, TEST_IPC_DELAY));
-}
-
-
 /* fixtures for the pager test case. */
 
 static struct pager_stats *pg_stats = NULL;
@@ -204,10 +109,7 @@ static void pager_setup(void)
 	pg_stats = malloc(sizeof(*pg_stats));
 	pg_stats->n_faults = 12345;
 	pg_stats->log_top = LOG_SIZE - 1;	/* to start at 0 */
-	pg_pager = start_thread(&stats_pager_fn, pg_stats);
-	fail_if(L4_IsNilThread(pg_pager), "can't setup stats pager");
-	for(int i=0; i < 10; i++) L4_ThreadSwitch(pg_pager);
-	fail_if(pg_stats->n_faults != 0, "stats pager acting weird");
+	pg_pager = start_stats_pager(pg_stats);
 
 	pg_poker = start_thread(&poke_peek_fn, NULL);
 	fail_if(L4_IsNilThread(pg_poker), "can't start poke/peek thread");
@@ -230,8 +132,8 @@ static void pager_teardown(void)
 		fail_if(true, "can't stop hung poker thread");
 	}
 
-	if(send_quit(pg_pager)) join_thread(pg_pager);
-	else fail_if(true, "can't stop pager thread");
+	L4_Word_t err = stop_stats_pager(pg_pager);
+	fail_if(err != 0, "can't stop pager thread; ipc ec %#lx", err);
 
 	free(pg_stats);
 	pg_stats = NULL;
