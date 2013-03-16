@@ -48,6 +48,13 @@ struct stritem_iter
 };
 
 
+struct fault_peer
+{
+	L4_Fpage_t *faults;
+	uint16_t num, pos;	/* at most 4M per strxfer = 1024 pages /peer */
+};
+
+
 /* in-progress typed transfer. */
 struct ipc_state
 {
@@ -65,14 +72,20 @@ struct ipc_state
 	int src_off;
 	struct stritem_iter src_iter, dst_iter;
 
-	/* (FIXME: these are horrible and result in too much code.) */
-	uint16_t n_srcf, n_dstf;	/* at most 4M per strxfer = 2*1024 pages */
-	uint16_t fp_src, fp_dst;	/* positions in faults[] */
-	/* (first nf_src are for the source thread, next nf_dst are for dest,
-	 * after that are words for dst_iter's contents.)
+	/* pre-transfer fault state */
+	struct fault_peer f_src, f_dst;
+
+	/* first f_src.num are for the source thread, next f_dst.num are for dest,
+	 * after that are words for dst_iter's contents.
 	 */
 	L4_Fpage_t faults[];	/* sizelog2 = PAGE_BITS, access = ro/rw */
 };
+
+
+static void send_prexfer_fault(
+	struct thread *t,
+	L4_Fpage_t fault,
+	L4_Word_t ip);
 
 
 static struct kmem_cache *ipc_wait_slab = NULL;
@@ -358,25 +371,27 @@ static void prexfer_ipc_hook(struct hook *hook, uintptr_t code, void *dataptr)
 	/* FIXME: restore send, recv timeouts (needed for other IPC stage) */
 
 	bool is_sender = CHECK_FLAG(t->flags, TF_SENDER);
-	/* FIXME: do the next pagefault, too */
-
-	bool other_ready;
-	if(is_sender) {
-		t->ipc->fp_src++;
-		other_ready = t->ipc->fp_dst == t->ipc->n_dstf;
-		assert(t->ipc->fp_src == t->ipc->n_srcf);
-	} else {
+	struct fault_peer *p_self = &t->ipc->f_src, *p_other = &t->ipc->f_dst;
+	if(!is_sender) {
+		assert(t == t->ipc->to);
+		SWAP(struct fault_peer *, p_self, p_other);
 		SWAP(L4_ThreadId_t, t->ipc_from, t->ipc_to);
-		t->ipc->fp_dst++;
-		other_ready = t->ipc->fp_src == t->ipc->n_srcf;
-		assert(t->ipc->fp_dst == t->ipc->n_dstf);
+	} else {
+		assert(t == t->ipc->from);
 	}
 
 	hook_detach(hook);
-
-	if(!other_ready) {
+	if(++p_self->pos < p_self->num) {
+		/* next fault. */
+		TRACE("%s: sending next fault (index %u out of %u) (in %lu:%lu)\n",
+			__func__, p_self->pos, p_self->num, TID_THREADNUM(t->id),
+			TID_VERSION(t->id));
+		send_prexfer_fault(t, p_self->faults[p_self->pos], t->ctx.eip);
+		assert(IS_IPC_WAIT(t->status));
+		TRACE("%s: next fault sent, state now %s\n", __func__,
+			sched_status_str(t));
+	} else if(p_other->pos < p_other->num) {
 		/* wait for partner. */
-		assert(ipc_partner(t)->status != TS_XFER);
 		TRACE("%s: waiting for partner in %s thread %lu:%lu\n", __func__,
 			CHECK_FLAG(t->flags, TF_SENDER) ? "sender" : "receiver",
 			TID_THREADNUM(t->id), TID_VERSION(t->id));
@@ -447,7 +462,8 @@ static bool set_prexfer_fault_state(
 	}
 	*st = (struct ipc_state){
 		.from = source, .to = dest, .tag = tag,
-		.n_srcf = nf_send, .n_dstf = nf_recv,
+		.f_src = { .num = nf_send, .faults = &st->faults[0] },
+		.f_dst = { .num = nf_recv, .faults = &st->faults[nf_send] },
 	};
 	memcpy(&st->faults[nf_send + nf_recv], recv_si->raw,
 		recv_si_words * sizeof(L4_Word_t));
