@@ -4,6 +4,8 @@
 
 #include <stdio.h>
 #include <stdarg.h>
+#include <stdlib.h>
+#include <stdint.h>
 #include <stdbool.h>
 #include <ccan/compiler/compiler.h>
 
@@ -138,6 +140,8 @@ extern bool is_privileged(void);
 /* from util.c */
 
 extern bool send_quit(L4_ThreadId_t thread);
+extern uint32_t rand32(uint32_t *state_p);
+extern void random_string(char *buf, size_t size, uint32_t *seed_p);
 
 
 /* from log.c */
