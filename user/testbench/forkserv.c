@@ -134,7 +134,7 @@ static struct fs_thread *get_thread(L4_ThreadId_t tid) {
 }
 
 
-#ifndef NDEBUG
+#ifdef DEBUG_ME_HARDER
 #include <ukernel/invariant.h>
 
 static bool invariants(const char *context)
@@ -196,6 +196,10 @@ static bool invariants(const char *context)
 
 inv_fail:
 	return false;
+}
+#else
+static bool invariants(const char *where) {
+	return true;
 }
 #endif
 

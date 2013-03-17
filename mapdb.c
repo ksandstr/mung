@@ -123,12 +123,11 @@ static struct map_db *get_map_db(uint32_t ref_id)
 }
 
 
-#ifndef NDEBUG
-#include <ukernel/invariant.h>
-
 /* "don't test this" bits */
 #define MOD_NO_CHILD_REFS (1 << 0)	/* don't check child refs */
 
+#ifdef DEBUG_ME_HARDER
+#include <ukernel/invariant.h>
 
 /* runtime invariant checks. */
 static bool check_mapdb(struct map_db *db, int opts)
@@ -222,6 +221,9 @@ static bool check_mapdb_module(int opts)
 
 	return true;
 }
+#else
+#define check_mapdb_module(foo) (true)
+#define check_mapdb(foo, bar) (true)
 #endif
 
 

@@ -437,10 +437,7 @@ Suite *string_suite(void)
 	tcase_add_checked_fixture(space, &fork_stt_setup, &fork_stt_teardown);
 	tcase_add_checked_fixture(space, &stats_setup, &stats_teardown);
 	tcase_add_test(space, echo_simple);
-	/* FIXME: this is mysteriously slow. likely related to forkserv, or
-	 * something. merits a looking into.
-	 */
-	// tcase_add_loop_test(space, echo_long, 0, 15);
+	tcase_add_loop_test(space, echo_long, 0, 15);
 	tcase_add_test(space, echo_with_hole);
 	tcase_add_test(space, echo_with_long_hole);
 	suite_add_tcase(s, space);
