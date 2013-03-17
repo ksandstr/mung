@@ -38,6 +38,14 @@ struct pager_stats
 };
 
 
+struct drop_param
+{
+	int keep;
+	int log_top;
+	L4_Fpage_t log[LOG_SIZE];
+};
+
+
 /* various test suites */
 
 extern struct Suite *process_suite(void);
@@ -160,6 +168,12 @@ extern L4_Word_t stop_stats_pager(L4_ThreadId_t tid);
  * cleared.
  */
 extern L4_Fpage_t get_fault(struct pager_stats *stats, L4_Word_t addr);
+
+
+/* from pg_drop.c */
+
+extern L4_ThreadId_t start_drop_pager(struct drop_param *param);
+extern L4_Word_t stop_drop_pager(L4_ThreadId_t tid);
 
 
 #endif

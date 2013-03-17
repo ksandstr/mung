@@ -21,8 +21,14 @@
 #define ECHO_LABEL	0x6857		/* "hW" */
 
 
-static L4_ThreadId_t test_tid, stats_tid;
+static L4_ThreadId_t test_tid, stats_tid, drop_tid;
 static struct pager_stats *stats;
+static struct drop_param *drop_param;
+
+
+static const uint32_t seed_bins[4] = {
+	0xdeadbeef, 0xf0adcafe, 0xb00b1e5, 0x71849a3f,
+};
 
 
 static bool read_fault(L4_Word_t addr) {
@@ -179,10 +185,7 @@ END_TEST
 START_LOOP_TEST(echo_long, test_iter)
 {
 	fail_unless(test_iter >= 0 && test_iter < 16);
-	static const uint32_t bins[4] = {
-		0xdeadbeef, 0xf0adcafe, 0xb00b1e5, 0x71849a3f,
-	};
-	uint32_t seed = bins[test_iter & 0x3] ^ bins[test_iter >> 2];
+	uint32_t seed = seed_bins[test_iter & 0x3] ^ seed_bins[test_iter >> 2];
 
 	const size_t test_len = 24 * 1024 + 1;
 	char *echostr = malloc(test_len);
@@ -196,6 +199,51 @@ START_LOOP_TEST(echo_long, test_iter)
 	fail_if(replybuf == NULL);
 	L4_StringItem_t got_si;
 	echo(test_tid, replybuf, test_len * 2, &got_si, echostr, 0);
+
+	fail_unless(L4_IsStringItem(&got_si));
+	replybuf[MIN(int, test_len * 2 - 1, got_si.X.string_length)] = '\0';
+	int rlen = strlen(replybuf);
+	ok(rlen >= strlen(echostr), "reply length >= input length");
+	ok(streq(&replybuf[rlen - strlen(echostr)], echostr),
+		"echo output ends with input");
+
+	free(echostr);
+	free(replybuf);
+}
+END_TEST
+
+
+/* iter should be 0..15. it'll be used to select a seed value for the string
+ * parameter.
+ *
+ * TODO: use the stats pager, too
+ */
+START_LOOP_TEST(echo_long_xferfault, test_iter)
+{
+	fail_unless(test_iter >= 0 && test_iter < 16);
+	uint32_t seed = seed_bins[test_iter & 0x3] ^ seed_bins[test_iter >> 2];
+
+	const size_t test_len = 24 * 1024 + 1;
+	char *echostr = valloc(test_len);
+	fail_if(echostr == NULL);
+	random_string(echostr, test_len, &seed);
+	fail_unless(strlen(echostr) == test_len - 1);
+
+	plan_tests(2);
+
+	L4_ThreadId_t old_pager = L4_Pager();
+	L4_Set_Pager(drop_tid);
+
+	/* provoke send-side faults also */
+	L4_Fpage_t echo_page = L4_Fpage((L4_Word_t)echostr, test_len * 2);
+	L4_Set_Rights(&echo_page, L4_FullyAccessible);
+	L4_FlushFpage(echo_page);
+
+	char *replybuf = valloc(test_len * 2);
+	fail_if(replybuf == NULL);
+	L4_StringItem_t got_si;
+	echo(test_tid, replybuf, test_len * 2, &got_si, echostr, 0);
+	L4_Set_Pager(old_pager);
 
 	fail_unless(L4_IsStringItem(&got_si));
 	replybuf[MIN(int, test_len * 2 - 1, got_si.X.string_length)] = '\0';
@@ -419,6 +467,25 @@ static void stats_teardown(void)
 }
 
 
+/* fixture for the page-dropping pager thread. set to keep at most two
+ * previous maps around.
+ */
+static void drop_setup(void)
+{
+	drop_param = malloc(sizeof(*drop_param));
+	drop_param->keep = 2;
+	fail_unless(drop_param != NULL);
+	drop_tid = start_drop_pager(drop_param);
+}
+
+
+static void drop_teardown(void)
+{
+	L4_Word_t ec = stop_drop_pager(drop_tid);
+	fail_if(ec != 0, "stop_drop_pager() failed, ec %#lx", ec);
+}
+
+
 Suite *string_suite(void)
 {
 	Suite *s = suite_create("string");
@@ -426,8 +493,10 @@ Suite *string_suite(void)
 	TCase *basic = tcase_create("basic");
 	tcase_add_checked_fixture(basic, &stt_setup, &stt_teardown);
 	tcase_add_checked_fixture(basic, &stats_setup, &stats_teardown);
+	tcase_add_checked_fixture(basic, &drop_setup, &drop_teardown);
 	tcase_add_test(basic, echo_simple);
 	tcase_add_loop_test(basic, echo_long, 0, 15);
+	tcase_add_loop_test(basic, echo_long_xferfault, 0, 15);
 	tcase_add_test(basic, echo_with_hole);
 	tcase_add_test(basic, echo_with_long_hole);
 	suite_add_tcase(s, basic);
@@ -436,8 +505,10 @@ Suite *string_suite(void)
 	TCase *space = tcase_create("space");
 	tcase_add_checked_fixture(space, &fork_stt_setup, &fork_stt_teardown);
 	tcase_add_checked_fixture(space, &stats_setup, &stats_teardown);
+	tcase_add_checked_fixture(space, &drop_setup, &drop_teardown);
 	tcase_add_test(space, echo_simple);
 	tcase_add_loop_test(space, echo_long, 0, 15);
+	tcase_add_loop_test(space, echo_long_xferfault, 0, 15);
 	tcase_add_test(space, echo_with_hole);
 	tcase_add_test(space, echo_with_long_hole);
 	suite_add_tcase(s, space);
