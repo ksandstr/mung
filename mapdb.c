@@ -1306,17 +1306,42 @@ static struct map_entry *discontiguate(
 		L4_Word_t r_end = r_start + L4_Size(range);
 		struct map_entry *last = probe_group_range(g, L4_FpageLog2(
 			L4_Address(range) + L4_Size(range) - PAGE_SIZE, PAGE_BITS));
-		/* ... does this work? */
-		if(last != NULL
-			&& (L4_Address(last->range) != r_start
-				|| L4_Size(last->range) != L4_Size(range))
-			&& L4_Address(last->range) < r_end)
-		{
-			err = split_entry(db, g, last, range);
-			if(err < 0) goto fail;
-			new_e = true;
+		/* two assumptions:
+		 * 1. if the entry would've started from before `range', then it'll
+		 *    have been cut up by the earlier call to split_entry().
+		 * 2. if the entry ends after `range', it should be split up further.
+		 */
+		if(last != NULL) {
+			/* if the entry would've started from before `range', it'll have
+			 * been turned to smaller chunks by the earlier call to
+			 * split_entry().
+			 */
+			assert(L4_Address(last->range) >= r_start);
+			/* so we only need test whether the entry at the last page's
+			 * position straddles r_end.
+			 */
+			if(FPAGE_HIGH(last->range) + 1 > r_end) {
+				err = split_entry(db, g, last, range);
+				if(err < 0) goto fail;
+				new_e = true;
+			}
 		}
 	}
+
+#ifndef NDEBUG
+	/* discontiguate() guarantees that no entry in `g' overlaps the start or
+	 * end of `range'. that's easy enough to check by brute force.
+	 */
+	struct map_entry *chk_e = probe_group_range(g, range);
+	assert(chk_e != NULL);
+	while(chk_e < &g->entries[g->num_entries]
+		&& L4_Address(chk_e->range) < FPAGE_HIGH(range))
+	{
+		assert(ADDR_IN_FPAGE(range, FPAGE_LOW(chk_e->range)));
+		assert(ADDR_IN_FPAGE(range, FPAGE_HIGH(chk_e->range)));
+		chk_e++;
+	}
+#endif
 
 	if(new_e) {
 		e = probe_group_range(g, range);
