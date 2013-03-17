@@ -25,6 +25,16 @@ static L4_ThreadId_t test_tid, stats_tid;
 static struct pager_stats *stats;
 
 
+static bool read_fault(L4_Word_t addr) {
+	return CHECK_FLAG(L4_Rights(get_fault(stats, addr)), L4_Readable);
+}
+
+
+static bool write_fault(L4_Word_t addr) {
+	return CHECK_FLAG(L4_Rights(get_fault(stats, addr)), L4_Writable);
+}
+
+
 static void string_test_thread(void *param UNUSED)
 {
 	const int rbuf_len = 2048;
@@ -158,41 +168,65 @@ END_TEST
 
 /* like echo_simple, but flushes mappings from some of the memory where
  * strings are sent and/or received.
- *
- * TODO: check that faults occurred
  */
 START_TEST(echo_with_hole)
 {
-	plan_tests(2);
+	plan_tests(6);
 
 	const size_t buf_size = 16 * 1024;
 	const char *echostr = "what did the pope say to the bear?";
 
-	char *replybuf = calloc(1, buf_size), *sendbuf = calloc(1, buf_size);
-	fail_unless(buf_size > 4200);
-	char *sendstr = &sendbuf[4100];
+	char *replybuf = valloc(buf_size), *sendbuf = valloc(buf_size);
+	memset(replybuf, 0, buf_size);
+	memset(sendbuf, 0, buf_size);
+	char *sendstr = &sendbuf[19];
 	memcpy(sendstr, echostr, strlen(echostr) + 1);
 
 	/* unmap the largish-enough page around both, ensuring a pagefault on both
 	 * sides
 	 */
+	L4_Word_t sndpage = (L4_Word_t)sendstr & ~PAGE_MASK,
+		rpypage = (L4_Word_t)replybuf & ~PAGE_MASK;
 	L4_Fpage_t flush[2] = {
-		L4_FpageLog2((L4_Word_t)sendstr & ~PAGE_MASK, PAGE_BITS),
-		L4_FpageLog2((L4_Word_t)replybuf & ~PAGE_MASK, PAGE_BITS),
+		L4_FpageLog2(sndpage, PAGE_BITS),
+		L4_FpageLog2(rpypage, PAGE_BITS),
 	};
 	for(int i=0; i < NUM_ELEMENTS(flush); i++) {
 		L4_Set_Rights(&flush[i], L4_FullyAccessible);
 	}
 	L4_FlushFpages(2, flush);
+	L4_ThreadId_t old_pager = L4_Pager();
+	L4_Set_Pager(stats_tid);
 
 	L4_StringItem_t got_si;
+	fail_unless(stats->n_faults == 0,
+		"saw %d faults before echo", stats->n_faults);
 	echo(test_tid, replybuf, buf_size - (sendstr - sendbuf),
 		&got_si, sendstr, strlen(echostr));
+	L4_Set_Pager(old_pager);
+
+	/* echo result */
 	replybuf[MIN(int, buf_size - 1, got_si.X.string_length)] = '\0';
 	int rlen = strlen(replybuf);
 	ok(rlen >= strlen(sendstr), "reply length >= input length");
 	ok(streq(&replybuf[MAX(int, 0, rlen - strlen(echostr))], echostr),
 		"echo output ends with input");
+
+	/* fault entrails */
+	ok1(stats->n_faults == 2);
+	ok1(stats->n_write == 1);
+#if 0
+	diag("%d faults, %d read, %d write",
+		stats->n_faults, stats->n_read, stats->n_write);
+	for(int i=0; i <= stats->log_top; i++) {
+		diag("fault: %#lx:%#lx, %#x", L4_Address(stats->log[i]),
+			L4_Size(stats->log[i]), L4_Rights(stats->log[i]));
+	}
+	diag("replybuf %p, sendstr %p", replybuf, sendstr);
+	diag("rpypage %#lx, sndpage %#lx", rpypage, sndpage);
+#endif
+	ok1(read_fault(sndpage));
+	ok1(write_fault(rpypage));
 
 	free(replybuf);
 	free(sendbuf);
@@ -205,16 +239,6 @@ static void *bump_and_align(void *ptr, size_t bump, size_t align)
 	assert(((align - 1) & align) == 0);		/* has 0 or 1 bits set */
 	uintptr_t p = (uintptr_t)ptr + bump;
 	return (void *)((p + align - 1) & ~(align - 1)) - bump;
-}
-
-
-static bool read_fault(L4_Word_t addr) {
-	return CHECK_FLAG(L4_Rights(get_fault(stats, addr)), L4_Readable);
-}
-
-
-static bool write_fault(L4_Word_t addr) {
-	return CHECK_FLAG(L4_Rights(get_fault(stats, addr)), L4_Writable);
 }
 
 
