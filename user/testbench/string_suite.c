@@ -37,10 +37,10 @@ static bool write_fault(L4_Word_t addr) {
 
 static void string_test_thread(void *param UNUSED)
 {
-	const int rbuf_len = 2048;
-	char *recvbuf = calloc(rbuf_len, 1);
+	const int rbuf_len = 64 * 1024;
+	char *recvbuf = valloc(rbuf_len);
+	memset(recvbuf, 0, rbuf_len);
 	L4_StringItem_t recv_si = L4_StringItem(rbuf_len, recvbuf);
-	char tmp[512];		/* sendbuf */
 
 	bool running = true;
 	while(running) {
@@ -72,8 +72,15 @@ static void string_test_thread(void *param UNUSED)
 						break;
 					}
 					recvbuf[MIN(int, rbuf_len - 1, si.X.string_length)] = '\0';
-					snprintf(tmp, sizeof(tmp), "echo, echo! %s", recvbuf);
-					strlcpy(recvbuf, tmp, rbuf_len);
+					int rec_len = strlen(recvbuf), tmplen = rec_len + 64;
+					char *tmp = malloc(tmplen);
+					if(tmp == NULL) {
+						strlcpy(recvbuf, "malloc failed", rbuf_len);
+					} else {
+						snprintf(tmp, tmplen, "echo, echo! %s", recvbuf);
+						strlcpy(recvbuf, tmp, tmplen);
+						free(tmp);
+					}
 					si = L4_StringItem(strlen(recvbuf) + 1, recvbuf);
 					L4_LoadMR(0, (L4_MsgTag_t){ .X.t = 2 }.raw);
 					L4_LoadMRs(1, 2, si.raw);
@@ -162,6 +169,43 @@ START_TEST(echo_simple)
 	ok(rlen >= strlen(echostr), "reply length >= input length");
 	ok(streq(&replybuf[rlen - strlen(echostr)], echostr),
 		"echo output ends with input");
+}
+END_TEST
+
+
+/* iter should be 0..15. it'll be used to select a seed value for the string
+ * parameter.
+ */
+START_LOOP_TEST(echo_long, test_iter)
+{
+	fail_unless(test_iter >= 0 && test_iter < 16);
+	static const uint32_t bins[4] = {
+		0xdeadbeef, 0xf0adcafe, 0xb00b1e5, 0x71849a3f,
+	};
+	uint32_t seed = bins[test_iter & 0x3] ^ bins[test_iter >> 2];
+
+	const size_t test_len = 24 * 1024 + 1;
+	char *echostr = malloc(test_len);
+	fail_if(echostr == NULL);
+	random_string(echostr, test_len, &seed);
+	fail_unless(strlen(echostr) == test_len - 1);
+
+	plan_tests(2);
+
+	char *replybuf = malloc(test_len * 2);
+	fail_if(replybuf == NULL);
+	L4_StringItem_t got_si;
+	echo(test_tid, replybuf, test_len * 2, &got_si, echostr, 0);
+
+	fail_unless(L4_IsStringItem(&got_si));
+	replybuf[MIN(int, test_len * 2 - 1, got_si.X.string_length)] = '\0';
+	int rlen = strlen(replybuf);
+	ok(rlen >= strlen(echostr), "reply length >= input length");
+	ok(streq(&replybuf[rlen - strlen(echostr)], echostr),
+		"echo output ends with input");
+
+	free(echostr);
+	free(replybuf);
 }
 END_TEST
 
@@ -383,6 +427,7 @@ Suite *string_suite(void)
 	tcase_add_checked_fixture(basic, &stt_setup, &stt_teardown);
 	tcase_add_checked_fixture(basic, &stats_setup, &stats_teardown);
 	tcase_add_test(basic, echo_simple);
+	tcase_add_loop_test(basic, echo_long, 0, 15);
 	tcase_add_test(basic, echo_with_hole);
 	tcase_add_test(basic, echo_with_long_hole);
 	suite_add_tcase(s, basic);
@@ -392,6 +437,10 @@ Suite *string_suite(void)
 	tcase_add_checked_fixture(space, &fork_stt_setup, &fork_stt_teardown);
 	tcase_add_checked_fixture(space, &stats_setup, &stats_teardown);
 	tcase_add_test(space, echo_simple);
+	/* FIXME: this is mysteriously slow. likely related to forkserv, or
+	 * something. merits a looking into.
+	 */
+	// tcase_add_loop_test(space, echo_long, 0, 15);
 	tcase_add_test(space, echo_with_hole);
 	tcase_add_test(space, echo_with_long_hole);
 	suite_add_tcase(s, space);
