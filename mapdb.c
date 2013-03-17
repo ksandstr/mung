@@ -1437,8 +1437,7 @@ int mapdb_unmap_fpage(
 		__func__, L4_Address(range), L4_Size(range),
 		!immediate ? "non-" : "", !recursive ? "non-" : "",
 		(int)db->ref_id);
-	L4_Word_t unmap_rights = L4_Rights(range),
-		r_end = L4_Address(range) + L4_Size(range);
+	L4_Word_t unmap_rights = L4_Rights(range), r_end = FPAGE_HIGH(range);
 	/* this function will only call discontiguate() to modify the structure of
 	 * the map_groups it accesses when it might revoke access in the immediate
 	 * map_db.
@@ -1477,7 +1476,6 @@ int mapdb_unmap_fpage(
 		}
 		if(e == NULL) continue;
 
-		L4_Word_t r_pos = L4_Address(e->range);
 		do {
 			/* check each native page.
 			 *
@@ -1487,6 +1485,7 @@ int mapdb_unmap_fpage(
 			 * TODO: only do this if the caller provides a location for the
 			 * out-parameter.
 			 */
+			L4_Word_t r_pos = L4_Address(e->range);
 			int e_mask = 0;
 			do {
 				L4_Word_t next = 0;
@@ -1550,12 +1549,12 @@ int mapdb_unmap_fpage(
 				rwx_seen |= pass_rwx;
 			}
 
-			r_pos = L4_Address(e->range) + L4_Size(e->range);
 			bool drop = false;
 			if(modify) {
 				/* ensured by discontiguate() */
-				assert(L4_Address(e->range) >= L4_Address(range));
-				assert(L4_Address(e->range) + L4_Size(e->range) <= r_end);
+				assert(FPAGE_LOW(e->range) >= FPAGE_LOW(range));
+				assert(FPAGE_LOW(e->range) < r_end);
+				assert(FPAGE_HIGH(e->range) <= r_end);
 
 				int old_access = L4_Rights(e->range),
 					new_access = old_access & ~unmap_rights;
@@ -1632,7 +1631,7 @@ int mapdb_unmap_fpage(
 			}
 
 			e->access = clear_stored_access ? 0 : rwx_seen;
-		} while(++e < &g->entries[g->num_entries] && r_pos < r_end);
+		} while(++e < &g->entries[g->num_entries] && L4_Address(e->range) < r_end);
 
 		dump_map_group(g);
 	}
