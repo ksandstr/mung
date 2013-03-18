@@ -9,6 +9,7 @@
 #include <stdlib.h>
 #include <stdint.h>
 #include <string.h>
+#include <ctype.h>
 
 #include <l4/types.h>
 #include <l4/ipc.h>
@@ -100,13 +101,14 @@ static bool peek(uint8_t *value_p, L4_ThreadId_t thread, L4_Word_t address)
 
 /* fixtures for the pager test case. */
 
-static struct pager_stats *pg_stats = NULL;
+static struct pager_stats *pg_stats;
 static L4_ThreadId_t pg_pager, pg_poker;
 
 
 static void pager_setup(void)
 {
 	pg_stats = malloc(sizeof(*pg_stats));
+	fail_unless(pg_stats != NULL);
 	pg_stats->n_faults = 12345;
 	pg_stats->log_top = LOG_SIZE - 1;	/* to start at 0 */
 	pg_pager = start_stats_pager(pg_stats);
@@ -313,7 +315,6 @@ START_TEST(simple_flush)
 {
 	const uint8_t poke_val = 0x22;
 
-	fail_unless(pg_stats != NULL);
 	plan_tests(8);
 
 	const size_t mem_size = 3 * 4096;
@@ -367,7 +368,6 @@ START_LOOP_TEST(partial_flush, iter)
 	/* variants */
 	const bool recursive = CHECK_FLAG(iter, 1);
 
-	fail_unless(pg_stats != NULL);
 	plan_tests(4);
 
 	const size_t mem_size = 3 * 4096;
@@ -406,6 +406,67 @@ START_LOOP_TEST(partial_flush, iter)
 END_TEST
 
 
+/* "large" meaning "multiple pages" */
+START_TEST(large_flush)
+{
+	const size_t test_size = 24 * 1024;
+
+	plan_tests(2);
+
+	char *mem = valloc(test_size);
+	fail_unless(mem != NULL);
+	uint32_t boring_seed = 0x81be0a94;
+	random_string(mem, test_size, &boring_seed);
+	diag("mem is %#x..%#x", (uintptr_t)mem, (uintptr_t)mem + test_size - 1);
+
+	/* should cause no faults before the flush. */
+	fail_unless(pg_stats->n_faults == 0);
+	for(uintptr_t pos = 0; pos < test_size; pos += PAGE_SIZE) {
+		uint8_t val;
+		bool ok = peek(&val, pg_poker, (uintptr_t)&mem[pos]);
+		fail_unless(ok);
+		fail_unless(mem[pos] == val, "expected %#x, got %#x",
+			(unsigned)mem[pos], (unsigned)val);
+
+		char c = mem[pos];
+		ok = poke(pg_poker, (uintptr_t)&mem[pos], toupper(c));
+		fail_unless(ok);
+		fail_unless(mem[pos] == toupper(c));
+		mem[pos] = c;
+	}
+	ok(pg_stats->n_faults == 0, "base case (no faults)");
+
+	L4_Fpage_t flush_page = L4_Fpage((uintptr_t)mem, test_size * 4);
+	L4_Set_Rights(&flush_page, L4_FullyAccessible);
+	diag("flushing %#lx..%#lx",
+		FPAGE_LOW(flush_page), FPAGE_HIGH(flush_page));
+	L4_FlushFpage(flush_page);
+
+	/* should cause both a read and a write fault separately afterward. */
+	fail_unless(pg_stats->n_faults == 0);
+	int expected = 0;
+	for(uintptr_t pos = 0; pos < test_size; pos += PAGE_SIZE) {
+		uint8_t val;
+		bool ok = peek(&val, pg_poker, (uintptr_t)&mem[pos]);
+		fail_unless(ok);
+		fail_unless(mem[pos] == val, "expected %#x, got %#x",
+			(unsigned)mem[pos], (unsigned)val);
+		expected++;
+
+		char c = mem[pos];
+		ok = poke(pg_poker, (uintptr_t)&mem[pos], toupper(c));
+		fail_unless(ok);
+		fail_unless(mem[pos] == toupper(c));
+		mem[pos] = c;
+		expected++;
+	}
+	diag("%d faults, r %d, w %d", pg_stats->n_faults,
+		pg_stats->n_read, pg_stats->n_write);
+	ok(pg_stats->n_faults == expected, "expecting %d faults", expected);
+}
+END_TEST
+
+
 Suite *space_suite(void)
 {
 	Suite *s = suite_create("space");
@@ -425,6 +486,7 @@ Suite *space_suite(void)
 	tcase_add_checked_fixture(unmap_case, &pager_setup, &pager_teardown);
 	tcase_add_test(unmap_case, simple_flush);
 	tcase_add_loop_test(unmap_case, partial_flush, 0, 1);
+	tcase_add_test(unmap_case, large_flush);
 	suite_add_tcase(s, unmap_case);
 
 	return s;
