@@ -1628,9 +1628,12 @@ int mapdb_unmap_fpage(
 						e = &g->entries[e_pos];
 					}
 				}
-			}
 
-			e->access = clear_stored_access ? 0 : rwx_seen;
+				/* counteract the loop bump */
+				e--;
+			} else {
+				e->access = clear_stored_access ? 0 : rwx_seen;
+			}
 		} while(++e < &g->entries[g->num_entries] && L4_Address(e->range) < r_end);
 
 		dump_map_group(g);
@@ -1638,6 +1641,29 @@ int mapdb_unmap_fpage(
 
 	assert(unmap_rights == 0 || check_mapdb_module(0));
 	if(db_changed) space_commit(db->space);
+
+	/* TODO: move postconditions into another function */
+#ifndef NDEBUG
+	if(unmap_rights != 0 && immediate) {
+#if 0
+		printf("checking unmap %#lx:%#lx (%#lx)\n", L4_Address(range),
+			L4_Size(range), unmap_rights);
+#endif
+		for(L4_Word_t addr = FPAGE_LOW(range);
+			addr < FPAGE_HIGH(range);
+			addr += PAGE_SIZE)
+		{
+			struct map_entry *e = mapdb_probe(db, addr);
+#if 0
+			if(e != NULL) {
+				printf("... entry %#lx:%#lx (%#lx)\n", L4_Address(e->range),
+					L4_Size(e->range), L4_Rights(e->range));
+			}
+#endif
+			assert(e == NULL || !CHECK_FLAG_ALL(L4_Rights(e->range), unmap_rights));
+		}
+	}
+#endif
 
 	return rwx_seen;
 }
