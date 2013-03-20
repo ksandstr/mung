@@ -21,7 +21,7 @@
 
 
 /* for "[KU]-[KU]: %d:%d -> %d:%d" prints */
-#define TRACE(fmt, ...) TRACE_MSG(TRID_SCHED, fmt, __VA_ARGS__)
+#define TRACE(fmt, ...) TRACE_MSG(TRID_SCHED, fmt, ##__VA_ARGS__)
 
 
 static struct thread *current_thread = NULL, *scheduler_thread = NULL;

@@ -1266,9 +1266,12 @@ bool ipc_recv_half(struct thread *self, bool *preempt_p)
 				sq_update_thread(from);
 			}
 		}
-		post_exn_ok(self);
-
-		assert(IS_READY(from->status));
+		if(!post_exn_ok(self)) {
+			/* post-IPC exception hooks may start another IPC operation right
+			 * away, so check this only in the ordinary path.
+			 */
+			assert(IS_READY(from->status));
+		}
 		*preempt_p = self == get_current_thread()
 			&& preempted_by(self, task_switch_time * 1000, from);
 		if(*preempt_p) {

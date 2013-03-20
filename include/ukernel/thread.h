@@ -40,7 +40,7 @@ typedef L4_Word_t thread_id;
 
 
 /* TODO: clean these up. */
-#define IS_READY(st) ((st) == TS_READY || (st) == TS_R_RECV)
+#define IS_READY(st) ((st) == TS_READY || (st) == TS_R_RECV || (st) == TS_XFER)
 #define IS_IPC_WAIT(st) (st == TS_SEND_WAIT || st == TS_RECV_WAIT)
 #define IS_IPC(st) (IS_IPC_WAIT(st) || st == TS_R_RECV || st == TS_XFER)
 #define IS_SCHED(thread) ((thread)->status >= TS_RUNNING)
