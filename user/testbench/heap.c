@@ -16,6 +16,7 @@
 
 
 static L4_Word_t heap_pos = 0, heap_top = 0;
+static L4_ThreadId_t heap_tid;	/* forkserv's TID */
 
 bool use_forkserv_sbrk = false;
 
@@ -72,10 +73,16 @@ void *sbrk(intptr_t increment)
 		/* FIXME: get smallest physical page size from KIP */
 		increment = (increment + 0xfff) & ~0xfff;
 		if(use_forkserv_sbrk) {
+			if(L4_IsNilThread(heap_tid)) {
+				heap_tid = L4_Pager();
+				printf("heap TID is now %lu:%lu\n", L4_ThreadNo(heap_tid),
+					L4_Version(heap_tid));
+				assert(!L4_IsNilThread(heap_tid));
+			}
 			L4_LoadMR(0, (L4_MsgTag_t){ .X.label = FORKSERV_SBRK,
 				.X.u = 1 }.raw);
 			L4_LoadMR(1, heap_pos - increment);
-			L4_MsgTag_t tag = L4_Call(L4_Pager());
+			L4_MsgTag_t tag = L4_Call(heap_tid);
 			if(L4_IpcFailed(tag)) {
 				printf("forkserv sbrk() failed: ec %#lx\n", L4_ErrorCode());
 			}
