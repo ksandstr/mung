@@ -306,12 +306,6 @@ static int stritemlen(L4_StringItem_t *si)
 }
 
 
-/* TODO: the calling convention shouldn't test whether @faults is NULL,
- * because probing the mapping database twice [once to see how many faults
- * there were, and the other to gather them] is silly. instead the caller
- * should start with, say, 16 faults' worth of memory and double that every
- * time stritem_faults() returns a "not enough room" indication.
- */
 static int stritem_faults(
 	L4_Fpage_t *faults,
 	size_t faults_len,
@@ -323,43 +317,39 @@ static int stritem_faults(
 	int n_faults = 0;
 	struct stritem_iter it;
 	stritem_first(si, &it);
-	do {
-		L4_Word_t addr = it.ptr;
-		int first_seg = PAGE_SIZE - (addr & PAGE_MASK);
-		if(first_seg == 0) first_seg = PAGE_SIZE;
-		do {
-			/* TODO: using mapdb_probe() here causes multiple lookups of the
-			 * first-level mapdb structure (i.e. map_group) where at most two
-			 * per a single string segment would suffice.
-			 */
-			struct map_entry *e = mapdb_probe(&sp->mapdb, addr);
-			if(e == NULL || !CHECK_FLAG_ALL(L4_Rights(e->range), access)) {
-				if(faults != NULL && n_faults < faults_len) {
-					L4_Fpage_t f = L4_FpageLog2(addr & ~PAGE_MASK, 12);
-					L4_Set_Rights(&f, access);
-					faults[n_faults] = f;
-				}
-				n_faults++;
-				if(max_fail >= 0 && n_faults > max_fail) return n_faults;
+	/* this loop works by brute fucking force. the groups-and-entries format
+	 * is too much of a hassle to do right the first time around.
+	 */
+	L4_Word_t addr = it.ptr & ~PAGE_MASK;
+	while(addr < it.ptr + it.len) {
+		struct map_entry *e = mapdb_probe(&sp->mapdb, addr);
+		if(e == NULL || !CHECK_FLAG_ALL(L4_Rights(e->range), access)) {
+			if(n_faults < faults_len) {
+				L4_Fpage_t f = L4_FpageLog2(addr, PAGE_BITS);
+				L4_Set_Rights(&f, access);
+				faults[n_faults] = f;
 			}
+			n_faults++;
+			if(max_fail >= 0 && n_faults > max_fail) return n_faults;
 
-			if(e == NULL) {
-				addr += first_seg;
-				first_seg = PAGE_SIZE;
-			} else {
-				addr = L4_Address(e->range) + L4_Size(e->range);
-			}
-		} while(addr < it.ptr + it.len);
-	} while(stritem_next(&it));
+			addr += PAGE_SIZE;
+		} else {
+			addr = L4_Address(e->range) + L4_Size(e->range);
+		}
+
+		if(addr >= it.ptr + it.len && stritem_next(&it)) {
+			/* next segment. */
+			addr = it.ptr;
+		}
+	}
 
 	return n_faults;
 }
 
 
-/* FIXME: handle the abort case, too! */
 static void prexfer_ipc_hook(struct hook *hook, uintptr_t code, void *dataptr)
 {
-	assert(code == 0);
+	assert(code == 0);		/* FIXME: handle the abort case also */
 
 	struct thread *t = container_of(hook, struct thread, post_exn_call);
 	assert(&t->post_exn_call == hook);
@@ -728,6 +718,9 @@ static L4_Word_t do_typed_transfer(
 
 				int send_len = stritemlen(send_si);
 				if(send_len > stritemlen(recv_si)) goto msg_overflow;
+				/* FIXME: don't do this. don't call stritem_faults() twice.
+				 * it's silly.
+				 */
 				int nf_src = stritem_faults(NULL, 0, source->space, send_si, L4_Readable, -1),
 					nf_dst = stritem_faults(NULL, 0, dest->space, recv_si,
 						L4_Readable | L4_Writable, -1);
@@ -1049,7 +1042,6 @@ bool ipc_send_half(struct thread *self)
 					set_ipc_error(thread_get_utcb(dest), error | 1);
 					set_ipc_return_thread(dest);
 				}
-				printf("%s: it doesn't happen here\n", __func__);
 				thread_wake(dest);
 			}
 			set_ipc_error(thread_get_utcb(self), error & ~1ul);
