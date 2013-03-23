@@ -504,6 +504,13 @@ void thread_ipc_fail(struct thread *t)
 		|| t->status == TS_SEND_WAIT
 		|| t->status == TS_R_RECV);
 
+	if(t->status == TS_SEND_WAIT) {
+		abort_thread_ipc(t);
+	}
+	/* FIXME: TS_XFER should also get aborted here. TS_RECV_WAIT requires no
+	 * such thing.
+	 */
+
 	if(CHECK_FLAG(t->flags, TF_HALT)) {
 		t->status = TS_STOPPED;
 		sq_remove_thread(t);

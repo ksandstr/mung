@@ -91,6 +91,8 @@ struct copy_err
 };
 
 
+static bool cmp_threadid(const void *tid, void *tid_as_ptr);
+
 static void send_xfer_fault(
 	struct thread *t,
 	L4_Fpage_t fault,
@@ -947,8 +949,7 @@ static L4_Word_t do_ipc_transfer(
 }
 
 
-/* one thing that thread_ipc_fail() doesn't do. used by the deleting mode
- * of ThreadControl.
+/* used by the deleting mode of ThreadControl.
  *
  * FIXME: untested!
  */
@@ -998,6 +999,31 @@ void abort_waiting_ipc(struct thread *t, L4_Word_t errcode)
 			set_ipc_error_thread(other, errcode);
 		}
 		thread_wake(other);
+	}
+}
+
+
+/* called from thread_ipc_fail(). takes care of the sendwait_hash entry.
+ * leaves errorcode setting to caller's caller.
+ */
+void abort_thread_ipc(struct thread *t)
+{
+	assert(t->status == TS_SEND_WAIT
+		|| t->status == TS_RECV_WAIT
+		|| t->status == TS_R_RECV);
+
+	if(t->status == TS_SEND_WAIT) {
+		size_t dst_hash = int_hash(t->ipc_to.raw);
+		assert(offsetof(struct ipc_wait, dest_tid) == 0);
+		struct ipc_wait *w = htable_get(&sendwait_hash, dst_hash,
+			&cmp_threadid, (void *)(uintptr_t)t->ipc_to.raw);
+		assert(w != NULL);
+		assert(w->thread == t);
+		htable_del(&sendwait_hash, dst_hash, w);
+		kmem_cache_free(ipc_wait_slab, w);
+	} else {
+		printf("%s: t->status is %s\n", __func__, sched_status_str(t));
+		panic("unhandled case in abort_thread_ipc()");
 	}
 }
 
@@ -1479,6 +1505,12 @@ void sys_ipc(struct x86_exregs *regs)
 static size_t hash_threadid(const void *tid, void *priv) {
 	const L4_ThreadId_t *p = tid;
 	return int_hash(p->raw);
+}
+
+
+static bool cmp_threadid(const void *tid, void *tid_as_ptr) {
+	const L4_ThreadId_t *p = tid;
+	return p->raw == (uintptr_t)tid_as_ptr;
 }
 
 

@@ -32,6 +32,11 @@ extern void ipc_user(struct thread *from, struct thread *to);
  */
 extern void abort_waiting_ipc(struct thread *t, L4_Word_t errorcode);
 
+/* removes the ipc_wait structure associated with the passive send in @t. used
+ * by sched.c in the timeout case (albeit indirectly, via thread_ipc_fail().)
+ */
+extern void abort_thread_ipc(struct thread *t);
+
 
 extern L4_MsgTag_t kipc(
 	L4_ThreadId_t to,
