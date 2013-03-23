@@ -69,7 +69,7 @@ struct ipc_state
 	int pos, last, dbr_pos;
 
 	/* stringitem copy state */
-	int src_off;
+	int src_off, dst_off;
 	struct stritem_iter src_iter, dst_iter;
 
 	/* pre-transfer fault state */
@@ -82,7 +82,16 @@ struct ipc_state
 };
 
 
-static void send_prexfer_fault(
+/* an error result from the copy_*_stritem() family. tagged by error code,
+ * supplied out of band.
+ */
+struct copy_err
+{
+	L4_Fpage_t fault;	/* [EFAULT] src/dst determined by read/write */
+};
+
+
+static void send_xfer_fault(
 	struct thread *t,
 	L4_Fpage_t fault,
 	L4_Word_t ip);
@@ -376,7 +385,7 @@ static void prexfer_ipc_hook(struct hook *hook, uintptr_t code, void *dataptr)
 		TRACE("%s: sending next fault (index %u out of %u) (in %lu:%lu)\n",
 			__func__, p_self->pos, p_self->num, TID_THREADNUM(t->id),
 			TID_VERSION(t->id));
-		send_prexfer_fault(t, p_self->faults[p_self->pos], t->ctx.eip);
+		send_xfer_fault(t, p_self->faults[p_self->pos], t->ctx.eip);
 		assert(IS_IPC_WAIT(t->status));
 		TRACE("%s: next fault sent, state now %s\n", __func__,
 			sched_status_str(t));
@@ -398,12 +407,12 @@ static void prexfer_ipc_hook(struct hook *hook, uintptr_t code, void *dataptr)
 }
 
 
-static void send_prexfer_fault(
+static void send_xfer_fault(
 	struct thread *t,
 	L4_Fpage_t fault,
 	L4_Word_t ip)
 {
-	TRACE("ipc: prexfer fault %#lx (ip %#lx) in %lu:%lu\n",
+	TRACE("ipc: xfer fault %#lx (ip %#lx) in %lu:%lu\n",
 		L4_Address(fault), ip, TID_THREADNUM(t->id), TID_VERSION(t->id));
 
 	void *utcb = thread_get_utcb(t);
@@ -411,6 +420,9 @@ static void send_prexfer_fault(
 	t->saved_regs[12] = t->ipc_from.raw;
 	t->saved_regs[13] = t->ipc_to.raw;
 	set_pf_msg(t, utcb, L4_Address(fault), ip, L4_Rights(fault));
+	/* (notice how this can cause calls to ipc_send_half() to nest? due to the
+	 * way IPC works in L4.X2, this is completely safe.)
+	 */
 	hook_push_back(&t->post_exn_call, &prexfer_ipc_hook, NULL);
 	ipc_user(t, pager);
 }
@@ -470,7 +482,7 @@ static bool set_prexfer_fault_state(
 		TRACE("%s: %d faults for sender\n", __func__, nf_send);
 		stritem_faults(&st->faults[0], nf_send, source->space, send_si,
 			L4_Readable, -1);
-		send_prexfer_fault(source, st->faults[0], source->ctx.eip);
+		send_xfer_fault(source, st->faults[0], source->ctx.eip);
 		assert(IS_IPC_WAIT(source->status));
 	} else {
 		source->status = TS_SEND_WAIT;
@@ -482,7 +494,7 @@ static bool set_prexfer_fault_state(
 		stritem_faults(&st->faults[nf_send], nf_recv, dest->space, recv_si,
 			L4_Writable | L4_Readable, -1);
 
-		send_prexfer_fault(dest, st->faults[nf_send], dest->ctx.eip);
+		send_xfer_fault(dest, st->faults[nf_send], dest->ctx.eip);
 		assert(IS_IPC_WAIT(dest->status));
 	} else {
 		dest->status = TS_RECV_WAIT;
@@ -494,15 +506,46 @@ static bool set_prexfer_fault_state(
 }
 
 
-static void copy_interspace_stritem(
-	struct space *src_space,
-	struct stritem_iter *src_iter,
-	struct space *dest_space,
-	struct stritem_iter *dst_iter)
+/* sends a pagefault on behalf of the source or destination, and puts the
+ * other thread in the appropriate wait state.
+ */
+static void set_xfer_fault_state(struct ipc_state *st, L4_Fpage_t fault)
 {
+	/* neither is relevant in this flow */
+	st->f_src = (struct fault_peer){ .faults = NULL };
+	st->f_dst = (struct fault_peer){ .faults = NULL };
+	struct thread *ft = st->from, *oth = st->to;
+	if(CHECK_FLAG(L4_Rights(fault), L4_Writable)) {
+		/* faulted in the receiver (write side). */
+		SWAP(struct thread *, ft, oth);
+	}
+
+	/* the other side waits, appearing ready to the faulting side when it gets
+	 * to the post-fault hook
+	 */
+	assert(oth->status == TS_XFER);
+	/* FIXME: set timeout according to xfer timeout */
+	oth->status = oth == st->to ? TS_RECV_WAIT : TS_SEND_WAIT;
+	thread_sleep(oth, L4_Never);
+
+	/* the faulter does an IPC in the scheduled transfer peer's (or IPC
+	 * caller's, outside of the ipc_resume() path) context.
+	 */
+	send_xfer_fault(ft, fault, ft->ctx.eip);
+	assert(IS_IPC_WAIT(ft->status));
+}
+
+
+/* a møøse once bit my sister... */
+static int copy_interspace_stritem(struct copy_err *err_p, struct ipc_state *st)
+{
+	int rc;
 	uintptr_t copy_dst = reserve_heap_page();
 	uint32_t copy_page = 0;
-	int s_off = 0, d_off = 0;
+	/* (old function parameters, now in `st') */
+	int s_off = st->src_off, d_off = st->dst_off;
+	struct stritem_iter *src_iter = &st->src_iter, *dst_iter = &st->dst_iter;
+	struct space *dest_space = st->to->space, *src_space = st->from->space;
 	do {
 #if 0
 		printf("start of loop; s_off %d, d_off %d\n", s_off, d_off);
@@ -516,10 +559,10 @@ static void copy_interspace_stritem(
 		uintptr_t dest_page = (dst_iter->ptr + d_off) & ~PAGE_MASK;
 		struct map_entry *e = mapdb_probe(&dest_space->mapdb, dest_page);
 		if(e == NULL || !CHECK_FLAG(L4_Rights(e->range), L4_Writable)) {
-			/* FIXME: pop a write fault */
-			printf("*** no writable mapdb entry for %#lx in space %d\n",
-				(L4_Word_t)dest_page, (int)dest_space->mapdb.ref_id);
-			panic("would pop string transfer fault");
+			/* pop a write fault */
+			err_p->fault = L4_FpageLog2(dest_page, PAGE_BITS);
+			L4_Set_Rights(&err_p->fault, L4_Readable | L4_Writable);
+			goto fault;
 		}
 		uint32_t d_page = mapdb_page_id_in_entry(e, dest_page);
 		if(d_page != copy_page) {
@@ -534,15 +577,17 @@ static void copy_interspace_stritem(
 		int d_pos = ((dst_iter->ptr & PAGE_MASK) + d_off) & PAGE_MASK;
 		assert(d_pos >= 0 && seg > 0);
 		assert(d_pos + seg <= PAGE_SIZE);
-		/* FIXME: check for read access in src_space! */
+
 		size_t n = space_memcpy_from(src_space, (void *)(copy_dst + d_pos),
 			src_iter->ptr + s_off, seg);
 		if(n < seg) {
-			/* FIXME: pop a read fault */
-			printf("*** memcpy_from %#lx:%#x in space %d returned only %#x bytes\n",
-				(L4_Word_t)src_iter->ptr, (unsigned)seg,
-				(int)src_space->mapdb.ref_id, (unsigned)n);
-			panic("short memcpy_from in string transfer");
+			/* pop a read fault */
+			s_off += n;
+			d_off += n;
+			err_p->fault = L4_FpageLog2((src_iter->ptr + n) & ~PAGE_MASK,
+				PAGE_BITS);
+			L4_Set_Rights(&err_p->fault, L4_Readable);
+			goto fault;
 		}
 
 		s_off += seg;
@@ -554,37 +599,32 @@ static void copy_interspace_stritem(
 		}
 	} while(s_off < src_iter->len || (s_off = 0, stritem_next(src_iter)));
 
+	rc = 0;
+
+end:
 	put_supervisor_page(copy_dst, 0);
 	x86_flush_tlbs();
 	free_heap_page(copy_dst);
+
+	return rc;
+
+fault:
+	st->src_off = s_off;
+	st->dst_off = d_off;
+	rc = EFAULT;
+	goto end;
 }
 
 
-static void copy_intraspace_stritem(
-	struct space *sp,
-	struct stritem_iter *src,
-	struct stritem_iter *dest)
-{
-	copy_interspace_stritem(sp, src, sp, dest);
-}
-
-
-/* FIXME: catch and propagate errors from the copy_*() functions, as they gain
- * indicators
+/* expects the following fields valid in @st: from, to, src_off, dst_off,
+ * src_iter, dst_iter
  */
-static void do_string_transfer(
-	struct thread *source,
-	struct stritem_iter *send_si,
-	struct thread *dest,
-	struct stritem_iter *recv_si)
+static int do_string_transfer(struct copy_err *err_p, struct ipc_state *st)
 {
-	if(source->space == dest->space) {
-		/* special case for intra-space transfers */
-		copy_intraspace_stritem(source->space, send_si, recv_si);
-	} else {
-		copy_interspace_stritem(source->space, send_si,
-			dest->space, recv_si);
-	}
+	/* TODO: add special case for intra-space transfers (with the appropriate
+	 * segment etc. hax)
+	 */
+	return copy_interspace_stritem(err_p, st);
 }
 
 
@@ -725,11 +765,24 @@ static L4_Word_t do_typed_transfer(
 					nf_dst = stritem_faults(NULL, 0, dest->space, recv_si,
 						L4_Readable | L4_Writable, -1);
 				if(likely(nf_src == 0 && nf_dst == 0)) {
-					/* FIXME: catch errors from this! */
-					struct stritem_iter s, r;
-					stritem_first(send_si, &s);
-					stritem_first(recv_si, &r);
-					do_string_transfer(source, &s, dest, &r);
+					struct ipc_state st;
+					stritem_first(send_si, &st.src_iter);
+					stritem_first(recv_si, &st.dst_iter);
+					st.src_off = 0;
+					st.dst_off = 0;
+					st.from = source;
+					st.to = dest;
+					struct copy_err err;
+					int n = do_string_transfer(&err, &st);
+					if(unlikely(n != 0)) {
+						/* EFAULT doesn't occur per stritem_faults() result.
+						 * no other errors are defined.
+						 */
+						printf("error %d in strxfer; fault %#lx:%#lx (access %#lx)\n",
+							n, L4_Address(err.fault), L4_Size(err.fault),
+							L4_Rights(err.fault));
+						panic("strxfer fault");
+					}
 					str_offset += send_len;
 				} else {
 					bool ok = set_prexfer_fault_state(tag,
@@ -796,17 +849,18 @@ bool ipc_resume(struct thread *t, bool *preempt_p)
 		__func__, TID_THREADNUM(source->id), TID_VERSION(source->id),
 		TID_THREADNUM(dest->id), TID_VERSION(dest->id));
 
-	/* right now, only the pre-transfer faults' case winds up here, so there's
-	 * no "this position in the string" information in ipc_state.
-	 *
-	 * nor are any errors propagated from do_string_transfer() on mid-xfer
-	 * faults.
-	 *
-	 * FIXME: also, a pointer to the sender's UTCB range has been retained in
-	 * the ipc_state. it should instead have a pointer to a copy, like it does
-	 * of the receiver's buffer items.
+	/* FIXME: a pointer to the sender's UTCB range has been retained in the
+	 * ipc_state. it should instead have a pointer to a copy, like it does of
+	 * the receiver's buffer items. (FIXME: is this still true?)
 	 */
-	do_string_transfer(st->from, &st->src_iter, st->to, &st->dst_iter);
+	struct copy_err err;
+	int n = do_string_transfer(&err, st);
+	if(n != 0) {
+		assert(n == EFAULT);
+		set_xfer_fault_state(st, err.fault);
+		*preempt_p = false;
+		return false;
+	}
 
 	/* bump the typed IPC state just as do_typed_transfer() would after a
 	 * single stringitem iteration
@@ -819,9 +873,9 @@ bool ipc_resume(struct thread *t, bool *preempt_p)
 
 	st->str_offset += stritemlen(src_si);
 
-	L4_Word_t err = do_typed_transfer(st->from, thread_get_utcb(st->from),
+	L4_Word_t ec = do_typed_transfer(st->from, thread_get_utcb(st->from),
 		st->to, thread_get_utcb(st->to), (L4_MsgTag_t){ });
-	if(unlikely(err != 0)) {
+	if(unlikely(ec != 0)) {
 		/* FIXME: set error as though it had happened in ipc_send_half()'s
 		 * do_ipc_transfer() callsite
 		 */

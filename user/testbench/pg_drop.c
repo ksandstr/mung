@@ -56,19 +56,23 @@ static void drop_pager_fn(void *param_ptr)
 				if(dpos < 0) dpos += LOG_SIZE;
 				assert(dpos >= 0 && dpos < LOG_SIZE);
 				L4_Fpage_t drop = param->log[dpos];
-				if(!L4_IsNilFpage(drop)) {
+				if(!L4_IsNilFpage(drop)
+					&& L4_Address(drop) != (faddr & ~PAGE_MASK))
+				{
+#if 0
 					diag("flushing %#lx:%#lx (dpos %d)",
 						L4_Address(drop), L4_Size(drop), dpos);
+#endif
 					L4_Set_Rights(&drop, L4_FullyAccessible);
 					L4_FlushFpage(drop);
 				}
 
 				/* pass it on. */
+				L4_LoadBR(0, L4_CompleteAddressSpace.raw);
 				L4_LoadMR(0, (L4_MsgTag_t){ .X.label = 0xffe0 | rwx,
 					.X.u = 2 }.raw);
 				L4_LoadMR(1, faddr);
 				L4_LoadMR(2, fip);
-				L4_LoadBR(0, L4_CompleteAddressSpace.raw);
 				tag = L4_Call(L4_Pager());
 				if(L4_IpcFailed(tag)) {
 					diag("drop-to-pager IPC failed, ec %lu",

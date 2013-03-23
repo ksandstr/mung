@@ -6,6 +6,7 @@
 
 #define ENOENT	2	/* no such file or directory */
 #define ENOMEM	12	/* out of memory */
+#define EFAULT	14	/* bad address */
 #define EEXIST	17	/* file exists */
 #define EINVAL	22	/* invalid value */
 
