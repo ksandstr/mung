@@ -19,6 +19,8 @@
 
 
 #define ECHO_LABEL	0x6857		/* "hW" */
+#define DELAY_LABEL	0x7a5a		/* "zZ" */
+#define PING_LABEL	0x6849		/* "hI" */
 
 
 static L4_ThreadId_t test_tid, stats_tid, drop_tid;
@@ -41,6 +43,16 @@ static bool write_fault(L4_Word_t addr) {
 }
 
 
+static void send_delay(L4_ThreadId_t tid, L4_Time_t time)
+{
+	L4_LoadMR(0, (L4_MsgTag_t){ .X.label = DELAY_LABEL, .X.u = 1 }.raw);
+	L4_LoadMR(1, time.raw);
+	L4_MsgTag_t tag = L4_Call_Timeouts(tid, TEST_IPC_DELAY,
+		TEST_IPC_DELAY);
+	fail_if(L4_IpcFailed(tag), "ec %#lx", __func__, L4_ErrorCode());
+}
+
+
 static void string_test_thread(void *param UNUSED)
 {
 	const int rbuf_len = 64 * 1024;
@@ -56,6 +68,7 @@ static void string_test_thread(void *param UNUSED)
 		L4_LoadBRs(1, 2, recv_si.raw);
 		L4_MsgTag_t tag = L4_Wait(&from);
 
+		L4_Time_t delay = L4_ZeroTime;
 		while(running) {
 			if(L4_IpcFailed(tag)) {
 				diag("helper got ipc failure, ec %#lx", L4_ErrorCode());
@@ -93,6 +106,26 @@ static void string_test_thread(void *param UNUSED)
 					break;
 				}
 
+				case DELAY_LABEL: {
+					if(tag.X.u != 1 || tag.X.t > 0) {
+						diag("invalid delay message");
+						L4_LoadMR(0, 0);
+						break;
+					}
+					L4_Word_t timeword;
+					L4_StoreMR(1, &timeword);
+					delay.raw = timeword;
+					break;
+				}
+
+				case PING_LABEL: {
+					/* reply with the same regs. */
+					L4_Word_t regs[64];
+					L4_StoreMRs(0, tag.X.u + tag.X.t + 1, regs);
+					L4_LoadMRs(0, tag.X.u + tag.X.t + 1, regs);
+					break;
+				}
+
 				default:
 					diag("unknown label %#lx (tag %#lx)", (L4_Word_t)tag.X.label,
 						tag.raw);
@@ -103,7 +136,16 @@ static void string_test_thread(void *param UNUSED)
 				/* simple acceptor over the entire recvbuf. */
 				L4_LoadBR(0, 1);		/* only stringitems */
 				L4_LoadBRs(1, 2, recv_si.raw);
-				tag = L4_ReplyWait(from, &from);
+				if(delay.raw == L4_ZeroTime.raw) {
+					tag = L4_ReplyWait(from, &from);
+				} else {
+					tag = L4_Reply(from);
+					if(L4_IpcSucceeded(tag)) {
+						L4_Sleep(delay);
+						delay = L4_ZeroTime;
+						tag = L4_Wait(&from);
+					}
+				}
 			}
 		}
 	}
@@ -158,6 +200,56 @@ static void echo(
 		fail_unless(L4_IsStringItem(got_si));
 	}
 }
+
+
+/* meta tests
+ *
+ * TODO: test of the "ping" function
+ */
+
+START_TEST(delay_test)
+{
+	plan_tests(5);
+
+	/* without delay, reply should be immediate. */
+	L4_Clock_t before = L4_SystemClock();
+	L4_LoadMR(0, (L4_MsgTag_t){ .X.label = PING_LABEL, .X.u = 1 }.raw);
+	L4_LoadMR(1, ECHO_LABEL ^ DELAY_LABEL);
+	L4_MsgTag_t tag = L4_Call_Timeouts(test_tid, L4_ZeroTime, L4_Never);
+	L4_Clock_t after = L4_SystemClock();
+	if(L4_IpcFailed(tag)) diag("error code %#lx", L4_ErrorCode());
+	ok(L4_IpcSucceeded(tag), "immediate call succeeded");
+	uint64_t diff_us = after.raw - before.raw;
+	diag("ipc took %lu µs", (unsigned long)diff_us);
+	ok(diff_us < 1000 * 10, "immediate call was immediate");
+
+	/* with delay, there should be a send-side timeout. */
+	send_delay(test_tid, L4_TimePeriod(20 * 1000));
+	before = L4_SystemClock();
+	L4_LoadMR(0, (L4_MsgTag_t){ .X.label = PING_LABEL, .X.u = 1 }.raw);
+	L4_LoadMR(1, ECHO_LABEL ^ DELAY_LABEL);
+	tag = L4_Call_Timeouts(test_tid, L4_TimePeriod(1000 * 17), L4_Never);
+	after = L4_SystemClock();
+	if(L4_IpcSucceeded(tag) || L4_ErrorCode() != 0x2) {
+		diag("unexpected ec %#lx", L4_ErrorCode());
+	}
+	ok(L4_IpcFailed(tag) && L4_ErrorCode() == 0x2,
+		"delayed call had send-side timeout");
+	diff_us = after.raw - before.raw;
+	diag("ipc took %lu µs", (unsigned long)diff_us);
+	ok(diff_us < 1000 * 15, "immediate call was delayed properly");
+
+	/* after delay, ping should complete properly. */
+	L4_LoadMR(0, (L4_MsgTag_t){ .X.label = PING_LABEL, .X.u = 1 }.raw);
+	L4_LoadMR(1, ECHO_LABEL ^ DELAY_LABEL);
+	tag = L4_Call_Timeouts(test_tid, TEST_IPC_DELAY, TEST_IPC_DELAY);
+	if(L4_IpcFailed(tag)) diag("after ec %#lx", L4_ErrorCode());
+	ok(L4_IpcSucceeded(tag), "after ipc ok");
+}
+END_TEST
+
+
+/* main test suite */
 
 
 START_TEST(echo_simple)
@@ -242,8 +334,10 @@ START_LOOP_TEST(echo_long_xferfault, test_iter)
 	char *replybuf = valloc(test_len * 2);
 	fail_if(replybuf == NULL);
 	L4_StringItem_t got_si;
-	echo(test_tid, replybuf, test_len * 2, &got_si, echostr, 0);
+	diag("calling echo");
+	echo(test_tid, replybuf, test_len * 2, &got_si, echostr, test_len - 1);
 	L4_Set_Pager(old_pager);
+	diag("echo returned");
 
 	fail_unless(L4_IsStringItem(&got_si));
 	replybuf[MIN(int, test_len * 2 - 1, got_si.X.string_length)] = '\0';
@@ -489,6 +583,11 @@ static void drop_teardown(void)
 Suite *string_suite(void)
 {
 	Suite *s = suite_create("string");
+
+	TCase *meta = tcase_create("meta");
+	tcase_add_checked_fixture(meta, &stt_setup, &stt_teardown);
+	tcase_add_test(meta, delay_test);
+	suite_add_tcase(s, meta);
 
 	TCase *basic = tcase_create("basic");
 	tcase_add_checked_fixture(basic, &stt_setup, &stt_teardown);

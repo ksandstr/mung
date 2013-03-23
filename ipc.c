@@ -563,6 +563,8 @@ static int copy_interspace_stritem(struct copy_err *err_p, struct ipc_state *st)
 		if(e == NULL || !CHECK_FLAG(L4_Rights(e->range), L4_Writable)) {
 			/* pop a write fault */
 			err_p->fault = L4_FpageLog2(dest_page, PAGE_BITS);
+			TRACE("ipc: write fault at %#lx:%#lx\n", L4_Address(err_p->fault),
+				L4_Size(err_p->fault));
 			L4_Set_Rights(&err_p->fault, L4_Readable | L4_Writable);
 			goto fault;
 		}
@@ -584,6 +586,8 @@ static int copy_interspace_stritem(struct copy_err *err_p, struct ipc_state *st)
 			src_iter->ptr + s_off, seg);
 		if(n < seg) {
 			/* pop a read fault */
+			TRACE("ipc: read fault after %u bytes (seg %d)\n",
+				(unsigned)n, seg);
 			s_off += n;
 			d_off += n;
 			err_p->fault = L4_FpageLog2((src_iter->ptr + s_off) & ~PAGE_MASK,
