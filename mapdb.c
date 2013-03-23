@@ -826,7 +826,32 @@ int mapdb_add_map(
 		}
 	}
 
+#ifndef NDEBUG
+	/* postcondition: the mapping database must contain the indicated
+	 * range if it existed in the parent. (could be stricter.)
+	 */
+	struct map_db *p_db = REF_DEFINED(parent)
+		? get_map_db(REF_SPACE(parent)) : NULL;
+	for(L4_Word_t addr = L4_Address(fpage), pg = 0;
+		REF_DEFINED(parent) && addr < L4_Address(fpage) + L4_Size(fpage);
+		addr += PAGE_SIZE, pg++)
+	{
+		L4_Word_t p_addr = REF_ADDR(parent) + pg * PAGE_SIZE;
+		struct map_entry *p_e = mapdb_probe(p_db, p_addr);
+		if(p_e == NULL) {
+			TRACE("%s/postcond: no parent entry\n", __func__);
+			continue;
+		}
+
+		struct map_entry *e = mapdb_probe(db, addr);
+		assert(e != NULL);
+		assert(mapdb_page_id_in_entry(e, addr) == pg + first_page_id);
+		assert(mapdb_page_id_in_entry(p_e, p_addr) == pg + first_page_id);
+	}
+#endif
+
 	assert(check_mapdb_module(MOD_NO_CHILD_REFS));
+
 	return 0;
 }
 
