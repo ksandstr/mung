@@ -8,6 +8,8 @@
 #include <l4/thread.h>
 #include <l4/ipc.h>
 
+#include "defs.h"
+
 
 /* IPC label definitions. stubs aren't necessary with a single call site. */
 
@@ -17,7 +19,7 @@
 #define FORKSERV_ADD_TID 0x6154		/* "aT" */
 #define FORKSERV_FORK 0x664f		/* "fO" */
 #define FORKSERV_SBRK 0x7342		/* "sB" (more of a brk(2), though) */
-#define FORKSERV_EXIT 0x7a5a		/* "zZ" */
+#define FORKSERV_EXIT QUIT_LABEL	/* ("zZ" was recycled for DELAY_LABEL) */
 #define FORKSERV_EXIT_THREAD 0x7a54	/* "zT" */
 #define FORKSERV_WAIT 0x7741		/* "wA" */
 #define FORKSERV_NEW_THREAD 0x2e21	/* ".!" */
