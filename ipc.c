@@ -586,7 +586,7 @@ static int copy_interspace_stritem(struct copy_err *err_p, struct ipc_state *st)
 			/* pop a read fault */
 			s_off += n;
 			d_off += n;
-			err_p->fault = L4_FpageLog2((src_iter->ptr + n) & ~PAGE_MASK,
+			err_p->fault = L4_FpageLog2((src_iter->ptr + s_off) & ~PAGE_MASK,
 				PAGE_BITS);
 			L4_Set_Rights(&err_p->fault, L4_Readable);
 			goto fault;
