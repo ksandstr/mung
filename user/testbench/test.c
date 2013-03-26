@@ -388,49 +388,54 @@ static void add_test_ids(struct htable *table, SRunner *sr)
 {
 	int suite_pfx = name_prefix_length_all(&sr->suites,
 		offsetof(Suite, runner_link), offsetof(Suite, name));
+	if(suite_pfx > 4) suite_pfx = 4;
 
 	Suite *s;
 	list_for_each(&sr->suites, s, runner_link) {
+		char suitename[5];
+		memset(suitename, '\0', sizeof(suitename));
+		memcpy(suitename, s->name, MIN(int, 4, suite_pfx));
+		suitename[0] = toupper(suitename[0]);
+
 		int tcase_pfx = name_prefix_length_all(&s->cases,
 			offsetof(TCase, suite_link), offsetof(TCase, name));
+		if(tcase_pfx > 4) tcase_pfx = 4;
 		TCase *tc;
 		list_for_each(&s->cases, tc, suite_link) {
+			char tcasename[5];
+			memset(tcasename, '\0', sizeof(tcasename));
+			memcpy(tcasename, tc->name, MIN(int, 4, tcase_pfx));
+			tcasename[0] = toupper(tcasename[0]);
+
 			int test_pfx = name_prefix_length_all(&tc->tests,
 				offsetof(struct test, tcase_link),
 				offsetof(struct test, name));
-
-			/* test_pfx is sometimes quite long. */
 			if(test_pfx > 4) test_pfx = 4;
 
-			int tid_len = suite_pfx + tcase_pfx + test_pfx;
-			char tid[tid_len + 1];
-			tid[tid_len] = '\0';
-			memcpy(&tid[0], s->name, suite_pfx);
-			memcpy(&tid[suite_pfx], tc->name, tcase_pfx);
-			tid[0] = toupper(tid[0]);
-			tid[suite_pfx] = toupper(tid[suite_pfx]);
-
-			int counter = 0;
 			struct test *t;
 			list_for_each(&tc->tests, t, tcase_link) {
-				int testpos = suite_pfx + tcase_pfx;
-				memcpy(&tid[testpos], t->name, test_pfx);
-				tid[testpos] = toupper(tid[testpos]);
+				char tid[24], testname[5];
+				memset(testname, '\0', sizeof(testname));
+				memcpy(testname, t->name, MIN(int, 4, test_pfx));
+				testname[0] = toupper(testname[0]);
 
+				snprintf(tid, sizeof(tid), "%s%s%s",
+					suitename, tcasename, testname);
+
+				int counter = 0;
 				struct test_entry *prior;
 				while((prior = get_test_entry(table, tid)) != NULL) {
-					assert(counter <= 0xff);
-					const char *digits = "0123456789ABCDEF";
-					tid[testpos + test_pfx - 1] = digits[counter & 0xf];
-					if(counter > 0xf) {
-						tid[testpos + test_pfx - 2] = digits[(counter >> 4) & 0xf];
-					}
+					assert(counter <= 0xffff);
+					snprintf(tid, sizeof(tid), "%s%s%s%x", suitename, tcasename,
+						testname, (unsigned)counter);
 					counter++;
 				}
 
+				int tid_len = strlen(tid);
 				struct test_entry *ent = malloc(sizeof(struct test_entry)
 					 + tid_len + 1);
-				memcpy(ent->path, tid, tid_len + 1);
+				memcpy(ent->path, tid, tid_len);
+				ent->path[tid_len] = '\0';
 				ent->s = s;
 				ent->tc = tc;
 				ent->test = t;
