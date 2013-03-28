@@ -102,7 +102,7 @@ static inline L4_MsgTag_t L4_ReplyWait_Timeout(
 	L4_Time_t rcv_timeout,
 	L4_ThreadId_t *from_p)
 {
-	return L4_Ipc(to, L4_anythread, L4_Timeouts(L4_Never, rcv_timeout),
+	return L4_Ipc(to, L4_anythread, L4_Timeouts(L4_ZeroTime, rcv_timeout),
 		from_p);
 }
 
