@@ -20,6 +20,7 @@
 #include <ukernel/gdt.h>
 #include <ukernel/sched.h>
 #include <ukernel/trace.h>
+#include <ukernel/bug.h>
 #include <ukernel/thread.h>
 
 
@@ -270,10 +271,8 @@ static void thread_destroy(struct thread *t)
 
 	space_remove_thread(sp, t);
 	bool ok = htable_del(&thread_hash, int_hash(TID_THREADNUM(t->id)), t);
-	if(unlikely(!ok)) {
-		printf("WARNING: %s: thread %lu:%lu not found in thread_hash\n",
-			__func__, TID_THREADNUM(t->id), TID_VERSION(t->id));
-	}
+	BUG_ON(!ok, "thread %lu:%lu not found in thread_hash",
+		TID_THREADNUM(t->id), TID_VERSION(t->id));
 
 	TRACE("%s: freeing %p\n", __func__, t);
 	kmem_cache_free(thread_slab, t);
@@ -884,6 +883,12 @@ void sys_threadcontrol(struct x86_exregs *regs)
 		TRACE("%s: deleting thread %lu:%lu (ptr %p)\n", __func__,
 			TID_THREADNUM(dest_tid.raw), TID_VERSION(dest_tid.raw),
 			dest);
+		/* (could maintain dest->ipc_to to indicate if there's a waiting send
+		 * phase.)
+		 */
+		if(dest->status == TS_SEND_WAIT || dest->status == TS_STOPPED) {
+			abort_thread_ipc(dest);
+		}
 		if(!CHECK_FLAG(dest->flags, TF_HALT)) thread_halt(dest);
 		abort_waiting_ipc(dest, 2 << 1);	/* "lost partner" */
 		post_exn_fail(dest);
