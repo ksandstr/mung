@@ -36,7 +36,8 @@ static struct page *next_dir_page = NULL;
 uint8_t syscall_stack[PAGE_SIZE] PAGE_ALIGN;
 uint8_t kcp_copy[PAGE_SIZE] PAGE_ALIGN;
 
-uint64_t *global_timer_count = NULL;
+uint64_t global_timer_count = 0;
+uint64_t *systemclock_p = NULL;
 
 
 void NORETURN panic(const char *message)
@@ -99,7 +100,16 @@ static struct page *find_page_by_id(uint32_t id)
 uint64_t read_global_timer(void)
 {
 	x86_irq_disable();
-	uint64_t value = *global_timer_count;
+	uint64_t value = global_timer_count;
+	x86_irq_enable();
+	return value;
+}
+
+
+uint64_t ksystemclock(void)
+{
+	x86_irq_disable();
+	uint64_t value = *systemclock_p;
 	x86_irq_enable();
 	return value;
 }
@@ -450,8 +460,9 @@ void kmain(void *bigp, unsigned int magic)
 	kip_mem = kcp_base;
 	assert(kcp_base == (void *)&kcp_copy[0]);
 	make_kip(kip_mem, resv_start & ~PAGE_MASK, resv_end | PAGE_MASK);
-	global_timer_count = kip_mem + PAGE_SIZE - sizeof(uint64_t);
-	*global_timer_count = 0;
+	systemclock_p = kip_mem + PAGE_SIZE - sizeof(uint64_t);
+	*systemclock_p = 0;
+	global_timer_count = 0;		/* and the clock accumulator */
 	printf("KIP on page id %lu\n", (L4_Word_t)kip_mem >> PAGE_BITS);
 	kcp_base = (void *)0xdeadbeef;
 

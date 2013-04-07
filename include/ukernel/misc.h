@@ -21,11 +21,15 @@
 
 extern uint8_t syscall_stack[];
 /* should only be read with interrupts disabled! */
-extern uint64_t *global_timer_count;
+extern uint64_t global_timer_count;		/* timer ticks */
+extern uint64_t *systemclock_p;			/* microseconds */
 
 extern void NORETURN panic(const char *message);
 
-/* returns kernel time in milliseconds. */
+/* return the values of global_timer_count, and *systemclock_p, disabling
+ * interrupts around the read operation.
+ */
 extern uint64_t read_global_timer(void);
+extern uint64_t ksystemclock(void);
 
 #endif

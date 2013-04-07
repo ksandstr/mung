@@ -98,7 +98,8 @@ void isr_irq_bottom(struct x86_exregs *regs)
 /* the timer interrupt. runs with interrupts disabled by design. */
 void isr_irq0_bottom(struct x86_exregs *regs)
 {
-	uint64_t now = ++(*global_timer_count);
+	uint64_t now = ++global_timer_count;
+	(*systemclock_p) += 1000;
 	pic_send_eoi(0);
 
 	if(now >= preempt_timer_count) {
