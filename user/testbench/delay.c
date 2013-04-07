@@ -6,11 +6,14 @@
 
 #include <l4/types.h>
 #include <l4/thread.h>
+#include <l4/kip.h>
+
+#include <ukernel/util.h>
 
 #include "defs.h"
 
 
-static const int hz = 1000;			/* TODO: get from KIP! */
+static unsigned hz = 1000, clock_step = 0;
 unsigned long iters_per_tick = 0;
 
 
@@ -62,7 +65,7 @@ static bool attempt(unsigned long loops, int ticks)
 	L4_Clock_t start = L4_SystemClock();
 	do {
 		delay_loop(100);
-	} while(L4_SystemClock().raw < start.raw + 1);
+	} while(L4_SystemClock().raw < start.raw + clock_step - 1);
 
 	delay_loop(loops);
 	L4_Clock_t end = L4_SystemClock();
@@ -70,7 +73,7 @@ static bool attempt(unsigned long loops, int ticks)
 	/* this biases the result upward. that's OK; nsleep() and usleep() are
 	 * only defined not to wake before the time is up.
 	 */
-	return start.raw + ticks < end.raw;
+	return start.raw + ticks * clock_step < end.raw;
 }
 
 
@@ -114,7 +117,18 @@ static uint32_t measure(int ticks)
 
 void calibrate_delay_loop(void)
 {
-	printf("calibrating delay loop...\n");
+	L4_KernelInterfacePage_t *kip = L4_GetKernelInterface();
+	L4_Time_t readp = { .raw = kip->ClockInfo.X.ReadPrecision };
+	clock_step = time_in_us(readp);
+	if(clock_step > 1000000) {
+		printf("kernel reports scheduleprecision of %u µs (too high!)\n",
+			clock_step);
+		abort();
+	}
+	hz = 1000000 / clock_step;
+
+	printf("calibrating delay loop... (hz %u, clock_step %u)\n",
+		hz, clock_step);
 	iters_per_tick = measure(15);
 	assert(iters_per_tick > 0);
 	printf("  %lu.%02lu BogoMIPS (%lu iters / tick)\n",
