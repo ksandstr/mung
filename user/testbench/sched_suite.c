@@ -34,18 +34,6 @@ static bool delay_preempt_case(
 
 
 
-static bool step_wu(struct list_head *lst, struct preempt_wakeup **wu)
-{
-	if((*wu)->result_link.next == &lst->n) {
-		*wu = NULL;
-		return false;
-	} else {
-		*wu = container_of_var((*wu)->result_link.next, *wu, result_link);
-		return true;
-	}
-}
-
-
 /* test case for the correct ipc error result in threads that time out in the
  * TS_R_RECV state.
  *
@@ -96,7 +84,7 @@ static L4_Word_t r_recv_timeout_case(int priority, bool spin, bool send)
 		do {
 			/* ishygddt */
 			delay_loop(iters_per_tick);
-		} while(start.raw + timeout_ms > L4_SystemClock().raw + 1);
+		} while(start.raw + timeout_ms * 1000 > L4_SystemClock().raw);
 	}
 
 	if(send) {
@@ -144,7 +132,7 @@ static void spinner_fn(void *param_ptr)
 	if(param->delay_pe) L4_DisablePreemption();
 
 #if 0
-	printf("spinner spins for %lu ms from %llu...\n", param->spin_ms,
+	diag("spinner spins for %lu ms from %llu...", param->spin_ms,
 		L4_SystemClock().raw);
 #endif
 
@@ -157,11 +145,10 @@ static void spinner_fn(void *param_ptr)
 			L4_ThreadSwitch(L4_nilthread);
 			L4_DisablePreemption();
 		}
-	} while(start.raw + param->spin_ms > L4_SystemClock().raw);
+	} while(start.raw + param->spin_ms * 1000 > L4_SystemClock().raw);
 
 #if 0
-	printf("spinner thread exiting at %llu.\n",
-		L4_SystemClock().raw);
+	diag("spinner thread exiting at %llu.", L4_SystemClock().raw);
 #endif
 
 	if(!L4_IsNilThread(param->parent)) {
@@ -237,7 +224,6 @@ static int find_own_priority(void)
 static void preempt_fn(void *param_ptr)
 {
 	unsigned int sleep_ms = (L4_Word_t)param_ptr;
-	printf("%s: sleeping for %u ms\n", __func__, sleep_ms);
 	L4_Sleep(L4_TimePeriod(sleep_ms * 1000));
 }
 
@@ -265,6 +251,8 @@ static bool preempt_exn_case(
 	int spin_time_ms,
 	int receive_wait_ms)
 {
+	const int loop_time_ms = 150;
+
 	bool ok = true;
 	int my_pri = find_own_priority();
 	L4_ThreadId_t spinner = start_spinner(my_pri - 2, spin_time_ms,
@@ -301,7 +289,7 @@ static bool preempt_exn_case(
 			w->clock = now;
 			list_add_tail(&r->wakeups, &w->result_link);
 		} else {
-			printf("wakeup at %llu not recorded due to malloc() issue",
+			diag("wakeup at %llu not recorded due to malloc() issue",
 				now.raw);
 		}
 
@@ -332,11 +320,11 @@ static bool preempt_exn_case(
 			/* ordinary regular spinner exit */
 			break;
 		} else {
-			printf("%s: got unexpected message (label %#lx, u %#lx, t %#lx)\n",
+			diag("%s: got unexpected message (label %#lx, u %#lx, t %#lx)",
 				__func__, (L4_Word_t)tag.X.label, (L4_Word_t)tag.X.u,
 				(L4_Word_t)tag.X.t);
 		}
-	} while(r->loop_start.raw + 100 > now.raw);
+	} while(r->loop_start.raw + loop_time_ms * 1000 > now.raw);
 
 	join_thread(spinner);
 	join_thread(preempt);
@@ -373,6 +361,7 @@ START_TEST(simple_preempt_test)
 	/* the result should be at least five wakeups with at least three ms in
 	 * between.
 	 */
+	diag("num_wake %d", (int)res->num_wake);
 	ok1(res->num_wake >= 5);
 
 	uint64_t prev = 0;
@@ -384,7 +373,8 @@ START_TEST(simple_preempt_test)
 				result_link));
 			prev = w->clock.raw;
 		} else {
-			ok1(w->clock.raw - prev >= 3);
+			int diff = w->clock.raw / 1000 - prev / 1000;
+			ok(diff >= 3, "preempted in at >= 3 ms (actual %d)", diff);
 			if(++count == 4) break;
 		}
 	}
@@ -435,11 +425,9 @@ START_LOOP_TEST(preempt_exn_test, t)
 		ok(res->num_wake == 2, "exn wrapper should return from ipc twice");
 	} else {
 		ok1(res->num_exn > 0);
-		uint32_t diff = res->first_preempt.raw - res->loop_start.raw;
-#if 1
-		printf("started at %llu, first preempt at %llu (diff %u), preempted %d time(s)\n",
+		uint32_t diff = res->first_preempt.raw / 1000 - res->loop_start.raw / 1000;
+		diag("started at %llu, first preempt at %llu (diff %u), preempted %d time(s)",
 			res->loop_start.raw, res->first_preempt.raw, diff, res->num_exn);
-#endif
 		if(big_ts && has_pe) {
 			/* the preempt_fn causes a preemption, which satisifes the 22-ms
 			 * receive function, which then doesn't preempt the thread again.
@@ -507,6 +495,14 @@ START_LOOP_TEST(delay_preempt, t)
 		polite = (t & 0x4) != 0,
 		small_ts = (t & 0x8) != 0;
 
+#if 0
+	diag("delay %s, high_sens_pri %s, polite %s, small_ts %s",
+		delay_pe ? "true" : "false",
+		high_sens_pri ? "true" : "false",
+		polite ? "true" : "false",
+		small_ts ? "true" : "false");
+#endif
+
 	struct list_head preempts = LIST_HEAD_INIT(preempts);
 	L4_Clock_t start_time;
 	bool ok = delay_preempt_case(&preempts, &start_time,
@@ -518,36 +514,53 @@ START_LOOP_TEST(delay_preempt, t)
 
 	struct preempt_wakeup *wu = list_top(&preempts, struct preempt_wakeup,
 		result_link);
+	uint64_t wake_ms, start_ms = start_time.raw / 1000;
+	int at;
+	if(wu != NULL) {
+		wake_ms = wu->clock.raw / 1000;
+		at = wake_ms - start_ms;
+	} else {
+		wake_ms = 0;
+		at = 0;
+	}
+
 	if(!delay_pe || !high_sens_pri) {
 		/* polite won't matter due to !delay_pe; or, delay_pe won't matter due
 		 * to !high_sens_pri.
+		 *
+		 * FIXME: plan the number of tests as there are ok() primitives, and
+		 * add the inverse condition to their clause.
 		 */
 
 		if(high_sens_pri) {
 			plan_tests(small_ts ? 2 : 1);
-			skip_start(wu == NULL, 1, "no wakeup");
-				int at = wu->clock.raw - start_time.raw;
-				ok(at >= 4 && at <= 6,
-					"first preemption at preempt wakeup");
-				step_wu(&preempts, &wu);
-			skip_end;
+			fail_unless(wu != NULL, "need wakeup");
+			ok(at >= 4 && at <= 6, "first preemption at preempt wakeup");
+
+			/* consume the wakeup. (could be a macro if used twice.) */
+			if(wu->result_link.next != &preempts.n) {
+				wu = container_of(wu->result_link.next, struct preempt_wakeup,
+					result_link);
+				wake_ms = wu->clock.raw / 1000;
+				at = wake_ms - start_ms;
+			} else {
+				wu = NULL;
+			}
 		} else {
 			plan_tests(1);
 		}
 
 		if(small_ts) {
 			/* and (again?) by timeslice running out. */
-			skip_start(wu == NULL, 1, "no wakeup");
-				int at = wu->clock.raw - start_time.raw;
-				if(high_sens_pri) {
-					ok(at >= 11 && at <= 13,
-						"preemption by short timeslice");
-				} else {
-					ok(at >= 11 && at <= 13 && wu == list_top(&preempts,
-							struct preempt_wakeup, result_link),
-						"first preemption by short timeslice");
-				}
-			skip_end;
+			fail_unless(wu != NULL, "need wakeup");
+			if(high_sens_pri) {
+				ok(at >= 11 && at <= 13,
+					"preemption by short timeslice");
+			} else {
+				ok(at >= 11 && at <= 13 && wu == list_top(&preempts,
+						struct preempt_wakeup, result_link),
+					"first preemption by short timeslice");
+			}
 		} else if(!high_sens_pri) {
 			ok(list_empty(&preempts),
 				"no preemption with long ts, low sens_pri");
@@ -558,7 +571,6 @@ START_LOOP_TEST(delay_preempt, t)
 			pass("preemption was delayed");
 			skip(1, "no wakeup");
 		} else {
-			int at = wu->clock.raw - start_time.raw;
 			ok(at > 5, "preemption was delayed");
 			ok(wu->was_exn && at >= 14 && at <= 16,
 				"preemption by max delay");
@@ -566,7 +578,6 @@ START_LOOP_TEST(delay_preempt, t)
 	} else if(!polite && small_ts) {
 		plan_tests(2);
 		skip_start(wu == NULL, 2, "no wakeup");
-			int at = wu->clock.raw - start_time.raw;
 			ok(at > 5, "preemption was delayed");
 			ok(wu->was_exn && at >= 11 && at <= 13,
 				"preemption by quantum during delay");
@@ -578,7 +589,6 @@ START_LOOP_TEST(delay_preempt, t)
 	} else if(polite && small_ts) {
 		plan_tests(1);
 		skip_start(wu == NULL, 1, "no wakeup");
-			int at = wu->clock.raw - start_time.raw;
 			/* politeness gets the spinner first 5 ms of runtime, and then
 			 * another 12 ms due to the ThreadSwitch.
 			 */
@@ -659,12 +669,12 @@ static bool delay_preempt_case(
 			/* ordinary regular spinner exit */
 			break;
 		} else {
-			printf("%s: got unexpected message (label %#lx, u %#lx, t %#lx)\n",
+			diag("%s: got unexpected message (label %#lx, u %#lx, t %#lx)",
 				__func__, (L4_Word_t)tag.X.label, (L4_Word_t)tag.X.u,
 				(L4_Word_t)tag.X.t);
 		}
 		list_add_tail(preempt_times_list, &wu->result_link);
-	} while(start_p->raw + 100 > L4_SystemClock().raw);
+	} while(start_p->raw + 100 * 1000 > L4_SystemClock().raw);
 
 	join_thread(spinner);
 	join_thread(preempt);
