@@ -13,7 +13,7 @@
 #include "test.h"
 
 
-#define printf(fmt, ...) log_f(fmt, ##__VA_ARGS__)
+#define log(fmt, ...) log_f("%s: " fmt, __func__, ##__VA_ARGS__)
 
 
 struct preempt_wakeup
@@ -65,7 +65,6 @@ static L4_Word_t r_recv_timeout_case(int priority, bool spin, bool send)
 	param[0] = L4_Myself().raw;
 	param[1] = L4_TimePeriod(timeout_ms * 1000).raw;
 	L4_ThreadId_t helper = start_thread(&r_recv_timeout_fn, param);
-	/* FIXME: replace these with nonlocal, diag()-printing exits */
 	fail_unless(!L4_IsNilThread(helper));
 
 	L4_Word_t res = L4_Set_Priority(helper, priority);
@@ -214,7 +213,7 @@ static int find_own_priority(void)
 		pri--;
 	}
 	if(pri == 0) {
-		printf("%s: found zero? wtf.\n", __func__);
+		log("loop result was zero (supplanting with 100)\n");
 		pri = 100;		/* make shit up! */
 	}
 	return pri;
@@ -289,14 +288,13 @@ static bool preempt_exn_case(
 			w->clock = now;
 			list_add_tail(&r->wakeups, &w->result_link);
 		} else {
-			diag("wakeup at %llu not recorded due to malloc() issue",
-				now.raw);
+			log("wakeup at %lu not recorded [malloc fail]\n",
+				(unsigned long)now.raw);
 		}
 
 		if(L4_IpcFailed(tag)) {
 			if(L4_ErrorCode() != 0x3) {
-				printf("%s: ipc error (code %#lx)\n", __func__,
-					L4_ErrorCode());
+				log("ipc error (code %#lx)\n", L4_ErrorCode());
 				ok = false;
 				break;
 			}
@@ -309,8 +307,7 @@ static bool preempt_exn_case(
 			L4_LoadMRs(1, num_words, words);
 			tag = L4_Reply(spinner);
 			if(L4_IpcFailed(tag)) {
-				printf("spinner preempt reply failed: ec %#lx\n",
-					L4_ErrorCode());
+				log("spinner preempt reply failed: ec %#lx\n", L4_ErrorCode());
 				ok = false;
 				break;
 			}
@@ -320,8 +317,8 @@ static bool preempt_exn_case(
 			/* ordinary regular spinner exit */
 			break;
 		} else {
-			diag("%s: got unexpected message (label %#lx, u %#lx, t %#lx)",
-				__func__, (L4_Word_t)tag.X.label, (L4_Word_t)tag.X.u,
+			log("got unexpected message (label %#lx, u %#lx, t %#lx)",
+				(L4_Word_t)tag.X.label, (L4_Word_t)tag.X.u,
 				(L4_Word_t)tag.X.t);
 		}
 	} while(r->loop_start.raw + loop_time_ms * 1000 > now.raw);
@@ -660,7 +657,7 @@ static bool delay_preempt_case(
 			L4_LoadMRs(1, num_words, &mrs[1]);
 			tag = L4_Reply(spinner);
 			if(L4_IpcFailed(tag)) {
-				printf("spinner preempt reply failed: ec %#lx\n",
+				log("spinner preempt reply failed: ec %#lx\n",
 					L4_ErrorCode());
 				ok = false;
 				break;
@@ -669,8 +666,8 @@ static bool delay_preempt_case(
 			/* ordinary regular spinner exit */
 			break;
 		} else {
-			diag("%s: got unexpected message (label %#lx, u %#lx, t %#lx)",
-				__func__, (L4_Word_t)tag.X.label, (L4_Word_t)tag.X.u,
+			log("got unexpected message (label %#lx, u %#lx, t %#lx)\n",
+				(L4_Word_t)tag.X.label, (L4_Word_t)tag.X.u,
 				(L4_Word_t)tag.X.t);
 		}
 		list_add_tail(preempt_times_list, &wu->result_link);
@@ -687,11 +684,11 @@ static bool delay_preempt_case(
 static int yield_timeslice_case(bool preempt_spinner)
 {
 	int my_pri = find_own_priority();
-	printf("%s: starting, my_pri is %d\n", __func__, my_pri);
+	log("starting, my_pri is %d\n", my_pri);
 
 	L4_ThreadId_t spinner = start_spinner(my_pri - 2, 15,
 		L4_TimePeriod(2 * 1000), false, false, false);
-	printf("%s: returned after spinner start\n", __func__);
+	log("returned after spinner start\n");
 
 	L4_ThreadId_t preempt = L4_nilthread;
 	if(preempt_spinner) {
@@ -703,7 +700,7 @@ static int yield_timeslice_case(bool preempt_spinner)
 	L4_Clock_t start = L4_SystemClock();
 	L4_ThreadSwitch(spinner);
 	L4_Clock_t end = L4_SystemClock();
-	printf("%s: switched to spinner at %llu, returned at %llu\n", __func__,
+	log("switched to spinner at %llu, returned at %llu\n",
 		start.raw, end.raw);
 
 	L4_Receive_Timeout(spinner, L4_TimePeriod(45 * 1000));

@@ -1,6 +1,9 @@
 
 /* simple deferred test logging.
  *
+ * tl;dr: in timing-sensitive tests, use log_f() instead of printf() or
+ * diag(). log_f() doesn't wait around for a serial port.
+ *
  * the point here is that printf(), being backed by a super naïve serial I/O
  * routine, tends to take up a whole lot of time while it's being executed.
  * things like the scheduling test tend to become less useful as milliseconds
