@@ -14,15 +14,7 @@ int vfprintf(FILE *stream, const char *fmt, va_list args)
 {
 	char buffer[256];
 	int n = vsnprintf(buffer, sizeof(buffer), fmt, args);
-	if(stream == stderr && n > 0) {
-		static bool is_first = true;
-		if(is_first) {
-			printf("[ERR]: ");
-			is_first = false;
-		}
-		if(buffer[n - 1] == '\n') is_first = true;
-	}
-	con_putstr(buffer);
+	if(n < 0) con_putstr("[vfprintf error]\n"); else con_putstr(buffer);
 	return n;
 }
 
