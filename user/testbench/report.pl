@@ -10,6 +10,7 @@ use TryCatch;
 use Moose::Util qw/apply_all_roles/;
 use List::Util qw/sum/;
 use List::MoreUtils qw/none/;
+use Term::ANSIColor;
 
 use Mung::Sink;
 use Mung::Ctrl;
@@ -87,9 +88,10 @@ foreach my $suite (@{$sink->suites}) {
 				my $nfails = $res->failed;
 				$sum_notok += $nfails;
 
-				push @out, "Test `$tn' in case `" . $tcase->name
-					. "' had $nfails failed test point(s)";
-				push @out, "  " . join(" ", $res->failed);
+				push @out, "Test `$tn' [" . $test->id . "] in "
+					. $suite->name . "/" . $tcase->name
+					. " failed $nfails test point(s): "
+					. "{ " . join(" ", $res->failed) . " }";
 
 				if($res->status eq 'FAIL') {
 					push @out, "  and exited with failed assertion: " . $res->fail_msg;
@@ -103,6 +105,28 @@ foreach my $suite (@{$sink->suites}) {
 					push @out, "  (was run $times times total; last reported.)";
 					$num_skipped = 0;
 				}
+
+				# add the complete test log.
+				foreach (@{$res->results}) {
+					next if $_->is_pragma || $_->is_version;
+					my $si;
+					my $c = 'reset';
+					# TODO: recognize to-do lines, use a bright_yellow minus
+					# sigil
+					if(!$_->is_ok) {
+						$si = "!";
+						$c = 'bold bright_red';
+					} elsif($_->is_test) {
+						# mark successful test points
+						$si = "+";
+						$c = 'bright_green';
+					} else {
+						# everything else is just noise.
+						$si = " ";
+					}
+					push @out, color($c) . $si . color('reset') . " " . $_->as_string;
+				}
+				push @out, "";
 			}
 			$notok_suites{$suite->{name}} = 1 if $sum_notok > 0;
 		}
@@ -110,8 +134,10 @@ foreach my $suite (@{$sink->suites}) {
 }
 my $num_notok_suites = scalar(keys %notok_suites);
 if($num_notok_suites > 0) {
-	print "\n" if @out;
-	print "$_\n" foreach(@out);
+	if(@out) {
+		print "\n";
+		print "$_\n" foreach(@out);
+	}
 	print "There were failed test points in $num_notok_suites suite(s).\n";
 }
 
@@ -136,6 +162,7 @@ if(@errors) {
 	}
 }
 
+# (what the fuck does this mean?)
 if($sink->incorrect || $sink->failed) {
 	print "There were " . $sink->incorrect . " incorrect tests";
 	my $f = $sink->failed;
