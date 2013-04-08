@@ -36,7 +36,7 @@ has 'test_log' => (is => 'ro', isa => 'ArrayRef[Str]');
 
 has 'results' => (
 	is => 'ro',
-	isa => 'ArrayRef',
+	isa => 'ArrayRef[TAP::Parser::Result]',
 	required => 1);
 
 # (for future expansion)
@@ -65,8 +65,9 @@ sub BUILDARGS {
 		delete $args{$_};
 	}
 
-	my @rs = [];
+	my @rs;
 	while(my $result = $args{parser}->next) {
+		# NOTE: this filters all "test log:" lines. that's kind of poor form.
 		push @rs, $result unless $result->is_unknown;
 	}
 	$args{results} = \@rs;
