@@ -223,7 +223,9 @@ START_TEST(delay_test)
 	diag("ipc took %lu µs", (unsigned long)diff_us);
 	ok(diff_us < 1000 * 10, "immediate call was immediate");
 
-	/* with delay, there should be a send-side timeout. */
+	/* with delay, there should be a send-side timeout between 16 and 19 ms,
+	 * inclusive, rounding down.
+	 */
 	send_delay(test_tid, L4_TimePeriod(20 * 1000));
 	before = L4_SystemClock();
 	L4_LoadMR(0, (L4_MsgTag_t){ .X.label = PING_LABEL, .X.u = 1 }.raw);
@@ -237,7 +239,8 @@ START_TEST(delay_test)
 		"delayed call had send-side timeout");
 	diff_us = after.raw - before.raw;
 	diag("ipc took %lu µs", (unsigned long)diff_us);
-	ok(diff_us < 1000 * 15, "immediate call was delayed properly");
+	int diff_ms = diff_us / 1000;
+	ok1(diff_ms > 16 && diff_ms < 20);
 
 	/* after delay, ping should complete properly. */
 	L4_LoadMR(0, (L4_MsgTag_t){ .X.label = PING_LABEL, .X.u = 1 }.raw);
