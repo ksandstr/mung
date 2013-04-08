@@ -23,6 +23,12 @@ use Mung::Restarting;
 use Mung::ConsoleReport;
 
 
+sub in_color {
+	my $color = shift;
+	return color($color) . join("", @_) . color('reset');
+}
+
+
 my $TOPLEVEL = ".";
 -f "$TOPLEVEL/run.sh" || die "can't find run.sh in path `$TOPLEVEL'";
 
@@ -88,10 +94,11 @@ foreach my $suite (@{$sink->suites}) {
 				my $nfails = $res->failed;
 				$sum_notok += $nfails;
 
+				# TODO: sprinkle this, too, with more colours.
 				push @out, "Test `$tn' [" . $test->id . "] in "
 					. $suite->name . "/" . $tcase->name
 					. " failed $nfails test point(s): "
-					. "{ " . join(" ", $res->failed) . " }";
+					. "{ " . in_color('bold', join(" ", $res->failed)) . " }";
 
 				if($res->status eq 'FAIL') {
 					push @out, "  and exited with failed assertion: " . $res->fail_msg;
@@ -109,22 +116,16 @@ foreach my $suite (@{$sink->suites}) {
 				# add the complete test log.
 				foreach (@{$res->results}) {
 					next if $_->is_pragma || $_->is_version;
-					my $si;
-					my $c = 'reset';
+					my @si = ('reset', " ");
 					# TODO: recognize to-do lines, use a bright_yellow minus
 					# sigil
 					if(!$_->is_ok) {
-						$si = "!";
-						$c = 'bold bright_red';
+						@si = ('bold bright_red', '!');
 					} elsif($_->is_test) {
 						# mark successful test points
-						$si = "+";
-						$c = 'bright_green';
-					} else {
-						# everything else is just noise.
-						$si = " ";
+						@si = ('bright_green', '+');
 					}
-					push @out, color($c) . $si . color('reset') . " " . $_->as_string;
+					push @out, in_color(@si) . " " . $_->as_string;
 				}
 				push @out, "";
 			}
