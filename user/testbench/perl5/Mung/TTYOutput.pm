@@ -1,4 +1,5 @@
-package Mung::ConsoleReport;
+package Mung::TTYOutput;
+use Modern::Perl '2012';
 use Moose;
 
 

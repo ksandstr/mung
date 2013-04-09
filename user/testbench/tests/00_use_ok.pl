@@ -20,4 +20,4 @@ use_ok('Mung::TestCase');
 use_ok('Mung::Test');
 use_ok('Mung::TestResult');
 use_ok('Mung::Output');
-use_ok('Mung::ConsoleReport');
+use_ok('Mung::TTYOutput');

@@ -20,7 +20,7 @@ use Mung::Test;
 use Mung::TestResult;
 use Mung::TapError;
 use Mung::Restarting;
-use Mung::ConsoleReport;
+use Mung::TTYOutput;
 
 
 sub in_color {
@@ -50,7 +50,7 @@ my $status = 0;
 my @errors;		# FIXME: fill this in
 
 my $module = Mung::ProcessModule->new(command => './run.sh -display none');
-my $sink = Mung::Sink->new(output => Mung::ConsoleReport->new);
+my $sink = Mung::Sink->new(output => Mung::TTYOutput->new);
 my $ctrl = Mung::Ctrl->new(@ctrl_param, sink => $sink);
 $sink->on_complete_fn(sub { $ctrl->completed($_[0], $_[1]->iter); });
 
