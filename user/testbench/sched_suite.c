@@ -684,11 +684,9 @@ static bool delay_preempt_case(
 static int yield_timeslice_case(bool preempt_spinner)
 {
 	int my_pri = find_own_priority();
-	log("starting, my_pri is %d\n", my_pri);
 
 	L4_ThreadId_t spinner = start_spinner(my_pri - 2, 15,
 		L4_TimePeriod(2 * 1000), false, false, false);
-	log("returned after spinner start\n");
 
 	L4_ThreadId_t preempt = L4_nilthread;
 	if(preempt_spinner) {
@@ -700,15 +698,13 @@ static int yield_timeslice_case(bool preempt_spinner)
 	L4_Clock_t start = L4_SystemClock();
 	L4_ThreadSwitch(spinner);
 	L4_Clock_t end = L4_SystemClock();
-	log("switched to spinner at %llu, returned at %llu\n",
-		start.raw, end.raw);
 
 	L4_Receive_Timeout(spinner, L4_TimePeriod(45 * 1000));
 	join_thread(spinner);
 
 	if(preempt_spinner) join_thread(preempt);
 
-	return end.raw - start.raw;
+	return (end.raw - start.raw + 500) / 1000;
 }
 
 
