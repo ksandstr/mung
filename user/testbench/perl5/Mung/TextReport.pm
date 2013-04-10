@@ -23,22 +23,39 @@ sub report_result {
 	my $tn = $test->name;
 	$tn .= ":" . $res->iter if $test->low != $test->high;
 
-	# TODO: sprinkle this, too, with more colours.
-	print $out "Test `$tn' [" . $test->id . "] in "
-		. $suite->name . "/" . $tcase->name
-		. " failed " . scalar $res->failed . " test point(s): "
-		. "{ " . in_color('bold', join(" ", $res->failed)) . " }\n";
+	my @conds;
+	if($res->failed > 0) {
+		push @conds, "failed " . scalar $res->failed . " test point(s): "
+			. "{ " . in_color('bold', join(" ", $res->failed)) . " }";
+	}
+	my $st = $res->status // "";
+	if($st eq 'FAIL') {
+		push @conds, "bailed out: " . $res->fail_msg;
+	} elsif($st eq 'PANIC') {
+		push @conds, "panic()ed: " . $res->fail_msg;
+	}
 
-	if($res->status eq 'FAIL') {
-		print $out "  and exited with failed assertion: " . $res->fail_msg . "\n";
-	} elsif($res->status eq 'PANIC') {
-		print $out "  and hit panic condition: " . $res->fail_msg . "\n";
+	if(@conds > 0) {
+		# TODO: sprinkle this, too, with more colours.
+		print $out "Test `$tn' [" . $test->id . "] in "
+			. $suite->name . "/" . $tcase->name . " ";
+		my $fst = 1;
+		foreach (@conds) {
+			if(!$fst) {
+				print $out "  and ";
+			} else {
+				$fst = 0;
+			}
+			print $out "$_\n";
+		}
+		print $out "  ---\n";
 	}
 
 	# add the complete test log.
 	foreach (@{$res->results}) {
 		next if $_->is_pragma || $_->is_version;
 		my @si = ('reset', " ");
+		my $pref = "";
 		# TODO: recognize to-do lines, use a bright_yellow minus
 		# sigil
 		if(!$_->is_ok) {
@@ -46,10 +63,13 @@ sub report_result {
 		} elsif($_->is_test) {
 			# mark successful test points
 			@si = ('bright_green', '+');
+		} elsif($_->is_bailout) {
+			# frightening to all nethack & dwarf fortress players
+			@si = ('reverse bright_red', '&');
+			$pref = "Bail out! ";
 		}
-		print $out in_color(@si) . " " . $_->as_string . "\n";
+		print $out in_color(@si) . " $pref" . $_->as_string . "\n";
 	}
-	print $out "\n";
 
 	return ${$out->string_ref};
 }
@@ -67,7 +87,7 @@ sub print_report {
 	foreach my $suite (@{$sink->suites}) {
 		foreach my $tcase (@{$suite->tcases}) {
 			foreach my $test (@{$tcase->tests}) {
-				my @fails = map { $_->failed ? ($_) : () } @{$test->results};
+				my @fails = map { $_->failed || $_->status ? ($_) : () } @{$test->results};
 				next unless @fails;
 
 				# there are roughly two kinds of test failures. first are the
@@ -83,6 +103,7 @@ sub print_report {
 
 				my $sum_notok = 0;
 				my $num_skipped = 0;
+				my $fst = 1;
 				while(@fails) {
 					my $res = shift @fails;
 					if(@fails && $res->eqv_to($fails[0])) {
@@ -99,7 +120,10 @@ sub print_report {
 						$num_skipped = 0;
 					}
 
-					print $out "\n" if $sum_notok == $res->failed;	# padding
+					if($fst) {
+						print $out "\n";
+						$fst = 0;
+					}
 					print $out $self->report_result(
 						suite => $suite, tcase => $tcase, test => $test,
 						result => $res);
@@ -136,6 +160,7 @@ sub print_report {
 
 	# (what the fuck does this mean?)
 	if($sink->incorrect || $sink->failed) {
+		print $out "\n";
 		print $out "There were " . $sink->incorrect . " incorrect tests";
 		my $f = $sink->failed;
 		if($f) {
