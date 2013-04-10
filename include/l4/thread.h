@@ -113,6 +113,15 @@ static inline void L4_Set_Pager(L4_ThreadId_t pg) {
 	L4_VREG(utcb, L4_TCR_PAGER) = pg.raw;
 }
 
+static inline L4_Word_t L4_XferTimeouts(void) {
+	void *utcb = __L4_Get_UtcbAddress();
+	return L4_VREG(utcb, L4_TCR_XFERTIMEOUTS);
+}
+
+static inline void L4_Set_XferTimeouts(L4_Word_t newval) {
+	void *utcb = __L4_Get_UtcbAddress();
+	L4_VREG(utcb, L4_TCR_XFERTIMEOUTS) = newval;
+}
 
 static inline void L4_Set_VirtualSender(L4_ThreadId_t id) {
 	void *utcb = __L4_Get_UtcbAddress();
