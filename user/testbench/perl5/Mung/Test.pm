@@ -71,13 +71,11 @@ sub end {
 
 	# to keep TAP::Parser from becoming confused by a single-line stream (as
 	# when the first assert blows right after the plan(), with no test points
-	# in between), recognize it and add a bail-out line.
+	# in between), recognize it and add an all-skip plan.
 	my $tap = join("\n", @{$self->tap_buf});
 	my $lines = @{$self->tap_buf};
-	if($lines == 0) {
-		$tap .= "1..0\n";	# all-skip
-	} elsif($lines == 1) {
-		$tap .= "\nBail out! assertion failed\n";
+	if($lines == 1) {
+		$tap = "1..0\n$tap";
 	}
 
 	my $result = Mung::TestResult->new(@_,

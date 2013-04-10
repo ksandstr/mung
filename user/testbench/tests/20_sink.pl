@@ -51,7 +51,7 @@ subtest "pass one, fail one" => sub {
 
 foreach my $pad_size (0, 1, 2) {
 	subtest "assert failure (pad $pad_size)" => sub {
-		plan tests => 4;
+		plan tests => 5;
 
 		my $m = ScriptModule->new;
 		my $plan = $m->plan($pad_size + 2);
@@ -73,15 +73,23 @@ foreach my $pad_size (0, 1, 2) {
 		my $test = $sink->suites->[0]->tcases->[0]->tests->[0];
 		ok(@{$test->results} == 1, "test was run once");
 		my $res = $test->results->[0];
+		ok($res->status, "test broke");
 		ok($res->has_problems, "result indicates problems");
-		ok($res->status eq 'FAIL', "status is FAIL");
-		like($res->fail_msg, qr/bogon\s+overflow/, "correct fail message");
+		my $failrow;
+		foreach (@{$res->results}) {
+			if($_->is_bailout) {
+				$failrow = $_;
+				last;
+			}
+		}
+		ok($failrow, "got bailout result");
+		like($failrow->as_string, qr/bogon\s+overflow/, "correct fail message");
 	};
 }
 
 
 subtest "fail before plan" => sub {
-	plan tests => 5;
+	plan tests => 6;
 
 	my $m = ScriptModule->new;
 	$m->plan(666);		# initializes the ok-line counter
@@ -99,8 +107,16 @@ subtest "fail before plan" => sub {
 	my $test = $sink->suites->[0]->tcases->[0]->tests->[0];
 	ok(@{$test->results} == 1, "module was run once");
 	my $res = $test->results->[0];
-	ok($res->status eq 'FAIL', "test broke");
-	like($res->fail_msg, qr/even plan this/, "fail message was delivered");
+	my $failrow;
+	foreach (@{$res->results}) {
+		if($_->is_bailout) {
+			$failrow = $_;
+			last;
+		}
+	}
+	ok($failrow, "got bailout result");
+	like($failrow->as_string, qr/even plan this/, "correct fail message");
+	ok($res->status, "test broke");
 	ok($res->passed == 0, "no tests passed");
 	ok($res->failed == 0, "no tests failed");
 };

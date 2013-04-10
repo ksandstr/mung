@@ -41,8 +41,6 @@ has 'plan' => (
 	isa => 'ArrayRef[Mung::Test]',
 	default => sub { [] } );
 
-has 'failmsg' => ( is => 'rw', isa => 'Str', default => '' );
-
 # output accumulators. should have a group accessor to produce the %stats
 # equivalent.
 has [ qw/failed incorrect/ ] => ( is => 'rw', isa => 'Int', default => 0 );
@@ -237,18 +235,11 @@ sub ctl_line {
 	} elsif($msg =~ /test\s+log:\s*(.+)$/) {
 		# capture test log output
 		push @{$self->test->{log}}, $1;
-	} elsif($msg =~ /test failed:\s+(msg\s+[`'](.+?)')?/) {
-		if($self->failmsg) {
-			# FIXME: pipe this through $self->output
-			print STDERR "WARNING: multiple test failure messages"
-				. " (last was `" . $self->failmsg . "')\n";
-		}
-		$self->failmsg($2 || '');
 	} elsif($msg =~ /test [`'](\w+)' failed, rc (-?\d+)/) {
-		# TODO: output something that relates the return code to the test
-		# plan. do that for tests that didn't fail, too.
-		$self->_end_test($1, rc => int($2) || 0, failmsg => $self->failmsg);
-		$self->failmsg('');
+		# this line is generated from the exit_on_fail() path, via
+		# run_test()'s return value. it's used for passing the TAP return
+		# code.
+		$self->_end_test($1, rc => int($2) || 0);
 	} elsif($msg =~ /desc (test|tcase|suite) `(\w+)'(\s*low:(\d+)\s*high:(\d+)\s*id:([a-zA-Z0-9]+))?/) {
 		my @args = (name => $2);
 		push @args, (low => int($4), high => int($5), id => $6) if $3;

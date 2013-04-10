@@ -88,7 +88,7 @@ void _fail_unless(
 		if(msg == NULL) msg = expr;
 		vsnprintf(buf, sizeof(buf), msg, ap);
 		va_end(ap);
-		printf("*** test failed: msg `%s'\n", buf);
+		printf("Bail out!  %s\n", buf);
 		flush_log(true);
 
 		exit_on_fail();

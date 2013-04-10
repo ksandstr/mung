@@ -149,7 +149,7 @@ sub not_ok {
 sub test_fail {
 	my $self = shift;
 	my $msg = shift;
-	return "*** test failed: msg `$msg'\n";
+	return "Bail out!  $msg\n";
 }
 
 

@@ -34,6 +34,8 @@ has 'parser' => (
 		qw/skip_all has_problems/]);
 has 'test_log' => (is => 'ro', isa => 'ArrayRef[Str]');
 
+# FIXME: this is a nasty overload of ->results across the related Mung::Test
+# and Mung::TestResult, which leads to confusing callsites.
 has 'results' => (
 	is => 'ro',
 	isa => 'ArrayRef[TAP::Parser::Result]',
@@ -56,19 +58,17 @@ sub BUILDARGS {
 	my $context = shift;
 	my %args = @_;
 
-	my %conv = ( panic => 'PANIC', failmsg => 'FAIL' );
-	$args{status} = '';
-	foreach (keys %conv) {
-		next unless exists $args{$_};
-		$args{status} = $conv{$_};
-		$args{fail_msg} = $args{$_};
-		delete $args{$_};
-	}
-
 	my @rs;
+	my $bo;
 	while(my $result = $args{parser}->next) {
 		# NOTE: this filters all "test log:" lines. that's kind of poor form.
 		push @rs, $result unless $result->is_unknown;
+		if($result->is_bailout) {
+			die "unexpected double bailout: " . $result->as_string if $bo;
+			$bo = $result;
+			$args{status} = 'FAIL';
+			$args{fail_msg} = $result->as_string;
+		}
 	}
 	$args{results} = \@rs;
 

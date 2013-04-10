@@ -85,8 +85,8 @@ void __assert_failure(
 	const char *function)
 {
 	if(in_test()) {
-		printf("*** test failed: msg `assert %s failed in %s:%d'\n",
-			condition, file, line);
+		printf("Bail out!  %s:%d assert failure `%s'\n",
+			file, line, condition);
 		exit_on_fail();
 	} else {
 		printf("testbench %lu:%lu %s(`%s', `%s', %u, `%s')\n",
