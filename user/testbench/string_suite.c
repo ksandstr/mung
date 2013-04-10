@@ -520,6 +520,109 @@ START_TEST(echo_with_long_hole)
 END_TEST
 
 
+/* TODO: use this from other tests also
+ * TODO: add an option to flush the receive buffer independently
+ * TODO: add a meta test to ensure that this actually causes faults when
+ * do_unmap is true
+ */
+static L4_Word_t faulting_echo(
+	L4_ThreadId_t serv_tid,
+	int test_iter,
+	bool do_unmap)
+{
+	uint32_t seed = seed_bins[test_iter & 0x3] ^ seed_bins[test_iter >> 2];
+
+	const size_t test_len = 11 * 1024 + 1;
+	char *echostr = malloc(test_len);
+	fail_if(echostr == NULL);
+	random_string(echostr, test_len, &seed);
+	fail_unless(strlen(echostr) == test_len - 1);
+
+	char *replybuf = malloc(test_len * 2);
+	fail_if(replybuf == NULL);
+
+	if(do_unmap) {
+		L4_Fpage_t unmap_page = L4_Fpage((uintptr_t)echostr, test_len * 4);
+		L4_Set_Rights(&unmap_page, L4_FullyAccessible);
+		diag("flushing %#lx:%#lx", L4_Address(unmap_page),
+			L4_Size(unmap_page));
+		L4_FlushFpage(unmap_page);
+	}
+
+	L4_StringItem_t got_si;
+	L4_StringItem_t rep_si = L4_StringItem(test_len * 2, replybuf);
+	L4_LoadBR(0, 1);
+	L4_LoadBRs(1, 2, rep_si.raw);
+	int echo_len = strlen(echostr);
+	L4_StringItem_t si = L4_StringItem(echo_len + 1, (void *)echostr);
+	L4_LoadMR(0, (L4_MsgTag_t){ .X.label = ECHO_LABEL, .X.t = 2 }.raw);
+	L4_LoadMRs(1, 2, si.raw);
+	L4_MsgTag_t tag = L4_Call_Timeouts(test_tid, TEST_IPC_DELAY,
+		TEST_IPC_DELAY);
+	L4_Word_t ec = L4_ErrorCode();
+	fail_unless(L4_IpcFailed(tag) || tag.X.t == 2,
+		"reply tag is weird (%#lx)", tag.raw);
+	if(L4_IpcSucceeded(tag)) {
+		L4_StoreMRs(1, 2, got_si.raw);
+		fail_unless(L4_IsStringItem(&got_si));
+
+		replybuf[MIN(int, test_len * 2 - 1, got_si.X.string_length)] = '\0';
+		int rlen = strlen(replybuf);
+		fail_unless(rlen >= strlen(echostr), "reply length >= input length");
+		fail_unless(streq(&replybuf[rlen - strlen(echostr)], echostr),
+			"echo output ends with input");
+	}
+
+	free(echostr);
+	free(replybuf);
+
+	return ec;
+}
+
+
+/* xferto testcase: transfer timeouts (and lack thereof). */
+
+START_TEST(no_xfer_timeout)
+{
+	plan_tests(2);
+
+	L4_Set_XferTimeouts(L4_Timeouts(L4_Never, L4_Never));
+	L4_Word_t ec = faulting_echo(test_tid, 0, false);
+	ok(ec == 0, "no-fault n/n case");
+
+	L4_Set_XferTimeouts(L4_Timeouts(L4_Never, L4_Never));
+	ec = faulting_echo(test_tid, 1, true);
+	ok(ec == 0, "faulting n/n case");
+}
+END_TEST
+
+
+START_TEST(immediate_xfer_timeout)
+{
+	plan_tests(2);
+
+	todo_start("not implemented");
+
+	L4_Word_t tos = L4_Timeouts(L4_ZeroTime, L4_ZeroTime);
+	L4_Set_XferTimeouts(tos);
+	L4_Word_t ec = faulting_echo(test_tid, 0, false);
+	ok(ec == 0, "no-fault z/z case");
+
+	L4_Set_XferTimeouts(tos);
+	ec = faulting_echo(test_tid, 0, true);
+	/* expecting 5 or 6 in send phase, indicating xfer timeout in invoker or
+	 * partner's address space (which are the same thing)
+	 */
+	int code = (ec >> 1) & 0x7;
+	diag("ec %#lx, code %d", ec, code);
+	ok((code == 5 || code == 6) && (ec & 1) == 0,
+		"timeout in no-fault z/z send phase");
+
+	todo_end();
+}
+END_TEST
+
+
 /* start string_test_thread in a forked space. */
 static void fork_stt_setup(void)
 {
@@ -628,6 +731,13 @@ Suite *string_suite(void)
 	tcase_add_test(space, echo_with_hole);
 	tcase_add_test(space, echo_with_long_hole);
 	suite_add_tcase(s, space);
+
+	/* transfer timeout tests */
+	TCase *xferto = tcase_create("xferto");
+	tcase_add_checked_fixture(xferto, &stt_setup, &stt_teardown);
+	tcase_add_test(xferto, no_xfer_timeout);
+	tcase_add_test(xferto, immediate_xfer_timeout);
+	suite_add_tcase(s, xferto);
 
 	return s;
 }
