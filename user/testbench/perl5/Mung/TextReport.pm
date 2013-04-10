@@ -18,6 +18,7 @@ sub report_result {
 	my $self = shift;
 	my %args = @_;
 	my ($test, $suite, $tcase, $res) = @args{qw/test suite tcase result/};
+	die unless @{$res->results} > 0;
 
 	my $out = IO::String->new;
 
@@ -52,7 +53,8 @@ sub report_result {
 			}
 			print $out "$_\n";
 		}
-		print $out "  ---\n";
+		print $out "  ---\n"
+			unless @conds == 1 && $res->results->[0]->is_plan;
 	}
 
 	# add the complete test log.
