@@ -140,9 +140,9 @@ static void string_test_thread(void *param UNUSED)
 					tag = L4_ReplyWait(from, &from);
 				} else {
 					tag = L4_Reply(from);
+					L4_Sleep(delay);
+					delay = L4_ZeroTime;
 					if(L4_IpcSucceeded(tag)) {
-						L4_Sleep(delay);
-						delay = L4_ZeroTime;
 						tag = L4_Wait(&from);
 					}
 				}
