@@ -211,11 +211,18 @@ START_TEST(delay_test)
 {
 	plan_tests(5);
 
+	/* synchronize. */
+	L4_LoadMR(0, (L4_MsgTag_t){ .X.label = PING_LABEL, .X.u = 1 }.raw);
+	L4_LoadMR(1, ECHO_LABEL ^ DELAY_LABEL);
+	L4_MsgTag_t tag = L4_Call(test_tid);
+	fail_unless(L4_IpcSucceeded(tag),
+		"sync ping failed, ec %#lx", L4_ErrorCode());
+
 	/* without delay, reply should be immediate. */
 	L4_Clock_t before = L4_SystemClock();
 	L4_LoadMR(0, (L4_MsgTag_t){ .X.label = PING_LABEL, .X.u = 1 }.raw);
 	L4_LoadMR(1, ECHO_LABEL ^ DELAY_LABEL);
-	L4_MsgTag_t tag = L4_Call_Timeouts(test_tid, L4_ZeroTime, L4_Never);
+	tag = L4_Call_Timeouts(test_tid, L4_ZeroTime, L4_Never);
 	L4_Clock_t after = L4_SystemClock();
 	if(L4_IpcFailed(tag)) diag("error code %#lx", L4_ErrorCode());
 	ok(L4_IpcSucceeded(tag), "immediate call succeeded");
