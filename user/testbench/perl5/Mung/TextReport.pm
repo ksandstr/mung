@@ -4,6 +4,7 @@ use Moose;
 
 use IO::String;
 use Term::ANSIColor;
+use List::MoreUtils qw/any/;
 
 
 sub in_color {
@@ -27,6 +28,9 @@ sub report_result {
 	if($res->failed > 0) {
 		push @conds, "failed " . scalar $res->failed . " test point(s): "
 			. "{ " . in_color('bold', join(" ", $res->failed)) . " }";
+	}
+	if($self->is_todo($res)) {
+		push @conds, "has failed test points marked to-do";
 	}
 	my $st = $res->status // "";
 	if($st eq 'FAIL') {
@@ -56,13 +60,12 @@ sub report_result {
 		next if $_->is_pragma || $_->is_version;
 		my @si = ('reset', " ");
 		my $pref = "";
-		# TODO: recognize to-do lines, use a bright_yellow minus
-		# sigil
 		if(!$_->is_ok) {
 			@si = ('bold bright_red', '!');
 		} elsif($_->is_test) {
-			# mark successful test points
+			# mark successful and to-do test points
 			@si = ('bright_green', '+');
+			@si = ($_->is_actual_ok ? 'blue' : 'bright_yellow', '~') if $_->has_todo;
 		} elsif($_->is_bailout) {
 			# frightening to all nethack & dwarf fortress players
 			@si = ('reverse bright_red', '&');
@@ -72,6 +75,22 @@ sub report_result {
 	}
 
 	return ${$out->string_ref};
+}
+
+
+sub is_todo {
+	my $self = shift;
+	my $result = shift;
+
+	return any { $_->is_test && $_->has_todo } @{$result->results};
+}
+
+
+sub is_reportable {
+	my $self = shift;
+	my $result = shift;
+
+	return $result->failed || $result->status || $self->is_todo($result);
 }
 
 
@@ -87,7 +106,7 @@ sub print_report {
 	foreach my $suite (@{$sink->suites}) {
 		foreach my $tcase (@{$suite->tcases}) {
 			foreach my $test (@{$tcase->tests}) {
-				my @fails = map { $_->failed || $_->status ? ($_) : () } @{$test->results};
+				my @fails = map { $self->is_reportable($_) ? ($_) : () } @{$test->results};
 				next unless @fails;
 
 				# there are roughly two kinds of test failures. first are the
