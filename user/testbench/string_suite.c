@@ -470,6 +470,7 @@ START_TEST(echo_with_long_hole)
 		diag("flushing %#lx:%#lx", L4_Address(flush[i]), L4_Size(flush[i]));
 #endif
 	}
+	stats->n_faults = 0;
 	L4_FlushFpages(NUM_ELEMENTS(flush), flush);
 
 	L4_StringItem_t got_si;
