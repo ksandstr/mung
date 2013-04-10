@@ -61,8 +61,7 @@ sub BUILDARGS {
 	my @rs;
 	my $bo;
 	while(my $result = $args{parser}->next) {
-		# NOTE: this filters all "test log:" lines. that's kind of poor form.
-		push @rs, $result unless $result->is_unknown;
+		push @rs, $result;
 		if($result->is_bailout) {
 			die "unexpected double bailout: " . $result->as_string if $bo;
 			$bo = $result;

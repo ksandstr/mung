@@ -70,6 +70,9 @@ sub report_result {
 			# frightening to all nethack & dwarf fortress players
 			@si = ('reverse bright_red', '&');
 			$pref = "Bail out! ";
+		} elsif($_->is_unknown) {
+			# non-test output (library output, deferred logs, etc.)
+			@si = ('blue', '?');
 		}
 		print $out in_color(@si) . " $pref" . $_->as_string . "\n";
 	}
