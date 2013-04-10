@@ -26,9 +26,9 @@ $| = 1;
 # parameters affecting the test process.
 my @roles;
 my @ctrl_param = ( max_ids_len => 70 );
-if($ENV{TEST_SLOW}) {
+if($ENV{TEST_SLOWER}) {
 	push @ctrl_param, ( allow_all => 0, max_per_run => 1 );
-} elsif(!$ENV{TEST_QUICK}) {
+} elsif($ENV{TEST_SLOW}) {
 	push @roles, 'Mung::Restarting';
 }
 

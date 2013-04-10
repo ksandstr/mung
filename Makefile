@@ -29,18 +29,22 @@ distclean: clean
 	@find . -name ".deps" -type d -print|xargs rm -rf
 
 
+# TODO: skip testbench self-tests if the perl source, and its test code, hasn't
+# changed since "testbench" and "ia32-kernel". (bit of a tall order, this.)
+qcheck: check
+
+
 check: all
 	+@make -C user/testbench check
 	@user/testbench/report.pl
 
 
-qcheck:
-	+@make check TEST_QUICK=1
-
-
 slowcheck:
 	+@make check TEST_SLOW=1
 
+
+slowercheck:
+	+@make check TEST_SLOWER=1
 
 
 tags: $(shell find . -iname "*.[ch]" -or -iname "*.p[lm]")
