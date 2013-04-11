@@ -82,7 +82,7 @@ static void wait_and_exit(int rc, L4_Word_t wait_ms)
 }
 
 
-START_LOOP_TEST(multi_fork_and_wait, iter)
+START_LOOP_TEST(multi_fork_and_wait, iter, 0, 3)
 {
 	bool do_wait = (iter & 1) != 0, many = (iter & 2) != 0;
 
@@ -255,7 +255,7 @@ Suite *process_suite(void)
 	tcase_add_test(fork_case, return_exit_status);
 	tcase_add_test(fork_case, ipc_with_child);
 	tcase_add_test(fork_case, deep_fork);
-	tcase_add_loop_test(fork_case, multi_fork_and_wait, 0, 3);
+	tcase_add_test(fork_case, multi_fork_and_wait);
 	suite_add_tcase(s, fork_case);
 
 	return s;

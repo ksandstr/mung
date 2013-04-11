@@ -166,18 +166,15 @@ void tcase_add_checked_fixture(TCase *tc, SFun setup, SFun teardown) {
 }
 
 
-void tcase_add_test_full(
-	TCase *tc,
-	void (*t_fun)(int),
-	const char *name,
-	int low, int high)
+void tcase_add_test_info(TCase *tc, const struct test_info *info)
 {
-	int len = strlen(name);
+	int len = strlen(info->name);
 	struct test *t = malloc(sizeof(struct test) + len + 1);
 	*t = (struct test){
-		.t_fun = t_fun, .low = low, .high = high,
+		.t_fun = info->test_fn,
+		.low = info->iter_low, .high = info->iter_high,
 	};
-	memcpy(t->name, name, len + 1);
+	memcpy(t->name, info->name, len + 1);
 	list_add_tail(&tc->tests, &t->tcase_link);
 }
 

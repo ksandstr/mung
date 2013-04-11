@@ -250,9 +250,8 @@ END_TEST
 /* iter should be 0..15. it'll be used to select a seed value for the string
  * parameter.
  */
-START_LOOP_TEST(echo_long, test_iter)
+START_LOOP_TEST(echo_long, test_iter, 0, 0xf)
 {
-	fail_unless(test_iter >= 0 && test_iter < 16);
 	uint32_t seed = seed_bins[test_iter & 0x3] ^ seed_bins[test_iter >> 2];
 
 	const size_t test_len = 24 * 1024 + 1;
@@ -286,9 +285,8 @@ END_TEST
  *
  * TODO: use the stats pager, too
  */
-START_LOOP_TEST(echo_long_xferfault, test_iter)
+START_LOOP_TEST(echo_long_xferfault, test_iter, 0, 0xf)
 {
-	fail_unless(test_iter >= 0 && test_iter < 16);
 	uint32_t seed = seed_bins[test_iter & 0x3] ^ seed_bins[test_iter >> 2];
 
 	const size_t test_len = 24 * 1024 + 1;
@@ -782,8 +780,8 @@ Suite *string_suite(void)
 	tcase_add_checked_fixture(basic, &stats_setup, &stats_teardown);
 	tcase_add_checked_fixture(basic, &drop_setup, &drop_teardown);
 	tcase_add_test(basic, echo_simple);
-	tcase_add_loop_test(basic, echo_long, 0, 15);
-	tcase_add_loop_test(basic, echo_long_xferfault, 0, 15);
+	tcase_add_test(basic, echo_long);
+	tcase_add_test(basic, echo_long_xferfault);
 	tcase_add_test(basic, echo_with_hole);
 	tcase_add_test(basic, echo_with_long_hole);
 	suite_add_tcase(s, basic);
@@ -794,8 +792,8 @@ Suite *string_suite(void)
 	tcase_add_checked_fixture(space, &stats_setup, &stats_teardown);
 	tcase_add_checked_fixture(space, &drop_setup, &drop_teardown);
 	tcase_add_test(space, echo_simple);
-	tcase_add_loop_test(space, echo_long, 0, 15);
-	tcase_add_loop_test(space, echo_long_xferfault, 0, 15);
+	tcase_add_test(space, echo_long);
+	tcase_add_test(space, echo_long_xferfault);
 	tcase_add_test(space, echo_with_hole);
 	tcase_add_test(space, echo_with_long_hole);
 	suite_add_tcase(s, space);

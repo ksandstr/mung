@@ -42,11 +42,27 @@ typedef struct SRunner SRunner;
 
 typedef void (*SFun)(void);
 
-#define START_TEST(name) \
-	static void name (int _i) {
-#define START_LOOP_TEST(name, _var) \
-	static void name (int _i) { \
-		int _var = _i;
+struct test_info
+{
+	void (*test_fn)(int);
+	const char *name;
+	int iter_low, iter_high;
+};
+
+#define START_TEST(NAME) \
+	static void NAME (int); \
+	static const struct test_info NAME ## _info = { \
+		.test_fn = &NAME, .name = #NAME, \
+	}; \
+	static void NAME (int _i) {
+#define START_LOOP_TEST(NAME, VAR, LOW, HIGH) \
+	static void NAME (int); \
+	static const struct test_info NAME ## _info = { \
+		.test_fn = &NAME, .name = #NAME, \
+		.iter_low = (LOW), .iter_high = (HIGH), \
+	}; \
+	static void NAME (int _i) { \
+		int VAR = _i;
 #define END_TEST }
 
 /* fail() inherited from the libtap imitation */
@@ -65,15 +81,9 @@ extern TCase *tcase_create(const char *name);
 extern void tcase_add_unchecked_fixture(TCase *tc, SFun setup, SFun teardown);
 extern void tcase_add_checked_fixture(TCase *tc, SFun setup, SFun teardown);
 
-extern void tcase_add_test_full(
-	TCase *tc,
-	void (*t_fun)(int),
-	const char *name,
-	int low, int high);
+extern void tcase_add_test_info(TCase *tc, const struct test_info *info);
 
-#define tcase_add_test(tc, tfun) tcase_add_test_full((tc), (tfun), #tfun, 0, 0)
-#define tcase_add_loop_test(tc, tfun, lo, hi) \
-	tcase_add_test_full((tc), (tfun), #tfun, (lo), (hi))
+#define tcase_add_test(tc, tfun) tcase_add_test_info((tc), &tfun ## _info)
 
 extern SRunner *srunner_create(Suite *first_suite);
 extern void srunner_add_suite(SRunner *run, Suite *s);

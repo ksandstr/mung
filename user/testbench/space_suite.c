@@ -363,7 +363,7 @@ END_TEST
  * TODO: split this up to test privilege revocation, and access bit reading,
  * separately.
  */
-START_LOOP_TEST(partial_flush, iter)
+START_LOOP_TEST(partial_flush, iter, 0, 1)
 {
 	/* variants */
 	const bool recursive = CHECK_FLAG(iter, 1);
@@ -485,7 +485,7 @@ Suite *space_suite(void)
 	TCase *unmap_case = tcase_create("unmap");
 	tcase_add_checked_fixture(unmap_case, &pager_setup, &pager_teardown);
 	tcase_add_test(unmap_case, simple_flush);
-	tcase_add_loop_test(unmap_case, partial_flush, 0, 1);
+	tcase_add_test(unmap_case, partial_flush);
 	tcase_add_test(unmap_case, large_flush);
 	suite_add_tcase(s, unmap_case);
 

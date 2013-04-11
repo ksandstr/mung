@@ -383,10 +383,8 @@ end:
 END_TEST
 
 
-START_LOOP_TEST(preempt_exn_test, t)
+START_LOOP_TEST(preempt_exn_test, t, 0, 7)
 {
-	fail_unless(t >= 0 && t < 8);
-
 	/* there are three boolean variables here. the first is timeslice length,
 	 * the second is the preemption signaling switch, and the third is whether
 	 * there'll be a higher-priority wakeup 10 ms in.
@@ -485,7 +483,7 @@ END_TEST
  * preemptor thread until after the higher-or-equal priority exception handler
  * has switched off.
  */
-START_LOOP_TEST(delay_preempt, t)
+START_LOOP_TEST(delay_preempt, t, 0, 0xf)
 {
 	const bool delay_pe = (t & 0x1) != 0,
 		high_sens_pri = (t & 0x2) != 0,
@@ -730,8 +728,8 @@ Suite *sched_suite(void)
 
 	TCase *preempt_case = tcase_create("preempt");
 	tcase_add_test(preempt_case, simple_preempt_test);
-	tcase_add_loop_test(preempt_case, preempt_exn_test, 0, 7);
-	tcase_add_loop_test(preempt_case, delay_preempt, 0, 15);
+	tcase_add_test(preempt_case, preempt_exn_test);
+	tcase_add_test(preempt_case, delay_preempt);
 	suite_add_tcase(s, preempt_case);
 
 	TCase *yield_case = tcase_create("yield");
