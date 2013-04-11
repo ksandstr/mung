@@ -31,7 +31,7 @@ sub report_result {
 			. "{ " . in_color('bold', join(" ", $res->failed)) . " }";
 	}
 	if($self->is_todo($res)) {
-		push @conds, "has failed test points marked to-do";
+		push @conds, "has test points marked TODO";
 	}
 	my $st = $res->status // "";
 	if($st eq 'FAIL') {
