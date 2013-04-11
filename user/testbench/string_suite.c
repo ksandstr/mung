@@ -555,8 +555,7 @@ END_TEST
 
 START_TEST(immediate_xfer_timeout)
 {
-	plan_tests(2);
-	todo_start("not implemented");
+	plan_tests(1 + 3 * 3);
 
 	L4_Word_t tos = L4_Timeouts(L4_ZeroTime, L4_ZeroTime);
 
@@ -565,18 +564,26 @@ START_TEST(immediate_xfer_timeout)
 	L4_Word_t ec = faulting_echo(test_tid, 0, false, false);
 	ok(ec == 0, "no-fault z/z case");
 
-	/* part 2: z/z should cause IPC failure when faults do occur
-	 * TODO: this only tests the send-phase xfer timeout
-	 */
-	L4_Set_XferTimeouts(tos);
-	ec = faulting_echo(test_tid, 0, true, false);
-	/* expecting 5 or 6 in send phase, indicating xfer timeout in invoker or
-	 * partner's address space (which are the same thing)
-	 */
-	int code = (ec >> 1) & 0x7;
-	diag("ec %#lx, code %d", ec, code);
-	ok((code == 5 || code == 6) && (ec & 1) == 0,
-		"timeout in no-fault z/z send phase");
+	todo_start("no kernel support");
+
+	/* part 2: z/z should cause IPC failure when faults do occur */
+	for(int i = 1; i < 4; i++) {
+		const bool u_send = CHECK_FLAG(i, 1), u_recv = CHECK_FLAG(i, 2);
+		diag("i %d, u_send %s, u_recv %s", i, btos(u_send), btos(u_recv));
+
+		L4_Set_XferTimeouts(tos);
+		ec = faulting_echo(test_tid, i + 1, u_send, u_recv);
+
+		/* expecting 5 or 6 in send phase, indicating xfer timeout in invoker or
+		 * partner's address space (which are the same thing)
+		 */
+		int code = (ec >> 1) & 0x7;
+		bool send_phase = (ec & 1) == 0;
+		diag("ec %#lx, code %d", ec, code);
+		ok(code == 5 || code == 6, "code is xfer timeout");
+		ok1(!u_send || send_phase);
+		ok1(!u_recv || u_send || !send_phase);
+	}
 
 	todo_end();
 }
@@ -666,8 +673,8 @@ START_TEST(faulting_echo_test)
 	 */
 	for(int i=1; i < 4; i++) {
 		bool u_send = CHECK_FLAG(i, 1), u_recv = CHECK_FLAG(i, 2);
-		diag("loop i=%d (u_send %s, u_recv %s)", i,
-			u_send ? "true" : "false", u_recv ? "true" : "false");
+		diag("loop i=%d (u_send %s, u_recv %s)",
+			i, btos(u_send), btos(u_recv));
 		send_reset(stats_tid);
 		L4_Set_Pager(stats_tid);
 		ec = faulting_echo(test_tid, 2 + i, u_send, u_recv);

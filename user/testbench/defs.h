@@ -28,6 +28,9 @@
 #define LOG_SIZE 64			/* size of pager stats log */
 
 
+#define btos(x) (!!(x) ? "true" : "false")
+
+
 struct Suite;
 
 
