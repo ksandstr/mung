@@ -54,6 +54,18 @@ static void diag_faults(struct pager_stats *st)
 }
 
 
+static void flush_page(L4_Word_t address, L4_Word_t size, L4_Word_t access)
+{
+	if(access == 0) access = L4_FullyAccessible;
+
+	L4_Fpage_t unmap_page = L4_Fpage(address, size);
+	L4_Set_Rights(&unmap_page, access);
+	diag("flushing %#lx:%#lx", L4_Address(unmap_page),
+		L4_Size(unmap_page));
+	L4_FlushFpage(unmap_page);
+}
+
+
 static void send_delay(L4_ThreadId_t tid, L4_Time_t time)
 {
 	L4_LoadMR(0, (L4_MsgTag_t){ .X.label = DELAY_LABEL, .X.u = 1 }.raw);
@@ -466,13 +478,12 @@ START_TEST(echo_with_long_hole)
 END_TEST
 
 
-/* TODO: use this from non-xferto tests also
- * TODO: add an option to flush the receive buffer independently
- */
+/* TODO: use this from non-xferto tests also */
 static L4_Word_t faulting_echo(
 	L4_ThreadId_t serv_tid,
 	int test_iter,
-	bool do_unmap)
+	bool do_unmap_send,
+	bool do_unmap_recv)
 {
 	uint32_t seed = seed_bins[test_iter & 0x3] ^ seed_bins[test_iter >> 2];
 
@@ -485,13 +496,13 @@ static L4_Word_t faulting_echo(
 	char *replybuf = malloc(test_len * 2);
 	fail_if(replybuf == NULL);
 
-	if(do_unmap) {
-		L4_Fpage_t unmap_page = L4_Fpage((uintptr_t)echostr, test_len * 4);
-		L4_Set_Rights(&unmap_page, L4_FullyAccessible);
-		diag("buffer %p:%#x", echostr, (unsigned)test_len);
-		diag("flushing %#lx:%#lx", L4_Address(unmap_page),
-			L4_Size(unmap_page));
-		L4_FlushFpage(unmap_page);
+	if(do_unmap_send) {
+		// diag("send buffer %p:%#x", echostr, (unsigned)test_len);
+		flush_page((uintptr_t)echostr, test_len * 4, 0);
+	}
+	if(do_unmap_recv) {
+		// diag("recv buffer %p:%#x", replybuf, (unsigned)test_len * 2);
+		flush_page((uintptr_t)replybuf, test_len * 8, 0);
 	}
 
 	L4_StringItem_t got_si;
@@ -532,11 +543,11 @@ START_TEST(no_xfer_timeout)
 	plan_tests(2);
 
 	L4_Set_XferTimeouts(L4_Timeouts(L4_Never, L4_Never));
-	L4_Word_t ec = faulting_echo(test_tid, 0, false);
+	L4_Word_t ec = faulting_echo(test_tid, 0, false, false);
 	ok(ec == 0, "no-fault n/n case");
 
 	L4_Set_XferTimeouts(L4_Timeouts(L4_Never, L4_Never));
-	ec = faulting_echo(test_tid, 1, true);
+	ec = faulting_echo(test_tid, 1, true, true);
 	ok(ec == 0, "faulting n/n case");
 }
 END_TEST
@@ -545,16 +556,20 @@ END_TEST
 START_TEST(immediate_xfer_timeout)
 {
 	plan_tests(2);
-
 	todo_start("not implemented");
 
 	L4_Word_t tos = L4_Timeouts(L4_ZeroTime, L4_ZeroTime);
+
+	/* part 1: z/z shouldn't cause IPC failure when no faults occurred */
 	L4_Set_XferTimeouts(tos);
-	L4_Word_t ec = faulting_echo(test_tid, 0, false);
+	L4_Word_t ec = faulting_echo(test_tid, 0, false, false);
 	ok(ec == 0, "no-fault z/z case");
 
+	/* part 2: z/z should cause IPC failure when faults do occur
+	 * TODO: this only tests the send-phase xfer timeout
+	 */
 	L4_Set_XferTimeouts(tos);
-	ec = faulting_echo(test_tid, 0, true);
+	ec = faulting_echo(test_tid, 0, true, false);
 	/* expecting 5 or 6 in send phase, indicating xfer timeout in invoker or
 	 * partner's address space (which are the same thing)
 	 */
@@ -627,34 +642,42 @@ END_TEST
 
 START_TEST(faulting_echo_test)
 {
-	plan_tests(2);
+	plan_tests(7);
 
 	L4_Set_XferTimeouts(L4_Timeouts(L4_Never, L4_Never));
 
 	/* part 1: faulting_echo() should produce no faults on second go without
 	 * the unmap option.
 	 */
-	L4_Word_t ec = faulting_echo(test_tid, 0, false);
-	fail_unless(ec == 0, "warmup failed: ec %#lx", ec);
+	L4_Word_t ec = faulting_echo(test_tid, 0, false, false);
+	fail_unless(ec == 0, "ec %#lx", ec);
 
-	stats->n_faults = 0; stats->n_write = 0;
+	send_reset(stats_tid);
 	L4_ThreadId_t old_pager = L4_Pager();
 	L4_Set_Pager(stats_tid);
-	ec = faulting_echo(test_tid, 1, false);
+	ec = faulting_echo(test_tid, 1, false, false);
 	L4_Set_Pager(old_pager);
-	fail_unless(ec == 0, "no-fault call failed: ec %#lx", ec);
+	fail_unless(ec == 0, "ec %#lx", ec);
 	ok1(stats->n_faults == 0);
 
 	/* part 2: subsequently, faulting_echo() with do_unmap should produce at
-	 * least one page fault.
+	 * least one page fault; they should be read/write according to send/recv
+	 * unmap flag.
 	 */
-	stats->n_faults = 0; stats->n_write = 0;
-	L4_Set_Pager(stats_tid);
-	ec = faulting_echo(test_tid, 2, true);
-	L4_Set_Pager(old_pager);
-	fail_unless(ec == 0, "fault call failed: ec %#lx", ec);
-	ok(stats->n_faults > 0, "n_faults=%d with do_unmap", stats->n_faults);
-	diag_faults(stats);
+	for(int i=1; i < 4; i++) {
+		bool u_send = CHECK_FLAG(i, 1), u_recv = CHECK_FLAG(i, 2);
+		diag("loop i=%d (u_send %s, u_recv %s)", i,
+			u_send ? "true" : "false", u_recv ? "true" : "false");
+		send_reset(stats_tid);
+		L4_Set_Pager(stats_tid);
+		ec = faulting_echo(test_tid, 2 + i, u_send, u_recv);
+		L4_Set_Pager(old_pager);
+		fail_unless(ec == 0, "ec %#lx", ec);
+
+		int n_read = stats->n_faults - stats->n_write;
+		ok1(!u_send || n_read > 0);
+		ok1(!u_recv || stats->n_write > 0);
+	}
 }
 END_TEST
 
