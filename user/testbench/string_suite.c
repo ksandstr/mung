@@ -43,6 +43,17 @@ static bool write_fault(L4_Word_t addr) {
 }
 
 
+static void diag_faults(struct pager_stats *st)
+{
+	diag("%d faults, %d read, %d write:",
+		st->n_faults, st->n_read, st->n_write);
+	for(int i=0; i <= st->log_top; i++) {
+		diag("  %#lx:%#lx, %#x", L4_Address(st->log[i]),
+			L4_Size(st->log[i]), L4_Rights(st->log[i]));
+	}
+}
+
+
 static void send_delay(L4_ThreadId_t tid, L4_Time_t time)
 {
 	L4_LoadMR(0, (L4_MsgTag_t){ .X.label = DELAY_LABEL, .X.u = 1 }.raw);
@@ -200,63 +211,6 @@ static void echo(
 		fail_unless(L4_IsStringItem(got_si));
 	}
 }
-
-
-/* meta tests
- *
- * TODO: test of the "ping" function
- */
-
-START_TEST(delay_test)
-{
-	plan_tests(5);
-
-	/* synchronize. */
-	L4_LoadMR(0, (L4_MsgTag_t){ .X.label = PING_LABEL, .X.u = 1 }.raw);
-	L4_LoadMR(1, ECHO_LABEL ^ DELAY_LABEL);
-	L4_MsgTag_t tag = L4_Call(test_tid);
-	fail_unless(L4_IpcSucceeded(tag),
-		"sync ping failed, ec %#lx", L4_ErrorCode());
-
-	/* without delay, reply should be immediate. */
-	L4_Clock_t before = L4_SystemClock();
-	L4_LoadMR(0, (L4_MsgTag_t){ .X.label = PING_LABEL, .X.u = 1 }.raw);
-	L4_LoadMR(1, ECHO_LABEL ^ DELAY_LABEL);
-	tag = L4_Call_Timeouts(test_tid, L4_ZeroTime, L4_Never);
-	L4_Clock_t after = L4_SystemClock();
-	if(L4_IpcFailed(tag)) diag("error code %#lx", L4_ErrorCode());
-	ok(L4_IpcSucceeded(tag), "immediate call succeeded");
-	uint64_t diff_us = after.raw - before.raw;
-	diag("ipc took %lu µs", (unsigned long)diff_us);
-	ok(diff_us < 1000 * 10, "immediate call was immediate");
-
-	/* with delay, there should be a send-side timeout between 16 and 19 ms,
-	 * inclusive, rounding down.
-	 */
-	send_delay(test_tid, L4_TimePeriod(20 * 1000));
-	before = L4_SystemClock();
-	L4_LoadMR(0, (L4_MsgTag_t){ .X.label = PING_LABEL, .X.u = 1 }.raw);
-	L4_LoadMR(1, ECHO_LABEL ^ DELAY_LABEL);
-	tag = L4_Call_Timeouts(test_tid, L4_TimePeriod(1000 * 17), L4_Never);
-	after = L4_SystemClock();
-	if(L4_IpcSucceeded(tag) || L4_ErrorCode() != 0x2) {
-		diag("unexpected ec %#lx", L4_ErrorCode());
-	}
-	ok(L4_IpcFailed(tag) && L4_ErrorCode() == 0x2,
-		"delayed call had send-side timeout");
-	diff_us = after.raw - before.raw;
-	diag("ipc took %lu µs", (unsigned long)diff_us);
-	int diff_ms = diff_us / 1000;
-	ok1(diff_ms > 16 && diff_ms < 20);
-
-	/* after delay, ping should complete properly. */
-	L4_LoadMR(0, (L4_MsgTag_t){ .X.label = PING_LABEL, .X.u = 1 }.raw);
-	L4_LoadMR(1, ECHO_LABEL ^ DELAY_LABEL);
-	tag = L4_Call_Timeouts(test_tid, TEST_IPC_DELAY, TEST_IPC_DELAY);
-	if(L4_IpcFailed(tag)) diag("after ec %#lx", L4_ErrorCode());
-	ok(L4_IpcSucceeded(tag), "after ipc ok");
-}
-END_TEST
 
 
 /* main test suite */
@@ -520,10 +474,8 @@ START_TEST(echo_with_long_hole)
 END_TEST
 
 
-/* TODO: use this from other tests also
+/* TODO: use this from non-xferto tests also
  * TODO: add an option to flush the receive buffer independently
- * TODO: add a meta test to ensure that this actually causes faults when
- * do_unmap is true
  */
 static L4_Word_t faulting_echo(
 	L4_ThreadId_t serv_tid,
@@ -544,6 +496,7 @@ static L4_Word_t faulting_echo(
 	if(do_unmap) {
 		L4_Fpage_t unmap_page = L4_Fpage((uintptr_t)echostr, test_len * 4);
 		L4_Set_Rights(&unmap_page, L4_FullyAccessible);
+		diag("buffer %p:%#x", echostr, (unsigned)test_len);
 		diag("flushing %#lx:%#lx", L4_Address(unmap_page),
 			L4_Size(unmap_page));
 		L4_FlushFpage(unmap_page);
@@ -619,6 +572,97 @@ START_TEST(immediate_xfer_timeout)
 		"timeout in no-fault z/z send phase");
 
 	todo_end();
+}
+END_TEST
+
+
+/* meta tests
+ *
+ * TODO: test of the "ping" function
+ */
+
+START_TEST(delay_test)
+{
+	plan_tests(5);
+
+	/* synchronize. */
+	L4_LoadMR(0, (L4_MsgTag_t){ .X.label = PING_LABEL, .X.u = 1 }.raw);
+	L4_LoadMR(1, ECHO_LABEL ^ DELAY_LABEL);
+	L4_MsgTag_t tag = L4_Call(test_tid);
+	fail_unless(L4_IpcSucceeded(tag),
+		"sync ping failed, ec %#lx", L4_ErrorCode());
+
+	/* without delay, reply should be immediate. */
+	L4_Clock_t before = L4_SystemClock();
+	L4_LoadMR(0, (L4_MsgTag_t){ .X.label = PING_LABEL, .X.u = 1 }.raw);
+	L4_LoadMR(1, ECHO_LABEL ^ DELAY_LABEL);
+	tag = L4_Call_Timeouts(test_tid, L4_ZeroTime, L4_Never);
+	L4_Clock_t after = L4_SystemClock();
+	if(L4_IpcFailed(tag)) diag("error code %#lx", L4_ErrorCode());
+	ok(L4_IpcSucceeded(tag), "immediate call succeeded");
+	uint64_t diff_us = after.raw - before.raw;
+	diag("ipc took %lu µs", (unsigned long)diff_us);
+	ok(diff_us < 1000 * 10, "immediate call was immediate");
+
+	/* with delay, there should be a send-side timeout between 16 and 19 ms,
+	 * inclusive, rounding down.
+	 */
+	send_delay(test_tid, L4_TimePeriod(20 * 1000));
+	before = L4_SystemClock();
+	L4_LoadMR(0, (L4_MsgTag_t){ .X.label = PING_LABEL, .X.u = 1 }.raw);
+	L4_LoadMR(1, ECHO_LABEL ^ DELAY_LABEL);
+	tag = L4_Call_Timeouts(test_tid, L4_TimePeriod(1000 * 17), L4_Never);
+	after = L4_SystemClock();
+	if(L4_IpcSucceeded(tag) || L4_ErrorCode() != 0x2) {
+		diag("unexpected ec %#lx", L4_ErrorCode());
+	}
+	ok(L4_IpcFailed(tag) && L4_ErrorCode() == 0x2,
+		"delayed call had send-side timeout");
+	diff_us = after.raw - before.raw;
+	diag("ipc took %lu µs", (unsigned long)diff_us);
+	int diff_ms = diff_us / 1000;
+	ok1(diff_ms > 16 && diff_ms < 20);
+
+	/* after delay, ping should complete properly. */
+	L4_LoadMR(0, (L4_MsgTag_t){ .X.label = PING_LABEL, .X.u = 1 }.raw);
+	L4_LoadMR(1, ECHO_LABEL ^ DELAY_LABEL);
+	tag = L4_Call_Timeouts(test_tid, TEST_IPC_DELAY, TEST_IPC_DELAY);
+	if(L4_IpcFailed(tag)) diag("after ec %#lx", L4_ErrorCode());
+	ok(L4_IpcSucceeded(tag), "after ipc ok");
+}
+END_TEST
+
+
+START_TEST(faulting_echo_test)
+{
+	plan_tests(2);
+
+	L4_Set_XferTimeouts(L4_Timeouts(L4_Never, L4_Never));
+
+	/* part 1: faulting_echo() should produce no faults on second go without
+	 * the unmap option.
+	 */
+	L4_Word_t ec = faulting_echo(test_tid, 0, false);
+	fail_unless(ec == 0, "warmup failed: ec %#lx", ec);
+
+	stats->n_faults = 0; stats->n_write = 0;
+	L4_ThreadId_t old_pager = L4_Pager();
+	L4_Set_Pager(stats_tid);
+	ec = faulting_echo(test_tid, 1, false);
+	L4_Set_Pager(old_pager);
+	fail_unless(ec == 0, "no-fault call failed: ec %#lx", ec);
+	ok1(stats->n_faults == 0);
+
+	/* part 2: subsequently, faulting_echo() with do_unmap should produce at
+	 * least one page fault.
+	 */
+	stats->n_faults = 0; stats->n_write = 0;
+	L4_Set_Pager(stats_tid);
+	ec = faulting_echo(test_tid, 2, true);
+	L4_Set_Pager(old_pager);
+	fail_unless(ec == 0, "fault call failed: ec %#lx", ec);
+	ok(stats->n_faults > 0, "n_faults=%d with do_unmap", stats->n_faults);
+	diag_faults(stats);
 }
 END_TEST
 
@@ -706,7 +750,9 @@ Suite *string_suite(void)
 
 	TCase *meta = tcase_create("meta");
 	tcase_add_checked_fixture(meta, &stt_setup, &stt_teardown);
+	tcase_add_checked_fixture(meta, &stats_setup, &stats_teardown);
 	tcase_add_test(meta, delay_test);
+	tcase_add_test(meta, faulting_echo_test);
 	suite_add_tcase(s, meta);
 
 	TCase *basic = tcase_create("basic");
