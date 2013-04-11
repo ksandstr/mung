@@ -13,6 +13,14 @@
 #include "test.h"
 
 
+static void reset_stats(struct pager_stats *stats)
+{
+	*stats = (struct pager_stats){
+		.log_top = LOG_SIZE - 1,	/* start at 0 */
+	};
+}
+
+
 /* a statistics-gathering pager thread that passes faults up to sigma0, so
  * that the reply (ignored as it is) will result in a situation where the
  * faulting thread recovers properly.
@@ -22,9 +30,7 @@
 static void stats_pager_fn(void *param_ptr)
 {
 	struct pager_stats *stats = param_ptr;
-	*stats = (struct pager_stats){
-		.log_top = LOG_SIZE - 1,	/* start at 0 */
-	};
+	reset_stats(stats);
 
 	bool run = true;
 	while(run) {
@@ -40,6 +46,10 @@ static void stats_pager_fn(void *param_ptr)
 			if(tag.X.label == QUIT_LABEL) {
 				run = false;
 				break;
+			} else if(tag.X.label == RESET_LABEL) {
+				reset_stats(stats);
+				L4_LoadMR(0, 0);
+				tag = L4_ReplyWait(from, &from);
 			} else if(tag.X.label >> 4 == 0xffe
 				&& tag.X.u == 2 && tag.X.t == 0)
 			{

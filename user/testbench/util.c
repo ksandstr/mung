@@ -17,6 +17,15 @@ bool send_quit(L4_ThreadId_t thread)
 }
 
 
+/* actually a call. */
+bool send_reset(L4_ThreadId_t thread)
+{
+	L4_LoadMR(0, (L4_MsgTag_t) { .X.label = RESET_LABEL }.raw);
+	return L4_IpcSucceeded(L4_Call_Timeouts(thread, TEST_IPC_DELAY,
+		TEST_IPC_DELAY));
+}
+
+
 /* via ccan/bdelta/test/common.h; used because there is no system RNG, and to
  * have consistent output.
  */
