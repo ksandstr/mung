@@ -363,23 +363,20 @@ START_TEST(echo_with_hole)
 		"echo output ends with input");
 
 	/* fault entrails */
-	ok1(stats->n_faults == 2);
-	ok1(stats->n_write == 1);
-#if 0
-	diag("%d faults, %d read, %d write",
-		stats->n_faults, stats->n_read, stats->n_write);
-	for(int i=0; i <= stats->log_top; i++) {
-		diag("fault: %#lx:%#lx, %#x", L4_Address(stats->log[i]),
-			L4_Size(stats->log[i]), L4_Rights(stats->log[i]));
-	}
-	diag("replybuf %p, sendstr %p", replybuf, sendstr);
-	diag("rpypage %#lx, sndpage %#lx", rpypage, sndpage);
-#endif
+	/* TODO: ignore rx faults, use "==" instead */
+	ok1(stats->n_faults >= 2);
+	ok1(stats->n_write >= 1);
 	ok1(read_fault(sndpage));
 	ok1(write_fault(rpypage));
 
 	free(replybuf);
 	free(sendbuf);
+
+	if(exit_status() > 0) {
+		diag_faults(stats);
+		diag("replybuf %p, sendstr %p", replybuf, sendstr);
+		diag("rpypage %#lx, sndpage %#lx", rpypage, sndpage);
+	}
 }
 END_TEST
 
@@ -457,12 +454,7 @@ START_TEST(echo_with_long_hole)
 	diag("%d faults, %d write", stats->n_faults, stats->n_write);
 	ok1(stats->n_faults >= 4);	/* only mildly useful */
 	ok1(stats->n_write >= 2);
-#if 1
-	for(int i=0; i <= stats->log_top; i++) {
-		diag("fault: %#lx:%#lx, %#x", L4_Address(stats->log[i]),
-			L4_Size(stats->log[i]), L4_Rights(stats->log[i]));
-	}
-#endif
+	diag_faults(stats);
 	ok1(read_fault(sndpage));
 	ok1(read_fault(sndpage + PAGE_SIZE));
 	ok1(write_fault(rpypage));
