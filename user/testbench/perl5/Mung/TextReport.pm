@@ -67,7 +67,7 @@ sub report_result {
 		} elsif($_->is_test) {
 			# mark successful and to-do test points
 			@si = ('bright_green', '+');
-			@si = ($_->is_actual_ok ? 'blue' : 'bright_yellow', '~') if $_->has_todo;
+			@si = ($_->is_actual_ok ? 'bright_yellow' : 'bold red', '~') if $_->has_todo;
 		} elsif($_->is_bailout) {
 			# frightening to all nethack & dwarf fortress players
 			@si = ('reverse bright_red', '&');
