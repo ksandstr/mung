@@ -26,6 +26,16 @@ bool send_reset(L4_ThreadId_t thread)
 }
 
 
+bool send_delay(L4_ThreadId_t thread, L4_Time_t delay, int repeat)
+{
+	L4_LoadMR(0, (L4_MsgTag_t){ .X.label = DELAY_LABEL, .X.u = 2 }.raw);
+	L4_LoadMR(1, delay.raw);
+	L4_LoadMR(2, repeat);
+	return L4_IpcSucceeded(L4_Call_Timeouts(thread, TEST_IPC_DELAY,
+		TEST_IPC_DELAY));
+}
+
+
 /* via ccan/bdelta/test/common.h; used because there is no system RNG, and to
  * have consistent output.
  */

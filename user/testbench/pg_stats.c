@@ -32,9 +32,17 @@ static void stats_pager_fn(void *param_ptr)
 	struct pager_stats *stats = param_ptr;
 	reset_stats(stats);
 
+	/* NOTE: the repeating delay thing was copypasta'd from
+	 * string_test_thread(). it could be moved into a "delay_ctx" structure
+	 * with a couple of functions to do reply[/delay]/wait in a re-used
+	 * manner. we'll see.
+	 */
+	L4_Time_t delay = L4_ZeroTime;
+	int delay_repeat = 0;
 	bool run = true;
 	while(run) {
 		L4_ThreadId_t from;
+		L4_LoadBR(0, 0);
 		L4_MsgTag_t tag = L4_Wait(&from);
 
 		for(;;) {
@@ -49,7 +57,15 @@ static void stats_pager_fn(void *param_ptr)
 			} else if(tag.X.label == RESET_LABEL) {
 				reset_stats(stats);
 				L4_LoadMR(0, 0);
-				tag = L4_ReplyWait(from, &from);
+			} else if(tag.X.label == DELAY_LABEL
+				&& tag.X.u == 2 && tag.X.t == 0)
+			{
+				L4_Word_t t, r;
+				L4_StoreMR(1, &t);
+				L4_StoreMR(2, &r);
+				delay.raw = t;
+				delay_repeat = r;
+				L4_LoadMR(0, 0);
 			} else if(tag.X.label >> 4 == 0xffe
 				&& tag.X.u == 2 && tag.X.t == 0)
 			{
@@ -89,12 +105,26 @@ static void stats_pager_fn(void *param_ptr)
 				} else {
 					/* reply. */
 					L4_LoadMR(0, 0);
-					tag = L4_ReplyWait(from, &from);
 				}
 			} else {
 				diag("pager got weird IPC from %#lx (label %#lx)",
 					from.raw, tag.X.label);
 				break;
+			}
+
+			if(run) {
+				L4_LoadBR(0, 0);
+				if(delay.raw == L4_ZeroTime.raw) {
+					assert(delay_repeat == 0);
+					tag = L4_ReplyWait(from, &from);
+				} else {
+					tag = L4_Reply(from);
+					L4_Sleep(delay);
+					if(--delay_repeat == 0) delay = L4_ZeroTime;
+					if(L4_IpcSucceeded(tag)) {
+						tag = L4_Wait(&from);
+					}
+				}
 			}
 		}
 	}

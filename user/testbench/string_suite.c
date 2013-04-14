@@ -19,7 +19,6 @@
 
 
 #define ECHO_LABEL	0x6857		/* "hW" */
-#define DELAY_LABEL	0x7a5a		/* "zZ" */
 #define PING_LABEL	0x6849		/* "hI" */
 
 
@@ -66,16 +65,6 @@ static void flush_page(L4_Word_t address, L4_Word_t size, L4_Word_t access)
 }
 
 
-static void send_delay(L4_ThreadId_t tid, L4_Time_t time)
-{
-	L4_LoadMR(0, (L4_MsgTag_t){ .X.label = DELAY_LABEL, .X.u = 1 }.raw);
-	L4_LoadMR(1, time.raw);
-	L4_MsgTag_t tag = L4_Call_Timeouts(tid, TEST_IPC_DELAY,
-		TEST_IPC_DELAY);
-	fail_if(L4_IpcFailed(tag), "ec %#lx", __func__, L4_ErrorCode());
-}
-
-
 static void string_test_thread(void *param UNUSED)
 {
 	const int rbuf_len = 64 * 1024;
@@ -83,6 +72,8 @@ static void string_test_thread(void *param UNUSED)
 	memset(recvbuf, 0, rbuf_len);
 	L4_StringItem_t recv_si = L4_StringItem(rbuf_len, recvbuf);
 
+	L4_Time_t delay = L4_ZeroTime;
+	int delay_repeat = 0;
 	bool running = true;
 	while(running) {
 		L4_ThreadId_t from;
@@ -91,7 +82,6 @@ static void string_test_thread(void *param UNUSED)
 		L4_LoadBRs(1, 2, recv_si.raw);
 		L4_MsgTag_t tag = L4_Wait(&from);
 
-		L4_Time_t delay = L4_ZeroTime;
 		while(running) {
 			if(L4_IpcFailed(tag)) {
 				diag("helper got ipc failure, ec %#lx", L4_ErrorCode());
@@ -130,14 +120,16 @@ static void string_test_thread(void *param UNUSED)
 				}
 
 				case DELAY_LABEL: {
-					if(tag.X.u != 1 || tag.X.t > 0) {
+					if(tag.X.u != 2 || tag.X.t > 0) {
 						diag("invalid delay message");
 						L4_LoadMR(0, 0);
 						break;
 					}
-					L4_Word_t timeword;
+					L4_Word_t timeword, repeat;
 					L4_StoreMR(1, &timeword);
+					L4_StoreMR(2, &repeat);
 					delay.raw = timeword;
+					delay_repeat = repeat;
 					break;
 				}
 
@@ -160,11 +152,12 @@ static void string_test_thread(void *param UNUSED)
 				L4_LoadBR(0, 1);		/* only stringitems */
 				L4_LoadBRs(1, 2, recv_si.raw);
 				if(delay.raw == L4_ZeroTime.raw) {
+					assert(delay_repeat == 0);
 					tag = L4_ReplyWait(from, &from);
 				} else {
 					tag = L4_Reply(from);
 					L4_Sleep(delay);
-					delay = L4_ZeroTime;
+					if(--delay_repeat == 0) delay = L4_ZeroTime;
 					if(L4_IpcSucceeded(tag)) {
 						tag = L4_Wait(&from);
 					}
@@ -619,7 +612,8 @@ START_TEST(delay_test)
 	/* with delay, there should be a send-side timeout between 16 and 19 ms,
 	 * inclusive, rounding down.
 	 */
-	send_delay(test_tid, L4_TimePeriod(20 * 1000));
+	bool ipc_ok = send_delay(test_tid, L4_TimePeriod(20 * 1000), 1);
+	fail_unless(ipc_ok, "ec %#lx", L4_ErrorCode());
 	before = L4_SystemClock();
 	L4_LoadMR(0, (L4_MsgTag_t){ .X.label = PING_LABEL, .X.u = 1 }.raw);
 	L4_LoadMR(1, ECHO_LABEL ^ DELAY_LABEL);

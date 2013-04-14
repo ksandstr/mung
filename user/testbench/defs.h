@@ -24,6 +24,7 @@
 /* common IPC labels */
 #define QUIT_LABEL 0xdead
 #define RESET_LABEL 0xf579
+#define DELAY_LABEL	0x7a5a		/* "zZ" */
 
 #define LOG_SIZE 64			/* size of pager stats log */
 
@@ -153,6 +154,7 @@ extern bool is_privileged(void);
 
 extern bool send_quit(L4_ThreadId_t thread);
 extern bool send_reset(L4_ThreadId_t thread);
+extern bool send_delay(L4_ThreadId_t thread, L4_Time_t delay, int repeat);
 extern uint32_t rand32(uint32_t *state_p);
 extern void random_string(char *buf, size_t size, uint32_t *seed_p);
 
