@@ -88,7 +88,7 @@ void _fail_unless(
 		if(msg == NULL) msg = expr;
 		vsnprintf(buf, sizeof(buf), msg, ap);
 		va_end(ap);
-		printf("Bail out!  %s\n", buf);
+		printf("Bail out!  %s (`%s' in %s:%d)\n", buf, expr, file, line);
 		flush_log(true);
 
 		exit_on_fail();
