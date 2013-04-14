@@ -484,7 +484,7 @@ static L4_Word_t faulting_echo(
 	random_string(echostr, test_len, &seed);
 	fail_unless(strlen(echostr) == test_len - 1);
 
-	char *replybuf = malloc(test_len * 2);
+	char *replybuf = calloc(1, test_len * 2);
 	fail_if(replybuf == NULL);
 
 	if(do_unmap_send) {
@@ -584,10 +584,38 @@ START_TEST(immediate_xfer_timeout)
 END_TEST
 
 
+/* FIXME: the stats pager's delay function hasn't been tested. this works by
+ * chance alone.
+ */
+static L4_Word_t delayed_faulting_echo(
+	L4_ThreadId_t thread,
+	int iter,
+	bool u_send,
+	bool u_recv,
+	L4_Time_t delay,
+	int delay_repeat)
+{
+	bool ipc_ok = send_reset(thread);
+	fail_unless(ipc_ok, "ec %#lx", L4_ErrorCode());
+	ipc_ok = send_delay(thread, delay, delay_repeat);
+	fail_unless(ipc_ok, "ec %#lx", L4_ErrorCode());
+
+	L4_ThreadId_t old_pager = L4_Pager();
+	L4_Set_Pager(stats_tid);
+	L4_Word_t ec = faulting_echo(thread, iter, u_send, u_recv);
+	L4_Set_Pager(old_pager);
+
+	ipc_ok = send_delay(stats_tid, L4_ZeroTime, 0);
+	fail_unless(ipc_ok, "ec %#lx", L4_ErrorCode());
+
+	return ec;
+}
+
+
 START_TEST(finite_xfer_timeout)
 {
-	plan_tests(1 + 1 * 3 + 3 * 3);
-	const int timeo_ms = 15;
+	plan_tests(1 + 2 * 3 + 3 * 3);
+	const int timeo_ms = 35;
 	L4_Word_t tos = L4_Timeouts(L4_TimePeriod(timeo_ms * 1000),
 		L4_TimePeriod(timeo_ms * 1000));
 	diag("timeo_ms = %d", timeo_ms);
@@ -606,40 +634,36 @@ START_TEST(finite_xfer_timeout)
 		const bool u_send = CHECK_FLAG(i, 1), u_recv = CHECK_FLAG(i, 2);
 		// diag("i %d, u_send %s, u_recv %s", i, btos(u_send), btos(u_recv));
 
+		/* first, immediately */
 		L4_Set_XferTimeouts(tos);
 		ec = faulting_echo(test_tid, i + 1, u_send, u_recv);
-		ok(ec == 0, "fast faulting [%c%c]", u_recv ? 'r' : '-',
-			u_send ? 'w' : '-');
+		ok(ec == 0, "fast faulting [%c%c]",
+			u_recv ? 'r' : '-', u_send ? 'w' : '-');
+
+		/* then with a delay that'll never exceed timeo_ms. */
+		L4_Set_XferTimeouts(tos);
+		ec = delayed_faulting_echo(test_tid, i + 4, u_send, u_recv,
+			L4_TimePeriod(1000), timeo_ms / 2 - 1);
+		ok(ec == 0, "slow faulting [%c%c]",
+			u_recv ? 'r' : '-', u_send ? 'w' : '-');
 	}
 
 	/* part 3: timeout should occur when the first pagefault is delayed by
-	 * timeo_ms, or more
-	 *
-	 * FIXME: the stats pager's delay function hasn't been tested. this works
-	 * by chance alone.
+	 * timeo_ms or more
 	 */
 	for(int i = 1; i < 4; i++) {
 		const bool u_send = CHECK_FLAG(i, 1), u_recv = CHECK_FLAG(i, 2);
-		diag("i %d, u_send %s, u_recv %s", i, btos(u_send), btos(u_recv));
+		// diag("i %d, u_send %s, u_recv %s", i, btos(u_send), btos(u_recv));
 
-		bool ipc_ok = send_reset(stats_tid);
-		fail_unless(ipc_ok, "ec %#lx", L4_ErrorCode());
-		ipc_ok = send_delay(stats_tid, L4_TimePeriod(timeo_ms * 1000), 32);
-		fail_unless(ipc_ok, "ec %#lx", L4_ErrorCode());
-
-		L4_ThreadId_t old_pager = L4_Pager();
-		L4_Set_Pager(stats_tid);
-		ec = faulting_echo(test_tid, i + 4, u_send, u_recv);
-		L4_Set_Pager(old_pager);
+		L4_Set_XferTimeouts(tos);
+		ec = delayed_faulting_echo(test_tid, i + 7, u_send, u_recv,
+			L4_TimePeriod(timeo_ms * 1000), 16);
 		int code = (ec >> 1) & 0x7;
 		bool send_phase = (ec & 1) == 0;
 		diag("ec %#lx, code %d", ec, code);
 		ok(code == 5 || code == 6, "code is xfer timeout");
 		ok1(!u_send || send_phase);
 		ok1(!u_recv || u_send || !send_phase);
-
-		ipc_ok = send_delay(stats_tid, L4_ZeroTime, 0);
-		fail_unless(ipc_ok, "ec %#lx", L4_ErrorCode());
 	}
 
 	todo_end();
@@ -649,7 +673,8 @@ END_TEST
 
 /* meta tests
  *
- * TODO: test of the "ping" function
+ * TODO: test of string_test_thread()'s "ping" function
+ * TODO: test of the stats pager's delay function (in some other module)
  */
 
 START_TEST(delay_test)
