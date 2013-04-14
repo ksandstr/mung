@@ -595,9 +595,9 @@ static L4_Word_t delayed_faulting_echo(
 	L4_Time_t delay,
 	int delay_repeat)
 {
-	bool ipc_ok = send_reset(thread);
+	bool ipc_ok = send_reset(stats_tid);
 	fail_unless(ipc_ok, "ec %#lx", L4_ErrorCode());
-	ipc_ok = send_delay(thread, delay, delay_repeat);
+	ipc_ok = send_delay(stats_tid, delay, delay_repeat);
 	fail_unless(ipc_ok, "ec %#lx", L4_ErrorCode());
 
 	L4_ThreadId_t old_pager = L4_Pager();
