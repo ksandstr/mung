@@ -567,6 +567,9 @@ START_TEST(immediate_xfer_timeout)
 
 		/* expecting 5 or 6 in send phase, indicating xfer timeout in invoker or
 		 * partner's address space (which are the same thing)
+		 *
+		 * FIXME: these conditions are copypasta'd in finite_xfer_timeout.
+		 * share them somehow.
 		 */
 		int code = (ec >> 1) & 0x7;
 		bool send_phase = (ec & 1) == 0;
@@ -574,6 +577,69 @@ START_TEST(immediate_xfer_timeout)
 		ok(code == 5 || code == 6, "code is xfer timeout");
 		ok1(!u_send || send_phase);
 		ok1(!u_recv || u_send || !send_phase);
+	}
+
+	todo_end();
+}
+END_TEST
+
+
+START_TEST(finite_xfer_timeout)
+{
+	plan_tests(1 + 1 * 3 + 3 * 3);
+	const int timeo_ms = 15;
+	L4_Word_t tos = L4_Timeouts(L4_TimePeriod(timeo_ms * 1000),
+		L4_TimePeriod(timeo_ms * 1000));
+	diag("timeo_ms = %d", timeo_ms);
+
+	todo_start("no kernel support");
+
+	/* part 1: timeout should not be triggered when no faults occur */
+	L4_Set_XferTimeouts(tos);
+	L4_Word_t ec = faulting_echo(test_tid, 0, false, false);
+	ok(ec == 0, "no-fault timeout case");
+
+	/* part 2: timeout should not be triggered when faults occur, but are
+	 * serviced in time
+	 */
+	for(int i = 1; i < 4; i++) {
+		const bool u_send = CHECK_FLAG(i, 1), u_recv = CHECK_FLAG(i, 2);
+		// diag("i %d, u_send %s, u_recv %s", i, btos(u_send), btos(u_recv));
+
+		L4_Set_XferTimeouts(tos);
+		ec = faulting_echo(test_tid, i + 1, u_send, u_recv);
+		ok(ec == 0, "fast faulting [%c%c]", u_recv ? 'r' : '-',
+			u_send ? 'w' : '-');
+	}
+
+	/* part 3: timeout should occur when the first pagefault is delayed by
+	 * timeo_ms, or more
+	 *
+	 * FIXME: the stats pager's delay function hasn't been tested. this works
+	 * by chance alone.
+	 */
+	for(int i = 1; i < 4; i++) {
+		const bool u_send = CHECK_FLAG(i, 1), u_recv = CHECK_FLAG(i, 2);
+		diag("i %d, u_send %s, u_recv %s", i, btos(u_send), btos(u_recv));
+
+		bool ipc_ok = send_reset(stats_tid);
+		fail_unless(ipc_ok, "ec %#lx", L4_ErrorCode());
+		ipc_ok = send_delay(stats_tid, L4_TimePeriod(timeo_ms * 1000), 32);
+		fail_unless(ipc_ok, "ec %#lx", L4_ErrorCode());
+
+		L4_ThreadId_t old_pager = L4_Pager();
+		L4_Set_Pager(stats_tid);
+		ec = faulting_echo(test_tid, i + 4, u_send, u_recv);
+		L4_Set_Pager(old_pager);
+		int code = (ec >> 1) & 0x7;
+		bool send_phase = (ec & 1) == 0;
+		diag("ec %#lx, code %d", ec, code);
+		ok(code == 5 || code == 6, "code is xfer timeout");
+		ok1(!u_send || send_phase);
+		ok1(!u_recv || u_send || !send_phase);
+
+		ipc_ok = send_delay(stats_tid, L4_ZeroTime, 0);
+		fail_unless(ipc_ok, "ec %#lx", L4_ErrorCode());
 	}
 
 	todo_end();
@@ -795,8 +861,10 @@ Suite *string_suite(void)
 	/* transfer timeout tests */
 	TCase *xferto = tcase_create("xferto");
 	tcase_add_checked_fixture(xferto, &stt_setup, &stt_teardown);
+	tcase_add_checked_fixture(xferto, &stats_setup, &stats_teardown);
 	tcase_add_test(xferto, no_xfer_timeout);
 	tcase_add_test(xferto, immediate_xfer_timeout);
+	tcase_add_test(xferto, finite_xfer_timeout);
 	suite_add_tcase(s, xferto);
 
 	return s;
