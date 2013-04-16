@@ -462,7 +462,7 @@ START_TEST(large_flush)
 	}
 	diag("%d faults, r %d, w %d", pg_stats->n_faults,
 		pg_stats->n_read, pg_stats->n_write);
-	ok(pg_stats->n_faults == expected, "expecting %d faults", expected);
+	ok1(pg_stats->n_faults >= expected);
 }
 END_TEST
 
