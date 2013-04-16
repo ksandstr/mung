@@ -68,7 +68,7 @@ struct test_info
 /* fail() inherited from the libtap imitation */
 
 #define fail_unless(expr, ...) \
-	_fail_unless(expr, __FILE__, __LINE__, \
+	_fail_unless((expr), __FILE__, __LINE__, \
 		"Assertion `" #expr "' failed", ## __VA_ARGS__, NULL)
 
 #define fail_if(expr, ...) \
