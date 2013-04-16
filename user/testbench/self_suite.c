@@ -11,6 +11,10 @@
 #include "test.h"
 
 
+static struct pager_stats *stats;
+static L4_ThreadId_t stats_tid;
+
+
 /* tcase fork: tests of forkserv's own process management features. */
 
 START_TEST(basic_fork_and_wait)
@@ -245,6 +249,64 @@ START_TEST(ipc_with_child)
 END_TEST
 
 
+/* tcase pagers: tests related to custom pagers used by testbench (except for
+ * forkserv, which is tested in the "process" case).
+ */
+
+START_TEST(stats_delay_test)
+{
+	const int delay_ms = 25, repeat_ct = 4;
+	fail_if(delay_ms < 15);
+
+	plan_tests(1 + (repeat_ct + 4) * 2);
+
+	/* part 1: without delay, the reset call should return immediately. */
+	fail_if(!send_reset(stats_tid), "ec %#lx", L4_ErrorCode());
+	fail_if(!send_delay(stats_tid, L4_ZeroTime, 0), "ec %#lx", L4_ErrorCode());
+	L4_Clock_t start = L4_SystemClock();
+	fail_if(!send_reset(stats_tid), "ec %#lx", L4_ErrorCode());
+	L4_Clock_t end = L4_SystemClock();
+	fail_if(end.raw < start.raw);
+	int elapsed_ms = (end.raw - start.raw) / 1000;
+	ok1(elapsed_ms <= 1);
+
+	/* part 2: with delay, it should apply a measurable delay that's close
+	 * enough to delay_ms (FIXME: adjust this using the clock precision).
+	 *
+	 * and part 3: it should stop applying the delay after repeat_ct calls.
+	 */
+	fail_if(!send_delay(stats_tid, L4_TimePeriod(delay_ms * 1000), repeat_ct),
+		"ec %#lx", L4_ErrorCode());
+	for(int i=0; i < repeat_ct + 4; i++) {
+		start = L4_SystemClock();
+		fail_if(!send_reset(stats_tid), "ec %#lx", L4_ErrorCode());
+		end = L4_SystemClock();
+		fail_if(end.raw < start.raw);
+		int elapsed_ms = (end.raw - start.raw) / 1000;
+
+		ok1(i >= repeat_ct || elapsed_ms > delay_ms - 10);
+		ok1(i < repeat_ct || elapsed_ms <= 1);
+	}
+}
+END_TEST
+
+
+/* start the stats-collecting pager thread. */
+static void stats_setup(void)
+{
+	stats = malloc(sizeof(*stats));
+	fail_unless(stats != NULL);
+	stats_tid = start_stats_pager(stats);
+}
+
+
+static void stats_teardown(void)
+{
+	L4_Word_t ec = stop_stats_pager(stats_tid);
+	fail_if(ec != 0, "stop_stats_pager() failed, ec %#lx", ec);
+}
+
+
 Suite *self_suite(void)
 {
 	Suite *s = suite_create("self");
@@ -257,6 +319,11 @@ Suite *self_suite(void)
 	tcase_add_test(fork_case, deep_fork);
 	tcase_add_test(fork_case, multi_fork_and_wait);
 	suite_add_tcase(s, fork_case);
+
+	TCase *pagers = tcase_create("pg");
+	tcase_add_checked_fixture(pagers, &stats_setup, &stats_teardown);
+	tcase_add_test(pagers, stats_delay_test);
+	suite_add_tcase(s, pagers);
 
 	return s;
 }
