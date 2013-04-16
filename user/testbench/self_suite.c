@@ -1,6 +1,4 @@
 
-/* tests of forkserv's own process management features. */
-
 #include <stdlib.h>
 #include <string.h>
 #include <assert.h>
@@ -12,6 +10,8 @@
 #include "defs.h"
 #include "test.h"
 
+
+/* tcase fork: tests of forkserv's own process management features. */
 
 START_TEST(basic_fork_and_wait)
 {
@@ -245,9 +245,9 @@ START_TEST(ipc_with_child)
 END_TEST
 
 
-Suite *process_suite(void)
+Suite *self_suite(void)
 {
-	Suite *s = suite_create("process");
+	Suite *s = suite_create("self");
 
 	TCase *fork_case = tcase_create("fork");
 	tcase_add_test(fork_case, basic_fork_and_wait);

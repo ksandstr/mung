@@ -53,7 +53,7 @@ struct drop_param
 
 /* various test suites */
 
-extern struct Suite *process_suite(void);
+extern struct Suite *self_suite(void);
 extern struct Suite *sched_suite(void);
 extern struct Suite *space_suite(void);
 extern struct Suite *thread_suite(void);

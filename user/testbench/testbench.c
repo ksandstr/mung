@@ -572,8 +572,7 @@ int main(void)
 
 	/* proper test suite */
 	static Suite *(* const suites[])(void) = {
-		/* selftests */
-		&process_suite,
+		&self_suite,	/* selftests */
 
 		/* microkernel tests */
 		&thread_suite,
