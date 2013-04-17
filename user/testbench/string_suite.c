@@ -1,5 +1,14 @@
 
-/* tests of L4.X2 string transfer features. */
+/* tests of L4.X2 string transfer features.
+ *
+ * TODO: tests on the following:
+ *   - message overflow condition, when
+ *     1) there are more string items than string buffer items, and
+ *     2) a string item won't fit in the current string buffer.
+ *   - offset field in L4_ErrorCode() in message overflow
+ *   - same in xfer timeout
+ *   - and in xfer abort
+ */
 
 #include <stdlib.h>
 #include <string.h>
@@ -59,8 +68,10 @@ static void flush_page(L4_Word_t address, L4_Word_t size, L4_Word_t access)
 
 	L4_Fpage_t unmap_page = L4_Fpage(address, size);
 	L4_Set_Rights(&unmap_page, access);
+#if 0
 	diag("flushing %#lx:%#lx", L4_Address(unmap_page),
 		L4_Size(unmap_page));
+#endif
 	L4_FlushFpage(unmap_page);
 }
 
@@ -84,7 +95,7 @@ static void string_test_thread(void *param UNUSED)
 
 		while(running) {
 			if(L4_IpcFailed(tag)) {
-				diag("helper got ipc failure, ec %#lx", L4_ErrorCode());
+				diag("%s got ipc failure, ec %#lx", __func__, L4_ErrorCode());
 				break;
 			}
 
@@ -301,10 +312,8 @@ START_LOOP_TEST(echo_long_xferfault, test_iter, 0, 0xf)
 	char *replybuf = valloc(test_len * 2);
 	fail_if(replybuf == NULL);
 	L4_StringItem_t got_si;
-	diag("calling echo");
 	echo(test_tid, replybuf, test_len * 2, &got_si, echostr, test_len - 1);
 	L4_Set_Pager(old_pager);
-	diag("echo returned");
 
 	fail_unless(L4_IsStringItem(&got_si));
 	replybuf[MIN(int, test_len * 2 - 1, got_si.X.string_length)] = '\0';
@@ -431,7 +440,7 @@ START_TEST(echo_with_long_hole)
 	L4_Set_Pager(stats_tid);
 	for(int i=0; i < NUM_ELEMENTS(flush); i++) {
 		L4_Set_Rights(&flush[i], L4_FullyAccessible);
-#if 1
+#if 0
 		diag("flushing %#lx:%#lx", L4_Address(flush[i]), L4_Size(flush[i]));
 #endif
 	}
@@ -560,7 +569,7 @@ START_TEST(immediate_xfer_timeout)
 	/* part 2: z/z should cause IPC failure when faults do occur */
 	for(int i = 1; i < 4; i++) {
 		const bool u_send = CHECK_FLAG(i, 1), u_recv = CHECK_FLAG(i, 2);
-		diag("i %d, u_send %s, u_recv %s", i, btos(u_send), btos(u_recv));
+		// diag("i %d, u_send %s, u_recv %s", i, btos(u_send), btos(u_recv));
 
 		L4_Set_XferTimeouts(tos);
 		ec = faulting_echo(test_tid, i + 1, u_send, u_recv);
@@ -618,7 +627,6 @@ START_TEST(finite_xfer_timeout)
 	const int timeo_ms = 35;
 	L4_Word_t tos = L4_Timeouts(L4_TimePeriod(timeo_ms * 1000),
 		L4_TimePeriod(timeo_ms * 1000));
-	diag("timeo_ms = %d", timeo_ms);
 
 	todo_start("no kernel support");
 
@@ -756,8 +764,10 @@ START_TEST(faulting_echo_test)
 	 */
 	for(int i=1; i < 4; i++) {
 		bool u_send = CHECK_FLAG(i, 1), u_recv = CHECK_FLAG(i, 2);
+#if 0
 		diag("loop i=%d (u_send %s, u_recv %s)",
 			i, btos(u_send), btos(u_recv));
+#endif
 		send_reset(stats_tid);
 		L4_Set_Pager(stats_tid);
 		ec = faulting_echo(test_tid, 2 + i, u_send, u_recv);
