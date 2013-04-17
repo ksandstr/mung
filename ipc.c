@@ -68,6 +68,9 @@ struct ipc_state
 	L4_Word_t str_offset;
 	int pos, last, dbr_pos;
 
+	/* xfer timeout tracking */
+	uint64_t xferto_at;		/* µs, 0 when not applicable */
+
 	/* stringitem copy state */
 	int src_off, dst_off;
 	struct stritem_iter src_iter, dst_iter;
@@ -632,6 +635,38 @@ static int do_string_transfer(struct copy_err *err_p, struct ipc_state *st)
 }
 
 
+static bool eval_xfer_timeout(
+	uint64_t *xferto_us_p,
+	L4_Time_t snd_to,
+	L4_Time_t rcv_to)
+{
+	uint64_t v;
+	if(snd_to.raw == L4_ZeroTime.raw
+		|| rcv_to.raw == L4_ZeroTime.raw)
+	{
+		/* instant timeout */
+		return false;
+	} else if(snd_to.raw != L4_Never.raw
+		&& rcv_to.raw != L4_Never.raw)
+	{
+		v = MIN(uint64_t, time_in_us(snd_to), time_in_us(rcv_to));
+	} else if(snd_to.raw != L4_Never.raw) {
+		assert(rcv_to.raw == L4_Never.raw);
+		v = time_in_us(snd_to);
+	} else if(rcv_to.raw != L4_Never.raw) {
+		assert(snd_to.raw == L4_Never.raw);
+		v = time_in_us(rcv_to);
+	} else {
+		assert(snd_to.raw == L4_Never.raw);
+		assert(rcv_to.raw == L4_Never.raw);
+		v = 0;
+	}
+
+	*xferto_us_p = v;
+	return true;
+}
+
+
 /* when source->ipc != NULL, this function resumes from the next typed item
  * indicated in the ipc_state structure, and may replace source->ipc with
  * another as page faults are generated.
@@ -789,6 +824,33 @@ static L4_Word_t do_typed_transfer(
 					}
 					str_offset += send_len;
 				} else {
+					uint64_t xferto_us = 0;
+					if(source->ipc == NULL) {
+						/* check ZeroTime before allocator call */
+						L4_Time_t snd_to = {
+							.raw = (L4_VREG(s_base, L4_TCR_XFERTIMEOUTS) >> 16)
+								& 0xffff,
+						}, rcv_to = {
+							.raw = L4_VREG(d_base, L4_TCR_XFERTIMEOUTS) & 0xffff,
+						};
+#if 0
+						printf("ipc: snd_to=");
+						if(snd_to.raw == L4_Never.raw) printf("never");
+						else printf("%lu µs", (unsigned long)time_in_us(snd_to));
+						printf("; rcv_to=");
+						if(rcv_to.raw == L4_Never.raw) printf("never");
+						else printf("%lu µs", (unsigned long)time_in_us(rcv_to));
+						printf("\n");
+#endif
+						if(!eval_xfer_timeout(&xferto_us, snd_to, rcv_to)) {
+#if 0
+							printf("ipc: immediate xfer timeout (nsrc %d, ndst %d)\n",
+								nf_src, nf_dst);
+#endif
+							if(nf_src == 0) goto xfer_timeout_src;
+							else goto xfer_timeout_dst;
+						}
+					}
 					bool ok = set_prexfer_fault_state(tag,
 						source, send_si, nf_src,
 						dest, recv_si, tot_br_words, nf_dst);
@@ -805,6 +867,14 @@ static L4_Word_t do_typed_transfer(
 					source->ipc->pos = pos;
 					source->ipc->last = last;
 					source->ipc->dbr_pos = dbr_pos;
+					if(xferto_us != 0 && source->ipc->xferto_at == 0) {
+						source->ipc->xferto_at = ksystemclock() + xferto_us;
+#if 0
+						printf("ipc: setting xfer timeout to %lu (now+%lu µs)\n",
+							(unsigned long)source->ipc->xferto_at,
+							(unsigned long)xferto_us);
+#endif
+					}
 
 					/* this, with source->ipc != NULL, means that the
 					 * operation didn't complete and that another thread
@@ -831,11 +901,20 @@ static L4_Word_t do_typed_transfer(
 
 	/* FIXME: these failure cases don't properly un-set the C bit in the last
 	 * typed word that's copied.
+	 *
+	 * FIXME: also, the caller must flip the xfer timeout around when writing
+	 * the other thread's ErrorCode TCR.
 	 */
 too_short:
 	/* FIXME: return a proper error */
 	panic("not enough typed message words");
 	return 0;
+
+xfer_timeout_src:
+	return (str_offset << 4) | 0xa;
+
+xfer_timeout_dst:
+	return (str_offset << 4) | 0xc;
 
 msg_overflow:
 	return (str_offset << 4) | 0x8;
@@ -1117,7 +1196,6 @@ bool ipc_send_half(struct thread *self)
 		bool had_no_ipc = self->ipc == NULL;
 		L4_Word_t error = do_ipc_transfer(self, dest);
 		if(unlikely(error != 0)) {
-			TRACE("%s: active send caused errorcode %#lx\n", __func__, error);
 			int code = (error & 0xe) >> 1;
 			if(code >= 4) {
 				/* mutual error; signal to partner also. */
