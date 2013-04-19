@@ -491,6 +491,7 @@ static L4_Word_t faulting_echo(
 	char *echostr = malloc(test_len);
 	fail_if(echostr == NULL);
 	random_string(echostr, test_len, &seed);
+	int echo_len = strlen(echostr);
 	fail_unless(strlen(echostr) == test_len - 1);
 
 	char *replybuf = calloc(1, test_len * 2);
@@ -509,7 +510,6 @@ static L4_Word_t faulting_echo(
 	L4_StringItem_t rep_si = L4_StringItem(test_len * 2, replybuf);
 	L4_LoadBR(0, 1);
 	L4_LoadBRs(1, 2, rep_si.raw);
-	int echo_len = strlen(echostr);
 	L4_StringItem_t si = L4_StringItem(echo_len + 1, (void *)echostr);
 	L4_LoadMR(0, (L4_MsgTag_t){ .X.label = ECHO_LABEL, .X.t = 2 }.raw);
 	L4_LoadMRs(1, 2, si.raw);
