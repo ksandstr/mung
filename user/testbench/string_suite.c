@@ -62,17 +62,30 @@ static void diag_faults(struct pager_stats *st)
 }
 
 
-static void flush_page(L4_Word_t address, L4_Word_t size, L4_Word_t access)
+static void flush_byte_range(
+	L4_Word_t first_address,
+	L4_Word_t size,
+	L4_Word_t access)
 {
 	if(access == 0) access = L4_FullyAccessible;
+	L4_Word_t last_address = (first_address + size + PAGE_SIZE - 1) & ~PAGE_MASK;
+	first_address &= ~PAGE_MASK;
 
-	L4_Fpage_t unmap_page = L4_Fpage(address, size);
-	L4_Set_Rights(&unmap_page, access);
+	L4_Fpage_t buf[64];
+	L4_Word_t addr;
+	int size_log2, ct = 0;
+	for_page_range(first_address, last_address, addr, size_log2) {
+		buf[ct] = L4_FpageLog2(addr, size_log2);
+		L4_Set_Rights(&buf[ct], access);
 #if 0
-	diag("flushing %#lx:%#lx", L4_Address(unmap_page),
-		L4_Size(unmap_page));
+		diag("flushing %#lx:%#lx", L4_Address(buf[ct]), L4_Size(buf[ct]));
 #endif
-	L4_FlushFpage(unmap_page);
+		if(++ct == 63) {
+			L4_FlushFpages(63, buf);
+			ct = 0;
+		}
+	}
+	if(ct > 0) L4_FlushFpages(ct, buf);
 }
 
 
@@ -83,6 +96,11 @@ static void string_test_thread(void *param UNUSED)
 	memset(recvbuf, 0, rbuf_len);
 	L4_StringItem_t recv_si = L4_StringItem(rbuf_len, recvbuf);
 
+#if 0
+	diag("%s running as %lu:%lu", __func__,
+		L4_ThreadNo(L4_Myself()), L4_Version(L4_Myself()));
+	diag("%s: recvbuf is %p:%#x", __func__, recvbuf, (unsigned)rbuf_len);
+#endif
 	L4_Time_t delay = L4_ZeroTime;
 	int delay_repeat = 0;
 	bool running = true;
@@ -499,11 +517,11 @@ static L4_Word_t faulting_echo(
 
 	if(do_unmap_send) {
 		// diag("send buffer %p:%#x", echostr, (unsigned)test_len);
-		flush_page((uintptr_t)echostr, test_len * 4, 0);
+		flush_byte_range((uintptr_t)echostr, test_len, 0);
 	}
 	if(do_unmap_recv) {
 		// diag("recv buffer %p:%#x", replybuf, (unsigned)test_len * 2);
-		flush_page((uintptr_t)replybuf, test_len * 8, 0);
+		flush_byte_range((uintptr_t)replybuf, test_len, 0);
 	}
 
 	L4_StringItem_t got_si;
