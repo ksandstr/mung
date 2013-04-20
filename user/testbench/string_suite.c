@@ -582,8 +582,6 @@ START_TEST(immediate_xfer_timeout)
 	L4_Word_t ec = faulting_echo(test_tid, 0, false, false);
 	ok(ec == 0, "no-fault z/z case");
 
-	todo_start("no kernel support");
-
 	/* part 2: z/z should cause IPC failure when faults do occur */
 	for(int i = 1; i < 4; i++) {
 		const bool u_send = CHECK_FLAG(i, 1), u_recv = CHECK_FLAG(i, 2);
@@ -605,15 +603,10 @@ START_TEST(immediate_xfer_timeout)
 		ok1(!u_send || send_phase);
 		ok1(!u_recv || u_send || !send_phase);
 	}
-
-	todo_end();
 }
 END_TEST
 
 
-/* FIXME: the stats pager's delay function hasn't been tested. this works by
- * chance alone.
- */
 static L4_Word_t delayed_faulting_echo(
 	L4_ThreadId_t thread,
 	int iter,
@@ -700,9 +693,13 @@ END_TEST
 /* meta tests
  *
  * TODO: test of string_test_thread()'s "ping" function
- * TODO: test of the stats pager's delay function (in some other module)
  */
 
+/* (this looks like it duplicates self/stats_delay_test, and there's some
+ * overlap for sure, but it actually tests string_test_thread()'s delay
+ * function rather than that of stats_pager_fn(). TODO: merge the two tests
+ * so that they can be pointed at both tests from one code.)
+ */
 START_TEST(delay_test)
 {
 	plan_tests(5);
