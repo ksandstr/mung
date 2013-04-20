@@ -643,7 +643,7 @@ static L4_Word_t delayed_faulting_echo(
 
 START_TEST(finite_xfer_timeout)
 {
-	plan_tests(1 + 2 * 3 + 3 * 3);
+	plan_tests(1 + 2 * 3 + 3 * 4 + 3 * 4);
 	const int timeo_ms = 35;
 	L4_Word_t tos = L4_Timeouts(L4_TimePeriod(timeo_ms * 1000),
 		L4_TimePeriod(timeo_ms * 1000));
@@ -676,22 +676,56 @@ START_TEST(finite_xfer_timeout)
 			u_recv ? 'r' : '-', u_send ? 'w' : '-');
 	}
 
-	/* part 3: timeout should occur when the first pagefault is delayed by
-	 * timeo_ms or more
+	/* part 3: xfer timeout should occur at timeo_ms when the first pagefault
+	 * is delayed by more than timeo_ms.
 	 */
 	for(int i = 1; i < 4; i++) {
 		const bool u_send = CHECK_FLAG(i, 1), u_recv = CHECK_FLAG(i, 2);
 		// diag("i %d, u_send %s, u_recv %s", i, btos(u_send), btos(u_recv));
 
 		L4_Set_XferTimeouts(tos);
-		ec = delayed_faulting_echo(NULL, test_tid, i + 7, u_send, u_recv,
-			L4_TimePeriod(timeo_ms * 1000), 16);
+		uint64_t took_us = 0;
+		ec = delayed_faulting_echo(&took_us, test_tid, i + 7, u_send, u_recv,
+			L4_TimePeriod(timeo_ms * 2 * 1000), 16);
 		int code = (ec >> 1) & 0x7;
 		bool send_phase = (ec & 1) == 0;
-		diag("ec %#lx, code %d", ec, code);
 		ok(code == 5 || code == 6, "code is xfer timeout");
 		ok1(!u_send || send_phase);
 		ok1(!u_recv || u_send || !send_phase);
+
+		/* at timeo_ms, plz. */
+		int64_t diff_us = (int64_t)took_us - timeo_ms * 1000;
+		diag("took_us=%lu, diff_us=%ld", (unsigned long)took_us,
+			(long)diff_us);
+		ok(diff_us <= 5000, "timed out at timeo_ms=%d", timeo_ms);
+	}
+
+	/* part 4: xfer timeout should also occur after timeo_ms when the
+	 * individual fault's delay is smaller than timeo_ms, i.e. when xfer
+	 * timeout occurs after the first fault.
+	 *
+	 * FIXME: body copypasta'd from part 3. should be in a function, or
+	 * possibly the time period varied by test iteration.
+	 */
+	for(int i = 1; i < 4; i++) {
+		const bool u_send = CHECK_FLAG(i, 1), u_recv = CHECK_FLAG(i, 2);
+		// diag("i %d, u_send %s, u_recv %s", i, btos(u_send), btos(u_recv));
+
+		L4_Set_XferTimeouts(tos);
+		uint64_t took_us = 0;
+		ec = delayed_faulting_echo(&took_us, test_tid, i + 7, u_send, u_recv,
+			L4_TimePeriod(timeo_ms / 2 * 1000), 16);
+		int code = (ec >> 1) & 0x7;
+		bool send_phase = (ec & 1) == 0;
+		ok(code == 5 || code == 6, "code is xfer timeout");
+		ok1(!u_send || send_phase);
+		ok1(!u_recv || u_send || !send_phase);
+
+		/* at timeo_ms, plz. */
+		int64_t diff_us = (int64_t)took_us - timeo_ms * 1000;
+		diag("took_us=%lu, diff_us=%ld", (unsigned long)took_us,
+			(long)diff_us);
+		ok(diff_us <= 5000, "timed out at timeo_ms=%d", timeo_ms);
 	}
 
 	todo_end();
