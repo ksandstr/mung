@@ -498,6 +498,7 @@ END_TEST
 
 /* TODO: use this from non-xferto tests also */
 static L4_Word_t faulting_echo(
+	uint64_t *call_time_p,
 	L4_ThreadId_t serv_tid,
 	int test_iter,
 	bool do_unmap_send,
@@ -524,6 +525,7 @@ static L4_Word_t faulting_echo(
 		flush_byte_range((uintptr_t)replybuf, test_len, 0);
 	}
 
+	L4_Clock_t before = L4_SystemClock();
 	L4_StringItem_t got_si;
 	L4_StringItem_t rep_si = L4_StringItem(test_len * 2, replybuf);
 	L4_LoadBR(0, 1);
@@ -536,6 +538,8 @@ static L4_Word_t faulting_echo(
 	L4_Word_t ec = L4_ErrorCode();
 	fail_unless(L4_IpcFailed(tag) || tag.X.t == 2,
 		"reply tag is weird (%#lx)", tag.raw);
+	L4_Clock_t after = L4_SystemClock();
+	if(call_time_p != NULL) *call_time_p = after.raw - before.raw;
 	if(L4_IpcSucceeded(tag)) {
 		L4_StoreMRs(1, 2, got_si.raw);
 		fail_unless(L4_IsStringItem(&got_si));
@@ -561,11 +565,11 @@ START_TEST(no_xfer_timeout)
 	plan_tests(2);
 
 	L4_Set_XferTimeouts(L4_Timeouts(L4_Never, L4_Never));
-	L4_Word_t ec = faulting_echo(test_tid, 0, false, false);
+	L4_Word_t ec = faulting_echo(NULL, test_tid, 0, false, false);
 	ok(ec == 0, "no-fault n/n case");
 
 	L4_Set_XferTimeouts(L4_Timeouts(L4_Never, L4_Never));
-	ec = faulting_echo(test_tid, 1, true, true);
+	ec = faulting_echo(NULL, test_tid, 1, true, true);
 	ok(ec == 0, "faulting n/n case");
 }
 END_TEST
@@ -579,7 +583,7 @@ START_TEST(immediate_xfer_timeout)
 
 	/* part 1: z/z shouldn't cause IPC failure when no faults occurred */
 	L4_Set_XferTimeouts(tos);
-	L4_Word_t ec = faulting_echo(test_tid, 0, false, false);
+	L4_Word_t ec = faulting_echo(NULL, test_tid, 0, false, false);
 	ok(ec == 0, "no-fault z/z case");
 
 	/* part 2: z/z should cause IPC failure when faults do occur */
@@ -588,7 +592,7 @@ START_TEST(immediate_xfer_timeout)
 		// diag("i %d, u_send %s, u_recv %s", i, btos(u_send), btos(u_recv));
 
 		L4_Set_XferTimeouts(tos);
-		ec = faulting_echo(test_tid, i + 1, u_send, u_recv);
+		ec = faulting_echo(NULL, test_tid, i + 1, u_send, u_recv);
 
 		/* expecting 5 or 6 in send phase, indicating xfer timeout in invoker or
 		 * partner's address space (which are the same thing)
@@ -608,6 +612,7 @@ END_TEST
 
 
 static L4_Word_t delayed_faulting_echo(
+	uint64_t *echo_time_p,
 	L4_ThreadId_t thread,
 	int iter,
 	bool u_send,
@@ -622,7 +627,7 @@ static L4_Word_t delayed_faulting_echo(
 
 	L4_ThreadId_t old_pager = L4_Pager();
 	L4_Set_Pager(stats_tid);
-	L4_Word_t ec = faulting_echo(thread, iter, u_send, u_recv);
+	L4_Word_t ec = faulting_echo(echo_time_p, thread, iter, u_send, u_recv);
 	L4_Set_Pager(old_pager);
 
 	ipc_ok = send_delay(stats_tid, L4_ZeroTime, 0);
@@ -643,7 +648,7 @@ START_TEST(finite_xfer_timeout)
 
 	/* part 1: timeout should not be triggered when no faults occur */
 	L4_Set_XferTimeouts(tos);
-	L4_Word_t ec = faulting_echo(test_tid, 0, false, false);
+	L4_Word_t ec = faulting_echo(NULL, test_tid, 0, false, false);
 	ok(ec == 0, "no-fault timeout case");
 
 	/* part 2: timeout should not be triggered when faults occur, but are
@@ -655,13 +660,13 @@ START_TEST(finite_xfer_timeout)
 
 		/* first, immediately */
 		L4_Set_XferTimeouts(tos);
-		ec = faulting_echo(test_tid, i + 1, u_send, u_recv);
+		ec = faulting_echo(NULL, test_tid, i + 1, u_send, u_recv);
 		ok(ec == 0, "fast faulting [%c%c]",
 			u_recv ? 'r' : '-', u_send ? 'w' : '-');
 
 		/* then with a delay that'll never exceed timeo_ms. */
 		L4_Set_XferTimeouts(tos);
-		ec = delayed_faulting_echo(test_tid, i + 4, u_send, u_recv,
+		ec = delayed_faulting_echo(NULL, test_tid, i + 4, u_send, u_recv,
 			L4_TimePeriod(1000), timeo_ms / 2 - 1);
 		ok(ec == 0, "slow faulting [%c%c]",
 			u_recv ? 'r' : '-', u_send ? 'w' : '-');
@@ -675,7 +680,7 @@ START_TEST(finite_xfer_timeout)
 		// diag("i %d, u_send %s, u_recv %s", i, btos(u_send), btos(u_recv));
 
 		L4_Set_XferTimeouts(tos);
-		ec = delayed_faulting_echo(test_tid, i + 7, u_send, u_recv,
+		ec = delayed_faulting_echo(NULL, test_tid, i + 7, u_send, u_recv,
 			L4_TimePeriod(timeo_ms * 1000), 16);
 		int code = (ec >> 1) & 0x7;
 		bool send_phase = (ec & 1) == 0;
@@ -762,13 +767,13 @@ START_TEST(faulting_echo_test)
 	/* part 1: faulting_echo() should produce no faults on second go without
 	 * the unmap option.
 	 */
-	L4_Word_t ec = faulting_echo(test_tid, 0, false, false);
+	L4_Word_t ec = faulting_echo(NULL, test_tid, 0, false, false);
 	fail_unless(ec == 0, "ec %#lx", ec);
 
 	send_reset(stats_tid);
 	L4_ThreadId_t old_pager = L4_Pager();
 	L4_Set_Pager(stats_tid);
-	ec = faulting_echo(test_tid, 1, false, false);
+	ec = faulting_echo(NULL, test_tid, 1, false, false);
 	L4_Set_Pager(old_pager);
 	fail_unless(ec == 0, "ec %#lx", ec);
 	ok1(stats->n_faults == 0);
@@ -785,7 +790,7 @@ START_TEST(faulting_echo_test)
 #endif
 		send_reset(stats_tid);
 		L4_Set_Pager(stats_tid);
-		ec = faulting_echo(test_tid, 2 + i, u_send, u_recv);
+		ec = faulting_echo(NULL, test_tid, 2 + i, u_send, u_recv);
 		L4_Set_Pager(old_pager);
 		fail_unless(ec == 0, "ec %#lx", ec);
 
@@ -793,6 +798,34 @@ START_TEST(faulting_echo_test)
 		ok1(!u_send || n_read > 0);
 		ok1(!u_recv || stats->n_write > 0);
 	}
+}
+END_TEST
+
+
+START_TEST(delayed_faulting_echo_test)
+{
+	plan_tests(2);
+	const int delay_ms = 3;
+
+	/* part 1: when no delay is given, the call should return within a
+	 * millisecond.
+	 */
+	uint64_t took_us = 0;
+	L4_Word_t ec = delayed_faulting_echo(&took_us, test_tid, 0, true, true,
+		L4_ZeroTime, 0);
+	fail_if(ec != 0, "ec %#lx", ec);
+
+	diag("took_us=%lu", (unsigned long)took_us);
+	ok(took_us <= 2000, "without delay");
+
+	/* part 2: when given, the delay should be seen at least three times. */
+	took_us = 0;
+	ec = delayed_faulting_echo(&took_us, test_tid, 0, true, true,
+		L4_TimePeriod(delay_ms * 1000), 16);
+	fail_if(ec != 0, "ec %#lx", ec);
+
+	diag("took_us=%lu", (unsigned long)took_us);
+	ok1(took_us > 9000);		/* it's over nine thousand */
 }
 END_TEST
 
@@ -883,6 +916,7 @@ Suite *string_suite(void)
 	tcase_add_checked_fixture(meta, &stats_setup, &stats_teardown);
 	tcase_add_test(meta, delay_test);
 	tcase_add_test(meta, faulting_echo_test);
+	tcase_add_test(meta, delayed_faulting_echo_test);
 	suite_add_tcase(s, meta);
 
 	TCase *basic = tcase_create("basic");
