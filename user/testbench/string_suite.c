@@ -496,6 +496,9 @@ START_TEST(echo_with_long_hole)
 END_TEST
 
 
+/* makes at most three pagefaults on the send side, and at least three on the
+ * receive side, when the respective do_unmap_{send,recv} argument is true.
+ */
 /* TODO: use this from non-xferto tests also */
 static L4_Word_t faulting_echo(
 	uint64_t *call_time_p,
@@ -504,10 +507,11 @@ static L4_Word_t faulting_echo(
 	bool do_unmap_send,
 	bool do_unmap_recv)
 {
-	uint32_t seed = seed_bins[test_iter & 0x3] ^ seed_bins[test_iter >> 2];
+	uint32_t seed = seed_bins[test_iter & 0x3] ^ seed_bins[(test_iter >> 2) & 0x3]
+		^ 0xb0a7face;
 
 	const size_t test_len = 11 * 1024 + 1;
-	char *echostr = malloc(test_len);
+	char *echostr = valloc(test_len);
 	fail_if(echostr == NULL);
 	random_string(echostr, test_len, &seed);
 	int echo_len = strlen(echostr);
@@ -522,7 +526,7 @@ static L4_Word_t faulting_echo(
 	}
 	if(do_unmap_recv) {
 		// diag("recv buffer %p:%#x", replybuf, (unsigned)test_len * 2);
-		flush_byte_range((uintptr_t)replybuf, test_len, 0);
+		flush_byte_range((uintptr_t)replybuf, test_len * 2, 0);
 	}
 
 	L4_Clock_t before = L4_SystemClock();
