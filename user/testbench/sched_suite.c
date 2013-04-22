@@ -4,6 +4,8 @@
 #include <assert.h>
 #include <ccan/list/list.h>
 
+#include <ukernel/util.h>
+
 #include <l4/types.h>
 #include <l4/thread.h>
 #include <l4/ipc.h>
@@ -156,16 +158,6 @@ static void spinner_fn(void *param_ptr)
 	}
 
 	free(param);
-}
-
-
-/* NOTE: copypasta'd from <ukernel/util.h> */
-static uint64_t time_in_us(L4_Time_t t)
-{
-	/* only defined for periods. c'mon. that's what "in" means. */
-	assert(t.period.a == 0);
-	if(t.raw == L4_ZeroTime.raw) return 0;
-	else return (uint32_t)t.period.m * (1u << t.period.e);
 }
 
 
