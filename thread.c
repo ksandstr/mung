@@ -118,18 +118,6 @@ COLD struct thread *init_threading(thread_id boot_tid)
 }
 
 
-void yield(struct thread *t)
-{
-	struct thread *current = get_current_thread();
-	current->status = TS_READY;
-	assert(current->wakeup_time < read_global_timer() * 1000);
-
-	/* TODO: switch to "t" */
-
-	schedule();
-}
-
-
 static void restore_saved_regs(struct hook *hook, uintptr_t code, void *priv)
 {
 	struct thread *t = container_of(hook, struct thread, post_exn_call);

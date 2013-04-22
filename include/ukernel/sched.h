@@ -37,9 +37,6 @@ extern NORETURN void return_to_scheduler(void);
  */
 extern NORETURN void return_to_ipc(struct thread *target);
 
-/* NOTE: doesn't yield */
-extern void yield(struct thread *to);
-
 extern struct thread *get_current_thread(void);
 
 /* switches from current thread, which must be an userspace thread. caller
