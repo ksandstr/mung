@@ -59,8 +59,7 @@ static void lock_module(void)
 
 static void unlock_module(void)
 {
-	L4_ThreadId_t self = L4_Myself();
-	assert(lock_tid.raw == self.raw);
+	assert(lock_tid.raw == L4_Myself().raw);
 	lock_tid.raw = 0;
 	__sync_synchronize();
 }

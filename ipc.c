@@ -1047,7 +1047,7 @@ void abort_waiting_ipc(struct thread *t, L4_Word_t errcode)
 		struct ipc_wait *w = container_of(ptr, struct ipc_wait, dest_tid);
 		if(w->dest_tid.raw != t->id) continue;
 
-		struct thread *peer = w->thread;
+		struct thread *peer UNUSED = w->thread;
 		assert(peer->ipc_to.raw == t->id);
 		assert(peer->status == TS_SEND_WAIT || peer->status == TS_XFER
 			|| peer->status == TS_STOPPED);
