@@ -446,7 +446,7 @@ uint64_t wakeup_at(L4_Time_t period)
 {
 	if(period.raw == L4_ZeroTime.raw) return 0;
 	else if(period.raw == L4_Never.raw) return ~(uint64_t)0;
-	else return read_global_timer() * 1000 + time_in_us(period);
+	else return ksystemclock() + time_in_us(period);
 }
 
 
