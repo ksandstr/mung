@@ -20,6 +20,7 @@
 #include <ukernel/thread.h>
 #include <ukernel/sched.h>
 #include <ukernel/space.h>
+#include <ukernel/bug.h>
 #include <ukernel/ipc.h>
 
 
@@ -97,7 +98,8 @@ struct copy_err
 static void send_xfer_fault(
 	struct thread *t,
 	L4_Fpage_t fault,
-	L4_Word_t ip);
+	L4_Word_t ip,
+	uint64_t xfto_abs);
 
 
 static struct kmem_cache *ipc_wait_slab = NULL;
@@ -338,6 +340,9 @@ static int stritem_faults(
 		if(e == NULL || !CHECK_FLAG_ALL(L4_Rights(e->range), access)) {
 			if(n_faults < faults_len) {
 				L4_Fpage_t f = L4_FpageLog2(addr, PAGE_BITS);
+				/* (TODO: if e != NULL, set access to the bits that weren't
+				 * present in e->range's rights
+				 */
 				L4_Set_Rights(&f, access);
 				faults[n_faults] = f;
 			}
@@ -359,12 +364,70 @@ static int stritem_faults(
 }
 
 
+void ipc_xfer_timeout(struct ipc_state *st)
+{
+	assert(st->from->ipc == st);
+	assert(st->to->ipc == st);
+
+	TRACE("%s: st->from{%lu:%lu} -> st->to{%lu:%lu}\n", __func__,
+		TID_THREADNUM(st->from->id), TID_VERSION(st->from->id),
+		TID_THREADNUM(st->to->id), TID_VERSION(st->to->id));
+
+	assert(st->f_src.num > 0 || st->f_dst.num > 0);
+	const bool f_in_src = st->f_src.num > 0;
+	const L4_Word_t ec_offs = st->str_offset << 4;
+	set_ipc_error_thread(st->from, ec_offs | (f_in_src ? 5 : 6) << 1);
+	set_ipc_error_thread(st->to, ec_offs | (!f_in_src ? 5 : 6) << 1 | 1);
+
+	struct thread *from = st->from, *to = st->to;
+	bool dead_ipc = post_exn_fail(from) | post_exn_fail(to);
+	if(!dead_ipc) {
+		/* can happen when both were waiting for transfer start due to
+		 * scheduling.
+		 */
+		st->from->ipc = NULL;
+		st->to->ipc = NULL;
+		free(st);
+	}
+
+	from->flags &= ~TF_SENDER;
+	thread_ipc_fail(from);
+	assert(IS_READY(from->status));
+	thread_ipc_fail(to);
+	assert(IS_READY(to->status));
+}
+
+
 static void prexfer_ipc_hook(struct hook *hook, uintptr_t code, void *dataptr)
 {
-	assert(code == 0);		/* FIXME: handle the abort case also */
-
 	struct thread *t = container_of(hook, struct thread, post_exn_call);
 	assert(&t->post_exn_call == hook);
+
+	hook_detach(hook);
+
+	if(code != 0) {
+		/* xfer fault loop was aborted. this happens for three reasons:
+		 *   1) scheduler selected the current thread, which was in R_RECV,
+		 *      and would've gone into passive receive but the transfer's xfer
+		 *      timeout was hit;
+		 *   2) an active send to @t completed, but not before the xfer
+		 *      timeout was hit;
+		 *   3) IPC abort from ExchangeRegisters, on either peer.
+		 *
+		 * if t->ipc isn't NULL, we'll clean it up on both sides.
+		 */
+		if(t->ipc != NULL) {
+			struct ipc_state *st = t->ipc;
+			st->from->ipc = NULL;
+			st->to->ipc = NULL;
+			assert(t->ipc == NULL);
+			free(st);
+		}
+
+		assert(t->saved_mrs == 0 && t->saved_brs == 0);
+		return;
+	}
+
 	assert(t->ipc != NULL);
 
 	t->ipc_from.raw = t->saved_regs[12];
@@ -382,13 +445,22 @@ static void prexfer_ipc_hook(struct hook *hook, uintptr_t code, void *dataptr)
 		assert(t == t->ipc->from);
 	}
 
-	hook_detach(hook);
-	if(++p_self->pos < p_self->num) {
+	if(t->ipc->xferto_at > 0 && ksystemclock() >= t->ipc->xferto_at) {
+		/* transfer timed out under the pager transaction, and wasn't killed
+		 * by the scheduler before that.
+		 *
+		 * FIXME: hit this in a test, first
+		 */
+		printf("%s: post-fault xfer timeout in %lu:%lu\n", __func__,
+			TID_THREADNUM(t->id), TID_VERSION(t->id));
+		panic("should xfertimeout in post-fault");
+	} else if(++p_self->pos < p_self->num) {
 		/* next fault. */
 		TRACE("%s: sending next fault (index %u out of %u) (in %lu:%lu)\n",
 			__func__, p_self->pos, p_self->num, TID_THREADNUM(t->id),
 			TID_VERSION(t->id));
-		send_xfer_fault(t, p_self->faults[p_self->pos], t->ctx.eip);
+		send_xfer_fault(t, p_self->faults[p_self->pos], t->ctx.eip,
+			t->ipc->xferto_at);
 		assert(IS_IPC_WAIT(t->status));
 		TRACE("%s: next fault sent, state now %s\n", __func__,
 			sched_status_str(t));
@@ -398,7 +470,7 @@ static void prexfer_ipc_hook(struct hook *hook, uintptr_t code, void *dataptr)
 			CHECK_FLAG(t->flags, TF_SENDER) ? "sender" : "receiver",
 			TID_THREADNUM(t->id), TID_VERSION(t->id));
 		t->status = is_sender ? TS_SEND_WAIT : TS_RECV_WAIT;
-		thread_sleep(t, L4_Never);		/* FIXME: apply xfer timeout */
+		thread_sleep(t, L4_Never);
 	} else {
 		TRACE("%s: partner %lu:%lu ready, scheduling\n", __func__,
 			TID_THREADNUM(t->id), TID_VERSION(t->id));
@@ -413,21 +485,26 @@ static void prexfer_ipc_hook(struct hook *hook, uintptr_t code, void *dataptr)
 static void send_xfer_fault(
 	struct thread *t,
 	L4_Fpage_t fault,
-	L4_Word_t ip)
+	L4_Word_t ip,
+	uint64_t xferto_abs)
 {
-	TRACE("ipc: xfer fault %#lx (ip %#lx) in %lu:%lu\n",
-		L4_Address(fault), ip, TID_THREADNUM(t->id), TID_VERSION(t->id));
+	TRACE("ipc: xfer fault %#lx (ip %#lx) in %lu:%lu (xfto %lu)\n",
+		L4_Address(fault), ip, TID_THREADNUM(t->id), TID_VERSION(t->id),
+		(unsigned long)xferto_abs);
 
 	void *utcb = thread_get_utcb(t);
 	struct thread *pager = thread_get_pager(t, utcb);
 	t->saved_regs[12] = t->ipc_from.raw;
 	t->saved_regs[13] = t->ipc_to.raw;
 	set_pf_msg(t, utcb, L4_Address(fault), ip, L4_Rights(fault));
-	/* (notice how this can cause calls to ipc_send_half() to nest? due to the
-	 * way IPC works in L4.X2, this is completely safe.)
+	/* (this can cause calls to ipc_send_half() to nest. due to the way IPC
+	 * works in L4.X2, that's completely safe.)
 	 */
 	hook_push_back(&t->post_exn_call, &prexfer_ipc_hook, NULL);
-	ipc_user(t, pager);
+	ipc_user(t, pager, xferto_abs);
+	assert(xferto_abs == 0 || t->wakeup_time == xferto_abs);
+
+	assert(IS_IPC_WAIT(t->status));
 }
 
 
@@ -437,9 +514,13 @@ static void send_xfer_fault(
  *
  * @recv_si must be a pointer to the string item in the buffer registers in
  * the _correct_ order, i.e. reverse from the BR order.
+ *
+ * @xferto_us is the number of microseconds until one of the participants
+ * aborts due to xfer timeout, or 0 for never.
  */
 static bool set_prexfer_fault_state(
 	L4_MsgTag_t tag,
+	uint64_t xferto_us,
 	struct thread *source,
 	L4_StringItem_t *send_si,
 	int nf_send,
@@ -448,9 +529,10 @@ static bool set_prexfer_fault_state(
 	int recv_si_words,
 	int nf_recv)
 {
-	TRACE("%s: entered. source %lu:%lu, dest %lu:%lu\n", __func__,
+	TRACE("%s: entered. source %lu:%lu, dest %lu:%lu, xferto_us %lu\n", __func__,
 		TID_THREADNUM(source->id), TID_VERSION(source->id),
-		TID_THREADNUM(dest->id), TID_VERSION(dest->id));
+		TID_THREADNUM(dest->id), TID_VERSION(dest->id),
+		(unsigned long)xferto_us);
 
 	assert(nf_send + nf_recv >= 0);
 	assert(source->ipc == dest->ipc);
@@ -469,6 +551,7 @@ static bool set_prexfer_fault_state(
 		.from = source, .to = dest, .tag = tag,
 		.f_src = { .num = nf_send, .faults = &st->faults[0] },
 		.f_dst = { .num = nf_recv, .faults = &st->faults[nf_send] },
+		.xferto_at = xferto_us == 0 ? 0 : ksystemclock() + xferto_us,
 	};
 	memcpy(&st->faults[nf_send + nf_recv], recv_si->raw,
 		recv_si_words * sizeof(L4_Word_t));
@@ -485,11 +568,12 @@ static bool set_prexfer_fault_state(
 		TRACE("%s: %d faults for sender\n", __func__, nf_send);
 		stritem_faults(&st->faults[0], nf_send, source->space, send_si,
 			L4_Readable, -1);
-		send_xfer_fault(source, st->faults[0], source->ctx.eip);
+		send_xfer_fault(source, st->faults[0], source->ctx.eip,
+			st->xferto_at);
 		assert(IS_IPC_WAIT(source->status));
 	} else {
 		source->status = TS_SEND_WAIT;
-		thread_sleep(source, L4_Never);		/* FIXME: xfer timeout? */
+		thread_sleep(source, L4_Never);
 	}
 
 	if(nf_recv > 0) {
@@ -497,11 +581,12 @@ static bool set_prexfer_fault_state(
 		stritem_faults(&st->faults[nf_send], nf_recv, dest->space, recv_si,
 			L4_Writable | L4_Readable, -1);
 
-		send_xfer_fault(dest, st->faults[nf_send], dest->ctx.eip);
+		send_xfer_fault(dest, st->faults[nf_send], dest->ctx.eip,
+			st->xferto_at);
 		assert(IS_IPC_WAIT(dest->status));
 	} else {
 		dest->status = TS_RECV_WAIT;
-		thread_sleep(dest, L4_Never);		/* FIXME: xfer timeout? */
+		thread_sleep(dest, L4_Never);
 	}
 
 	TRACE("%s: exiting.\n", __func__);
@@ -527,14 +612,13 @@ static void set_xfer_fault_state(struct ipc_state *st, L4_Fpage_t fault)
 	 * to the post-fault hook
 	 */
 	assert(oth->status == TS_XFER);
-	/* FIXME: set timeout according to xfer timeout */
 	oth->status = oth == st->to ? TS_RECV_WAIT : TS_SEND_WAIT;
 	thread_sleep(oth, L4_Never);
 
 	/* the faulter does an IPC in the scheduled transfer peer's (or IPC
 	 * caller's, outside of the ipc_resume() path) context.
 	 */
-	send_xfer_fault(ft, fault, ft->ctx.eip);
+	send_xfer_fault(ft, fault, ft->ctx.eip, st->xferto_at);
 	assert(IS_IPC_WAIT(ft->status));
 }
 
@@ -825,33 +909,35 @@ static L4_Word_t do_typed_transfer(
 					str_offset += send_len;
 				} else {
 					uint64_t xferto_us = 0;
-					if(source->ipc == NULL) {
-						/* check ZeroTime before allocator call */
-						L4_Time_t snd_to = {
-							.raw = (L4_VREG(s_base, L4_TCR_XFERTIMEOUTS) >> 16)
-								& 0xffff,
-						}, rcv_to = {
-							.raw = L4_VREG(d_base, L4_TCR_XFERTIMEOUTS) & 0xffff,
-						};
+					/* FIXME: if there was a preceding string transfer with
+					 * xfer faults in this IPC, carry its remaining xfer
+					 * timeout forward instead of starting from zero
+					 */
+					/* check ZeroTime before allocator call */
+					L4_Time_t snd_to = {
+						.raw = (L4_VREG(s_base, L4_TCR_XFERTIMEOUTS) >> 16)
+							& 0xffff,
+					}, rcv_to = {
+						.raw = L4_VREG(d_base, L4_TCR_XFERTIMEOUTS) & 0xffff,
+					};
 #if 0
-						printf("ipc: snd_to=");
-						if(snd_to.raw == L4_Never.raw) printf("never");
-						else printf("%lu µs", (unsigned long)time_in_us(snd_to));
-						printf("; rcv_to=");
-						if(rcv_to.raw == L4_Never.raw) printf("never");
-						else printf("%lu µs", (unsigned long)time_in_us(rcv_to));
-						printf("\n");
+					printf("ipc: snd_to=");
+					if(snd_to.raw == L4_Never.raw) printf("never");
+					else printf("%lu µs", (unsigned long)time_in_us(snd_to));
+					printf("; rcv_to=");
+					if(rcv_to.raw == L4_Never.raw) printf("never");
+					else printf("%lu µs", (unsigned long)time_in_us(rcv_to));
+					printf("\n");
 #endif
-						if(!eval_xfer_timeout(&xferto_us, snd_to, rcv_to)) {
+					if(!eval_xfer_timeout(&xferto_us, snd_to, rcv_to)) {
 #if 0
-							printf("ipc: immediate xfer timeout (nsrc %d, ndst %d)\n",
-								nf_src, nf_dst);
+						printf("ipc: immediate xfer timeout (nsrc %d, ndst %d)\n",
+							nf_src, nf_dst);
 #endif
-							if(nf_src == 0) goto xfer_timeout_src;
-							else goto xfer_timeout_dst;
-						}
+						if(nf_src == 0) goto xfer_timeout_src;
+						else goto xfer_timeout_dst;
 					}
-					bool ok = set_prexfer_fault_state(tag,
+					bool ok = set_prexfer_fault_state(tag, xferto_us,
 						source, send_si, nf_src,
 						dest, recv_si, tot_br_words, nf_dst);
 					if(!ok) {
@@ -867,14 +953,7 @@ static L4_Word_t do_typed_transfer(
 					source->ipc->pos = pos;
 					source->ipc->last = last;
 					source->ipc->dbr_pos = dbr_pos;
-					if(xferto_us != 0 && source->ipc->xferto_at == 0) {
-						source->ipc->xferto_at = ksystemclock() + xferto_us;
-#if 0
-						printf("ipc: setting xfer timeout to %lu (now+%lu µs)\n",
-							(unsigned long)source->ipc->xferto_at,
-							(unsigned long)xferto_us);
-#endif
-					}
+					assert(xferto_us == 0 || source->ipc->xferto_at > 0);
 
 					/* this, with source->ipc != NULL, means that the
 					 * operation didn't complete and that another thread
@@ -1057,7 +1136,6 @@ void abort_waiting_ipc(struct thread *t, L4_Word_t errcode)
 			 */
 			set_ipc_error_thread(w->thread, errcode);
 		}
-		/* (TODO: shouldn't this be moved inside the if-clause above?) */
 		thread_wake(w->thread);
 
 		htable_delval(&sendwait_hash, &it);
@@ -1089,6 +1167,9 @@ void abort_waiting_ipc(struct thread *t, L4_Word_t errcode)
 /* called from thread_ipc_fail() and from the deleting ThreadControl. takes
  * care of the sendwait_hash entry. leaves errorcode setting to caller's
  * caller.
+ *
+ * TODO: this should be renamed to indicate its function. there's already
+ * abort_waiting_ipc(), which should be renamed as well.
  */
 void abort_thread_ipc(struct thread *t)
 {
@@ -1234,10 +1315,13 @@ bool ipc_send_half(struct thread *self)
 					0x1000));
 				L4_VREG(dest_utcb, L4_TCR_VA_SENDER) = self->id;
 			}
-
 			thread_wake(dest);
 		} else {
 			assert(dest->ipc != NULL || IS_READY(dest->status));
+			/* timeout should've happened in post_exn_ok() already */
+			assert(dest->ipc == NULL
+				|| dest->ipc->xferto_at == 0
+				|| dest->ipc->xferto_at > ksystemclock());
 		}
 
 		if(L4_IsNilThread(self->ipc_from)) {
@@ -1288,14 +1372,14 @@ void ipc_simple(struct thread *dest)
 	struct thread *current = get_current_thread();
 	assert(current->saved_mrs != 0 || current->saved_brs != 0);
 
-	ipc_user(current, dest);
+	ipc_user(current, dest, 0);
 }
 
 
-/* FIXME: have caller set send, recv timeouts. #PF uses never/never, and
- * string transfer faults should time out according to the xfer timeout.
- */
-void ipc_user(struct thread *from, struct thread *to)
+void ipc_user(
+	struct thread *from,
+	struct thread *to,
+	uint64_t xferto_at)
 {
 	from->ipc_to.raw = to->id;
 	from->ipc_from.raw = to->id;
@@ -1306,6 +1390,11 @@ void ipc_user(struct thread *from, struct thread *to)
 		/* TODO: use preempt somewhere */
 		bool preempt = false;
 		ipc_recv_half(from, &preempt);
+	}
+
+	if(xferto_at > 0 && IS_IPC_WAIT(from->status)) {
+		from->wakeup_time = xferto_at;
+		sq_update_thread(from);
 	}
 }
 
@@ -1348,6 +1437,20 @@ bool ipc_recv_half(struct thread *self, bool *preempt_p)
 			TID_THREADNUM(self->id), TID_VERSION(self->id),
 			TID_THREADNUM(self->ipc_from.raw), TID_VERSION(self->ipc_from.raw));
 		self->status = TS_RECV_WAIT;
+		if(self->ipc != NULL && self->ipc->xferto_at > 0) {
+#if 0
+			TRACE("%s: ongoing ipc timeout in %lu:%lu at %lu (now %lu)\n",
+				__func__, TID_THREADNUM(self->id), TID_VERSION(self->id),
+				(unsigned long)self->ipc->xferto_at,
+				(unsigned long)ksystemclock());
+			TRACE("%s: called from %p\n", __func__, __builtin_return_address(0));
+#endif
+			if(ksystemclock() >= self->ipc->xferto_at) {
+				ipc_xfer_timeout(self->ipc);
+				*preempt_p = false;
+				return true;
+			}
+		}
 		thread_sleep(self, self->recv_timeout);
 		if(self->status == TS_READY) {
 			/* instant timeout. */
@@ -1429,7 +1532,7 @@ bool ipc_recv_half(struct thread *self, bool *preempt_p)
 			&& preempted_by(self, task_switch_time * 1000, from);
 		if(*preempt_p) {
 #if 0
-			printf("%s: thread %u:%u (pri %d) was preempted by partner %u:%u (pri %d)\n",
+			TRACE("%s: thread %u:%u (pri %d) was preempted by partner %u:%u (pri %d)\n",
 				__func__, TID_THREADNUM(self->id), TID_VERSION(self->id),
 				(int)self->pri, TID_THREADNUM(from->id), TID_VERSION(from->id),
 				(int)from->pri);

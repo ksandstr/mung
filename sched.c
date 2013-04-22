@@ -167,8 +167,12 @@ bool preempted_by(
 }
 
 
+/* simple IPC timeout. signaled to exactly one thread. */
 static void timeout_ipc(struct thread *t)
 {
+	assert(t->saved_mrs + t->saved_brs == 0);
+	assert(hook_empty(&t->post_exn_call));
+
 	bool is_send = t->status == TS_SEND_WAIT;
 	thread_ipc_fail(t);
 	set_ipc_error_thread(t, (1 << 1) | (is_send ? 0 : 1));
@@ -269,7 +273,7 @@ static struct thread *schedule_next_thread(
 	struct thread *current,
 	bool *saw_zero_p)
 {
-	uint64_t now = read_global_timer() * 1000;
+	const uint64_t now = ksystemclock();
 
 	struct thread *pick = NULL;
 	bool saw_zero = false;
@@ -294,10 +298,19 @@ static struct thread *schedule_next_thread(
 		assert(cand->status != TS_STOPPED);
 
 		if(cand->status == TS_SEND_WAIT || cand->status == TS_RECV_WAIT) {
-			if(cand->wakeup_time > now) break;
+			if(cand->wakeup_time > now) {
+				/* no need to look any further; no candidate was found. */
+				break;
+			}
 
 			/* timed out. */
-			timeout_ipc(cand);
+			if(cand->ipc != NULL) {
+				ipc_xfer_timeout(cand->ipc);
+				assert(cand->ipc == NULL);
+				assert(!IS_IPC_WAIT(cand->status));
+			} else {
+				timeout_ipc(cand);
+			}
 			if(cand->status != TS_READY) continue;
 		} else if(cand->status == TS_R_RECV
 			&& cand->recv_timeout.raw != L4_ZeroTime.raw
@@ -310,12 +323,6 @@ static struct thread *schedule_next_thread(
 			 */
 			timeout_ipc(cand);
 			if(cand->status != TS_READY) continue;
-		} else if(cand->status == TS_XFER) {
-			assert(cand->ipc != NULL);
-
-			/* FIXME: check for xfer timeout? (partner's xfer timeout comes up
-			 * when it gets scheduled, and not otherwise.)
-			 */
 		}
 
 		/* ignore lower-priority threads if a zero-quantum thread was seen
@@ -385,7 +392,7 @@ bool schedule(void)
 		return false;
 	} else if(next == NULL) {
 		/* add timeslices to threads that're ready and have none. */
-		uint64_t now = read_global_timer() * 1000;
+		uint64_t now = ksystemclock();
 		RB_FOREACH(node, &sched_tree) {
 			struct thread *t = rb_entry(node, struct thread, sched_rb);
 			if(IS_READY(t->status) && t->quantum == 0
@@ -507,7 +514,7 @@ NORETURN void scheduler_loop(struct thread *self)
 				struct thread *exh = get_thread_exh(prev, utcb);
 				if(exh != NULL) {
 					build_exn_ipc(prev, utcb, -4, &prev->ctx);
-					ipc_user(prev, exh);
+					ipc_user(prev, exh, 0);
 					/* halt the thread if its exception handler is AWOL. */
 					if(!IS_IPC_WAIT(prev->status)) {
 						assert(L4_VREG(utcb, L4_TCR_ERRORCODE) != 0);

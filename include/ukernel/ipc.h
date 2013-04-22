@@ -20,8 +20,17 @@ extern void init_ipc(void);
  */
 extern void ipc_simple(struct thread *dest);
 
-/* same, but for "from" */
-extern void ipc_user(struct thread *from, struct thread *to);
+/* same, but for "from", and has an absolute xfer timeout */
+extern void ipc_user(
+	struct thread *from,
+	struct thread *to,
+	uint64_t xferto_abs);
+
+/* effect a string transfer timeout on the ongoing IPC transaction and its
+ * peers. drops both out of IPC, sets error code, destroys @st, makes peers
+ * READY.
+ */
+extern void ipc_xfer_timeout(struct ipc_state *st);
 
 /* one thing that thread_ipc_fail() doesn't do. used by the deleting mode of
  * ThreadControl to abort waiting IPCs that depend on a moribund thread's

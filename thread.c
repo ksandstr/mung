@@ -150,9 +150,11 @@ void save_ipc_regs(struct thread *t, int mrs, int brs)
 {
 	/* TODO: see above */
 #if 0
-	printf("%s: called for %lu:%lu (%d MRs, %d BRs) from %p\n", __func__,
-		TID_THREADNUM(t->id), TID_VERSION(t->id), mrs, brs,
-		__builtin_return_address(0));
+	if(t->saved_mrs != 0 || t->saved_brs != 0) {
+		printf("%s: called for %lu:%lu (%d MRs, %d BRs) from %p\n", __func__,
+			TID_THREADNUM(t->id), TID_VERSION(t->id), mrs, brs,
+			__builtin_return_address(0));
+	}
 #endif
 	assert(t->saved_mrs == 0 && t->saved_brs == 0);
 	assert(mrs >= 1 && brs >= 0);
@@ -498,14 +500,16 @@ void thread_ipc_fail(struct thread *t)
 {
 	assert(t->status == TS_RECV_WAIT
 		|| t->status == TS_SEND_WAIT
-		|| t->status == TS_R_RECV);
+		|| t->status == TS_R_RECV
+		|| (t->status == TS_XFER && t->ipc != NULL));
 
 	if(t->status == TS_SEND_WAIT) {
+		/* (NOTE: also, $t->ipc != NULL \implies \
+		 * Myself \notin \dom sendwait\_hash$, so this isn't actually
+		 * required. abort_thread_ipc() accepts that, though.)
+		 */
 		abort_thread_ipc(t);
 	}
-	/* FIXME: TS_XFER should also get aborted here. TS_RECV_WAIT requires no
-	 * such thing.
-	 */
 
 	if(CHECK_FLAG(t->flags, TF_HALT)) {
 		t->status = TS_STOPPED;

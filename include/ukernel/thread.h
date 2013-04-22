@@ -203,7 +203,8 @@ extern void thread_halt(struct thread *t);
 extern void thread_resume(struct thread *t);
 
 /* effects an IPC failure (timeout, abort, cancel) state transition. doesn't
- * change vregs or call the post-exception hooks, just does the status &
+ * change vregs, toss the string transfer state, or call the post-exception
+ * hooks; just does the status, send-wait (via abort_thread_ipc()) &
  * scheduling bits.
  *
  * requires status \in {RECV_WAIT, SEND_WAIT, R_RECV}.
