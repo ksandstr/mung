@@ -17,6 +17,7 @@
 #include <ukernel/misc.h>
 #include <ukernel/thread.h>
 #include <ukernel/trace.h>
+#include <ukernel/hook.h>
 #include <ukernel/sched.h>
 
 
@@ -227,6 +228,8 @@ static void leaving_thread(struct thread *self)
 /* set preemption parameters, current_thread */
 static void entering_thread(struct thread *next)
 {
+	assert(hook_empty(&next->post_exn_call));
+
 	/* TODO: find the clock tick when this thread'll be pre-empted due to
 	 * exhausted quantum; or when the total quantum exhausted message will be
 	 * triggered (XXX: what is that?); or when a higher-priority thread's IPC

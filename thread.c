@@ -173,6 +173,8 @@ void save_ipc_regs(struct thread *t, int mrs, int brs)
 bool post_exn_ok(struct thread *t)
 {
 	int num = hook_call_front(&t->post_exn_call, -1, false, 0);
+	/* kernel IPC chains either keep shitting, or get off the pot. */
+	assert(num == 0 || t->ipc != NULL || IS_READY(t->status));
 	return num > 0;
 }
 
@@ -450,11 +452,13 @@ uint64_t wakeup_at(L4_Time_t period)
 
 void thread_sleep(struct thread *t, L4_Time_t period)
 {
+#ifndef NDEBUG
 	if(!IS_IPC_WAIT(t->status) && t->status != TS_XFER) {
-		printf("%s: thread %lu:%lu status is %s\n", __func__,
+		TRACE("%s: thread %lu:%lu status is %s\n", __func__,
 			TID_THREADNUM(t->id), TID_VERSION(t->id),
 			sched_status_str(t));
 	}
+#endif
 
 	assert(IS_IPC_WAIT(t->status) || t->status == TS_XFER);
 	/* NOTE: this function was merged with thread_wake(), which asserted
@@ -463,10 +467,15 @@ void thread_sleep(struct thread *t, L4_Time_t period)
 	 * RECV_WAIT.
 	 */
 
+#ifndef NDEBUG
 	if(period.raw != L4_ZeroTime.raw && period.raw != L4_Never.raw) {
 		TRACE("%s: sleeping thread %lu:%lu for %llu microseconds\n", __func__,
 			TID_THREADNUM(t->id), TID_VERSION(t->id), time_in_us(period));
+	} else if(period.raw == L4_Never.raw) {
+		TRACE("%s: sleeping thread %lu:%lu for good\n", __func__,
+			TID_THREADNUM(t->id), TID_VERSION(t->id));
 	}
+#endif
 
 	if(period.raw == L4_ZeroTime.raw) {
 		if(CHECK_FLAG(t->flags, TF_HALT)) {
@@ -602,7 +611,8 @@ static void receive_breath_of_life(
 			sp = L4_VREG(utcb, L4_TCR_MR(2));
 		TRACE("%s: setting sp %#lx, ip %#lx\n", __func__, sp, ip);
 		thread_set_spip(t, sp, ip);
-		/* the exception's IPC success unhalts the thread. */
+
+		thread_wake(t);
 	}
 }
 

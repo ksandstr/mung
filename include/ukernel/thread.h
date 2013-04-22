@@ -80,16 +80,32 @@ struct thread
 	uint32_t quantum;			/* # of µs left (goes up to 1h 6m) */
 	uint64_t total_quantum;		/* # of µs left */
 
+	/* parameters of the ongoing IPC operation
+	 * (i.e. copies of TCR values at time of IPC syscall)
+	 */
 	L4_Time_t send_timeout, recv_timeout;
-	/* "from" is altered on receive. */
+	/* successful active or passive receive stores the apparent sender's
+	 * global TID in ipc_from. (actual sender is stored in the TCR.)
+	 */
 	L4_ThreadId_t ipc_from, ipc_to;
 
 	/* the IPC mechanism arranges for post_exn_call to be called front-to-back
-	 * once either the IPC in progress succeeds, or fails. hook functions
-	 * should call hook_detach() as appropriate.
+	 * once either the IPC in progress succeeds in its send and receive half
+	 * both, or fails in either. hook functions should call hook_detach() as
+	 * desired.
 	 *
 	 * @code is 0 on success and nonzero on failure. @dataptr isn't defined.
 	 * the containing thread can be referenced with container_of().
+	 *
+	 * this hook informs kernel-generated IPC chains (i.e. page faults,
+	 * exceptions, string transfer pagefaults, and breath-of-life) of timeout
+	 * and abort events. on success, exactly one hook function must put the
+	 * thread in question in the correct state that follows from success; on
+	 * failure, hook functions must leave the thread state alone (per def'n of
+	 * post_exn_fail()).
+	 *
+	 * when the hook is empty, no kernel-generated IPC is occurring. threads
+	 * can only be scheduled when this is true.
 	 */
 	struct hook post_exn_call;
 
@@ -222,6 +238,14 @@ extern void save_ipc_regs(struct thread *t, int mrs, int brs);
 /* these return false for ordinary IPC (with return values etc), and true for
  * exception IPC (with a full frame restore). they don't care about kernel
  * threads.
+ *
+ * calls to post_exn_fail() should co-occur with something that brings @t out
+ * of IPC sleep, i.e. thread_ipc_fail(), thread_wake() or similar, regardless
+ * of the return value.
+ *
+ * when post_exn_ok() returns true the thread'll have changed state according
+ * to the kernel-side IPC flow, and should not be put to sleep or woken up by
+ * the caller.
  */
 extern bool post_exn_fail(struct thread *t);
 extern bool post_exn_ok(struct thread *t);

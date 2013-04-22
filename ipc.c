@@ -1219,8 +1219,13 @@ bool ipc_send_half(struct thread *self)
 
 		/* receiver's IPC return */
 		dest->ipc_from = self_id;
-		bool regular = !post_exn_ok(dest);
-		if(regular) {
+		/* wake the receiver up, joining with the overridden status. this
+		 * satisfies thread_wake()'s precondition both in ordinary and
+		 * kernel-originated IPC.
+		 */
+		assert(dest->status == TS_RECV_WAIT || dest->status == TS_R_RECV);
+		dest->status = status;
+		if(!post_exn_ok(dest)) {
 			/* ordinary IPC; set up the IPC return registers. */
 			set_ipc_return_thread(dest);
 			if(propagated) {
@@ -1229,19 +1234,10 @@ bool ipc_send_half(struct thread *self)
 					0x1000));
 				L4_VREG(dest_utcb, L4_TCR_VA_SENDER) = self->id;
 			}
-		}
 
-		if(dest->ipc != NULL) {
-			/* string transfers have slightly different rules. */
-			assert(!regular);
-			thread_sleep(dest, L4_Never);		/* FIXME: xfer timeouts */
-		} else {
-			/* wake the receiver up, joining with the overridden status. this
-			 * satisfies thread_wake()'s precondition.
-			 */
-			assert(dest->status == TS_RECV_WAIT || dest->status == TS_R_RECV);
-			dest->status = status;
 			thread_wake(dest);
+		} else {
+			assert(dest->ipc != NULL || IS_READY(dest->status));
 		}
 
 		if(L4_IsNilThread(self->ipc_from)) {

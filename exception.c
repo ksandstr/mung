@@ -316,6 +316,8 @@ static void receive_exn_reply(struct hook *hook, uintptr_t code, void *priv)
 	/* set reserved bits correctly */
 	regs->eflags &= 0xffffffd7;
 	regs->eflags |= 0x00000002;
+
+	thread_wake(t);
 }
 
 
@@ -356,6 +358,16 @@ void build_exn_ipc(
 	 * MRs we're interested in.
 	 */
 	hook_push_front(&t->post_exn_call, &receive_exn_reply, NULL);
+}
+
+
+static void receive_pf_reply(struct hook *hook, uintptr_t code, void *priv)
+{
+	hook_detach(hook);
+	if(likely(code == 0)) {
+		struct thread *t = container_of(hook, struct thread, post_exn_call);
+		thread_wake(t);
+	}
 }
 
 
@@ -492,6 +504,7 @@ void isr_exn_pf_bottom(struct x86_exregs *regs)
 			return_to_scheduler();
 		} else {
 			set_pf_msg(current, utcb, fault_addr, regs->eip, fault_access);
+			hook_push_back(&current->post_exn_call, &receive_pf_reply, NULL);
 			return_to_ipc(pager);
 		}
 	}
@@ -500,6 +513,15 @@ void isr_exn_pf_bottom(struct x86_exregs *regs)
 
 /* functions exported in <ukernel/ipc.h> */
 
+/* FIXME: if a pagefault is replied to with more than 3 MRs (tag, single
+ * MapItem), the reply's data overwrites that present in the recipient's TCB.
+ * this can disrupt ongoing IPC by overwriting registers that haven't been
+ * copied, and munge MRs in a pre-IPC condition when a pagefault or exception
+ * is generated while the thread loads its MRs.
+ *
+ * proposed solution: when !hook_empty(&t->post_exn_call), store existing MRs
+ * into a buffer that gets restored when post_exn_ok() returns true.
+ */
 void set_pf_msg(
 	struct thread *t,
 	void *utcb,
