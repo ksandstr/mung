@@ -68,6 +68,10 @@ void __assert_failure(
 {
 	printf("assert(%s) failed in `%s' (%s:%u)\n", condition, function,
 		file, line);
+#ifndef NDEBUG
+	printf("  second-level call returns to %p\n",
+		__builtin_return_address(1));
+#endif
 	panic("*** assertion failure");
 }
 
