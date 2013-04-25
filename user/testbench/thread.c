@@ -126,8 +126,7 @@ int thread_on_fork(
 		}
 		threads[i].stack = NULL;
 		threads[i].alive = false;
-		threads[i].version = -threads[i].version;
-		assert(threads[i].version <= 0);
+		threads[i].version = -abs(threads[i].version);
 		threads[i].retval = NULL;
 
 		/* TODO: destroy TSD bits for threads[i] */
