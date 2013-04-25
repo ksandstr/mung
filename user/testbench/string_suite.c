@@ -661,8 +661,6 @@ START_TEST(finite_xfer_timeout)
 	L4_Word_t tos = L4_Timeouts(L4_TimePeriod(timeo_ms * 1000),
 		L4_TimePeriod(timeo_ms * 1000));
 
-	todo_start("no kernel support");
-
 	/* part 1: timeout should not be triggered when no faults occur */
 	L4_Set_XferTimeouts(tos);
 	L4_Word_t ec = faulting_echo(NULL, test_tid, 0, false, false);
@@ -740,8 +738,6 @@ START_TEST(finite_xfer_timeout)
 			(long)diff_us);
 		ok(diff_us <= 5000, "timed out at timeo_ms=%d", timeo_ms);
 	}
-
-	todo_end();
 }
 END_TEST
 
