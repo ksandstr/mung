@@ -1398,40 +1398,30 @@ bool ipc_recv_half(struct thread *self, bool *preempt_p)
 {
 	assert(preempt_p != NULL);
 
-	/* FIXME: remove this when anylocalthread is implemented. it prevents
-	 * the panic() in this function, but fails ipc_suite.
-	 */
-	if(self->ipc_from.raw == L4_anylocalthread.raw) {
-		self->ipc_from = L4_anythread;
-	}
-
 	/* find sender. */
 	struct thread *from = NULL;
 	L4_ThreadId_t from_tid = L4_nilthread;
 	size_t hash = int_hash(self->id);
-	if(self->ipc_from.raw != L4_anylocalthread.raw) {
-		struct htable_iter it;
-		for(struct ipc_wait *w = htable_firstval(&sendwait_hash, &it, hash);
-			w != NULL;
-			w = htable_nextval(&sendwait_hash, &it, hash))
+	struct htable_iter it;
+	for(struct ipc_wait *w = htable_firstval(&sendwait_hash, &it, hash);
+		w != NULL;
+		w = htable_nextval(&sendwait_hash, &it, hash))
+	{
+		/* TODO: filter TS_STOPPED threads, as they don't participate in
+		 * IPC until restarted.
+		 */
+		if(w->dest_tid.raw == self->id
+			&& (self->ipc_from.raw == L4_anythread.raw
+				|| self->ipc_from.raw == w->send_tid.raw
+				|| (self->ipc_from.raw == L4_anylocalthread.raw
+					&& w->thread->space == self->space)))
 		{
-			/* TODO: filter TS_STOPPED threads, as they don't participate in
-			 * IPC until restarted.
-			 */
-			if(w->dest_tid.raw == self->id
-				&& (self->ipc_from.raw == L4_anythread.raw
-					|| self->ipc_from.raw == w->send_tid.raw))
-			{
-				from = w->thread;
-				from_tid = w->send_tid;
-				htable_delval(&sendwait_hash, &it);
-				kmem_cache_free(ipc_wait_slab, w);
-				break;
-			}
+			from = w->thread;
+			from_tid = w->send_tid;
+			htable_delval(&sendwait_hash, &it);
+			kmem_cache_free(ipc_wait_slab, w);
+			break;
 		}
-	} else {
-		/* TODO: handle those, also */
-		panic("anylocalthread not handled");
 	}
 
 	if(from == NULL) {
