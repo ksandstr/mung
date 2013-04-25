@@ -24,8 +24,7 @@
 #include <ukernel/ipc.h>
 
 
-/* for "active/passive send/receive" prints */
-#define TRACE(fmt, ...) TRACE_MSG(TRID_IPC, fmt, __VA_ARGS__)
+#define TRACE(fmt, ...) TRACE_MSG(TRID_IPC, fmt, ##__VA_ARGS__)
 
 
 /* these are kept in sendwait_hash in a multiset way, i.e. use
@@ -184,7 +183,6 @@ static bool stritem_next(struct stritem_iter *it)
  * another hassle.
  *
  * TODO: this doesn't fail atomically.
- * ALSO TODO: nor does it handle grantitems.
  */
 static int apply_io_mapitem(
 	struct thread *source,
@@ -565,7 +563,6 @@ static bool set_prexfer_fault_state(
 	assert(!CHECK_FLAG(dest->flags, TF_SENDER));
 
 	if(nf_send > 0) {
-		TRACE("%s: %d faults for sender\n", __func__, nf_send);
 		stritem_faults(&st->faults[0], nf_send, source->space, send_si,
 			L4_Readable, -1);
 		send_xfer_fault(source, st->faults[0], source->ctx.eip,
@@ -577,7 +574,6 @@ static bool set_prexfer_fault_state(
 	}
 
 	if(nf_recv > 0) {
-		TRACE("%s: %d faults for receiver\n", __func__, nf_recv);
 		stritem_faults(&st->faults[nf_send], nf_recv, dest->space, recv_si,
 			L4_Writable | L4_Readable, -1);
 
@@ -589,7 +585,6 @@ static bool set_prexfer_fault_state(
 		thread_sleep(dest, L4_Never);
 	}
 
-	TRACE("%s: exiting.\n", __func__);
 	return true;
 }
 
@@ -1438,13 +1433,6 @@ bool ipc_recv_half(struct thread *self, bool *preempt_p)
 			TID_THREADNUM(self->ipc_from.raw), TID_VERSION(self->ipc_from.raw));
 		self->status = TS_RECV_WAIT;
 		if(self->ipc != NULL && self->ipc->xferto_at > 0) {
-#if 0
-			TRACE("%s: ongoing ipc timeout in %lu:%lu at %lu (now %lu)\n",
-				__func__, TID_THREADNUM(self->id), TID_VERSION(self->id),
-				(unsigned long)self->ipc->xferto_at,
-				(unsigned long)ksystemclock());
-			TRACE("%s: called from %p\n", __func__, __builtin_return_address(0));
-#endif
 			if(ksystemclock() >= self->ipc->xferto_at) {
 				ipc_xfer_timeout(self->ipc);
 				*preempt_p = false;
@@ -1632,11 +1620,6 @@ end:
 	if(current->status == TS_READY && !*preempt_p) {
 		current->status = TS_RUNNING;
 	}
-
-#if 0
-	TRACE("%s: IPC returning with status %d.\n", __func__,
-		(int)current->status);
-#endif
 }
 
 
