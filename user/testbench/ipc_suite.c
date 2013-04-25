@@ -25,6 +25,7 @@
 struct sender_param {
 	L4_ThreadId_t parent;
 	L4_Word_t payload;
+	L4_Time_t delay;	/* ZeroTime or TimePeriod */
 };
 
 
@@ -55,6 +56,11 @@ static void sender_thread_fn(void *param_ptr)
 {
 	struct sender_param *p = param_ptr;
 
+	if(p->delay.raw != L4_ZeroTime.raw) {
+		assert(p->delay.raw != L4_Never.raw);
+		L4_Sleep(p->delay);
+	}
+
 	L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 1, .X.label = 0xd00d }.raw);
 	L4_LoadMR(1, p->payload);
 	L4_MsgTag_t tag = L4_Send_Timeout(p->parent, TEST_IPC_DELAY);
@@ -66,18 +72,18 @@ static void sender_thread_fn(void *param_ptr)
 }
 
 
-static L4_ThreadId_t send_from_thread(L4_Word_t payload)
+static L4_ThreadId_t send_from_thread(L4_Word_t payload, L4_Time_t delay)
 {
 	struct sender_param *param = malloc(sizeof(*param));
 	fail_if(param == NULL);
 	*param = (struct sender_param){
-		.parent = L4_MyGlobalId(), .payload = payload,
+		.parent = L4_MyGlobalId(), .payload = payload, .delay = delay,
 	};
 	return start_thread(&sender_thread_fn, param);
 }
 
 
-static L4_ThreadId_t send_from_fork(L4_Word_t payload)
+static L4_ThreadId_t send_from_fork(L4_Word_t payload, L4_Time_t delay)
 {
 	L4_ThreadId_t child_tid, parent_tid = L4_MyGlobalId();
 	int pid = fork_tid(&child_tid);
@@ -85,7 +91,7 @@ static L4_ThreadId_t send_from_fork(L4_Word_t payload)
 		struct sender_param *param = malloc(sizeof(*param));
 		fail_if(param == NULL);
 		*param = (struct sender_param){
-			.parent = parent_tid, .payload = payload,
+			.parent = parent_tid, .payload = payload, .delay = delay,
 		};
 		sender_thread_fn(param);
 		exit(0);
@@ -135,12 +141,17 @@ static inline L4_MsgTag_t L4_WaitLocal_Timeout(
  *   2b) same but one thread, local, should not timeout;
  *   3) two threads, one local & one foreign, should receive from local, and
  *      then timeout.
+ *
+ * due to the test harness being somewhat less than featureful wrt looped
+ * tests, there's a loop around parts 2 and 3 to introduce delays, hopefully
+ * triggering both active send and receive.
  */
 START_TEST(receive_from_anylocalthread)
 {
-	diag("test in %lu:%lu", L4_ThreadNo(L4_Myself()),
-		L4_Version(L4_Myself()));
-	plan_tests(5);
+	plan_tests(1 + 2 * 4);
+
+	const int delay_ms = 3;
+	const L4_Time_t delay = L4_TimePeriod(delay_ms * 1000);
 
 	/* flush immediate senders first with vanilla IPC. */
 	bool timed_out = false;
@@ -154,7 +165,6 @@ START_TEST(receive_from_anylocalthread)
 	}
 	fail_unless(timed_out, "palate-cleansing didn't take");
 
-	todo_start("kernel not ready");
 
 	/* part 1 */
 	L4_ThreadId_t from;
@@ -162,42 +172,51 @@ START_TEST(receive_from_anylocalthread)
 	ok(L4_IpcFailed(tag) && (L4_ErrorCode() & 0xf) == 3,
 		"recv timeout in no-sender");
 
-	/* part 2a */
-	L4_ThreadId_t sender = send_from_fork(0xdeadbeef);
-	tag = L4_WaitLocal_Timeout(TEST_IPC_DELAY, &from);
-	ok(L4_IpcFailed(tag) && (L4_ErrorCode() & 0xf) == 3,
-		"recv timeout in foreign sender");
-	close_sender(sender);
+	for(int i=0; i <= 1; i++) {
+		const bool d_self = !CHECK_FLAG(i, 1);
+		const L4_Time_t d = d_self ? L4_ZeroTime : delay;
+		diag("delay_ms=%d applies to %s", delay_ms,
+			d_self ? "receiver" : "sender");
 
-	/* part 2b */
-	L4_ThreadId_t fork_sender = send_from_thread(0xf00bdead);
-	tag = L4_WaitLocal_Timeout(TEST_IPC_DELAY, &from);
-	if(L4_IpcFailed(tag)) diag("ec %#lx", L4_ErrorCode());
-	L4_Word_t payload;
-	L4_StoreMR(1, &payload);
-	ok(L4_IpcSucceeded(tag) && payload == 0xf00bdead,
-		"recv success in local sender");
-	close_sender(fork_sender);
+		/* part 2a */
+		L4_ThreadId_t sender = send_from_fork(0xdeadbeef, d);
+		if(d_self) L4_Sleep(delay);
+		tag = L4_WaitLocal_Timeout(TEST_IPC_DELAY, &from);
+		/* (no diag(), receive phase timeout is expected) */
+		ok(L4_IpcFailed(tag) && (L4_ErrorCode() & 0xf) == 3,
+			"recv timeout in foreign sender");
+		close_sender(sender);
 
-	/* part 3 */
-	fork_sender = send_from_fork(0xbaddcafe);
-	sender = send_from_thread(0xb0a7face);
-	tag = L4_WaitLocal_Timeout(TEST_IPC_DELAY, &from);
-	if(L4_IpcFailed(tag)) diag("ec %#lx", L4_ErrorCode());
-	L4_StoreMR(1, &payload);
-	ok(L4_IpcSucceeded(tag) && payload == 0xb0a7face,
-		"received from thread, first");
+		/* part 2b */
+		L4_ThreadId_t fork_sender = send_from_thread(0xf00bdead, d);
+		if(d_self) L4_Sleep(delay);
+		tag = L4_WaitLocal_Timeout(TEST_IPC_DELAY, &from);
+		if(L4_IpcFailed(tag)) diag("ec %#lx", L4_ErrorCode());
+		L4_Word_t payload;
+		L4_StoreMR(1, &payload);
+		ok(L4_IpcSucceeded(tag) && payload == 0xf00bdead,
+			"recv success in local sender");
+		close_sender(fork_sender);
 
-	tag = L4_Wait_Timeout(TEST_IPC_DELAY, &from);
-	if(L4_IpcFailed(tag)) diag("ec %#lx", L4_ErrorCode());
-	L4_StoreMR(1, &payload);
-	ok(L4_IpcSucceeded(tag) && payload == 0xbaddcafe,
-		"received from fork, after");
+		/* part 3 */
+		fork_sender = send_from_fork(0xbaddcafe, d);
+		sender = send_from_thread(0xb0a7face, d);
+		if(d_self) L4_Sleep(delay);
+		tag = L4_WaitLocal_Timeout(TEST_IPC_DELAY, &from);
+		if(L4_IpcFailed(tag)) diag("ec %#lx", L4_ErrorCode());
+		L4_StoreMR(1, &payload);
+		ok(L4_IpcSucceeded(tag) && payload == 0xb0a7face,
+			"received from thread, first");
 
-	close_sender(fork_sender);
-	close_sender(sender);
+		tag = L4_Wait_Timeout(TEST_IPC_DELAY, &from);
+		if(L4_IpcFailed(tag)) diag("ec %#lx", L4_ErrorCode());
+		L4_StoreMR(1, &payload);
+		ok(L4_IpcSucceeded(tag) && payload == 0xbaddcafe,
+			"received from fork, after");
 
-	todo_end();
+		close_sender(fork_sender);
+		close_sender(sender);
+	}
 }
 END_TEST
 
