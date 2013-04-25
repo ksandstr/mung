@@ -32,17 +32,17 @@ struct sender_param {
 /* TODO: move this into util.c or some such */
 static int fork_tid(L4_ThreadId_t *tid_p)
 {
+	L4_MsgTag_t tag;
 	L4_ThreadId_t parent = L4_MyGlobalId();
 	int pid = fork();
 	if(pid != 0) {
-		L4_MsgTag_t tag = L4_Wait(tid_p);
-		fail_if(L4_IpcFailed(tag),
-			"%s: ec %#lx", __func__, L4_ErrorCode());
+		tag = L4_Wait(tid_p);
 	} else {
-		L4_LoadMR(0, 0);
-		L4_Send(parent);
 		*tid_p = L4_nilthread;
+		L4_LoadMR(0, 0);
+		tag = L4_Send(parent);
 	}
+	fail_if(L4_IpcFailed(tag), "%s: ec %#lx", __func__, L4_ErrorCode());
 
 	return pid;
 }
@@ -63,8 +63,8 @@ static void sender_thread_fn(void *param_ptr)
 
 	L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 1, .X.label = 0xd00d }.raw);
 	L4_LoadMR(1, p->payload);
-	L4_MsgTag_t tag = L4_Send_Timeout(p->parent, TEST_IPC_DELAY);
-	if(L4_IpcFailed(tag) && (L4_ErrorCode() & 0xf) != 2) {
+	L4_MsgTag_t tag = L4_Send(p->parent);
+	if(L4_IpcFailed(tag)) {
 		diag("%s: send failed, ec %#lx", __func__, L4_ErrorCode());
 	}
 
@@ -79,7 +79,8 @@ static L4_ThreadId_t send_from_thread(L4_Word_t payload, L4_Time_t delay)
 	*param = (struct sender_param){
 		.parent = L4_MyGlobalId(), .payload = payload, .delay = delay,
 	};
-	return start_thread(&sender_thread_fn, param);
+	L4_ThreadId_t tid = start_thread(&sender_thread_fn, param);
+	return tid;
 }
 
 
@@ -185,6 +186,11 @@ START_TEST(receive_from_anylocalthread)
 		/* (no diag(), receive phase timeout is expected) */
 		ok(L4_IpcFailed(tag) && (L4_ErrorCode() & 0xf) == 3,
 			"recv timeout in foreign sender");
+		/* (clear it, though.) */
+		do {
+			tag = L4_Wait(&from);
+			fail_if(L4_IpcFailed(tag));
+		} while(from.raw != sender.raw);
 		close_sender(sender);
 
 		/* part 2b */
@@ -207,15 +213,14 @@ START_TEST(receive_from_anylocalthread)
 		L4_StoreMR(1, &payload);
 		ok(L4_IpcSucceeded(tag) && payload == 0xb0a7face,
 			"received from thread, first");
+		close_sender(sender);	/* must catch its death gurgle first */
 
 		tag = L4_Wait_Timeout(TEST_IPC_DELAY, &from);
 		if(L4_IpcFailed(tag)) diag("ec %#lx", L4_ErrorCode());
 		L4_StoreMR(1, &payload);
 		ok(L4_IpcSucceeded(tag) && payload == 0xbaddcafe,
 			"received from fork, after");
-
 		close_sender(fork_sender);
-		close_sender(sender);
 	}
 }
 END_TEST
