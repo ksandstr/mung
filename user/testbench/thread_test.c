@@ -62,7 +62,7 @@ void threadctl_test(void)
 		static uint8_t stack[8192] __attribute__((aligned(4096)));
 		const L4_Word_t child_stk_top = (L4_Word_t)(stack
 			+ sizeof(stack) - 16);
-		add_fs_tid(1, dest);
+		add_fs_tid(getpid(), dest);
 		L4_Start_SpIp(dest, child_stk_top, (L4_Word_t)&test_thread_fn);
 		printf("test thread %lu:%lu started.\n",
 			L4_ThreadNo(dest), L4_Version(dest));

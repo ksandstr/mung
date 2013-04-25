@@ -306,7 +306,7 @@ L4_ThreadId_t start_thread_long(
 		}
 
 		/* let forkserv know this should be paged for testbench */
-		add_fs_tid(1, tid);
+		add_fs_tid(getpid(), tid);
 
 		if(priority != -1) {
 			L4_Word_t r = L4_Set_Priority(tid, priority);

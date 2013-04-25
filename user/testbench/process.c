@@ -31,14 +31,22 @@ struct child_param
 
 static L4_ThreadId_t mgr_tid = { .raw = 0 };
 static bool is_roottask = true;
+static int task_pid = 1;
 
 
 static void child_starter_fn(struct child_param *param);
 
 
-bool is_privileged(void)
-{
+bool is_privileged(void) {
 	return is_roottask;
+}
+
+
+int getpid(void)
+{
+	assert(!is_roottask || task_pid == 1);
+	assert(is_roottask || task_pid > 1);
+	return task_pid;
 }
 
 
@@ -330,6 +338,22 @@ int fork(void)
 		}
 
 		L4_Set_ExceptionHandler(L4_nilthread);
+
+		/* now, who the fuck was I again? */
+		L4_LoadMR(0, (L4_MsgTag_t){ .X.label = FORKSERV_GETPID }.raw);
+		tag = L4_Call(L4_Pager());
+		if(L4_IpcFailed(tag)) {
+			printf("fork (child side): can't get own pid, ec %#lx\n",
+				L4_ErrorCode());
+			goto child_fail;
+		}
+		L4_Word_t val;
+		L4_StoreMR(1, &val);
+		if(tag.X.u < 1 || val <= 1) {
+			printf("fork (child side): getpid() failed\n");
+			goto child_fail;
+		}
+		task_pid = val;
 	}
 	if(param_ptr != NULL) {
 		free(param_ptr->stk_top);	/* also destroys param */

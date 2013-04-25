@@ -897,6 +897,20 @@ static bool handle_wait(L4_ThreadId_t ipc_from)
 }
 
 
+static bool handle_getpid(L4_ThreadId_t ipc_from)
+{
+	struct fs_space *sp = get_space_by_tid(ipc_from);
+	if(sp == NULL) {
+		L4_LoadMR(0, 0);
+		return true;
+	}
+
+	L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 1 }.raw);
+	L4_LoadMR(1, sp->id);
+	return true;
+}
+
+
 static bool end_thread(L4_ThreadId_t tid)
 {
 	struct fs_thread *t = get_thread(tid);
@@ -1186,6 +1200,11 @@ static void forkserv_dispatch_loop(void)
 				case FORKSERV_WAIT:
 					assert(invariants("wait"));
 					reply = handle_wait(from);
+					break;
+
+				case FORKSERV_GETPID:
+					assert(invariants("getpid"));
+					reply = handle_getpid(from);
 					break;
 
 				case FORKSERV_EXIT: {

@@ -24,6 +24,7 @@
 #define FORKSERV_WAIT 0x7741		/* "wA" */
 #define FORKSERV_NEW_THREAD 0x2e21	/* ".!" */
 #define FORKSERV_UNMAP 0x754d		/* "uM" */
+#define FORKSERV_GETPID 0x6750		/* "gP" */
 
 
 /* this one is used from unit tests, though. forkserv calls unmap (not flush)

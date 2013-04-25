@@ -146,6 +146,7 @@ extern bool use_forkserv_sbrk;
 extern int fork(void);
 extern int wait(int *status);
 extern NORETURN void exit(int status);
+extern int getpid(void);
 
 extern bool is_privileged(void);
 
