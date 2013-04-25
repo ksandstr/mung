@@ -1254,7 +1254,9 @@ bool ipc_send_half(struct thread *self)
 
 	if(status == TS_RECV_WAIT
 		&& (dest->ipc_from.raw == L4_anythread.raw
-			|| dest->ipc_from.raw == self_id.raw)
+			|| dest->ipc_from.raw == self_id.raw
+			|| (dest->ipc_from.raw == L4_anylocalthread.raw
+				&& dest->space == self->space))
 		&& (dest->wakeup_time == ~(uint64_t)0u
 			|| dest->wakeup_time > now_us))
 	{
