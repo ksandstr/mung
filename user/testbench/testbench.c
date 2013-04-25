@@ -578,6 +578,7 @@ int main(void)
 		&thread_suite,
 		&space_suite,
 		&sched_suite,
+		&ipc_suite,
 		&string_suite,
 	};
 	SRunner *run = srunner_create(NULL);

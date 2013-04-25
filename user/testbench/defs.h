@@ -18,8 +18,10 @@
 #define PAGE_MASK (PAGE_SIZE - 1)
 #define UTCB_SIZE 512
 
-/* the appropriate delay for IPC reception before failure */
-#define TEST_IPC_DELAY L4_TimePeriod(150000)
+/* the appropriate delay for IPC reception before failure. applied wherever
+ * it's necessary to let the other get scheduled first.
+ */
+#define TEST_IPC_DELAY L4_TimePeriod(100 * 1000)
 
 /* common IPC labels */
 #define QUIT_LABEL 0xdead
@@ -57,6 +59,7 @@ extern struct Suite *self_suite(void);
 extern struct Suite *sched_suite(void);
 extern struct Suite *space_suite(void);
 extern struct Suite *thread_suite(void);
+extern struct Suite *ipc_suite(void);
 extern struct Suite *string_suite(void);
 
 

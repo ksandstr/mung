@@ -1398,6 +1398,13 @@ bool ipc_recv_half(struct thread *self, bool *preempt_p)
 {
 	assert(preempt_p != NULL);
 
+	/* FIXME: remove this when anylocalthread is implemented. it prevents
+	 * the panic() in this function, but fails ipc_suite.
+	 */
+	if(self->ipc_from.raw == L4_anylocalthread.raw) {
+		self->ipc_from = L4_anythread;
+	}
+
 	/* find sender. */
 	struct thread *from = NULL;
 	L4_ThreadId_t from_tid = L4_nilthread;
