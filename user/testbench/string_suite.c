@@ -615,6 +615,15 @@ START_TEST(immediate_xfer_timeout)
 END_TEST
 
 
+static bool call_ping(L4_ThreadId_t dest_tid)
+{
+	L4_LoadMR(0, (L4_MsgTag_t){ .X.label = PING_LABEL, .X.u = 1 }.raw);
+	L4_LoadMR(1, ECHO_LABEL ^ DELAY_LABEL);
+	L4_MsgTag_t tag = L4_Call(dest_tid);
+	return L4_IpcSucceeded(tag);
+}
+
+
 static L4_Word_t delayed_faulting_echo(
 	uint64_t *echo_time_p,
 	L4_ThreadId_t thread,
@@ -624,9 +633,12 @@ static L4_Word_t delayed_faulting_echo(
 	L4_Time_t delay,
 	int delay_repeat)
 {
-	bool ipc_ok = send_reset(stats_tid);
+	/* set up the xfer fault service delay. */
+	bool ipc_ok = send_delay(stats_tid, delay, delay_repeat);
 	fail_unless(ipc_ok, "ec %#lx", L4_ErrorCode());
-	ipc_ok = send_delay(stats_tid, delay, delay_repeat);
+
+	/* sync with echo partner. */
+	ipc_ok = call_ping(thread);
 	fail_unless(ipc_ok, "ec %#lx", L4_ErrorCode());
 
 	L4_ThreadId_t old_pager = L4_Pager();
@@ -634,6 +646,7 @@ static L4_Word_t delayed_faulting_echo(
 	L4_Word_t ec = faulting_echo(echo_time_p, thread, iter, u_send, u_recv);
 	L4_Set_Pager(old_pager);
 
+	/* clear the delay mode. */
 	ipc_ok = send_delay(stats_tid, L4_ZeroTime, 0);
 	fail_unless(ipc_ok, "ec %#lx", L4_ErrorCode());
 
@@ -748,17 +761,14 @@ START_TEST(delay_test)
 	plan_tests(5);
 
 	/* synchronize. */
-	L4_LoadMR(0, (L4_MsgTag_t){ .X.label = PING_LABEL, .X.u = 1 }.raw);
-	L4_LoadMR(1, ECHO_LABEL ^ DELAY_LABEL);
-	L4_MsgTag_t tag = L4_Call(test_tid);
-	fail_unless(L4_IpcSucceeded(tag),
-		"sync ping failed, ec %#lx", L4_ErrorCode());
+	bool ipc_ok = call_ping(test_tid);
+	fail_unless(ipc_ok, "sync ping failed, ec %#lx", L4_ErrorCode());
 
 	/* without delay, reply should be immediate. */
 	L4_Clock_t before = L4_SystemClock();
 	L4_LoadMR(0, (L4_MsgTag_t){ .X.label = PING_LABEL, .X.u = 1 }.raw);
 	L4_LoadMR(1, ECHO_LABEL ^ DELAY_LABEL);
-	tag = L4_Call_Timeouts(test_tid, L4_ZeroTime, L4_Never);
+	L4_MsgTag_t tag = L4_Call_Timeouts(test_tid, L4_ZeroTime, L4_Never);
 	L4_Clock_t after = L4_SystemClock();
 	if(L4_IpcFailed(tag)) diag("error code %#lx", L4_ErrorCode());
 	ok(L4_IpcSucceeded(tag), "immediate call succeeded");
@@ -769,7 +779,7 @@ START_TEST(delay_test)
 	/* with delay, there should be a send-side timeout between 16 and 19 ms,
 	 * inclusive, rounding down.
 	 */
-	bool ipc_ok = send_delay(test_tid, L4_TimePeriod(20 * 1000), 1);
+	ipc_ok = send_delay(test_tid, L4_TimePeriod(20 * 1000), 1);
 	fail_unless(ipc_ok, "ec %#lx", L4_ErrorCode());
 	before = L4_SystemClock();
 	L4_LoadMR(0, (L4_MsgTag_t){ .X.label = PING_LABEL, .X.u = 1 }.raw);
