@@ -519,7 +519,7 @@ static L4_Word_t faulting_echo(
 	int echo_len = strlen(echostr);
 	fail_unless(strlen(echostr) == test_len - 1);
 
-	char *replybuf = calloc(1, test_len * 2);
+	char *replybuf = valloc(test_len * 2);
 	fail_if(replybuf == NULL);
 
 	if(do_unmap_send) {
@@ -529,6 +529,8 @@ static L4_Word_t faulting_echo(
 	if(do_unmap_recv) {
 		// diag("recv buffer %p:%#x", replybuf, (unsigned)test_len * 2);
 		flush_byte_range((uintptr_t)replybuf, test_len * 2, 0);
+	} else {
+		memset(replybuf, '\0', test_len * 2);
 	}
 
 	L4_Clock_t before = L4_SystemClock();
