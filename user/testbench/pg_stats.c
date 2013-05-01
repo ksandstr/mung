@@ -39,7 +39,7 @@ static void stats_pager_fn(void *param_ptr)
 	 */
 	L4_Time_t delay = L4_ZeroTime;
 	int delay_repeat = 0;
-	bool run = true;
+	bool delay_spin = false, run = true;
 	while(run) {
 		L4_ThreadId_t from;
 		L4_LoadBR(0, 0);
@@ -58,13 +58,15 @@ static void stats_pager_fn(void *param_ptr)
 				reset_stats(stats);
 				L4_LoadMR(0, 0);
 			} else if(tag.X.label == DELAY_LABEL
-				&& tag.X.u == 2 && tag.X.t == 0)
+				&& tag.X.u == 3 && tag.X.t == 0)
 			{
-				L4_Word_t t, r;
+				L4_Word_t t, r, s;
 				L4_StoreMR(1, &t);
 				L4_StoreMR(2, &r);
+				L4_StoreMR(3, &s);
 				delay.raw = t;
 				delay_repeat = r;
+				delay_spin = !!s;
 				L4_LoadMR(0, 0);
 			} else if(tag.X.label >> 4 == 0xffe
 				&& tag.X.u == 2 && tag.X.t == 0)
@@ -119,7 +121,7 @@ static void stats_pager_fn(void *param_ptr)
 					tag = L4_ReplyWait(from, &from);
 				} else {
 					tag = L4_Reply(from);
-					L4_Sleep(delay);
+					if(delay_spin) usleep(time_in_us(delay)); else L4_Sleep(delay);
 					if(--delay_repeat == 0) delay = L4_ZeroTime;
 					if(L4_IpcSucceeded(tag)) {
 						tag = L4_Wait(&from);

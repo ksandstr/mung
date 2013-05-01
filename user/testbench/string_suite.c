@@ -103,7 +103,7 @@ static void string_test_thread(void *param UNUSED)
 #endif
 	L4_Time_t delay = L4_ZeroTime;
 	int delay_repeat = 0;
-	bool running = true;
+	bool delay_spin = false, running = true;
 	while(running) {
 		L4_ThreadId_t from;
 		/* simple acceptor over the entire recvbuf. */
@@ -149,16 +149,18 @@ static void string_test_thread(void *param UNUSED)
 				}
 
 				case DELAY_LABEL: {
-					if(tag.X.u != 2 || tag.X.t > 0) {
+					if(tag.X.u != 3 || tag.X.t > 0) {
 						diag("invalid delay message");
 						L4_LoadMR(0, 0);
 						break;
 					}
-					L4_Word_t timeword, repeat;
+					L4_Word_t timeword, repeat, spin;
 					L4_StoreMR(1, &timeword);
 					L4_StoreMR(2, &repeat);
+					L4_StoreMR(3, &spin);
 					delay.raw = timeword;
 					delay_repeat = repeat;
+					delay_spin = !!spin;
 					break;
 				}
 
@@ -185,7 +187,7 @@ static void string_test_thread(void *param UNUSED)
 					tag = L4_ReplyWait(from, &from);
 				} else {
 					tag = L4_Reply(from);
-					L4_Sleep(delay);
+					if(delay_spin) usleep(time_in_us(delay)); else L4_Sleep(delay);
 					if(--delay_repeat == 0) delay = L4_ZeroTime;
 					if(L4_IpcSucceeded(tag)) {
 						tag = L4_Wait(&from);
@@ -634,7 +636,7 @@ static L4_Word_t delayed_faulting_echo(
 	int delay_repeat)
 {
 	/* set up the xfer fault service delay. */
-	bool ipc_ok = send_delay(stats_tid, delay, delay_repeat);
+	bool ipc_ok = send_delay(stats_tid, delay, delay_repeat, false);
 	fail_unless(ipc_ok, "ec %#lx", L4_ErrorCode());
 
 	/* sync with echo partner. */
@@ -647,7 +649,7 @@ static L4_Word_t delayed_faulting_echo(
 	L4_Set_Pager(old_pager);
 
 	/* clear the delay mode. */
-	ipc_ok = send_delay(stats_tid, L4_ZeroTime, 0);
+	ipc_ok = send_delay(stats_tid, L4_ZeroTime, 0, false);
 	fail_unless(ipc_ok, "ec %#lx", L4_ErrorCode());
 
 	return ec;
@@ -775,7 +777,7 @@ START_TEST(delay_test)
 	/* with delay, there should be a send-side timeout between 16 and 19 ms,
 	 * inclusive, rounding down.
 	 */
-	ipc_ok = send_delay(test_tid, L4_TimePeriod(20 * 1000), 1);
+	ipc_ok = send_delay(test_tid, L4_TimePeriod(20 * 1000), 1, false);
 	fail_unless(ipc_ok, "ec %#lx", L4_ErrorCode());
 	before = L4_SystemClock();
 	L4_LoadMR(0, (L4_MsgTag_t){ .X.label = PING_LABEL, .X.u = 1 }.raw);

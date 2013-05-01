@@ -262,7 +262,8 @@ START_TEST(stats_delay_test)
 
 	/* part 1: without delay, the reset call should return immediately. */
 	fail_if(!send_reset(stats_tid), "ec %#lx", L4_ErrorCode());
-	fail_if(!send_delay(stats_tid, L4_ZeroTime, 0), "ec %#lx", L4_ErrorCode());
+	fail_if(!send_delay(stats_tid, L4_ZeroTime, 0, false),
+		"ec %#lx", L4_ErrorCode());
 	L4_Clock_t start = L4_SystemClock();
 	fail_if(!send_reset(stats_tid), "ec %#lx", L4_ErrorCode());
 	L4_Clock_t end = L4_SystemClock();
@@ -275,8 +276,8 @@ START_TEST(stats_delay_test)
 	 *
 	 * and part 3: it should stop applying the delay after repeat_ct calls.
 	 */
-	fail_if(!send_delay(stats_tid, L4_TimePeriod(delay_ms * 1000), repeat_ct),
-		"ec %#lx", L4_ErrorCode());
+	fail_if(!send_delay(stats_tid, L4_TimePeriod(delay_ms * 1000),
+		repeat_ct, false), "ec %#lx", L4_ErrorCode());
 	for(int i=0; i < repeat_ct + 4; i++) {
 		start = L4_SystemClock();
 		fail_if(!send_reset(stats_tid), "ec %#lx", L4_ErrorCode());

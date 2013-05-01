@@ -158,7 +158,11 @@ extern bool is_privileged(void);
 
 extern bool send_quit(L4_ThreadId_t thread);
 extern bool send_reset(L4_ThreadId_t thread);
-extern bool send_delay(L4_ThreadId_t thread, L4_Time_t delay, int repeat);
+extern bool send_delay(
+	L4_ThreadId_t thread,
+	L4_Time_t delay,
+	int repeat,
+	bool spin);
 extern uint32_t rand32(uint32_t *state_p);
 extern void random_string(char *buf, size_t size, uint32_t *seed_p);
 
