@@ -163,7 +163,8 @@ sub _end_test {
 sub test_panic {
 	my $self = shift;
 	my $msg = shift // '<<no message>>';
-	return $self->_end_test($self->test->name, panic => $msg);
+	return $self->_end_test($self->test->name,
+		status => "PANIC", fail_msg => $msg);
 }
 
 
