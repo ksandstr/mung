@@ -6,13 +6,58 @@
 #include <l4/types.h>
 #include <l4/ipc.h>
 #include <l4/thread.h>
+#include <l4/kip.h>
+
+#include <ukernel/util.h>
 
 #include "defs.h"
 #include "test.h"
 
 
+#define now_ms() (L4_SystemClock().raw / 1000)
+
+
 static struct pager_stats *stats;
 static L4_ThreadId_t stats_tid;
+
+
+static void fresh_tick(void)
+{
+	L4_Clock_t start = L4_SystemClock();
+	while(start.raw >= L4_SystemClock().raw) {
+		/* spin! */
+	}
+}
+
+
+/* tcase util: tests of whatever's in defs.h */
+
+START_TEST(basic_delay_test)
+{
+	plan_tests(2);
+	L4_KernelInterfacePage_t *kip = L4_GetKernelInterface();
+	const uint64_t tick_us = time_in_us((L4_Time_t){
+		.raw = kip->ClockInfo.X.ReadPrecision });
+	diag("tick_us=%lu", (unsigned long)tick_us);
+
+	/* base case: a sleep of 0 µs causes advance of 0 clock ticks. */
+	fresh_tick();
+	uint64_t start_ms = now_ms();
+	usleep(0);
+	uint64_t end_ms = now_ms();
+	ok1(start_ms == end_ms);
+
+	/* sleeping for 2 ticks' worth should advance the clock by 2 ticks. */
+	fresh_tick();
+	L4_Clock_t start = L4_SystemClock();
+	/* well... plus a bit of jitter to cross the edge properly */
+	usleep(tick_us * 2 + (tick_us / 30));
+	L4_Clock_t end = L4_SystemClock();
+	diag("end %lu, start %lu",
+		(unsigned long)end.raw, (unsigned long)start.raw);
+	ok1(end.raw - start.raw == 2 * tick_us);
+}
+END_TEST
 
 
 /* tcase fork: tests of forkserv's own process management features. */
@@ -311,6 +356,10 @@ static void stats_teardown(void)
 Suite *self_suite(void)
 {
 	Suite *s = suite_create("self");
+
+	TCase *util_case = tcase_create("util");
+	tcase_add_test(util_case, basic_delay_test);
+	suite_add_tcase(s, util_case);
 
 	TCase *fork_case = tcase_create("fork");
 	tcase_add_test(fork_case, basic_fork_and_wait);
