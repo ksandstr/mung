@@ -1431,17 +1431,31 @@ bool ipc_recv_half(struct thread *self, bool *preempt_p)
 			TID_THREADNUM(self->id), TID_VERSION(self->id),
 			TID_THREADNUM(self->ipc_from.raw), TID_VERSION(self->ipc_from.raw));
 		self->status = TS_RECV_WAIT;
+
 		if(self->ipc != NULL && self->ipc->xferto_at > 0) {
 			if(ksystemclock() >= self->ipc->xferto_at) {
+				/* this happens when @self is a xfer pagefault sender and that
+				 * IPC succeeded passively, putting @self in TS_R_RECV,
+				 * causing schedule() to call ipc_recv_half() on it after
+				 * xferto_at has passed.
+				 */
 				ipc_xfer_timeout(self->ipc);
 				*preempt_p = false;
 				return true;
+			} else {
+				/* NOTE: thread_sleep() would involve a back-and-forth with
+				 * L4_Time_t, which is undesirable.
+				 */
+				self->wakeup_time = self->ipc->xferto_at;
+				sq_update_thread(self);
 			}
-		}
-		thread_sleep(self, self->recv_timeout);
-		if(self->status == TS_READY) {
-			/* instant timeout. */
-			set_ipc_error_thread(self, (1 << 1) | 1);
+		} else {
+			/* ordinary, non-pagefault IPC. */
+			thread_sleep(self, self->recv_timeout);
+			if(self->status == TS_READY) {
+				/* instant timeout. */
+				set_ipc_error_thread(self, (1 << 1) | 1);
+			}
 		}
 		return false;
 	} else {
