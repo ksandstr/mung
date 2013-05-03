@@ -1338,16 +1338,15 @@ static bool ipc_send_half(struct thread *self, bool *preempt_p)
 
 		if(L4_IsNilThread(self->ipc_from)) {
 			/* send-only, and done. */
-			assert(self->status == TS_RUNNING);
 			self->status = TS_READY;
-			return true;
 		} else {
 			/* indicate active receive. set wakeup time from right now. */
 			self->status = TS_R_RECV;
 			self->wakeup_time = wakeup_at(self->recv_timeout);
 			sq_update_thread(self);
-			return true;
 		}
+		assert(IS_READY(self->status));
+		return true;
 	} else if(self->send_timeout.raw != L4_ZeroTime.raw) {
 		/* passive send */
 		/* FIXME: check return values from kmem_cache_alloc(), htable_add() --
@@ -1445,6 +1444,7 @@ bool ipc_recv_half(struct thread *self, bool *preempt_p)
 		TRACE("%s: passive receive to %lu:%lu (waiting on %lu:%lu)\n", __func__,
 			TID_THREADNUM(self->id), TID_VERSION(self->id),
 			TID_THREADNUM(self->ipc_from.raw), TID_VERSION(self->ipc_from.raw));
+		bool old_wakeup = self->status == TS_R_RECV;
 		self->status = TS_RECV_WAIT;
 
 		if(self->ipc != NULL && self->ipc->xferto_at > 0) {
@@ -1459,17 +1459,27 @@ bool ipc_recv_half(struct thread *self, bool *preempt_p)
 				*preempt_p = false;
 				return true;
 			} else {
-				/* NOTE: thread_sleep() would involve a back-and-forth with
-				 * L4_Time_t, which is undesirable.
-				 */
+				/* avoid L4_Time_t back-and-forth in thread_sleep() */
 				self->wakeup_time = self->ipc->xferto_at;
 				sq_update_thread(self);
 			}
+		} else if(old_wakeup) {
+			/* came from R_RECV, therefore wakeup_time is set from the
+			 * send-phase completion.
+			 */
+			sq_update_thread(self);
+			assert(self->wakeup_time == wakeup_at(L4_Never)
+				|| self->wakeup_time > ksystemclock());
+			if(self->wakeup_time == 0) {
+				/* timeout. */
+				set_ipc_error_thread(self, (1 << 1) | 1);
+			}
 		} else {
-			/* ordinary, non-pagefault IPC. */
+			/* receive-only IPC, such as L4_Wait(), gets its timeout here. */
 			thread_sleep(self, self->recv_timeout);
 			if(self->status == TS_READY) {
 				/* instant timeout. */
+				assert(self->recv_timeout.raw == L4_ZeroTime.raw);
 				set_ipc_error_thread(self, (1 << 1) | 1);
 			}
 		}
