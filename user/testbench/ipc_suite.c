@@ -6,6 +6,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
+#include <stdbool.h>
+
+#include <ccan/compiler/compiler.h>
 
 #include <l4/types.h>
 #include <l4/ipc.h>
@@ -14,9 +17,13 @@
 #include <l4/syscall.h>
 
 #include <ukernel/util.h>
+#include <muidl.h>
 
 #include "defs.h"
 #include "test.h"
+
+#define IPCHELPER_IMPL_SOURCE
+#include "ipc-suite-defs.h"
 
 
 #define IS_LOCAL_TID(tid) (!L4_IsNilThread(L4_LocalIdOf((tid))))
@@ -27,6 +34,10 @@ struct sender_param {
 	L4_Word_t payload;
 	L4_Time_t delay;	/* ZeroTime or TimePeriod */
 };
+
+
+static L4_ThreadId_t helper_tid;
+static bool helper_running;
 
 
 /* TODO: move this into util.c or some such */
@@ -226,6 +237,126 @@ START_TEST(receive_from_anylocalthread)
 END_TEST
 
 
+/* NOTE: this test won't show red until Ipc callers can be pre-empted before
+ * the receive half.
+ */
+START_LOOP_TEST(recv_timeout_from_send, iter, 0, 1)
+{
+	plan_tests(5);
+	const unsigned int sleep_ms = 70, timeo_ms = sleep_ms / 2;
+	const bool spin = CHECK_FLAG(iter, 1);
+	diag("sleep_ms=%d, timeo_ms=%d, spin=%s",
+		sleep_ms, timeo_ms, btos(spin));
+
+	/* part 1: shouldn't timeout without a timeout. */
+	int n = __ipchelper_yield(helper_tid);
+	fail_unless(n == 0, "n=%d", n);
+	n = __ipchelper_sleep_timeout(helper_tid, sleep_ms * 1000, spin,
+		L4_Never, L4_Never);
+	if(n != 0) diag("n=%d", n);
+	ok(n == 0, "base (no timeout)");
+
+	/* part 2: should timeout with a timeout.
+	 *
+	 * when the partner is IPC-sleeping, the timeout should happen on
+	 * schedule. when it's spinning, timeout shouldn't happen sooner than when
+	 * the helper's quantum is exhausted.
+	 */
+	n = __ipchelper_yield(helper_tid);
+	fail_unless(n == 0, "n=%d", n);
+	L4_Clock_t start = L4_SystemClock();
+	n = __ipchelper_sleep_timeout(helper_tid, sleep_ms * 1000, spin,
+		L4_Never, L4_TimePeriod(timeo_ms * 1000));
+	L4_Clock_t end = L4_SystemClock();
+	const int code = (n >> 1) & 0x7;
+	const bool send_phase = !CHECK_FLAG(n, 1);
+	diag("n=%d, code=%d, send_phase=%s", n, code, btos(send_phase));
+	ok1(!send_phase);
+	ok(code == 1, "is timeout");
+	int diff_us = end.raw - start.raw,
+		diff_ms = diff_us / 1000;
+	diag("diff_us=%d, diff_ms=%d", diff_us, diff_ms);
+	ok1(spin || diff_ms <= timeo_ms + 2);
+	/* the "50" comes from start_thread()'s default quantum. */
+	ok1(!spin || diff_ms >= 50);
+}
+END_TEST
+
+
+static void helper_quit_impl(void) {
+	helper_running = false;
+}
+
+
+static void helper_yield_impl(void) {
+	L4_ThreadSwitch(L4_nilthread);
+}
+
+
+static void helper_sleep_impl(int32_t us, bool spin)
+{
+#if 0
+	diag("sleep: us=%d, spin=%s, clock=%u", us, btos(spin),
+		(unsigned)L4_SystemClock().raw);
+#endif
+	if(spin) usleep(us); else L4_Sleep(L4_TimePeriod(us));
+#if 0
+	diag("sleep returning. clock=%u",
+		(unsigned)L4_SystemClock().raw);
+#endif
+}
+
+
+static void helper_thread_fn(void *param UNUSED)
+{
+	static const struct ipc_helper_vtable vtab = {
+		.quit = &helper_quit_impl,
+		.yield = &helper_yield_impl,
+		.sleep = &helper_sleep_impl,
+	};
+
+	helper_running = true;
+	while(helper_running) {
+		L4_Word_t status = _muidl_ipc_helper_dispatch(&vtab);
+		if(status == MUIDL_UNKNOWN_LABEL
+			&& muidl_get_tag().X.label == 0xcbad)
+		{
+			/* ignore this; it's just a "pop back to the loop" thing that
+			 * makes us re-check helper_running.
+			 */
+		} else if(status != 0 && !MUIDL_IS_L4_ERROR(status)) {
+			printf("helper: dispatch status %#lx\n", status);
+		}
+	}
+}
+
+
+static void helper_setup(void)
+{
+	fail_unless(L4_IsNilThread(helper_tid));
+	helper_tid = start_thread(&helper_thread_fn, NULL);
+	fail_unless(!L4_IsNilThread(helper_tid));
+}
+
+
+static void helper_teardown(void)
+{
+	bool quit_ok = send_quit(helper_tid);
+	fail_unless(quit_ok, "send_quit() failed, ec %#lx", L4_ErrorCode());
+	/* hacky hacky. provoke an unknown ipc status, and quit of the helper
+	 * thread.
+	 */
+	L4_LoadMR(0, (L4_MsgTag_t){ .X.label = 0xcbad }.raw);
+	L4_MsgTag_t tag = L4_Send_Timeout(helper_tid, TEST_IPC_DELAY);
+	fail_if(L4_IpcFailed(tag), "ec %#lx", L4_ErrorCode());
+
+	void *value = join_thread(helper_tid);
+	fail_unless(value == NULL,
+		"unexpected return from string test thread: `%s'", (char *)value);
+	helper_tid = L4_nilthread;
+}
+
+
 Suite *ipc_suite(void)
 {
 	Suite *s = suite_create("ipc");
@@ -236,6 +367,12 @@ Suite *ipc_suite(void)
 	TCase *panic_case = tcase_create("panic");
 	tcase_add_test(panic_case, receive_from_anylocalthread);
 	suite_add_tcase(s, panic_case);
+
+	TCase *timeout_case = tcase_create("timeout");
+	tcase_add_checked_fixture(timeout_case,
+		&helper_setup, &helper_teardown);
+	tcase_add_test(timeout_case, recv_timeout_from_send);
+	suite_add_tcase(s, timeout_case);
 
 	return s;
 }

@@ -1,0 +1,17 @@
+/* interface for a helper used by ipc_suite.c . */
+
+[StubPrefix(__ipchelper)]
+interface IpcHelper
+{
+	[Label(0xdead)]
+	oneway void quit();
+
+	/* causes the helper thread to get another scheduling quantum before
+	 * returning to play.
+	 */
+	[Label(0x1233)]
+	void yield();
+
+	[Label(0x1234), StubSendTimeout, StubRecvTimeout]
+	void sleep(in long us, in boolean spin);
+};

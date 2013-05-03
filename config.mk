@@ -4,7 +4,7 @@ MUIDL_DIR=$(CFGDIR)/../muidl
 
 CFLAGS=-O2 -Wall -march=native -mno-sse -mno-avx -std=gnu99 -m32 \
 	-I $(CFGDIR)/include -I $(CFGDIR)/include/fake_clib \
-	-I $(CCAN_DIR) \
+	-I $(MUIDL_DIR)/include -I $(CCAN_DIR) \
 	-D_GNU_SOURCE -D__KERNEL__ \
 	-mno-avx -mno-sse -mno-sse2 \
 	-fno-builtin -nostdlib #-DCCAN_LIST_DEBUG -DDEBUG_ME_HARDER
