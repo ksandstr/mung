@@ -7,3 +7,7 @@ tags
 *~
 *.o
 .deps
+*-service.s
+*-common.s
+*-client.s
+*-defs.h

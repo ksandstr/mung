@@ -9,7 +9,7 @@ all: testbench forkserv
 
 
 clean:
-	@rm -f *.o
+	@rm -f *.o $(CLEAN_PATS)
 
 
 distclean:
@@ -26,7 +26,7 @@ covercheck:
 
 testbench: testbench.ld crt0.o testbench.o dlmalloc.o heap.o thread.o \
 		delay.o process.o exn-store.o log.o tap.o test.o util.o \
-		pg_stats.o pg_drop.o \
+		idlsupp.o pg_stats.o pg_drop.o \
 		sched_suite.o space_suite.o thread_suite.o string_suite.o \
 		ipc_suite.o self_suite.o \
 		legacy.o thread_test.o \
@@ -35,6 +35,8 @@ testbench: testbench.ld crt0.o testbench.o dlmalloc.o heap.o thread.o \
 	@$(LD) $(LDFLAGS) -T testbench.ld $(filter %.o,$^) $(LIBS) -o $@ \
 		-L $(CFGDIR)/lib -lukernel_util \
 		$(shell gcc $(CFLAGS) -print-libgcc-file-name)
+
+ipc_suite.o: ipc_suite.c ipc-suite-defs.h
 
 
 # NOTE: use of the same heap.o as in testbench
