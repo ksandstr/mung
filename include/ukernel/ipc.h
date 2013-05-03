@@ -53,29 +53,35 @@ extern L4_MsgTag_t kipc(
 /* the full L4.X2 IPC system call. registers and everything. */
 extern void sys_ipc(struct x86_exregs *regs);
 
-/* returns true when active receive or send succeeded, false when not.
- * the value affects scheduling which is determined by the caller.
+/* perform one half of the IPC system call. ipc_send_half() is only valid for
+ * non-STOPPED, non-halted threads.
  *
- * when these return false, and thread status is not the corresponding
- * TS_{RECV,SEND}_WAIT, the IPC operation should return. the thread's
- * ErrorCode will have been set.
+ * returns true when active half-ipc succeeded immediately. @t->state will
+ * depend on TF_HALT: if it is set, @t->state == STOPPED; if it's clear,
+ * @t->state == READY (or R_RECV for the send half iff @t->ipc_from !=
+ * L4_nilthread).
  *
- * when ipc_recv_half() returns true, and the thread status is TS_READY, and
- * *preempt_p is returned as true, the caller should preempt the current
- * receiver thread if it is currently executing.
+ * returns false when either active half-ipc failed (timeouts, nonex't peers,
+ * etc), or was changed into the passive form. in the former case, @t->state
+ * \in {READY, R_RECV, STOPPED}, same conditions as above; in the latter,
+ * IS_IPC_WAIT(@t->status).
  *
- * NOTE: this is flawed, as ipc_send_half() may also cause preemption by
- * activating a higher-priority receiver on the same CPU. see github issue #2.
+ * on error, @t's ErrorCode will be set.
+ *
+ * when ipc_recv_half() succeeds and *preempt_p is true, the caller should
+ * preempt the current receiver thread if it is currently executing.
+ *
+ * FIXME: this is incomplete since ipc_send_half() may also cause preemption
+ * by activating a higher-priority receiver on the same CPU. see github issue
+ * #2.
  */
-extern bool ipc_recv_half(struct thread *receiver, bool *preempt_p);
-extern bool ipc_send_half(struct thread *sender);
+extern bool ipc_recv_half(struct thread *t, bool *preempt_p);
+extern bool ipc_send_half(struct thread *t);
 
-/* similar to ipc_recv_half(), but @peer->state == TS_XFER */
+/* as ipc_recv_half(), but requires @peer->state == TS_XFER */
 extern bool ipc_resume(struct thread *peer, bool *preempt_p);
 
-/* partner thread of a thread in TS_XFER. accessor of the ipc_state
- * structure.
- */
+/* partner thread of a thread in TS_XFER. accessor of struct ipc_state. */
 extern struct thread *ipc_partner(struct thread *t);
 
 /* used by the scheduler */

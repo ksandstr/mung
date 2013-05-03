@@ -1187,25 +1187,28 @@ void abort_thread_ipc(struct thread *t)
 }
 
 
-/* returns true when the send phase has completed succesfully. false
- * otherwise; if the send phase doesn't immediately succeed, status changes to
- * TS_SEND_WAIT if the thread should sleep, and sets ErrorCode on error.
- *
- * TODO: this function is rather sub-optimal wrt thread_get_utcb(). the
+/* TODO: this function is rather sub-optimal wrt thread_get_utcb(). the
  * pointers should really be grabbed once and passed as parameters to
  * do_ipc_transfer() etc.
+ *
+ * postcond: !@retval || @self->status \in {READY, R_RECV, STOPPED}
  */
 bool ipc_send_half(struct thread *self)
 {
+	/* must look this alive to attempt active send */
+	assert(!CHECK_FLAG(self->flags, TF_HALT));
+	assert(self->status != TS_STOPPED);
+
 	assert(!L4_IsNilThread(self->ipc_to)
 		&& self->ipc_to.raw != L4_anylocalthread.raw
 		&& self->ipc_to.raw != L4_anythread.raw);
 
 	struct thread *dest = thread_find(self->ipc_to.raw);
-	if(unlikely(dest == NULL)) {
+	if(dest == NULL) {
 		TRACE("%s: can't find peer %lu:%lu\n", __func__,
 			TID_THREADNUM(self->ipc_to.raw), TID_VERSION(self->ipc_to.raw));
 		set_ipc_error(thread_get_utcb(self), 2 << 1 | 0);
+		self->status = TS_READY;
 		return false;
 	}
 
@@ -1245,7 +1248,7 @@ bool ipc_send_half(struct thread *self)
 			dest->status = TS_RECV_WAIT;	/* required by thread_wake() */
 			set_ipc_error_thread(dest, (1 << 1) | 1);
 			thread_wake(dest);
-			status = dest->status;
+			status = dest->status;		/* reload after thread_wake() */
 		} else {
 			/* yep */
 			status = TS_RECV_WAIT;
@@ -1286,6 +1289,7 @@ bool ipc_send_half(struct thread *self)
 			}
 			set_ipc_error(thread_get_utcb(self), error & ~1ul);
 			assert(self->status == TS_RUNNING);
+			self->status = TS_READY;
 			return false;
 		} else if(self->ipc != NULL && had_no_ipc) {
 			/* (may be in send_wait, to pager; recv_wait and r_recv, from
@@ -1324,10 +1328,16 @@ bool ipc_send_half(struct thread *self)
 		if(L4_IsNilThread(self->ipc_from)) {
 			/* send-only, and done. */
 			assert(self->status == TS_RUNNING);
+			self->status = TS_READY;
 			return true;
 		} else {
 			/* indicate active receive. */
 			self->status = TS_R_RECV;
+			/* FIXME: set wakeup_time according to recv timeout. the thread's
+			 * not exactly sleeping, but there should be a timeout condition
+			 * if R_RECV is be resolved by the scheduler later than [send
+			 * completion + recv timeout].
+			 */
 			if(self->wakeup_time > 0) {
 				self->wakeup_time = 0;
 				sq_update_thread(self);
@@ -1336,6 +1346,12 @@ bool ipc_send_half(struct thread *self)
 		}
 	} else if(self->send_timeout.raw != L4_ZeroTime.raw) {
 		/* passive send */
+		/* FIXME: check return values from kmem_cache_alloc(), htable_add() --
+		 * both may have allocator failure. (really, instead of sendwait_hash
+		 * use a linked list in the destination thread, through ipc_wait.
+		 * there's already one mechanism that turns thread IDs into hashtable
+		 * entries.)
+		 */
 		TRACE("%s: passive send to %lu:%lu (from %lu:%lu, actual %lu:%lu)\n",
 			__func__,
 			TID_THREADNUM(dest->id), TID_VERSION(dest->id),
@@ -1350,12 +1366,12 @@ bool ipc_send_half(struct thread *self)
 
 		self->status = TS_SEND_WAIT;
 		thread_sleep(self, self->send_timeout);
-		assert(self->status != TS_READY);
 
 		return false;
 	} else {
 		/* instant timeout. */
 		set_ipc_error_thread(self, (1 << 1) | 0);
+		self->status = TS_READY;
 		return false;
 	}
 }
@@ -1396,6 +1412,7 @@ void ipc_user(
 }
 
 
+/* postcond: !@retval || @self->status \in {READY, R_RECV, STOPPED} */
 bool ipc_recv_half(struct thread *self, bool *preempt_p)
 {
 	assert(preempt_p != NULL);
@@ -1440,6 +1457,7 @@ bool ipc_recv_half(struct thread *self, bool *preempt_p)
 				 * xferto_at has passed.
 				 */
 				ipc_xfer_timeout(self->ipc);
+				assert(IS_READY(self->status));
 				*preempt_p = false;
 				return true;
 			} else {
@@ -1476,7 +1494,7 @@ bool ipc_recv_half(struct thread *self, bool *preempt_p)
 				/* mutual error; notify sender also (i.e. break its exception
 				 * receive phase, if any)
 				 */
-				if(likely(!post_exn_fail(from))) {
+				if(!post_exn_fail(from)) {
 					set_ipc_error(thread_get_utcb(from), error & ~1ul);
 					set_ipc_return_thread(from);
 				}
@@ -1484,6 +1502,7 @@ bool ipc_recv_half(struct thread *self, bool *preempt_p)
 			}
 			set_ipc_error(thread_get_utcb(self), error | 1);
 			assert(self->status == TS_RUNNING);
+			self->status = TS_READY;	/* failed active receive -> READY. */
 			return false;
 		} else if(self->ipc != NULL) {
 			assert(IS_IPC(self->status));
@@ -1599,6 +1618,7 @@ L4_MsgTag_t kipc(
 		if(likely(L4_IpcSucceeded(tag))) *from_p = current->ipc_from;
 	}
 	assert(current->status != TS_XFER);
+	assert(!IS_READY(current->status));
 
 	return tag;
 }
