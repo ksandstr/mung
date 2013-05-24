@@ -300,21 +300,29 @@ START_LOOP_TEST(send_preempt, iter, 0, 1)
 END_TEST
 
 
-/* NOTE: this test won't show red until Ipc callers can be pre-empted before
- * the receive half.
- */
-START_LOOP_TEST(recv_timeout_from_send, iter, 0, 1)
+START_LOOP_TEST(recv_timeout_from_send, iter, 0, 3)
 {
-	plan_tests(5);
+	plan_tests(6);
+
 	const unsigned int sleep_ms = 70, timeo_ms = sleep_ms / 2;
-	const bool spin = CHECK_FLAG(iter, 1);
-	diag("sleep_ms=%d, timeo_ms=%d, spin=%s",
-		sleep_ms, timeo_ms, btos(spin));
+	const bool p_spin = CHECK_FLAG(iter, 1),
+		p_preempt = CHECK_FLAG(iter, 2);
+	diag("sleep_ms=%d, timeo_ms=%d, p_spin=%s, p_preempt=%s",
+		sleep_ms, timeo_ms, btos(p_spin), btos(p_preempt));
+
+	if(p_preempt) {
+		/* variant: with the helper at a higher priority, receive timeout
+		 * should start from send-phase completion, and still work properly.
+		 */
+		L4_Word_t ret = L4_Set_Priority(L4_Myself(),
+			find_own_priority() - 10);
+		fail_if(ret == 0, "set_priority failed: ret=%lu", ret);
+	}
 
 	/* part 1: shouldn't timeout without a timeout. */
 	int n = __ipchelper_yield(helper_tid);
 	fail_unless(n == 0, "n=%d", n);
-	n = __ipchelper_sleep_timeout(helper_tid, sleep_ms * 1000, spin,
+	n = __ipchelper_sleep_timeout(helper_tid, sleep_ms * 1000, p_spin,
 		L4_Never, L4_Never);
 	if(n != 0) diag("n=%d", n);
 	ok(n == 0, "base (no timeout)");
@@ -323,12 +331,13 @@ START_LOOP_TEST(recv_timeout_from_send, iter, 0, 1)
 	 *
 	 * when the partner is IPC-sleeping, the timeout should happen on
 	 * schedule. when it's spinning, timeout shouldn't happen sooner than when
-	 * the helper's quantum is exhausted.
+	 * the helper's quantum is exhausted (!p_preempt), or at sleep completion
+	 * (otherwise).
 	 */
 	n = __ipchelper_yield(helper_tid);
 	fail_unless(n == 0, "n=%d", n);
 	L4_Clock_t start = L4_SystemClock();
-	n = __ipchelper_sleep_timeout(helper_tid, sleep_ms * 1000, spin,
+	n = __ipchelper_sleep_timeout(helper_tid, sleep_ms * 1000, p_spin,
 		L4_Never, L4_TimePeriod(timeo_ms * 1000));
 	L4_Clock_t end = L4_SystemClock();
 	const int code = (n >> 1) & 0x7;
@@ -339,9 +348,15 @@ START_LOOP_TEST(recv_timeout_from_send, iter, 0, 1)
 	int diff_us = end.raw - start.raw,
 		diff_ms = diff_us / 1000;
 	diag("diff_us=%d, diff_ms=%d", diff_us, diff_ms);
-	ok1(spin || diff_ms <= timeo_ms + 2);
-	/* the "50" comes from start_thread()'s default quantum. */
-	ok1(!spin || diff_ms >= 50);
+	ok1(p_spin || diff_ms <= timeo_ms + 2);
+
+	/* 50 ms comes from start_thread()'s default quantum. this is true
+	 * regardless of p_preempt.
+	 */
+	ok1(!p_spin || diff_ms >= 50);
+
+	/* however, p_spin && p_preempt ==> diff_ms >= sleep_ms. */
+	ok1(!p_spin || !p_preempt || diff_ms >= sleep_ms);
 }
 END_TEST
 
