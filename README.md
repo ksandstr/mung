@@ -27,18 +27,17 @@ recent copy of CCAN. The former goes under `../muidl` relative to where this
 somehow distasteful to you, modify `config.mk` to make them less so. The
 commands to download those packages are
 
-    $ (cd .. && git clone git://github.com/ksandstr/muidl.git)
-    $ (cd ~/src && git clone git://github.com/rustyrussell/ccan.git)
+    mung$ (cd .. && git clone git://github.com/ksandstr/muidl.git)
+    mung$ (cd ~/src && git clone git://github.com/rustyrussell/ccan.git)
 
 There's also some dependencies I haven't figured out quite yet, but which can
 be satisfied from current Debian testing with trial and error.
 
 To run the testbench application inside a qemu-KVM virtual machine, use the
-provided `run.sh` script. (To get a brief test report, use `make check`.) To
-run it inside something else, or to use another root server besides
-`testbench`, chuck some runes of your own. Proper-ish test reporting can be
-had from the `make check' target, which requires a few Perl packages (names
-from the Debian repository):
+provided `run.sh` script. To run it inside something else, or to use another
+root server besides `testbench`, chuck some runes of your own. Brief and
+sincere test reporting can be had from the `make check` target, which requires
+a few Perl packages (names from the Debian repository):
 
     libmoose-perl libtrycatch-perl liblist-moreutils-perl libdevel-cover-perl
     libstruct-compare-perl libmodern-perl-perl
