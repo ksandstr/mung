@@ -593,7 +593,9 @@ static void return_to_other(struct thread *current, struct thread *other)
 
 void return_to_ipc(struct thread *target)
 {
-	ipc_simple(target);
+	struct thread *cur = get_current_thread();
+	assert(cur->saved_mrs != 0 || cur->saved_brs != 0);
+	ipc_user(cur, target, 0);
 
 	/* TODO: schedule the target thread next */
 

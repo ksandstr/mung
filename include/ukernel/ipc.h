@@ -16,11 +16,8 @@ struct ipc_state;
 extern void init_ipc(void);
 
 /* no timeouts, always call-and-wait. puts current thread in sendwait or
- * recvwait.
+ * recvwait. uses an absolute xfer timeout when @xferto_abs > 0.
  */
-extern void ipc_simple(struct thread *dest);
-
-/* same, but for "from", and has an absolute xfer timeout */
 extern void ipc_user(
 	struct thread *from,
 	struct thread *to,

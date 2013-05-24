@@ -1377,18 +1377,6 @@ bool ipc_send_half(struct thread *self)
 }
 
 
-/* simple IPC is used by e.g. pagefaults and exceptions, simple messages
- * produced by kernel features.
- */
-void ipc_simple(struct thread *dest)
-{
-	struct thread *current = get_current_thread();
-	assert(current->saved_mrs != 0 || current->saved_brs != 0);
-
-	ipc_user(current, dest, 0);
-}
-
-
 void ipc_user(
 	struct thread *from,
 	struct thread *to,
