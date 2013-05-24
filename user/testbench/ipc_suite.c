@@ -14,6 +14,7 @@
 #include <l4/ipc.h>
 #include <l4/kip.h>
 #include <l4/space.h>
+#include <l4/schedule.h>
 #include <l4/syscall.h>
 
 #include <ukernel/util.h>
@@ -237,6 +238,68 @@ START_TEST(receive_from_anylocalthread)
 END_TEST
 
 
+static void recv_spin_fn(void *param_ptr)
+{
+	const L4_Word_t *ps = param_ptr;
+	int sleep_us = ps[0];
+
+	L4_ThreadId_t from;
+	L4_MsgTag_t tag = L4_Wait(&from);
+	if(L4_IpcFailed(tag)) {
+		printf("%s: ipc failed, ec %#lx\n", __func__, L4_ErrorCode());
+		goto end;
+	}
+
+	usleep(sleep_us);
+
+end:
+	free(param_ptr);
+}
+
+
+/* tests that a send from a lower to higher priority thread causes a
+ * scheduling preemption. also tests that a send to a same-priority thread
+ * causes no preemption.
+ */
+START_LOOP_TEST(send_preempt, iter, 0, 1)
+{
+	plan_tests(2);
+
+	const bool p_preempt = CHECK_FLAG(iter, 1);
+	diag("p_preempt=%s", btos(p_preempt));
+	const int start_pri = find_own_priority(),
+		spin_us = 5000;	/* 5 ms */
+	fail_unless(start_pri >= 12,
+		"need start_pri at least 12, got %d", start_pri);
+
+	L4_Word_t *param = malloc(sizeof(L4_Word_t));
+	param[0] = spin_us;
+	L4_ThreadId_t other = start_thread_long(&recv_spin_fn, param,
+		-1, L4_TimePeriod(50 * 1000), L4_Never);
+	fail_if(L4_IsNilThread(other));
+	L4_ThreadSwitch(other);
+
+	if(p_preempt) {
+		L4_Word_t ret = L4_Set_Priority(L4_Myself(), start_pri - 11);
+		fail_if(ret == 0, "ret %lu, ec %#lx", ret, L4_ErrorCode());
+	}
+
+	L4_Clock_t start = L4_SystemClock();
+	L4_LoadMR(0, 0);
+	L4_MsgTag_t tag = L4_Send(other);
+	fail_if(L4_IpcFailed(tag), "ec %#lx", L4_ErrorCode());
+	L4_Clock_t end = L4_SystemClock();
+	uint64_t diff_us = end.raw - start.raw;
+	ok1(!p_preempt || diff_us >= spin_us);
+	ok1(p_preempt || diff_us < 2000);
+
+	diag("diff_us=%lu", (unsigned long)diff_us);
+
+	join_thread(other);
+}
+END_TEST
+
+
 /* NOTE: this test won't show red until Ipc callers can be pre-empted before
  * the receive half.
  */
@@ -367,6 +430,11 @@ Suite *ipc_suite(void)
 	TCase *panic_case = tcase_create("panic");
 	tcase_add_test(panic_case, receive_from_anylocalthread);
 	suite_add_tcase(s, panic_case);
+
+	TCase *preempt_case = tcase_create("preempt");
+	tcase_add_test(preempt_case, send_preempt);
+	/* TODO: also one for receive */
+	suite_add_tcase(s, preempt_case);
 
 	TCase *timeout_case = tcase_create("timeout");
 	tcase_add_checked_fixture(timeout_case,

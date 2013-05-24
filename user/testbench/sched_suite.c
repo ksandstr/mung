@@ -42,6 +42,8 @@ static bool delay_preempt_case(
  * two cases: with an incoming message, and without. the former tests whether
  * the TS_R_RECV timeout is handled correctly in the receive override case,
  * which isn't implemented as of 2012-05-06.
+ *
+ * FIXME: this should be moved into ipc_suite.
  */
 static void r_recv_timeout_fn(void *param_ptr)
 {
@@ -190,8 +192,8 @@ static L4_ThreadId_t start_spinner(
 }
 
 
-/* feh. */
-static int find_own_priority(void)
+/* TODO: move this into a misc.c or some such! */
+int find_own_priority(void)
 {
 	int pri = 254;
 	L4_ThreadId_t self = L4_Myself();
