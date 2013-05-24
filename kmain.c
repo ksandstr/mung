@@ -321,7 +321,7 @@ static void pager_thread(void *parameter)
 
 			/* ReplyWait */
 			from = L4_anythread;
-			tag = kipc(sender, &from, L4_Timeouts(L4_Never, L4_Never));
+			tag = kipc(sender, &from, L4_Timeouts(L4_ZeroTime, L4_Never));
 		}
 	}
 }
