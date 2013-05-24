@@ -1331,17 +1331,10 @@ bool ipc_send_half(struct thread *self)
 			self->status = TS_READY;
 			return true;
 		} else {
-			/* indicate active receive. */
+			/* indicate active receive. set wakeup time from right now. */
 			self->status = TS_R_RECV;
-			/* FIXME: set wakeup_time according to recv timeout. the thread's
-			 * not exactly sleeping, but there should be a timeout condition
-			 * if R_RECV is be resolved by the scheduler later than [send
-			 * completion + recv timeout].
-			 */
-			if(self->wakeup_time > 0) {
-				self->wakeup_time = 0;
-				sq_update_thread(self);
-			}
+			self->wakeup_time = wakeup_at(self->recv_timeout);
+			sq_update_thread(self);
 			return true;
 		}
 	} else if(self->send_timeout.raw != L4_ZeroTime.raw) {
