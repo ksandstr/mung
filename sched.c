@@ -516,7 +516,7 @@ NORETURN void scheduler_loop(struct thread *self)
 					build_exn_ipc(prev, utcb, -4, &prev->ctx);
 					ipc_user(prev, exh, 0);
 					/* halt the thread if its exception handler is AWOL. */
-					if(!IS_IPC_WAIT(prev->status)) {
+					if(!IS_IPC(prev->status)) {
 						assert(L4_VREG(utcb, L4_TCR_ERRORCODE) != 0);
 						thread_halt(prev);
 					}

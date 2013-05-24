@@ -15,8 +15,9 @@ struct ipc_state;
 
 extern void init_ipc(void);
 
-/* no timeouts, always call-and-wait. puts current thread in sendwait or
- * recvwait. uses an absolute xfer timeout when @xferto_abs > 0.
+/* no timeouts, always call-and-wait. puts @from in sendwait, recvwait, or
+ * r_ready (when preempted at send phase). uses an absolute xfer timeout when
+ * @xferto_abs > 0.
  */
 extern void ipc_user(
 	struct thread *from,
@@ -65,15 +66,11 @@ extern void sys_ipc(struct x86_exregs *regs);
  *
  * on error, @t's ErrorCode will be set.
  *
- * when ipc_recv_half() succeeds and *preempt_p is true, the caller should
- * preempt the current receiver thread if it is currently executing.
- *
- * FIXME: this is incomplete since ipc_send_half() may also cause preemption
- * by activating a higher-priority receiver on the same CPU. see github issue
- * #2.
+ * when ipc_{recv,send}_half() succeeds and *preempt_p is true, the caller
+ * should preempt the current receiver thread if it is currently executing.
  */
 extern bool ipc_recv_half(struct thread *t, bool *preempt_p);
-extern bool ipc_send_half(struct thread *t);
+/* static bool ipc_send_half(struct thread *t, bool *preempt_p); */
 
 /* as ipc_recv_half(), but requires @peer->state == TS_XFER */
 extern bool ipc_resume(struct thread *peer, bool *preempt_p);

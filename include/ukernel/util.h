@@ -45,6 +45,9 @@
 #define ALIGN_TO_SHIFT(addr, shift) ((addr) & ~((1 << (shift)) - 1))
 #define ALIGN_TO_SIZE(addr, size) ALIGN_TO_SHIFT((addr), size_to_shift((shift)))
 
+/* printf() utility macro */
+#define btos(x) (!!(x) ? "true" : "false")
+
 
 /* usage:
  *
