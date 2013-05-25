@@ -323,7 +323,7 @@ START_LOOP_TEST(recv_timeout_from_send, iter, 0, 3)
 	int n = __ipchelper_yield(helper_tid);
 	fail_unless(n == 0, "n=%d", n);
 	n = __ipchelper_sleep_timeout(helper_tid, sleep_ms * 1000, p_spin,
-		L4_Never, L4_Never);
+		0, L4_Never, L4_Never);
 	if(n != 0) diag("n=%d", n);
 	ok(n == 0, "base (no timeout)");
 
@@ -338,7 +338,7 @@ START_LOOP_TEST(recv_timeout_from_send, iter, 0, 3)
 	fail_unless(n == 0, "n=%d", n);
 	L4_Clock_t start = L4_SystemClock();
 	n = __ipchelper_sleep_timeout(helper_tid, sleep_ms * 1000, p_spin,
-		L4_Never, L4_TimePeriod(timeo_ms * 1000));
+		0, L4_Never, L4_TimePeriod(timeo_ms * 1000));
 	L4_Clock_t end = L4_SystemClock();
 	const int code = (n >> 1) & 0x7;
 	const bool send_phase = !CHECK_FLAG(n, 1);
@@ -361,6 +361,36 @@ START_LOOP_TEST(recv_timeout_from_send, iter, 0, 3)
 END_TEST
 
 
+/* synopsis: test that receive timeout is applied from send-phase completion
+ * even under instant preemption. this reflects the (potentially late) R_RECV
+ * -> RECV_WAIT transition by the scheduler, which should retain the timeout
+ * set in the previous transition to R_RECV.
+ *
+ * plan: call IpcHelper::sleep() from a lower-priority thread. spin for a
+ * shorter time than the timeout, but sleep for long enough after to pop the
+ * timeout -- or not, if it wasn't retained from R_RECV.
+ */
+START_TEST(recv_timeout_from_preempt)
+{
+	plan_tests(2);
+	const unsigned timeo_ms = 50, spin_ms = 35, sleep_ms = 25;
+
+	L4_Word_t ret = L4_Set_Priority(L4_Myself(), find_own_priority() - 10);
+	fail_if(ret == 0, "setpri failed, ret=%lu", ret);
+
+	int n = __ipchelper_yield(helper_tid);
+	fail_unless(n == 0, "n=%d", n);
+	n = __ipchelper_sleep_timeout(helper_tid, spin_ms * 1000, true,
+		sleep_ms * 1000, L4_Never, L4_TimePeriod(timeo_ms * 1000));
+	const int code = (n >> 1) & 0x7;
+	const bool send_phase = !CHECK_FLAG(n, 1);
+	diag("n=%d, code=%d, send_phase=%s", n, code, btos(send_phase));
+	ok1(!send_phase);
+	ok(code == 1, "is timeout");
+}
+END_TEST
+
+
 static void helper_quit_impl(void) {
 	helper_running = false;
 }
@@ -371,17 +401,16 @@ static void helper_yield_impl(void) {
 }
 
 
-static void helper_sleep_impl(int32_t us, bool spin)
+static void helper_sleep_impl(
+	int32_t us,
+	bool spin,
+	int32_t sleep_after_us)
 {
-#if 0
-	diag("sleep: us=%d, spin=%s, clock=%u", us, btos(spin),
-		(unsigned)L4_SystemClock().raw);
-#endif
 	if(spin) usleep(us); else L4_Sleep(L4_TimePeriod(us));
-#if 0
-	diag("sleep returning. clock=%u",
-		(unsigned)L4_SystemClock().raw);
-#endif
+
+	if(sleep_after_us > 0) {
+		L4_Sleep(L4_TimePeriod(sleep_after_us));
+	}
 }
 
 
@@ -455,6 +484,7 @@ Suite *ipc_suite(void)
 	tcase_add_checked_fixture(timeout_case,
 		&helper_setup, &helper_teardown);
 	tcase_add_test(timeout_case, recv_timeout_from_send);
+	tcase_add_test(timeout_case, recv_timeout_from_preempt);
 	suite_add_tcase(s, timeout_case);
 
 	return s;

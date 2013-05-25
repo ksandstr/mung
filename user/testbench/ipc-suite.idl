@@ -12,6 +12,12 @@ interface IpcHelper
 	[Label(0x1233)]
 	void yield();
 
+	/* @sleep_after_us provokes the case where send-phase preemption sets a
+	 * timeout which is reset on r_recv -> recv_wait.
+	 */
 	[Label(0x1234), StubSendTimeout, StubRecvTimeout]
-	void sleep(in long us, in boolean spin);
+	void sleep(
+		in long us,			/* µs of sleep */
+		in boolean spin,	/* false = IPC sleep, true = spinning */
+		in long sleep_after_us);	/* length of IPC sleep after */
 };
