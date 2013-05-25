@@ -304,11 +304,11 @@ START_LOOP_TEST(recv_timeout_from_send, iter, 0, 3)
 {
 	plan_tests(6);
 
-	const unsigned int sleep_ms = 70, timeo_ms = sleep_ms / 2;
 	const bool p_spin = CHECK_FLAG(iter, 1),
 		p_preempt = CHECK_FLAG(iter, 2);
-	diag("sleep_ms=%d, timeo_ms=%d, p_spin=%s, p_preempt=%s",
-		sleep_ms, timeo_ms, btos(p_spin), btos(p_preempt));
+	const unsigned int sleep_ms = 70, timeo_ms = sleep_ms / 2;
+	diag("p_spin=%s, p_preempt=%s", btos(p_spin), btos(p_preempt));
+	diag("sleep_ms=%u, timeo_ms=%u", sleep_ms, timeo_ms);
 
 	if(p_preempt) {
 		/* variant: with the helper at a higher priority, receive timeout
@@ -350,12 +350,12 @@ START_LOOP_TEST(recv_timeout_from_send, iter, 0, 3)
 	diag("diff_us=%d, diff_ms=%d", diff_us, diff_ms);
 	ok1(p_spin || diff_ms <= timeo_ms + 2);
 
-	/* 50 ms comes from start_thread()'s default quantum. this is true
-	 * regardless of p_preempt.
+	/* p_spin && !p_preempt ==> diff_ms = 50 (within error).
+	 * (50 ms comes from start_thread()'s default quantum.)
 	 */
-	ok1(!p_spin || diff_ms >= 50);
+	ok1(!p_spin || p_preempt || (diff_ms >= 50 && diff_ms < 55));
 
-	/* however, p_spin && p_preempt ==> diff_ms >= sleep_ms. */
+	/* p_spin && p_preempt ==> diff_ms >= sleep_ms. */
 	ok1(!p_spin || !p_preempt || diff_ms >= sleep_ms);
 }
 END_TEST
