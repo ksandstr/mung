@@ -78,9 +78,8 @@ static inline int size_to_shift(size_t size) {
 static inline uint64_t time_in_us(L4_Time_t t)
 {
 	/* only defined for periods. c'mon. that's what "in" means. */
-	assert(t.period.a == 0);
-	if(t.raw == L4_ZeroTime.raw) return 0;
-	else return (uint32_t)t.period.m * (1u << t.period.e);
+	assert(L4_IsTimePeriod_NP(t));
+	return L4_PeriodUs_NP(t);
 }
 
 

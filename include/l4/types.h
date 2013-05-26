@@ -148,6 +148,17 @@ static inline L4_Word_t L4_SizeLog2(L4_Fpage_t fp) {
 }
 
 
+/* Clock, via L4Ka::Pistachio. */
+
+typedef union {
+	L4_Word64_t raw;
+	struct {
+		L4_Word32_t low;
+		L4_Word32_t high;
+	} __attribute__((packed)) X;
+} L4_Clock_t;
+
+
 /* time. derived from L4Ka::Pistachio. */
 
 typedef union {
@@ -214,18 +225,69 @@ static inline L4_Time_t L4_TimePeriod(L4_Word64_t microseconds)
 }
 
 
-/* Clock, via L4Ka::Pistachio. */
+/* contrary to the spec as of 20120601, the maximum representable interval is
+ * about 33½ minutes, or 0x3ff << 15 microseconds.
+ *
+ * or I've miscomprehended something along the way.
+ *
+ * anyway, this is like the L4Ka::Pistachio L4_TimePoint(), except with an
+ * explicit time base for ease of testing.
+ */
+static inline L4_Time_t L4_TimePoint2_NP(L4_Clock_t base, L4_Clock_t at)
+{
+	_L4_ASSERT(base.raw < at.raw);
 
-typedef union {
-	L4_Word64_t raw;
-	struct {
-		L4_Word32_t low;
-		L4_Word32_t high;
-	} __attribute__((packed)) X;
-} L4_Clock_t;
+	if(at.raw - base.raw > (0x3ff << 15)) return L4_Never;
+
+	uint32_t us = at.raw - base.raw;
+	int exp = 22 - __builtin_clz(us);
+	if(exp < 0) exp = 0;
+	_L4_ASSERT(exp <= 15);
+	_L4_ASSERT((us >> exp) < 1024);
+	return (L4_Time_t){ .point = { .a = 1,
+		.e = exp, .m = (at.raw >> exp) & 0x3ff,
+		.c = (at.raw >> (exp + 10)) & 1 } };
+}
 
 
-/* that header includes this one, anyhow. */
+/* due to circular dependency between L4_Clock_t (here) and L4_SystemClock()
+ * (in <l4/syscall.h>), in mung L4_TimePoint() is just a macro. caveat lector.
+ */
+#define L4_TimePoint(at) L4_TimePoint2_NP(L4_SystemClock(), (at))
+
+
+/* these don't appear in L4Ka::Pistachio either. */
+static inline bool L4_IsTimePoint_NP(L4_Time_t t) {
+	return t.point.a == 1;
+}
+
+
+static inline bool L4_IsTimePeriod_NP(L4_Time_t t) {
+	return t.period.a == 0;
+}
+
+
+static inline L4_Clock_t L4_PointClock_NP(L4_Clock_t base, L4_Time_t t)
+{
+	_L4_ASSERT(L4_IsTimePoint_NP(t));
+
+	uint64_t clk = base.raw >> (t.point.e + 10);
+	clk += (clk & 1) ^ t.point.c;
+	return (L4_Clock_t){
+		.raw = (clk << (t.point.e + 10)) + ((uint32_t)t.point.m << t.point.e),
+	};
+}
+
+
+/* weirdest. name. ever */
+static inline L4_Word64_t L4_PeriodUs_NP(L4_Time_t t) {
+	_L4_ASSERT(L4_IsTimePeriod_NP(t));
+	if(t.raw == L4_ZeroTime.raw) return 0;
+	else return (L4_Word64_t)t.period.m << t.period.e;
+}
+
+
+/* (because of a circular dependency.) */
 #include <l4/arch.h>
 
 #endif
