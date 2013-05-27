@@ -575,6 +575,7 @@ int main(void)
 		&self_suite,	/* selftests */
 
 		/* microkernel tests */
+		&type_suite,
 		&thread_suite,
 		&space_suite,
 		&sched_suite,
