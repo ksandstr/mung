@@ -238,6 +238,43 @@ START_TEST(receive_from_anylocalthread)
 END_TEST
 
 
+/* IPC sleep with a TimePoint value. passes when it not only doesn't panic the
+ * microkernel, but also when it drops out of the sleep at the correct time.
+ */
+START_LOOP_TEST(point_timeouts, iter, 0, 15)
+{
+	const unsigned pre_us = 800 * iter, sleep_us = 20 * 1000;
+	assert(pre_us < sleep_us);
+
+	plan_tests(2);
+
+	L4_Clock_t pt = { .raw = L4_SystemClock().raw + sleep_us };
+	L4_Time_t t = L4_TimePoint(pt);
+	fail_unless(L4_IsTimePoint_NP(t));
+
+	/* part 1: a timeout on a time point should happen at the specified time
+	 * regardless of interim sleeps or the like.
+	 */
+	if(pre_us > 0) L4_Sleep(L4_TimePeriod(pre_us));
+	L4_Sleep(t);
+	L4_Clock_t wake_at = L4_SystemClock();
+	ok(wake_at.raw - pt.raw < 200, "woke up at t + %u µs", sleep_us);
+
+	/* part 2: an invalid (expired) timepoit should be handled like
+	 * L4_ZeroTime.
+	 */
+	L4_Sleep(L4_TimePeriod(1000));	/* put it definitely in the swamp */
+
+	L4_Clock_t pre_sleep = L4_SystemClock();
+	fail_if(pre_sleep.raw <= pt.raw);
+	L4_Sleep(t);
+	wake_at = L4_SystemClock();
+	ok(wake_at.raw - pre_sleep.raw < 200,
+		"didn't sleep with expired point");
+}
+END_TEST
+
+
 static void recv_spin_fn(void *param_ptr)
 {
 	const L4_Word_t *ps = param_ptr;
@@ -473,6 +510,7 @@ Suite *ipc_suite(void)
 	 */
 	TCase *panic_case = tcase_create("panic");
 	tcase_add_test(panic_case, receive_from_anylocalthread);
+	tcase_add_test(panic_case, point_timeouts);
 	suite_add_tcase(s, panic_case);
 
 	TCase *preempt_case = tcase_create("preempt");

@@ -83,6 +83,15 @@ static inline uint64_t time_in_us(L4_Time_t t)
 }
 
 
+/* NOTE: copypasta'd from type_suite.c! */
+static inline bool pt_is_valid(L4_Clock_t base, L4_Time_t t)
+{
+	uint32_t max = 0x3ff << t.point.e,
+		us = L4_PointClock_NP(base, t).raw - base.raw;
+	return max >= us;
+}
+
+
 /* from hash.c */
 extern uint32_t int_hash(uint32_t key);
 extern uint32_t ptr_hash(const void *ptr);

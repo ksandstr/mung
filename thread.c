@@ -444,11 +444,23 @@ void thread_resume(struct thread *t)
 }
 
 
-uint64_t wakeup_at(L4_Time_t period)
+uint64_t wakeup_at(L4_Time_t t)
 {
-	if(period.raw == L4_ZeroTime.raw) return 0;
-	else if(period.raw == L4_Never.raw) return ~(uint64_t)0;
-	else return ksystemclock() + time_in_us(period);
+	if(t.raw == L4_ZeroTime.raw) return 0;
+	else if(t.raw == L4_Never.raw) return ~(uint64_t)0;
+	else {
+		L4_Clock_t base = { .raw = ksystemclock() };
+		if(L4_IsTimePoint_NP(t)) {
+			if(pt_is_valid(base, t)) {
+				return L4_PointClock_NP(base, t).raw;
+			} else {
+				/* like it was ZeroTime. */
+				return 0;
+			}
+		} else {
+			return base.raw + time_in_us(t);
+		}
+	}
 }
 
 
