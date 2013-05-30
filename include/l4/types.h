@@ -272,14 +272,14 @@ static inline L4_Clock_t L4_PointClock_NP(L4_Clock_t base, L4_Time_t t)
 	_L4_ASSERT(L4_IsTimePoint_NP(t));
 
 	uint64_t clk = base.raw >> (t.point.e + 10);
-	clk += (clk & 1) ^ t.point.c;
+	clk += ((int)clk & 1) ^ t.point.c;
 	return (L4_Clock_t){
-		.raw = (clk << (t.point.e + 10)) + ((uint32_t)t.point.m << t.point.e),
+		.raw = (clk << (t.point.e + 10)) | ((uint32_t)t.point.m << t.point.e),
 	};
 }
 
 
-/* weirdest. name. ever */
+/* (clearly a relative of Incontinentia's...) */
 static inline L4_Word64_t L4_PeriodUs_NP(L4_Time_t t) {
 	_L4_ASSERT(L4_IsTimePeriod_NP(t));
 	if(t.raw == L4_ZeroTime.raw) return 0;
