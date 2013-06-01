@@ -4,26 +4,34 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <assert.h>
 
-#include <l4/vregs.h>
+#include "defs.h"
+
+
+static int muidl_ctx_key = -1;
 
 
 void muidl_supp_alloc_context(unsigned int length)
 {
-	void *utcb = __L4_Get_UtcbAddress();
-	void **pp = (void *)&L4_VREG(utcb, L4_TCR_THREADWORD0);
-	if(*pp == NULL) {
+	if(muidl_ctx_key == -1) {
+		tsd_key_create(&muidl_ctx_key, &free);
+	}
+	void *ptr = tsd_get(muidl_ctx_key);
+	if(ptr == NULL) {
 		if(length < 64) length = 64;
-		*pp = malloc(length);
-		if(*pp == NULL) {
+		ptr = malloc(length);
+		if(ptr == NULL) {
 			printf("%s: can't alloc length=%u bytes!\n", __func__, length);
 			abort();
 		}
-		memset(*pp, '\0', length);
+		memset(ptr, '\0', length);
+		tsd_set(muidl_ctx_key, ptr);
+		assert(tsd_get(muidl_ctx_key) == ptr);
 	}
 }
 
 
 void *muidl_supp_get_context(void) {
-	return (void *)L4_VREG(__L4_Get_UtcbAddress(), L4_TCR_THREADWORD0);
+	return tsd_get(muidl_ctx_key);
 }
