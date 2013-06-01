@@ -41,6 +41,27 @@ bool send_delay(
 }
 
 
+void idl_fixture_teardown(L4_ThreadId_t tid)
+{
+	if(!send_quit(tid)) {
+		printf("send_quit() failed, ec %#lx\n", L4_ErrorCode());
+		abort();
+	}
+
+	/* hacky hacky. provoke an unknown ipc status, and quit of the helper
+	 * thread. 0xcbad is seen in IDL_FIXTURE()'s dispatch-calling loop.
+	 */
+	L4_LoadMR(0, (L4_MsgTag_t){ .X.label = 0xcbad }.raw);
+	L4_MsgTag_t tag = L4_Send_Timeout(tid, TEST_IPC_DELAY);
+	if(L4_IpcFailed(tag)) {
+		printf("%s: ec %#lx\n", __func__, L4_ErrorCode());
+		abort();
+	}
+
+	join_thread(tid);
+}
+
+
 /* via ccan/bdelta/test/common.h; used because there is no system RNG, and to
  * have consistent output.
  */

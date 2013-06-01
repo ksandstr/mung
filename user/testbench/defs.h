@@ -7,6 +7,7 @@
 #include <stdlib.h>
 #include <stdint.h>
 #include <stdbool.h>
+#include <assert.h>
 #include <ccan/compiler/compiler.h>
 
 #include <l4/types.h>
@@ -32,6 +33,44 @@
 
 
 #define btos(x) (!!(x) ? "true" : "false")
+
+
+/* declare and use an IDL dispatcher fixture. symbols static by default.
+ * idl_fixture_teardown() is defined in util.c .
+ */
+#define IDL_FIXTURE(fixture_name, iface_name, vtable) \
+static L4_ThreadId_t fixture_name ## _tid; \
+static bool fixture_name ## _running = false; \
+static void fixture_name ## _thread_fn(void *param UNUSED) { \
+	fixture_name ## _running = true; \
+	while(fixture_name ## _running) { \
+		L4_Word_t status = _muidl_ ## iface_name ## _dispatch((vtable)); \
+		if(status == MUIDL_UNKNOWN_LABEL \
+			&& muidl_get_tag().X.label == 0xcbad) \
+		{ \
+			/* ignore */ \
+		} else if(status != 0 && !MUIDL_IS_L4_ERROR(status)) { \
+			printf(#iface_name ":" #fixture_name ": dispatch status %#lx\n", \
+				status); \
+		} \
+	} \
+} \
+static void fixture_name ## _setup(void) { \
+	assert(L4_IsNilThread(fixture_name ## _tid)); \
+	fixture_name ## _tid = start_thread(&fixture_name ## _thread_fn, NULL); \
+	assert(!L4_IsNilThread(fixture_name ## _tid)); \
+} \
+static void fixture_name ## _teardown(void) { \
+	idl_fixture_teardown(fixture_name ## _tid); \
+	fixture_name ## _tid = L4_nilthread; \
+}
+
+#define ADD_IDL_FIXTURE(tcase, fixture_name) \
+tcase_add_checked_fixture((tcase), &fixture_name ## _setup, \
+	&fixture_name ## _teardown)
+
+extern void idl_fixture_teardown(L4_ThreadId_t tid);
+
 
 
 struct Suite;

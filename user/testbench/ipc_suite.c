@@ -451,54 +451,13 @@ static void helper_sleep_impl(
 }
 
 
-static void helper_thread_fn(void *param UNUSED)
-{
-	static const struct ipc_helper_vtable vtab = {
-		.quit = &helper_quit_impl,
-		.yield = &helper_yield_impl,
-		.sleep = &helper_sleep_impl,
-	};
+static const struct ipc_helper_vtable helper_vtab = {
+	.quit = &helper_quit_impl,
+	.yield = &helper_yield_impl,
+	.sleep = &helper_sleep_impl,
+};
 
-	helper_running = true;
-	while(helper_running) {
-		L4_Word_t status = _muidl_ipc_helper_dispatch(&vtab);
-		if(status == MUIDL_UNKNOWN_LABEL
-			&& muidl_get_tag().X.label == 0xcbad)
-		{
-			/* ignore this; it's just a "pop back to the loop" thing that
-			 * makes us re-check helper_running.
-			 */
-		} else if(status != 0 && !MUIDL_IS_L4_ERROR(status)) {
-			printf("helper: dispatch status %#lx\n", status);
-		}
-	}
-}
-
-
-static void helper_setup(void)
-{
-	fail_unless(L4_IsNilThread(helper_tid));
-	helper_tid = start_thread(&helper_thread_fn, NULL);
-	fail_unless(!L4_IsNilThread(helper_tid));
-}
-
-
-static void helper_teardown(void)
-{
-	bool quit_ok = send_quit(helper_tid);
-	fail_unless(quit_ok, "send_quit() failed, ec %#lx", L4_ErrorCode());
-	/* hacky hacky. provoke an unknown ipc status, and quit of the helper
-	 * thread.
-	 */
-	L4_LoadMR(0, (L4_MsgTag_t){ .X.label = 0xcbad }.raw);
-	L4_MsgTag_t tag = L4_Send_Timeout(helper_tid, TEST_IPC_DELAY);
-	fail_if(L4_IpcFailed(tag), "ec %#lx", L4_ErrorCode());
-
-	void *value = join_thread(helper_tid);
-	fail_unless(value == NULL,
-		"unexpected return from string test thread: `%s'", (char *)value);
-	helper_tid = L4_nilthread;
-}
+IDL_FIXTURE(helper, ipc_helper, &helper_vtab);
 
 
 Suite *ipc_suite(void)
@@ -519,8 +478,7 @@ Suite *ipc_suite(void)
 	suite_add_tcase(s, preempt_case);
 
 	TCase *timeout_case = tcase_create("timeout");
-	tcase_add_checked_fixture(timeout_case,
-		&helper_setup, &helper_teardown);
+	ADD_IDL_FIXTURE(timeout_case, helper);
 	tcase_add_test(timeout_case, recv_timeout_from_send);
 	tcase_add_test(timeout_case, recv_timeout_from_preempt);
 	suite_add_tcase(s, timeout_case);
