@@ -1,8 +1,10 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdbool.h>
 #include <assert.h>
 #include <ccan/list/list.h>
+#include <ccan/compiler/compiler.h>
 
 #include <ukernel/util.h>
 
@@ -35,6 +37,114 @@ static bool delay_preempt_case(
 	bool small_ts);
 
 
+/* api tests */
+
+static void starvin_marvin(void *param UNUSED)
+{
+	L4_MsgTag_t tag;
+	do {
+		L4_ThreadId_t somebody;
+		tag = L4_Wait(&somebody);
+		if(L4_IpcFailed(tag)) {
+			diag("%s: ipc fail, ec %#lx", __func__, L4_ErrorCode());
+			continue;
+		}
+	} while(tag.X.label != QUIT_LABEL);
+}
+
+
+/* provoke as many distinct errors as possible.
+ *
+ * (TODO: not complete; "X may call Schedule on Y" isn't tested because other
+ * threads always have the current thread as scheduler.)
+ */
+START_TEST(syscall_errors)
+{
+	const int ref_pri = find_own_priority();
+	const L4_Word_t ref_timectl = (L4_Word_t)L4_TimePeriod(15 * 1000).raw << 16
+			| L4_Never.raw,
+		ref_pectl = (ref_pri - 1) << 8 | L4_Never.raw;
+
+	plan_tests(1 + 2*2 + 1 + 1 + 1);
+
+	L4_ThreadId_t other = start_thread(&starvin_marvin, NULL);
+	fail_if(L4_IsNilThread(other));
+
+	/* base case: pass (unexcitingly) */
+	L4_Word_t timectl_out, ret = L4_Schedule(other, ref_timectl, 0, ref_pri,
+		ref_pectl, &timectl_out);
+	if(!ok(ret != L4_SCHEDRESULT_ERROR, "can succeed")) {
+		diag("err %d, ec %#lx", ret, L4_ErrorCode());
+	}
+
+	/* part 1: fuck with time control.
+	 * two halves: one for ts_len, another for total_quantum. same rules apply
+	 * to both.
+	 */
+	for(int half = 0; half <= 1; half++) {
+		const char *what = half == 0 ? "ts_len" : "total_quantum";
+		/* the other thing, what's not tested. */
+		L4_Word_t base = (L4_Word_t)L4_Never.raw << (half * 16);
+		int shift = (1 - half) * 16;
+
+		const struct {
+			L4_Time_t t;
+			const char *desc;
+		} fails[] = {
+			{ .desc = "zero", .t = L4_ZeroTime },
+			{ .desc = "timepoint value", .t = L4_TimePoint((L4_Clock_t){
+				.raw = L4_SystemClock().raw + 30 * 1000 }) },
+		};
+		for(int f=0; f < sizeof(fails) / sizeof(fails[0]); f++) {
+			L4_Word_t val = base | (L4_Word_t)fails[f].t.raw << shift;
+			ret = L4_Schedule(other, val, 0, ref_pri, ref_pectl,
+				&timectl_out);
+			L4_Word_t ec = L4_ErrorCode();
+			if(!ok(ret == L4_SCHEDRESULT_ERROR && ec == 5,
+				"reject %s for %s", fails[f].desc, what))
+			{
+				diag("ret=%lu, ec=%#lx", ret, ec);
+			}
+		}
+	}
+
+	/* part 2: screw with prioctl. */
+	ret = L4_Schedule(other, ref_timectl, 0, ref_pri + 1, ref_pectl,
+		&timectl_out);
+	L4_Word_t ec = L4_ErrorCode();
+	if(!ok(ret == L4_SCHEDRESULT_ERROR && ec == 5,
+		"reject prio = ref_pri + 1"))
+	{
+		diag("ret=%lu, ec=%#lx", ret, ec);
+	}
+
+	/* part 3: sexually penetrate sens_pri. */
+	ret = L4_Schedule(other, ref_timectl, 0, ref_pri,
+		(ref_pectl & 0xffff) | (ref_pri + 1) << 16, &timectl_out);
+	ec = L4_ErrorCode();
+	if(!ok(ret == L4_SCHEDRESULT_ERROR && ec == 5,
+		"reject sens_prio = ref_pri + 1"))
+	{
+		diag("ret=%lu, ec=%#lx", ret, ec);
+	}
+
+	/* part 4: pork maximum_delay in a very uncomfortable place. */
+	L4_Time_t point = L4_TimePoint((L4_Clock_t){
+		.raw = L4_SystemClock().raw + 10 * 1000 });
+	ret = L4_Schedule(other, ref_timectl, 0, ref_pri,
+		(ref_pectl & 0xff0000) | point.raw, &timectl_out);
+	ec = L4_ErrorCode();
+	if(!ok(ret == L4_SCHEDRESULT_ERROR && ec == 5,
+		"reject timepoint value for maximum_delay"))
+	{
+		diag("ret=%lu, ec=%#lx", ret, ec);
+	}
+
+	send_quit(other);
+	join_thread(other);
+}
+END_TEST
+
 
 /* test case for the correct ipc error result in threads that time out in the
  * TS_R_RECV state.
@@ -44,6 +154,7 @@ static bool delay_preempt_case(
  * which isn't implemented as of 2012-05-06.
  *
  * FIXME: this should be moved into ipc_suite.
+ * FIXME: and verified.
  */
 static void r_recv_timeout_fn(void *param_ptr)
 {
@@ -715,6 +826,10 @@ END_TEST
 Suite *sched_suite(void)
 {
 	Suite *s = suite_create("sched");
+
+	TCase *api_case = tcase_create("api");
+	tcase_add_test(api_case, syscall_errors);
+	suite_add_tcase(s, api_case);
 
 	TCase *ipc_case = tcase_create("ipc");
 	tcase_add_test(ipc_case, r_recv_timeout_test);
