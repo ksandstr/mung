@@ -623,8 +623,7 @@ void sys_threadswitch(struct x86_exregs *regs)
 
 
 static bool sched_valid_time(L4_Time_t t) {
-	return t.raw == 0xffff || (t.period.a == 0 && t.raw != 0)
-		|| t.raw == L4_Never.raw;
+	return !(t.raw == L4_ZeroTime.raw || L4_IsTimePoint_NP(t));
 }
 
 
@@ -645,7 +644,9 @@ void sys_schedule(struct x86_exregs *regs)
 	/* cooked inputs */
 	L4_Time_t ts_len = { .raw = (timectl >> 16) & 0xffff },
 		total_quantum = { .raw = timectl & 0xffff };
-	if(!sched_valid_time(ts_len) || !sched_valid_time(total_quantum)) {
+	if((ts_len.raw != 0xffff && !sched_valid_time(ts_len))
+		|| (total_quantum.raw != 0xffff && !sched_valid_time(total_quantum)))
+	{
 		goto inv_param;
 	}
 	L4_Word_t pri = prioctl & 0xff;
@@ -653,6 +654,18 @@ void sys_schedule(struct x86_exregs *regs)
 	L4_Word_t procnum = procctl & 0xffff,
 		sens_pri = (preemptctl >> 16) & 0xff,
 		max_delay = preemptctl & 0xffff;
+	/* NOTE: this deviates from the L4.X2 spec, which doesn't specify that
+	 * sens_pri must be equal or lower to the scheduler's priority.
+	 *
+	 * (also: this and @pri should be compared to the higher of the actual
+	 * scheduler thread's and @current's priorities.)
+	 */
+	if((sens_pri != 0xff && sens_pri > current->pri)
+		|| (max_delay != 0xffff
+			&& L4_IsTimePoint_NP((L4_Time_t){ .raw = max_delay })))
+	{
+		goto inv_param;
+	}
 
 	old_timectl = (L4_Word_t)L4_TimePeriod(dest->quantum).raw << 16
 		| L4_TimePeriod(dest->total_quantum).raw;
