@@ -718,6 +718,28 @@ static bool eval_xfer_timeout(
 	L4_Time_t snd_to,
 	L4_Time_t rcv_to)
 {
+	/* NOTE: TimePoint values in {snd,rcv}_to can cause a timeout in two ways:
+	 * by being reached, and by having been reached before the call to
+	 * eval_xfer_timeout(). the former is handled as an IPC timeout via a
+	 * TimePeriod conversion, and the latter is detected with pt_is_valid()
+	 * from a latent call to do_typed_transfer().
+	 *
+	 * this code could unify the clock conversion bits in a nicer way. as it
+	 * stands TimePoints are slightly slower to process.
+	 */
+	if(L4_IsTimePoint_NP(snd_to)) {
+		L4_Clock_t base = { .raw = ksystemclock() };
+		snd_to = pt_is_valid(base, snd_to)
+			? L4_TimePeriod(L4_PointClock_NP(base, snd_to).raw - base.raw)
+			: L4_ZeroTime;
+	}
+	if(L4_IsTimePoint_NP(rcv_to)) {
+		L4_Clock_t base = { .raw = ksystemclock() };
+		rcv_to = pt_is_valid(base, rcv_to)
+			? L4_TimePeriod(L4_PointClock_NP(base, rcv_to).raw - base.raw)
+			: L4_ZeroTime;
+	}
+
 	uint64_t v;
 	if(snd_to.raw == L4_ZeroTime.raw
 		|| rcv_to.raw == L4_ZeroTime.raw)
