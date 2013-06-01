@@ -1,0 +1,31 @@
+#ifndef _L4X2_IDL
+#define _L4X2_IDL
+
+module L4X2
+{
+
+native l4_word_t;
+typedef l4_word_t word;
+
+native l4_mapgrantitem_t;
+typedef l4_mapgrantitem_t MapGrantItem;
+
+native l4_fpage_t;
+typedef l4_fpage_t Fpage;
+
+native l4_time_t;
+typedef l4_time_t Time;
+
+
+interface FaultHandler
+{
+	[TagMask(0xfff00000), Label(0xffe0)]
+	void handle_fault(
+		[MR(1)] in word faddr,
+		[MR(2)] in word fip,
+		[map] out MapGrantItem page);
+};
+
+}; // module L4X2
+
+#endif

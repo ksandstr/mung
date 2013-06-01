@@ -62,7 +62,8 @@ static void diag_faults(struct pager_stats *st)
 }
 
 
-static void flush_byte_range(
+/* TODO: move into a different module */
+void flush_byte_range(
 	L4_Word_t first_address,
 	L4_Word_t size,
 	L4_Word_t access)

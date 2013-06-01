@@ -36,22 +36,24 @@
 
 
 /* declare and use an IDL dispatcher fixture. symbols static by default.
- * idl_fixture_teardown() is defined in util.c .
+ * idl_fixture_teardown() is defined in util.c . setting quit_cond to false
+ * makes it perpetual, which is usually not how test fixtures are supposed to
+ * behave.
  */
-#define IDL_FIXTURE(fixture_name, iface_name, vtable) \
+#define IDL_FIXTURE(fixture_name, iface_name, vtable, quit_cond) \
 static L4_ThreadId_t fixture_name ## _tid; \
-static bool fixture_name ## _running = false; \
 static void fixture_name ## _thread_fn(void *param UNUSED) { \
-	fixture_name ## _running = true; \
-	while(fixture_name ## _running) { \
+	while(!(quit_cond)) { \
 		L4_Word_t status = _muidl_ ## iface_name ## _dispatch((vtable)); \
 		if(status == MUIDL_UNKNOWN_LABEL \
 			&& muidl_get_tag().X.label == 0xcbad) \
 		{ \
-			/* ignore */ \
+			/* ignore (used by idl_fixture_teardown(); causes re-eval of the \
+			 * exit condition) \
+			 */ \
 		} else if(status != 0 && !MUIDL_IS_L4_ERROR(status)) { \
-			printf(#iface_name ":" #fixture_name ": dispatch status %#lx\n", \
-				status); \
+			printf("%s:%s: dispatch status %#lx (last tag %#lx)\n", \
+				#iface_name, #fixture_name, status, muidl_get_tag().raw); \
 		} \
 	} \
 } \
@@ -66,8 +68,8 @@ static void fixture_name ## _teardown(void) { \
 }
 
 #define ADD_IDL_FIXTURE(tcase, fixture_name) \
-tcase_add_checked_fixture((tcase), &fixture_name ## _setup, \
-	&fixture_name ## _teardown)
+	tcase_add_checked_fixture((tcase), &fixture_name ## _setup, \
+		&fixture_name ## _teardown)
 
 extern void idl_fixture_teardown(L4_ThreadId_t tid);
 
@@ -214,6 +216,14 @@ extern int find_own_priority(void);
 
 extern int log_f(const char *fmt, ...);
 extern void flush_log(bool print);
+
+
+/* from string_suite.c (TODO: move elsewhere!) */
+
+extern void flush_byte_range(
+	L4_Word_t first_address,
+	L4_Word_t size,
+	L4_Word_t access);
 
 
 /* from pg_stats.c */

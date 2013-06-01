@@ -1,7 +1,10 @@
 /* interface for a helper used by ipc_suite.c . */
 
+#include "l4x2.idl"
+
+
 [StubPrefix(__ipchelper)]
-interface IpcHelper
+interface IpcHelper: L4X2::FaultHandler
 {
 	[Label(0xdead)]
 	oneway void quit();
@@ -14,10 +17,25 @@ interface IpcHelper
 
 	/* @sleep_after_us provokes the case where send-phase preemption sets a
 	 * timeout which is reset on r_recv -> recv_wait.
+	 *
+	 * also sets the fault handler's response delay to @us.
 	 */
 	[Label(0x1234), StubSendTimeout, StubRecvTimeout]
 	void sleep(
 		in long us,			/* µs of sleep */
 		in boolean spin,	/* false = IPC sleep, true = spinning */
 		in long sleep_after_us);	/* length of IPC sleep after */
+
+
+	typedef string<12 * 1024> munge_str;
+
+	/* xfer timeout test function. receives a string, and munges it with a
+	 * random_string() output generated with @rnd_seed ^ hash_string(@input).
+	 * (hash_string() is from ccan/hash.) replies with the munged string.
+	 */
+	[Label(0x1235)]
+	void munge_string(
+		in munge_str input,
+		out munge_str output,
+		in long rnd_seed);
 };

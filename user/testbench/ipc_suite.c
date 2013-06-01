@@ -9,6 +9,8 @@
 #include <stdbool.h>
 
 #include <ccan/compiler/compiler.h>
+#include <ccan/hash/hash.h>
+#include <ccan/crc/crc.h>
 
 #include <l4/types.h>
 #include <l4/ipc.h>
@@ -37,8 +39,119 @@ struct sender_param {
 };
 
 
-static L4_ThreadId_t helper_tid;
-static bool helper_running;
+struct helper_ctx
+{
+	int fault_delay_us;
+	bool running;
+};
+
+
+static struct helper_ctx *helper_ctx(void)
+{
+	static int helper_ctx_key = -1;
+
+	if(helper_ctx_key == -1) {
+		tsd_key_create(&helper_ctx_key, &free);
+	}
+	struct helper_ctx *ctx = tsd_get(helper_ctx_key);
+	if(ctx == NULL) {
+		ctx = malloc(sizeof *ctx);
+		*ctx = (struct helper_ctx){
+			.running = true,
+			.fault_delay_us = 0,
+		};
+		tsd_set(helper_ctx_key, ctx);
+		assert(tsd_get(helper_ctx_key) == ctx);
+	}
+
+	return ctx;
+}
+
+
+static void helper_quit_impl(void) {
+	helper_ctx()->running = false;
+}
+
+
+static void helper_yield_impl(void) {
+	L4_ThreadSwitch(L4_nilthread);
+}
+
+
+static void helper_sleep_impl(
+	int32_t us,
+	bool spin,
+	int32_t sleep_after_us)
+{
+#if 0
+	diag("%s: us=%d, spin=%s, sleep_after_us=%d", __func__,
+		us, btos(spin), sleep_after_us);
+#endif
+	if(us > 0) {
+		if(spin) usleep(us); else L4_Sleep(L4_TimePeriod(us));
+	}
+
+	if(sleep_after_us > 0) {
+		L4_Sleep(L4_TimePeriod(sleep_after_us));
+	}
+
+	helper_ctx()->fault_delay_us = MAX(int, us, 0);
+}
+
+
+static void helper_handle_fault_impl(
+	L4_Word_t faddr,
+	L4_Word_t fip,
+	L4_MapItem_t *map)
+{
+	int sleep_us = helper_ctx()->fault_delay_us;
+	// diag("faddr=%#lx, fip=%#lx, sleep_us=%d", faddr, fip, sleep_us);
+	if(sleep_us > 0) {
+		L4_Sleep(L4_TimePeriod(sleep_us));
+	}
+
+	/* pass it up. */
+	L4_MsgTag_t tag = muidl_get_tag();
+	L4_LoadBR(0, L4_CompleteAddressSpace.raw);
+	L4_LoadMR(0, tag.raw);
+	L4_LoadMR(1, faddr);
+	L4_LoadMR(2, fip);
+	tag = L4_Call(L4_Pager());
+	if(!L4_IpcSucceeded(tag)) {
+		diag("%s: ipc failed, ec %#lx", __func__, L4_ErrorCode());
+	}
+
+	L4_StoreMRs(1, 2, map->raw);
+}
+
+
+static void munge_string_local(
+	const char *input,
+	char *output,
+	int32_t rnd_seed)
+{
+	uint32_t str_seed = rnd_seed ^ hash_string(input);
+	int length = strlen(input);
+	char *buffer = malloc(length + 1);
+	random_string(buffer, length, &str_seed);
+	for(int i=0; i < length; i++) {
+		output[i] = buffer[i] ^ input[i];
+	}
+	output[length] = '\0';
+}
+
+
+static const struct ipc_helper_vtable helper_vtab = {
+	.quit = &helper_quit_impl,
+	.yield = &helper_yield_impl,
+	.sleep = &helper_sleep_impl,
+	.handle_fault = &helper_handle_fault_impl,
+	.munge_string = &munge_string_local,
+};
+
+IDL_FIXTURE(helper, ipc_helper, &helper_vtab, !helper_ctx()->running);
+IDL_FIXTURE(other_helper, ipc_helper, &helper_vtab,
+	!helper_ctx()->running);
 
 
 /* TODO: move this into util.c or some such */
@@ -241,7 +354,7 @@ END_TEST
 /* IPC sleep with a TimePoint value. passes when it not only doesn't panic the
  * microkernel, but also when it drops out of the sleep at the correct time.
  */
-START_LOOP_TEST(point_timeouts, iter, 0, 15)
+START_LOOP_TEST(point_ipc_timeouts, iter, 0, 15)
 {
 	const unsigned pre_us = 800 * iter, sleep_us = 20 * 1000;
 	assert(pre_us < sleep_us);
@@ -271,6 +384,93 @@ START_LOOP_TEST(point_timeouts, iter, 0, 15)
 	wake_at = L4_SystemClock();
 	ok(wake_at.raw - pre_sleep.raw < 200,
 		"didn't sleep with expired point");
+}
+END_TEST
+
+
+/* call IpcHelper::munge_string() with buffers that're known not to be mapped.
+ * compare result with locally-computed equivalent via crc32c().
+ */
+static int munge_case(
+	L4_ThreadId_t partner_tid,
+	size_t munge_size,
+	uint32_t munge_seed)
+{
+	char *munge_in = malloc(munge_size + 1),
+		*munge_out = malloc(munge_size + 1);
+	uint32_t rnd_seed = 0xcabb1e23;
+	random_string(munge_in, munge_size, &rnd_seed);
+	munge_string_local(munge_in, munge_out, munge_seed);
+	uint32_t local_crc = crc32c(0, munge_out, munge_size);
+
+	flush_byte_range((uintptr_t)munge_in, munge_size, L4_FullyAccessible);
+	flush_byte_range((uintptr_t)munge_out, munge_size, L4_FullyAccessible);
+
+	int n = __ipchelper_munge_string(other_helper_tid,
+		munge_in, munge_out, munge_seed);
+	if(n != 0) goto end;
+	uint32_t remote_crc = crc32c(0, munge_out, munge_size);
+	if(remote_crc != local_crc) {
+		diag("remote_crc=%#x, local_crc=%#x", __func__,
+			(unsigned)remote_crc, (unsigned)local_crc);
+	}
+
+end:
+	free(munge_in);
+	free(munge_out);
+	return n;
+}
+
+
+/* same, but for xfer timeouts. this involves a string transfer helper thread,
+ * and a delaying pager.
+ */
+START_TEST(point_xfer_timeouts)
+{
+	const size_t munge_size = 6 * 1024 + 77;
+	const uint32_t munge_seed = 0x715517da;
+	const int to_us = 25 * 1000, pg_delay_us = 5 * 1000;
+
+	plan_tests(4);
+
+	L4_Set_Pager(helper_tid);
+	int n = __ipchelper_sleep(helper_tid, 0, false, 0);
+	fail_unless(n == 0, "init sleep failed, n %#x", (unsigned)n);
+
+	/* base case: no timeout when none is given. */
+	L4_Set_XferTimeouts(L4_Timeouts(L4_Never, L4_Never));
+	n = munge_case(other_helper_tid, munge_size, munge_seed);
+	if(!ok1(n == 0)) diag("n=%d", n);
+
+	/* part #1: no timeout when timeout is given, but no delay. */
+	L4_Clock_t base = L4_SystemClock();
+	L4_Time_t to_pt = L4_TimePoint2_NP(base,
+		(L4_Clock_t){ .raw = base.raw + to_us });
+	L4_Set_XferTimeouts(L4_Timeouts(to_pt, to_pt));
+	n = munge_case(other_helper_tid, munge_size, munge_seed);
+	if(!ok1(n == 0)) diag("n=%d", n);
+
+	/* part #2: timeout should occur when delay is set. */
+	L4_Set_XferTimeouts(L4_Timeouts(L4_Never, L4_Never));
+	n = __ipchelper_sleep(helper_tid, pg_delay_us, false, 0);
+	fail_unless(n == 0, "delay-setting sleep failed, n %#x", (unsigned)n);
+
+	base = L4_SystemClock();
+	to_pt = L4_TimePoint2_NP(base, (L4_Clock_t){ .raw = base.raw + to_us });
+	diag("base=%#lx, to_pt={e=%d, m=%#x, c=%d} -> @%#lx",
+		(L4_Word_t)base.raw, to_pt.point.e, to_pt.point.m, to_pt.point.c,
+		(L4_Word_t)L4_PointClock_NP(base, to_pt).raw);
+	L4_Sleep(L4_TimePeriod(to_us - pg_delay_us));
+	fail_unless(pt_is_valid(L4_SystemClock(), to_pt));
+
+	L4_Set_XferTimeouts(L4_Timeouts(to_pt, to_pt));
+	n = munge_case(other_helper_tid, munge_size, munge_seed);
+	L4_Clock_t after = L4_SystemClock();
+	diag("after=%#lx", (L4_Word_t)after.raw);
+	int code = (n >> 1) & 0x7;
+	if(!ok(code == 5 || code == 6, "hit xfer timeout")) diag("n=%d", n);
+	int64_t end_diff = (int64_t)after.raw - base.raw - to_us;
+	if(!ok1(end_diff > 0)) diag("end_diff=%d", (int)end_diff);
 }
 END_TEST
 
@@ -428,38 +628,6 @@ START_TEST(recv_timeout_from_preempt)
 END_TEST
 
 
-static void helper_quit_impl(void) {
-	helper_running = false;
-}
-
-
-static void helper_yield_impl(void) {
-	L4_ThreadSwitch(L4_nilthread);
-}
-
-
-static void helper_sleep_impl(
-	int32_t us,
-	bool spin,
-	int32_t sleep_after_us)
-{
-	if(spin) usleep(us); else L4_Sleep(L4_TimePeriod(us));
-
-	if(sleep_after_us > 0) {
-		L4_Sleep(L4_TimePeriod(sleep_after_us));
-	}
-}
-
-
-static const struct ipc_helper_vtable helper_vtab = {
-	.quit = &helper_quit_impl,
-	.yield = &helper_yield_impl,
-	.sleep = &helper_sleep_impl,
-};
-
-IDL_FIXTURE(helper, ipc_helper, &helper_vtab);
-
-
 Suite *ipc_suite(void)
 {
 	Suite *s = suite_create("ipc");
@@ -469,7 +637,6 @@ Suite *ipc_suite(void)
 	 */
 	TCase *panic_case = tcase_create("panic");
 	tcase_add_test(panic_case, receive_from_anylocalthread);
-	tcase_add_test(panic_case, point_timeouts);
 	suite_add_tcase(s, panic_case);
 
 	TCase *preempt_case = tcase_create("preempt");
@@ -479,8 +646,11 @@ Suite *ipc_suite(void)
 
 	TCase *timeout_case = tcase_create("timeout");
 	ADD_IDL_FIXTURE(timeout_case, helper);
+	ADD_IDL_FIXTURE(timeout_case, other_helper);
 	tcase_add_test(timeout_case, recv_timeout_from_send);
 	tcase_add_test(timeout_case, recv_timeout_from_preempt);
+	tcase_add_test(timeout_case, point_ipc_timeouts);
+	tcase_add_test(timeout_case, point_xfer_timeouts);
 	suite_add_tcase(s, timeout_case);
 
 	return s;

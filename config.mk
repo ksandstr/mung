@@ -10,7 +10,7 @@ CFLAGS=-O2 -Wall -march=native -mno-sse -mno-avx -std=gnu99 -m32 \
 	-fno-builtin -nostdlib #-DCCAN_LIST_DEBUG -DDEBUG_ME_HARDER
 
 MUIDL:=$(abspath $(MUIDL_DIR)/muidl)
-MUIDLFLAGS=-I $(MUIDL_DIR)/share/idl
+MUIDLFLAGS=-I $(MUIDL_DIR)/share/idl -I $(CFGDIR)/idl
 
 CLEAN_PATS=*-service.s *-client.s *-common.s *-defs.h
 
