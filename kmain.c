@@ -16,6 +16,7 @@
 #include <ukernel/mm.h>
 #include <ukernel/space.h>
 #include <ukernel/x86.h>
+#include <ukernel/cpu.h>
 #include <ukernel/interrupt.h>
 #include <ukernel/timer.h>
 #include <ukernel/ipc.h>
@@ -414,6 +415,9 @@ void kmain(void *bigp, unsigned int magic)
 	printf("KCP found at %p (copy at %p)\n", kcp_base, &kcp_copy[0]);
 	memcpy(kcp_copy, kcp_base, PAGE_SIZE);
 	kcp_base = &kcp_copy[0];
+
+	scan_cpuid();
+	if(!CHECK_FLAG(get_features()->edx, 1)) panic("math is hard!");
 
 	uintptr_t resv_start = ~0ul, resv_end = 0;
 	init_kernel_heap(kcp_base, &resv_start, &resv_end);
