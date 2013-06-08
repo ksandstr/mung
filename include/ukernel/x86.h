@@ -16,6 +16,14 @@
 #include <ukernel/idt.h>
 
 
+/* CR0 flags (incomplete) */
+#define X86_CR0_MP (1 << 1)
+#define X86_CR0_EM (1 << 2)
+#define X86_CR0_TS (1 << 3)
+#define X86_CR0_NE (1 << 5)
+
+
+
 struct thread;
 
 /* courtesy of L4Ka::pistachio */
@@ -42,12 +50,24 @@ struct x86_exregs {
 } __attribute__((packed));
 
 
+/* feature info from CPUID page 01h (edx, ecx) */
+struct x86_features {
+	uint32_t edx, ecx;
+};
+
+
+/* from exception.c */
+
+/* keeps track of coprocessor contexts etc. */
+extern void cop_init(void);
+extern void cop_switch(struct thread *next);
+extern void cop_killa(struct thread *dead);
+
+
 /* constructs a per-architecture exception message using the given context
  * while saving prior message registers. doesn't perform IPC or set the
  * message tag's label field. sets up a reply handler that stores the message
  * in "t"'s context.
- *
- * implemented in exception.c .
  */
 extern void build_exn_ipc(
 	struct thread *t,
@@ -137,6 +157,64 @@ static inline void x86_irq_disable(void) {
 static inline void x86_irq_enable(void) {
 	asm volatile ("sti" ::: "memory");
 }
+
+
+static inline void x86_alter_cr0(uint32_t and, uint32_t or)
+{
+	asm volatile (
+		"movl %%cr0, %%edx\n"
+		"andl %0, %%edx\n"
+		"orl %1, %%edx\n"
+		"movl %%edx, %%cr0\n"
+		:: "g" (and), "g" (or)
+		: "edx");
+}
+
+
+struct cpuid_out {
+	uint32_t eax, ebx, ecx, edx;
+};
+
+
+static inline void x86_cpuid(
+	struct cpuid_out *out,
+	uint32_t eax,
+	uint32_t ebx,
+	uint32_t ecx,
+	uint32_t edx)
+{
+	asm volatile (
+		"cpuid\n"
+		"movl %%eax, %0\n"
+		"movl %%ebx, %1\n"
+		"movl %%ecx, %2\n"
+		"movl %%edx, %3\n"
+		: "=m" (out->eax), "=m" (out->ebx), "=m" (out->ecx), "=m" (out->edx)
+		: "a" (eax), "b" (ebx), "c" (ecx), "d" (edx));
+}
+
+
+/* FPU shit */
+
+static inline void x86_init_fpu(void) {
+	asm volatile ("fwait; finit");
+}
+
+
+static inline void x86_fsave(void *ptr) {
+	asm volatile ("fwait; fsave (%0)" :: "r" (ptr));
+}
+
+
+static inline void x86_frstor(void *ptr) {
+	asm volatile ("frstor (%0)" :: "r" (ptr));
+}
+
+
+/* from cpu.c (should be in x86.c or some such, or in an ia32 directory
+ * alongside gdt, idt, etc. bits?)
+ */
+extern void scan_cpuid(void);
 
 
 #endif

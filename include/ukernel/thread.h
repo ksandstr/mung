@@ -4,15 +4,18 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+
 #include <ccan/list/list.h>
 #include <ccan/compiler/compiler.h>
 
 #include <l4/types.h>
+
 #include <ukernel/mm.h>
 #include <ukernel/rbtree.h>
 #include <ukernel/hook.h>
 #include <ukernel/util.h>
 #include <ukernel/x86.h>
+#include <ukernel/slab.h>
 #include <ukernel/guard.h>
 
 
@@ -117,6 +120,7 @@ struct thread
 
 	struct page *stack_page;
 
+	void *fpu_context;			/* TODO: what about MMX, SSE, etc? */
 	struct x86_exregs ctx;
 
 	/* saved IPC registers. at most 14 (acceptor, tag, 12 MRs for exception
@@ -262,7 +266,7 @@ extern void thread_save_ctx(struct thread *t, const struct x86_exregs *regs);
 extern size_t hash_thread_by_id(const void *threadptr, void *dataptr);
 
 
-/* defined in context-32.S etc. */
+/* low-level context switching from context-32.S etc. */
 
 /* swap_context() is the soft yield. it re-/stores only those registers
  * that're preserved over a SysV x86 function call.

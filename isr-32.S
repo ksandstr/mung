@@ -113,8 +113,10 @@ isr_exn_\name\()_top:
 	ISR_EXN 0, de, 0	# divide error
 	ISR_EXN 3, int3, 0	# int3 (KDB)
 	ISR_EXN 6, ud, 0	# invalid opcode
+	ISR_EXN 7, nm, 0	# device not available (fpu/mmx etc)
 	ISR_EXN 13, gp		# general protection
 	ISR_EXN 14, pf		# pagefault
+	ISR_EXN 16, mf, 0	# x87 floating point thing
 	ISR_EXN 0x8d, exregs_sc, 0	# ExchangeRegisters
 	ISR_EXN 0x8e, memctl_sc, 0	# MemoryControl
 	ISR_EXN 0x8f, basic_sc, 0	# basic syscall

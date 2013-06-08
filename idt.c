@@ -54,8 +54,10 @@ void setup_idt(int code_seg)
 	EXN_GATE(ints, code_sel, 0, de);	/* divide error */
 	EXN_GATE(ints, code_sel, 3, int3);	/* int3 (KDB) */
 	EXN_GATE(ints, code_sel, 6, ud);	/* invalid opcode */
+	EXN_GATE(ints, code_sel, 7, nm);	/* FPU/MMX/etc. reloads */
 	EXN_GATE(ints, code_sel, 13, gp);	/* general protection */
 	EXN_GATE(ints, code_sel, 14, pf);	/* pagefault */
+	EXN_GATE(ints, code_sel, 16, mf);	/* x87 floating-point exception */
 	EXN_GATE(ints, code_sel, 0x8d, exregs_sc);	/* ExchangeRegisters */
 	EXN_GATE(ints, code_sel, 0x8e, memctl_sc);	/* MemoryControl */
 	EXN_GATE(ints, code_sel, 0x8f, basic_sc);	/* basic syscall */

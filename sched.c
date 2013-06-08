@@ -350,6 +350,7 @@ static void switch_thread(struct thread *prev, struct thread *next)
 	assert(IS_KERNEL_THREAD(prev));
 
 	space_switch(next->space);
+	cop_switch(next);
 
 	/* load the new context */
 	if(IS_KERNEL_THREAD(next)) {

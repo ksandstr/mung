@@ -3,6 +3,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <assert.h>
+
 #include <ccan/alignof/alignof.h>
 #include <ccan/likely/likely.h>
 #include <ccan/list/list.h>
@@ -261,6 +262,7 @@ static void thread_destroy(struct thread *t)
 		t->stack_page = NULL;
 	}
 
+	cop_killa(t);
 	space_remove_thread(sp, t);
 	bool ok = htable_del(&thread_hash, int_hash(TID_THREADNUM(t->id)), t);
 	BUG_ON(!ok, "thread %lu:%lu not found in thread_hash",

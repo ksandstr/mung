@@ -190,10 +190,10 @@ static void setup_paging(uintptr_t id_start, uintptr_t id_end)
 	 * paging.
 	 */
 	__asm__ __volatile__ (
-		"\tmovl %0, %%cr3\n"
-		"\tmovl %%cr0, %%eax\n"
-		"\torl $0x80000000, %%eax\n"
-		"\tmovl %%eax, %%cr0\n"
+		"movl %%eax, %%cr3\n"
+		"movl %%cr0, %%eax\n"
+		"orl $0x80000000, %%eax\n"
+		"movl %%eax, %%cr0\n"
 		:
 		: "a" (kernel_space->pdirs->vm_addr)
 		: "memory");
@@ -441,6 +441,11 @@ void kmain(void *bigp, unsigned int magic)
 
 	init_irq();
 
+	printf("initializing FPU...\n");
+	/* set MP. clear EMulation, NoExceptions, TaskSwitch. */
+	x86_alter_cr0(~(X86_CR0_EM | X86_CR0_NE | X86_CR0_TS), X86_CR0_MP);
+	x86_init_fpu();
+
 	x86_irq_enable();
 
 	printf("setting up paging (id maps between %#lx and %#lx)...\n",
@@ -495,6 +500,7 @@ void kmain(void *bigp, unsigned int magic)
 	init_mapdb();
 	init_ipc();
 
+	cop_init();
 	struct thread *first_thread = init_threading(THREAD_ID(17, 1));
 	space_add_thread(kernel_space, first_thread);
 	init_sched(first_thread);

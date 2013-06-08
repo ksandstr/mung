@@ -1,7 +1,9 @@
 
 #include <stdio.h>
 #include <stdint.h>
+
 #include <ccan/likely/likely.h>
+#include <ccan/compiler/compiler.h>
 
 #include <l4/types.h>
 #include <l4/vregs.h>
@@ -10,12 +12,22 @@
 #include <ukernel/thread.h>
 #include <ukernel/sched.h>
 #include <ukernel/space.h>
+#include <ukernel/slab.h>
 #include <ukernel/ipc.h>
 #include <ukernel/syscall.h>
 #include <ukernel/cpu.h>
 #include <ukernel/kip.h>
 #include <ukernel/util.h>
 #include <ukernel/misc.h>
+
+
+/* the thread the current FPU context belongs to. usually not NULL, but may
+ * become so through a deleting ThreadControl.
+ */
+static struct thread *fpu_thread = NULL;
+
+static struct kmem_cache *fpu_context_slab = NULL;
+static void *next_fpu_context = NULL;
 
 
 void isr_exn_de_bottom(struct x86_exregs *regs)
@@ -60,6 +72,86 @@ void isr_exn_ud_bottom(struct x86_exregs *regs)
 		assert(current->status == TS_STOPPED);
 		return_to_scheduler();
 	}
+}
+
+
+COLD void cop_init(void)
+{
+	fpu_context_slab = kmem_cache_create("fpuctx", 108, 64, 0, NULL, NULL);
+}
+
+
+void cop_switch(struct thread *next)
+{
+	assert(next != NULL);
+
+	if(fpu_thread == next) {
+		/* re-enable the unsaved context */
+		x86_alter_cr0(~X86_CR0_TS, 0);
+	} else {
+		/* lazy transition, or initialization */
+		x86_alter_cr0(~0ul, X86_CR0_TS);
+		if(next_fpu_context == NULL) {
+			next_fpu_context = kmem_cache_alloc(fpu_context_slab);
+		}
+	}
+}
+
+
+void cop_killa(struct thread *dead)
+{
+	if(fpu_thread == dead) {
+		fpu_thread = NULL;
+		x86_alter_cr0(~0ul, X86_CR0_TS);
+	}
+	if(dead->fpu_context != NULL) {
+		if(next_fpu_context == NULL) {
+			next_fpu_context = dead->fpu_context;
+		} else {
+			kmem_cache_free(fpu_context_slab, dead->fpu_context);
+		}
+	}
+
+#ifndef NDEBUG
+	dead->fpu_context = (void *)0xDEADBEEF;
+#endif
+}
+
+
+/* device not available exception (fpu/mmx context switch) */
+void isr_exn_nm_bottom(struct x86_exregs *regs)
+{
+	x86_alter_cr0(~X86_CR0_TS, 0);
+
+	struct thread *current = get_current_thread(), *prev = fpu_thread;
+
+	assert(prev == NULL || prev->fpu_context != (void *)0xDEADBEEF);
+	if(prev != current && likely(prev != NULL)) {
+		if(prev->fpu_context == NULL) {
+			assert(next_fpu_context != NULL);
+			prev->fpu_context = next_fpu_context;
+			next_fpu_context = NULL;
+		}
+		x86_fsave(prev->fpu_context);
+	}
+
+	if(current->fpu_context != NULL) {
+		assert(current->fpu_context != (void *)0xDEADBEEF);
+		x86_frstor(current->fpu_context);
+	} else {
+		/* TODO: set rounding mode to truncate, etc. default FPU state */
+	}
+
+	fpu_thread = current;
+}
+
+
+/* x87 fpu exceptions */
+void isr_exn_mf_bottom(struct x86_exregs *regs)
+{
+	printf("#MF\n");
+	thread_halt(get_current_thread());
+	return_to_scheduler();
 }
 
 
