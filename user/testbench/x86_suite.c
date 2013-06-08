@@ -80,6 +80,50 @@ START_LOOP_TEST(fpu_cw_restore, iter, 0, 3)
 END_TEST
 
 
+#ifdef __SSE__
+/* a helper thread that sleeps for 2 ms, then alters the SSE rounding mode. */
+static void sleep_and_twiddle_sse(void *param UNUSED)
+{
+	L4_Sleep(L4_TimePeriod(2 * 1000));
+
+	int rmode = _MM_GET_ROUNDING_MODE();
+	diag("rmode=%#x", rmode);
+	int new_rmode = (rmode + _MM_ROUND_DOWN) & _MM_ROUND_MASK;
+	_MM_SET_ROUNDING_MODE(new_rmode);
+	diag("rmode'=%#x", new_rmode);
+}
+#endif
+
+
+START_LOOP_TEST(sse_cw_restore, iter, 0, 3)
+{
+#ifndef __SSE__
+	plan_skip_all("no SSE support at compile-time");
+#else
+	plan_tests(1);
+
+	L4_ThreadId_t helper_tid = start_thread(&sleep_and_twiddle_sse, NULL);
+	fail_if(L4_IsNilThread(helper_tid));
+
+	static const unsigned modes[] = {
+		_MM_ROUND_NEAREST,
+		_MM_ROUND_DOWN,
+		_MM_ROUND_UP,
+		_MM_ROUND_TOWARD_ZERO,
+	};
+
+	_MM_SET_ROUNDING_MODE(modes[iter]);
+	unsigned pre_mode = _MM_GET_ROUNDING_MODE();
+	join_thread(helper_tid);
+	unsigned post_mode = _MM_GET_ROUNDING_MODE();
+	if(!ok1(pre_mode == post_mode)) {
+		diag("mode=%#x mode'=%#x", pre_mode, post_mode);
+	}
+#endif
+}
+END_TEST
+
+
 START_TEST(mmx_smoketest)
 {
 #ifndef __MMX__
@@ -157,10 +201,11 @@ struct Suite *x86_suite(void)
 		suite_add_tcase(s, tc);
 	}
 
-	/* FPU context tests */
+	/* FPU/SSE context tests */
 	{
-		TCase *tc = tcase_create("fpuctx");
+		TCase *tc = tcase_create("hwctx");
 		tcase_add_test(tc, fpu_cw_restore);
+		tcase_add_test(tc, sse_cw_restore);
 		suite_add_tcase(s, tc);
 	}
 
