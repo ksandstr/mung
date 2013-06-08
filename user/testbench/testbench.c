@@ -577,6 +577,7 @@ int main(void)
 		/* microkernel tests */
 		&type_suite,
 		&thread_suite,
+		&x86_suite,
 		&space_suite,
 		&sched_suite,
 		&ipc_suite,

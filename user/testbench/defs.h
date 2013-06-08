@@ -103,6 +103,7 @@ extern struct Suite *thread_suite(void);
 extern struct Suite *ipc_suite(void);
 extern struct Suite *string_suite(void);
 extern struct Suite *type_suite(void);
+extern struct Suite *x86_suite(void);
 
 
 /* pre-formal tests */
