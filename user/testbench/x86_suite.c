@@ -1,6 +1,7 @@
 
 #include <math.h>
 #include <stdint.h>
+#include <string.h>
 
 #include <l4/types.h>
 #include <l4/ipc.h>
@@ -11,6 +12,11 @@
 
 #include "test.h"
 #include "defs.h"
+
+
+#ifdef __MMX__
+#include <mmintrin.h>
+#endif
 
 
 /* rounding mode field in the FPU control word (i.e. {11:10}) */
@@ -70,9 +76,49 @@ START_LOOP_TEST(fpu_cw_restore, iter, 0, 3)
 END_TEST
 
 
+START_TEST(mmx_smoketest)
+{
+#ifndef __MMX__
+	plan_skip_all("no MMX support at compile-time");
+#else
+	plan_tests(2);
+
+	union {
+		uint8_t o[8];
+		__m64 m;
+	} a, b, out;
+	for(int i=0; i < 8; i++) {
+		a.o[i] = 0x4a - i;
+		b.o[i] = i + 0xd6;
+	}
+	out.m = _mm_add_pi8(a.m, b.m);
+	_mm_empty();
+	pass("didn't die");
+
+	bool still_ok = true;
+	for(int i=0; i < 8; i++) {
+		uint8_t expect = a.o[i] + b.o[i];
+		if(out.o[i] != expect) {
+			still_ok = false;
+			diag("i=%d: out=%#02x, expected %#02x", i, out.o[i], expect);
+		}
+	}
+	ok(still_ok, "results consistent");
+#endif
+}
+END_TEST
+
+
 struct Suite *x86_suite(void)
 {
 	Suite *s = suite_create("x86");
+
+	/* smoke testing */
+	{
+		TCase *tc = tcase_create("smoke");
+		tcase_add_test(tc, mmx_smoketest);
+		suite_add_tcase(s, tc);
+	}
 
 	/* FPU context tests */
 	{
