@@ -18,6 +18,10 @@
 #include <mmintrin.h>
 #endif
 
+#ifdef __SSE__
+#include <xmmintrin.h>
+#endif
+
 
 /* rounding mode field in the FPU control word (i.e. {11:10}) */
 #define X86_FPUCW_RND_EVEN 0
@@ -109,6 +113,38 @@ START_TEST(mmx_smoketest)
 END_TEST
 
 
+START_TEST(sse_smoketest)
+{
+#ifndef __SSE__
+	plan_skip_all("no SSE support at compile-time");
+#else
+	plan_tests(2);
+
+	union {
+		float f[4];
+		__m128 m;
+	} a, b, out;
+	for(int i=0; i < 4; i++) {
+		a.f[i] = 1.234 * i;
+		b.f[i] = 8.9 - (i * 3.778);
+	}
+	out.m = _mm_add_ps(a.m, b.m);
+	pass("didn't die");
+
+	bool still_ok = true;
+	for(int i=0; i < 4; i++) {
+		float expect = a.f[i] + b.f[i];
+		if(fabsf(out.f[i] - expect) > 0.0003) {
+			still_ok = false;
+			diag("at i=%d, diff > 0.0003", i);
+		}
+	}
+	ok(still_ok, "results consistent");
+#endif
+}
+END_TEST
+
+
 struct Suite *x86_suite(void)
 {
 	Suite *s = suite_create("x86");
@@ -117,6 +153,7 @@ struct Suite *x86_suite(void)
 	{
 		TCase *tc = tcase_create("smoke");
 		tcase_add_test(tc, mmx_smoketest);
+		tcase_add_test(tc, sse_smoketest);
 		suite_add_tcase(s, tc);
 	}
 
