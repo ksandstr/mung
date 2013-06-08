@@ -77,7 +77,18 @@ void isr_exn_ud_bottom(struct x86_exregs *regs)
 
 COLD void cop_init(void)
 {
-	fpu_context_slab = kmem_cache_create("fpuctx", 108, 64, 0, NULL, NULL);
+	bool long_fsave = CPU_HAS_FXSR();
+	fpu_context_slab = kmem_cache_create("fpuctx",
+		long_fsave ? 512 : 108, 64, 0, NULL, NULL);
+
+	if(CPU_HAS_FXSR() && CPU_HAS_SSE()) {
+		/* set CR4.OSFXSR and CR4.OSXMMEXCPT */
+		asm volatile (
+			"movl %%cr4, %%eax\n"
+			"orl $0x600, %%eax\n"
+			"movl %%eax, %%cr4\n"
+			::: "eax");
+	}
 }
 
 
@@ -132,12 +143,21 @@ void isr_exn_nm_bottom(struct x86_exregs *regs)
 			prev->fpu_context = next_fpu_context;
 			next_fpu_context = NULL;
 		}
-		x86_fsave(prev->fpu_context);
+
+		if(CPU_HAS_FXSR()) {
+			x86_fxsave(prev->fpu_context);
+		} else {
+			x86_fsave(prev->fpu_context);
+		}
 	}
 
 	if(current->fpu_context != NULL) {
 		assert(current->fpu_context != (void *)0xDEADBEEF);
-		x86_frstor(current->fpu_context);
+		if(CPU_HAS_FXSR()) {
+			x86_fxrstor(current->fpu_context);
+		} else {
+			x86_frstor(current->fpu_context);
+		}
 	} else {
 		/* TODO: set rounding mode to truncate, etc. default FPU state */
 	}
@@ -150,6 +170,15 @@ void isr_exn_nm_bottom(struct x86_exregs *regs)
 void isr_exn_mf_bottom(struct x86_exregs *regs)
 {
 	printf("#MF\n");
+	thread_halt(get_current_thread());
+	return_to_scheduler();
+}
+
+
+/* SSE fpu exceptions */
+void isr_exn_xm_bottom(struct x86_exregs *regs)
+{
+	printf("#XM\n");
 	thread_halt(get_current_thread());
 	return_to_scheduler();
 }
@@ -339,6 +368,9 @@ static void handle_io_fault(struct thread *current, struct x86_exregs *regs)
 		default:
 			printf("unknown instruction %#02x in I/O fault at %#lx\n",
 				insn[0], regs->eip);
+			/* FIXME: pop an "illegal instruction" exception message,
+			 * somehow
+			 */
 			goto fail;
 	}
 

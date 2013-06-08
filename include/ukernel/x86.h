@@ -14,6 +14,7 @@
 #include <ukernel/ioport.h>
 #include <ukernel/gdt.h>
 #include <ukernel/idt.h>
+#include <ukernel/util.h>
 
 
 /* CR0 flags (incomplete) */
@@ -22,6 +23,22 @@
 #define X86_CR0_TS (1 << 3)
 #define X86_CR0_NE (1 << 5)
 
+/* CPUID page 01h EDX flag masks */
+#define X86_FEATURE_D_FXSR (1 << 24)
+#define X86_FEATURE_D_SSE (1 << 25)
+#define X86_FEATURE_D_SSE2 (1 << 26)
+
+/* same for ECX */
+#define X86_FEATURE_C_SSE3 (1 << 0)
+#define X86_FEATURE_C_SSSE3 (1 << 9)
+#define X86_FEATURE_C_SSE41 (1 << 19)
+#define X86_FEATURE_C_SSE42 (1 << 20)
+
+/* TODO: set these at configuration time to remove a runtime check in the #NM
+ * handler.
+ */
+#define CPU_HAS_FXSR() CHECK_FLAG(get_features()->edx, X86_FEATURE_D_FXSR)
+#define CPU_HAS_SSE() CHECK_FLAG(get_features()->edx, X86_FEATURE_D_SSE)
 
 
 struct thread;
@@ -194,7 +211,7 @@ static inline void x86_cpuid(
 }
 
 
-/* FPU shit */
+/* FPU/MMX/SSE shit */
 
 static inline void x86_init_fpu(void) {
 	asm volatile ("fwait; finit");
@@ -208,6 +225,16 @@ static inline void x86_fsave(void *ptr) {
 
 static inline void x86_frstor(void *ptr) {
 	asm volatile ("frstor (%0)" :: "r" (ptr));
+}
+
+
+static inline void x86_fxsave(void *ptr) {
+	asm volatile ("fwait; fxsave (%0)" :: "r" (ptr));
+}
+
+
+static inline void x86_fxrstor(void *ptr) {
+	asm volatile ("fxrstor (%0)" :: "r" (ptr));
 }
 
 

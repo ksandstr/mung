@@ -269,8 +269,14 @@ L4_ThreadId_t start_thread_long(
 		abort();
 	}
 	threads[t].stack = stack;
-	L4_Word_t stk_top = (L4_Word_t)stack + THREAD_STACK_SIZE - 16;
-	L4_Word_t *sptr = (void *)stk_top;
+	L4_Word_t stk_top = ((L4_Word_t)stack + THREAD_STACK_SIZE - 16) & ~0xfu;
+#ifdef __SSE__
+	/* align for the parameter. (FIXME: this is poorly understood. why does 4
+	 * give the right alignment, but not 8?)
+	 */
+	stk_top += 4;
+#endif
+	L4_Word_t *sptr = (L4_Word_t *)stk_top;
 	*(--sptr) = self.raw;
 	*(--sptr) = 0xbabecafe;		/* >implying human trafficking */
 	stk_top = (L4_Word_t)sptr;
