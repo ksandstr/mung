@@ -81,7 +81,7 @@ int vsnprintf(char *str, size_t size, const char *fmt, va_list arg_list)
 		 * integers by the varargs mechanism.)
 		 */
 		// bool is_short = false;
-		bool is_alternate = false;
+		bool is_alternate = false, field_width_set = false;
 		char pad_char = ' ';
 		int field_width = 1, is_len = 0;
 
@@ -101,6 +101,8 @@ int vsnprintf(char *str, size_t size, const char *fmt, va_list arg_list)
 					int len = 0, w = parse_width(&fmt[i], &len);
 					if(w == 0) goto error;
 					field_width = w;
+					if(field_width < 0) field_width = 0;
+					field_width_set = true;
 					i += len - 1;
 					break;
 				}
@@ -226,10 +228,15 @@ int vsnprintf(char *str, size_t size, const char *fmt, va_list arg_list)
 				break;
 
 			case 's':
-				/* FIXME: apply padding, field width things? */
+				/* FIXME: apply padding up to field_width when asked? */
 				conv_src = va_arg(ap, const char *);
-				if(conv_src != NULL) conv_size = strlen(conv_src);
-				else {
+				if(conv_src != NULL) {
+					if(field_width_set) {
+						conv_size = strnlen(conv_src, field_width);
+					} else {
+						conv_size = strlen(conv_src);
+					}
+				} else {
 					conv_src = "(null)";
 					conv_size = 6;
 				}
