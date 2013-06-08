@@ -15,8 +15,9 @@
 
 #include <ukernel/mm.h>
 #include <ukernel/space.h>
-#include <ukernel/x86.h>
 #include <ukernel/cpu.h>
+#include <ukernel/x86.h>
+#include <ukernel/acpi.h>
 #include <ukernel/interrupt.h>
 #include <ukernel/timer.h>
 #include <ukernel/ipc.h>
@@ -419,6 +420,12 @@ void kmain(void *bigp, unsigned int magic)
 	scan_cpuid();
 	if(!CHECK_FLAG(get_features()->edx, 1)) panic("math is hard!");
 
+	int n = acpi_init();
+	if(n < 0) {
+		printf("ACPI initialization failed!\n");
+		panic("mung doesn't work without ACPI anymore. bawwww");
+	}
+
 	uintptr_t resv_start = ~0ul, resv_end = 0;
 	init_kernel_heap(kcp_base, &resv_start, &resv_end);
 
@@ -459,7 +466,7 @@ void kmain(void *bigp, unsigned int magic)
 	setup_paging(resv_start, resv_end);
 
 	/* (see comment for init_spaces().) */
-	int n = mapdb_init(&kernel_space->mapdb, kernel_space);
+	n = mapdb_init(&kernel_space->mapdb, kernel_space);
 	if(n < 0) panic("mapdb_init() for the kernel space failed");
 
 	space_add_resv_pages(kernel_space, &ksp_resv);

@@ -52,10 +52,10 @@ tags: $(shell find . -iname "*.[ch]" -or -iname "*.p[lm]")
 
 
 # TODO: remove the GCC-ism for compatiblity with clang. (ha ha ha ha ha ha)
-ia32-kernel: linker.ld loader.o isr.o kmain.o kip.o cpu.o \
-		dlmalloc.o heap.o pic.o timer.o thread.o context.o trace.o \
-		sched.o gdt.o idt.o exception.o irq.o space.o ipc.o mapdb.o \
-		ccan-htable.o ccan-list.o
+ia32-kernel: linker.ld loader.o kmain.o kip.o cpu.o heap.o thread.o \
+		trace.o sched.o exception.o space.o ipc.o mapdb.o \
+		acpi.o gdt.o idt.o irq.o pic.o isr.o timer.o context.o \
+		dlmalloc.o ccan-htable.o ccan-list.o
 	@echo "  LD $@"
 	@ld -T linker.ld -o $@ $(filter %.o,$^) \
 		-L lib -lukernel_util \
