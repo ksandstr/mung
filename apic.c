@@ -46,6 +46,15 @@
 #define APIC_TMR(ix) (0x180 + (ix) * 0x10)	/* trigger mode reg (RO) */
 #define APIC_IRR(ix) (0x200 + (ix) * 0x10)	/* interrupt request reg (RO) */
 #define APIC_ICR(ix) (0x300 + (ix) * 0x10)	/* 0..1: interrupt cmd reg (RW) */
+#define APIC_LVT_TIMER	0x320	/* local timer vector */
+#define APIC_LVT_THERM	0x330	/* same, but thermal */
+#define APIC_LVT_PERF	0x340	/* same, performance monitoring */
+#define APIC_LVT_LINT0	0x350	/* same, LINT0 */
+#define APIC_LVT_LINT1	0x360	/* same, LINT1 */
+#define APIC_LVT_ERROR	0x370	/* same, error vector */
+#define APIC_TIMER_INIT	0x380	/* LAPIC timer initial count register */
+#define APIC_TIMER_CUR	0x390	/* LAPIC timer current count register (RO) */
+#define APIC_TIMER_DCR	0x3e0	/* LAPIC timer divide cfg register */
 /* etc... (add as needed) */
 
 /* IOAPIC registers (via ioapic_{read,write}()) */
@@ -146,7 +155,6 @@ static void ioapic_unmask_irq(int irq, bool act_high, bool level_trig)
 	int vec = irq % 24;
 
 	uint32_t ctl = ioapic_read(ioa, IOREDTBL(vec) + 0);
-	printf("old ctl for irq%d = %#x\n", irq, ctl);
 
 	int trig = level_trig ? 1 : 0, pol = act_high ? 0 : 1;
 
@@ -160,7 +168,6 @@ static void ioapic_unmask_irq(int irq, bool act_high, bool level_trig)
 	 */
 	ctl &= ~((1 << 16) | (!pol << 13) | (!trig << 15) | 0xff);
 	ctl |= (pol << 13) | (trig << 15) | (0x20 + irq);
-	printf("ctl' for irq%d = %#x\n", irq, ctl);
 	ioapic_write(ioa, IOREDTBL(vec) + 0, ctl);
 }
 

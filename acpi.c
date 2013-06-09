@@ -309,7 +309,7 @@ int acpi_init(void)
 				acpi_madt->h.length, acpi_madt->lc_addr, acpi_madt->flags);
 			dump_madt(acpi_madt);
 		} else if(memcmp(hdr->signature, "SSDT", 4) == 0) {
-			printf("SSDT (ptr=%p) has %u bytes of code.\n", hdr,
+			printf("SSDT has %u bytes of code.\n",
 				hdr->length - sizeof(struct sdt_header));
 			free(hdr);		/* not used. */
 		} else if(memcmp(hdr->signature, "HPET", 4) == 0) {
@@ -329,8 +329,8 @@ int acpi_init(void)
 		if(dsdt == NULL) {
 			printf("ACPI DSDT not valid!\n");
 		} else {
-			printf("DSDT (ptr=%p) has %u bytes of code.\n", dsdt,
-				dsdt->length - sizeof(struct sdt_header));
+			printf("DSDT (ptr=%#08x) has %u bytes of code.\n",
+				(unsigned)dsdt_ptr, dsdt->length - sizeof(struct sdt_header));
 			free(dsdt);
 		}
 	}
