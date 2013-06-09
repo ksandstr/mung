@@ -417,17 +417,11 @@ void kmain(void *bigp, unsigned int magic)
 	memcpy(kcp_copy, kcp_base, PAGE_SIZE);
 	kcp_base = &kcp_copy[0];
 
-	scan_cpuid();
-	if(!CHECK_FLAG(get_features()->edx, 1)) panic("math is hard!");
-
-	int n = acpi_init();
-	if(n < 0) {
-		printf("ACPI initialization failed!\n");
-		panic("mung doesn't work without ACPI anymore. bawwww");
-	}
-
 	uintptr_t resv_start = ~0ul, resv_end = 0;
 	init_kernel_heap(kcp_base, &resv_start, &resv_end);
+
+	scan_cpuid();
+	if(!CHECK_FLAG(get_features()->edx, 1)) panic("math is hard!");
 
 	/* initialize interrupt-related data structures with the I bit cleared. */
 	x86_irq_disable();
@@ -466,7 +460,7 @@ void kmain(void *bigp, unsigned int magic)
 	setup_paging(resv_start, resv_end);
 
 	/* (see comment for init_spaces().) */
-	n = mapdb_init(&kernel_space->mapdb, kernel_space);
+	int n = mapdb_init(&kernel_space->mapdb, kernel_space);
 	if(n < 0) panic("mapdb_init() for the kernel space failed");
 
 	space_add_resv_pages(kernel_space, &ksp_resv);
@@ -477,6 +471,12 @@ void kmain(void *bigp, unsigned int magic)
 	const L4_KernelConfigurationPage_t *kcp = kcp_base;
 	L4_KernelRootServer_t s0_mod = kcp->sigma0,
 		roottask_mod = kcp->root_server;
+
+	n = acpi_init();
+	if(n < 0) {
+		printf("ACPI initialization failed!\n");
+		panic("mung doesn't work without ACPI anymore. bawwww");
+	}
 
 	/* initialize KIP */
 	kip_mem = kcp_base;

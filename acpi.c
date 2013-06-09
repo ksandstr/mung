@@ -6,10 +6,15 @@
 #include <string.h>
 #include <assert.h>
 
+#include <ukernel/mm.h>
 #include <ukernel/misc.h>
 #include <ukernel/acpi.h>
 
 
+#define PAGE_ADDR(a) ((a) & ~PAGE_MASK)
+
+
+/* structures in kernel heap (constant over paging setup) */
 const struct acpi_fadt *acpi_fadt = NULL;
 const struct acpi_madt *acpi_madt = NULL;
 const struct acpi_hpet *acpi_hpet = NULL;
@@ -20,10 +25,17 @@ const struct acpi_hpet *acpi_hpet = NULL;
  */
 static struct rsdp_v20 *find_rsdp(void)
 {
+	uintptr_t resv = reserve_heap_page(), phys = 0;
+
 	struct rsdp_v20 *p = NULL;
 	for(uintptr_t addr = 0x000e0000; addr <= 0x000fffff; addr += 16) {
-		if(memcmp((void *)addr, "RSD PTR ", 8) == 0) {
-			p = (void *)addr;
+		if(PAGE_ADDR(phys) != PAGE_ADDR(addr)) {
+			phys = PAGE_ADDR(addr);
+			put_supervisor_page(resv, phys >> PAGE_BITS);
+		}
+		uintptr_t vaddr = (addr & PAGE_MASK) | resv;
+		if(memcmp((void *)vaddr, "RSD PTR ", 8) == 0) {
+			p = (void *)vaddr;
 			assert(memcmp(p->signature, "RSD PTR ", 8) == 0);
 			break;
 		}
@@ -35,10 +47,23 @@ static struct rsdp_v20 *find_rsdp(void)
 	for(int i=0; i < 20; i++) sum += ((uint8_t *)p)[i];
 	if((sum & 0xff) != 0) {
 		printf("ACPI RDSP checksum mismatch!\n");
-		return NULL;
+		p = NULL;
+		goto end;
 	}
 
+	/* copy it off. */
+	const struct rsdp_v20 *tmp = p;
+	int len = tmp->revision >= 1 ? sizeof(struct rsdp_v20) : 20;
+	p = malloc(len);
+	/* FIXME: use a proper "copy_from_phys()" routine, eventually, one
+	 * day...
+	 */
+	assert(PAGE_ADDR((uintptr_t)tmp + len - 1) == PAGE_ADDR((uintptr_t)tmp));
+	memcpy(p, tmp, len);
+
 end:
+	put_supervisor_page(resv, 0);
+	free_heap_page(resv);
 	return p;
 }
 
@@ -55,6 +80,51 @@ static bool sdt_valid(const struct sdt_header *sdt)
 	uint32_t sum = 0;
 	for(size_t i=0; i < sdt->length; i++) sum += ((const uint8_t *)sdt)[i];
 	return (sum & 0xff) == 0;
+}
+
+
+static struct sdt_header *sdt_copy(uintptr_t phys_addr)
+{
+	struct sdt_header *copy;
+	uintptr_t resv = reserve_heap_page();
+	put_supervisor_page(resv, phys_addr >> PAGE_BITS);
+	const struct sdt_header *sdt = (void *)(resv | (phys_addr & PAGE_MASK));
+	bool delay_valid;
+	if(PAGE_ADDR(phys_addr + sdt->length) != PAGE_ADDR(phys_addr)) {
+		delay_valid = true;
+	} else if(!sdt_valid(sdt)) {
+		printf("ACPI table at %#08x isn't valid\n", phys_addr);
+		copy = NULL;
+		goto end;
+	} else {
+		/* short & OK */
+		delay_valid = false;
+	}
+
+	unsigned length = sdt->length;	/* sdt dies at 2nd put_supervisor_page() */
+	copy = malloc(length);
+	unsigned pos = 0;
+	while(pos < length) {
+		uintptr_t copy_at = phys_addr + pos;
+		assert(pos == 0 || PAGE_ADDR(copy_at) == copy_at);
+		put_supervisor_page(resv, copy_at >> PAGE_BITS);
+		int chunk = MIN(int, length - pos, PAGE_SIZE - (copy_at & PAGE_MASK));
+		assert(chunk > 0);
+		memcpy((void *)copy + pos, (void *)(resv | (copy_at & PAGE_MASK)),
+			chunk);
+		pos += chunk;
+	}
+
+	if(delay_valid && !sdt_valid(copy)) {
+		printf("ACPI table at %#08x isn't valid\n", phys_addr);
+		free(copy);
+		copy = NULL;
+	}
+
+end:
+	put_supervisor_page(resv, 0);
+	free_heap_page(resv);
+	return copy;
 }
 
 
@@ -189,8 +259,8 @@ static void dump_madt(const struct acpi_madt *madt)
 }
 
 
-/* NOTE: this function runs either in a 1:1 mapping between physical and
- * virtual memory, or with paging disabled. caveat lector.
+/* runs after paging has been enabled. maps ACPI tables into kernel memory
+ * with reserve_heap_page() and put_supervisor_page().
  */
 int acpi_init(void)
 {
@@ -204,9 +274,9 @@ int acpi_init(void)
 	printf("  checksum %#02x, OEM ID `%6s', revision %u, RSDT @ %#08x\n",
 		rsdp->checksum, rsdp->oemid, rsdp->revision, rsdp->rsdtaddress);
 
-	const struct sdt_header *rsdt_hdr = (void *)rsdp->rsdtaddress;
-	if(!sdt_valid(rsdt_hdr)) {
-		printf("RSDT checksum not valid!\n");
+	struct sdt_header *rsdt_hdr = sdt_copy(rsdp->rsdtaddress);
+	if(rsdt_hdr == NULL) {
+		printf("RSDT copy failed!\n");
 		return -1;
 	}
 	printf("RSDT header:"); print_sdt(rsdt_hdr);
@@ -218,42 +288,50 @@ int acpi_init(void)
 	printf("%d SDT pointers:\n", num_sdt_ptrs);
 	for(int i=0; i < num_sdt_ptrs; i++) {
 		printf("  [%d] %#x", i, sdt_ptrs[i]);
-		const struct sdt_header *hdr = (void *)sdt_ptrs[i];
-		if(!sdt_valid(hdr)) {
+		struct sdt_header *hdr = sdt_copy(sdt_ptrs[i]);
+		if(hdr == NULL) {
 			printf(" [not valid]\n");
 			continue;
 		}
 		print_sdt(hdr);
 
 		if(memcmp(hdr->signature, "FACP", 4) == 0) {
-			acpi_fadt = (void *)hdr;
+			acpi_fadt = (struct acpi_fadt *)hdr;
+			assert(sdt_valid(&acpi_fadt->h));
 			dsdt_ptr = acpi_fadt->dsdt;
 			if(dsdt_ptr == 0 && is_v2) dsdt_ptr = acpi_fadt->x_dsdt;
 			facs_ptr = acpi_fadt->firmwarectrl;
 			if(facs_ptr == 0 && is_v2) facs_ptr = acpi_fadt->x_firmwarecontrol;
 		} else if(memcmp(hdr->signature, "APIC", 4) == 0) {
-			acpi_madt = (void *)hdr;
+			acpi_madt = (struct acpi_madt *)hdr;
+			assert(sdt_valid(&acpi_madt->h));
 			printf("MADT: len %u, local controller at %#08x, flags %#x\n",
 				acpi_madt->h.length, acpi_madt->lc_addr, acpi_madt->flags);
 			dump_madt(acpi_madt);
 		} else if(memcmp(hdr->signature, "SSDT", 4) == 0) {
 			printf("SSDT (ptr=%p) has %u bytes of code.\n", hdr,
 				hdr->length - sizeof(struct sdt_header));
+			free(hdr);		/* not used. */
 		} else if(memcmp(hdr->signature, "HPET", 4) == 0) {
-			acpi_hpet = (void *)hdr;
+			acpi_hpet = (struct acpi_hpet *)hdr;
+			assert(sdt_valid(&acpi_hpet->h));
 			printf("HPET: block=%#08x, id=%u, min_tick=%u, prot=%#02x\n",
 				acpi_hpet->block_id, acpi_hpet->hpet_id, acpi_hpet->min_tick,
 				acpi_hpet->prot);
+		} else {
+			/* unknown. */
+			free(hdr);
 		}
 	}
 
 	if(dsdt_ptr != 0) {
-		const struct sdt_header *dsdt = (void *)(uintptr_t)dsdt_ptr;
-		if(!sdt_valid(dsdt)) {
+		struct sdt_header *dsdt = sdt_copy(dsdt_ptr);
+		if(dsdt == NULL) {
 			printf("ACPI DSDT not valid!\n");
 		} else {
 			printf("DSDT (ptr=%p) has %u bytes of code.\n", dsdt,
 				dsdt->length - sizeof(struct sdt_header));
+			free(dsdt);
 		}
 	}
 

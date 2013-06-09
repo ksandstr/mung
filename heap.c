@@ -136,7 +136,8 @@ static COLD bool page_is_available(
 
 
 /* reserves initial memory for the kernel. this is subsequently used to
- * allocate spaces, threads, UTCB pages, and page tracking structures.
+ * allocate spaces, threads, UTCB pages, page tracking structures, copies of
+ * ACPI tables, etc...
  */
 void init_kernel_heap(
 	void *kcp_base,

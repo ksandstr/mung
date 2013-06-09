@@ -140,6 +140,7 @@ struct acpi_hpet
 
 /* globals from acpi.c */
 
+/* (copied into kernel heap by acpi_init()) */
 extern const struct acpi_fadt *acpi_fadt;
 extern const struct acpi_madt *acpi_madt;
 extern const struct acpi_hpet *acpi_hpet;
