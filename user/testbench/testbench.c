@@ -16,6 +16,7 @@
 #include <l4/bootinfo.h>
 
 #include <ukernel/util.h>
+#include <ukernel/ioport.h>
 
 #include "defs.h"
 #include "forkserv.h"
@@ -558,6 +559,46 @@ static void parse_cmd_opts(struct htable *ht, const char *boot_cmdline)
 }
 
 
+/* IA-PC style keyboard interrupt handling. */
+static void keyboard_thread(void *param UNUSED)
+{
+	printf("keyboard thread running!\n");
+
+	/* direct IRQ1 to this thread. */
+	L4_ThreadId_t irq_tid = L4_GlobalId(1, 1);
+	L4_Word_t res = L4_ThreadControl(irq_tid, irq_tid, L4_nilthread,
+		L4_MyGlobalId(), (void *)-1);
+	if(res == 0) {
+		printf("IRQ1 ThreadControl failed, ec %#lx\n", L4_ErrorCode());
+		goto end;
+	}
+
+	for(;;) {
+		L4_MsgTag_t tag = L4_Receive(irq_tid);
+		if(L4_IpcFailed(tag)) {
+			printf("IRQ1 receive failed, ec %#lx\n", L4_ErrorCode());
+			continue;
+		}
+
+        printf("i'm a keyboard, beepin ur macaronis\n");
+#define KBD_STATUS_REG 0x64
+#define KBD_DATA_REG 0x60
+#define KBD_STAT_OBF 0x01
+        for(;;) {
+            uint8_t st = inb(KBD_STATUS_REG);
+            if((st & KBD_STAT_OBF) == 0) break;
+            inb(KBD_DATA_REG);  /* and throw it away */
+        }
+
+		L4_LoadMR(0, 0);
+		L4_Reply(irq_tid);
+	}
+
+end:
+	printf("keyboard thread exiting!\n");
+}
+
+
 int main(void)
 {
 	printf("hello, world!\n");
@@ -614,6 +655,12 @@ int main(void)
 	legacy_tests();
 
 	printf("*** testbench completed.\n");
+
+	if(cmd_opt(&opts, "keyboard") != NULL) {
+		printf("*** starting keyboard test thread\n");
+		L4_ThreadId_t keyb_tid = start_thread(&keyboard_thread, NULL);
+		join_thread(keyb_tid);
+	}
 
 	return 0;
 }
