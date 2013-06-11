@@ -465,6 +465,8 @@ void kmain(void *bigp, unsigned int magic)
 	space_add_resv_pages(kernel_space, &ksp_resv);
 	list_head_init(&ksp_resv);
 
+	/* NOTE: malloc(), free(), etc. are only available from this line down. */
+
 	const L4_KernelConfigurationPage_t *kcp = kcp_base;
 	L4_KernelRootServer_t s0_mod = kcp->sigma0,
 		roottask_mod = kcp->root_server;
@@ -505,7 +507,8 @@ void kmain(void *bigp, unsigned int magic)
 	init_ipc();
 
 	cop_init();
-	struct thread *first_thread = init_threading(THREAD_ID(17, 1));
+	struct thread *first_thread = init_threading(
+		THREAD_ID(last_int_threadno() + 1, 1));
 	space_add_thread(kernel_space, first_thread);
 	init_sched(first_thread);
 
@@ -513,14 +516,17 @@ void kmain(void *bigp, unsigned int magic)
 	 * in development it functions as a printf() output path and for catching
 	 * segfaults, so that's OK.
 	 */
+	int next_user_tno = first_user_threadno();
 	struct thread *sigma0_pager = create_kthread(&pager_thread, NULL),
-		*s0_thread = spawn_kernel_server(THREAD_ID(128, 1),
+		*s0_thread = spawn_kernel_server(THREAD_ID(next_user_tno++, 1),
 			&s0_mod, sigma0_pager, PAGE_BITS, true),
 		*roottask = NULL;
 	sigma0_space = s0_thread->space;
+	/* (burn one TID for sigma1, which is missing from the spec.) */
+	next_user_tno++;
 	if(roottask_mod.high >= PAGE_SIZE) {
-		roottask = spawn_kernel_server(THREAD_ID(160, 1), &roottask_mod,
-			s0_thread, 16, false);
+		roottask = spawn_kernel_server(THREAD_ID(next_user_tno++, 1),
+			&roottask_mod, s0_thread, 16, false);
 		roottask->space->flags |= SF_PRIVILEGE;
 		printf("roottask [%#lx .. %#lx] created as %lu:%lu.\n",
 			roottask_mod.low, roottask_mod.high,

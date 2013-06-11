@@ -3,6 +3,7 @@
 #define SEEN_KIP_H
 
 #include <l4/types.h>
+#include <l4/kip.h>
 
 
 extern void *kip_mem;
@@ -13,5 +14,18 @@ extern void *kip_mem;
  */
 extern void make_kip(void *mem, L4_Word_t kern_start, L4_Word_t kern_end);
 
+
+/* friendly neighbourhood accessors */
+
+static inline int first_user_threadno(void) {
+	L4_KernelInterfacePage_t *kip = kip_mem;
+	return kip->ThreadInfo.X.UserBase;
+}
+
+
+static inline int last_int_threadno(void) {
+	L4_KernelInterfacePage_t *kip = kip_mem;
+	return kip->ThreadInfo.X.SystemBase - 1;
+}
 
 #endif
