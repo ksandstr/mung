@@ -22,8 +22,11 @@ static uint32_t irq_pending[16];
 static void isr_irq_bottom_soft(int irq, struct x86_exregs *regs)
 {
 	assert(irq >= 0 && irq <= 15);
-	/* FIXME: send interrupt IPC to the proper recipient */
-	printf("got unexpected interrupt 0x%x\n", (unsigned)irq);
+	if(!int_trigger(irq)) {
+		printf("got unexpected irq# %#x\n", (unsigned)irq);
+	} else {
+		pic_send_eoi(irq);
+	}
 }
 
 

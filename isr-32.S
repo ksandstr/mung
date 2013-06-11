@@ -29,10 +29,23 @@ isr_\name\()_top:
 	jmp isr_irq_common
 	.endm
 
+	# irq0 is the PIT, consumed by microkernel
 	ISR_IRQ 0x21, irq1
-	ISR_IRQ 0x22, irq2
+	# irq2 is the PIC cascade thing; we'll never bind to that.
 	ISR_IRQ 0x23, irq3
-	/* ... TODO */
+	ISR_IRQ 0x24, irq4
+	ISR_IRQ 0x25, irq5
+	ISR_IRQ 0x26, irq6
+	ISR_IRQ 0x27, irq7
+	ISR_IRQ 0x28, irq8
+	ISR_IRQ 0x29, irq9
+	ISR_IRQ 0x2a, irq10
+	ISR_IRQ 0x2b, irq11
+	ISR_IRQ 0x2c, irq12
+	ISR_IRQ 0x2d, irq13
+	ISR_IRQ 0x2e, irq14
+	ISR_IRQ 0x2f, irq15
+
 
 	.align 16,0
 isr_irq_common:
@@ -71,6 +84,8 @@ isr_\name\()_top:
 	iret
 	.endm
 
+	# timer interrupt is consumed by microkernel. applications may bind to
+	# interrupt 0, but it'll never fire.
 	ISR_IRQ_FAST 0x20, irq0
 
 

@@ -36,6 +36,7 @@ struct space *sigma0_space = NULL;
 static struct list_head resv_page_list = LIST_HEAD_INIT(resv_page_list);
 static struct page *next_dir_page = NULL;
 
+/* system call & interrupt stack (x86 specific). */
 uint8_t syscall_stack[PAGE_SIZE] PAGE_ALIGN;
 uint8_t kcp_copy[PAGE_SIZE] PAGE_ALIGN;
 

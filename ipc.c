@@ -22,6 +22,8 @@
 #include <ukernel/sched.h>
 #include <ukernel/space.h>
 #include <ukernel/bug.h>
+#include <ukernel/kip.h>
+#include <ukernel/interrupt.h>
 #include <ukernel/ipc.h>
 
 
@@ -132,7 +134,7 @@ static inline void set_ipc_error(void *utcb, L4_Word_t ec)
 }
 
 
-static inline void set_ipc_return_regs(
+inline void set_ipc_return_regs(
 	struct x86_exregs *regs,
 	struct thread *current,
 	void *utcb)
@@ -1254,14 +1256,30 @@ static bool ipc_send_half(
 		&& self->ipc_to.raw != L4_anylocalthread.raw
 		&& self->ipc_to.raw != L4_anythread.raw);
 
+	if(CHECK_FLAG(self->flags, TF_INTR)
+		&& L4_Version(self->ipc_to) == 1
+		&& L4_ThreadNo(self->ipc_to) <= last_int_threadno()
+		&& L4_VREG(self_utcb, L4_TCR_MR(0)) == 0)
+	{
+		/* eat an interrupt reply. */
+		bool illegal = !int_clear(L4_ThreadNo(self->ipc_to), self);
+		if(illegal) {
+			/* pop "non-existing partner" when the interrupt isn't associated
+			 * to the sender.
+			 */
+			goto no_partner;
+		}
+
+		*preempt_p = false;
+		return true;
+	}
+
 	struct thread *dest = resolve_tid_spec(self->space, self->ipc_to);
 	if(dest == NULL) {
 		TRACE("%s: can't find peer %lu:%lu\n", __func__,
 			TID_THREADNUM(self->ipc_to.raw), TID_VERSION(self->ipc_to.raw));
-		set_ipc_error(self_utcb, 2 << 1 | 0);
 		self->status = TS_READY;
-		*preempt_p = false;
-		return false;
+		goto no_partner;
 	}
 
 	/* TODO: quicker tag access? maybe keep it next to ipc_to? */
@@ -1421,6 +1439,13 @@ static bool ipc_send_half(
 		self->status = TS_READY;
 		return false;
 	}
+	assert(false);
+
+no_partner:
+	set_ipc_error(self_utcb, (2 << 1) | 0);
+	self->status = TS_READY;
+	*preempt_p = false;
+	return false;
 }
 
 
@@ -1461,6 +1486,30 @@ bool ipc_recv_half(
 	bool *preempt_p)
 {
 	assert(preempt_p != NULL);
+
+	/* poll for interrupts where applicable. */
+	if(CHECK_FLAG(self->flags, TF_INTR)
+		&& (self->ipc_from.raw == L4_anythread.raw
+			|| (L4_Version(self->ipc_from) == 1
+				&& L4_ThreadNo(self->ipc_from) <= last_int_threadno())))
+	{
+		int found = int_poll(self,
+			self->ipc_from.raw == L4_anythread.raw ? -1 : L4_ThreadNo(self->ipc_from));
+		if(found >= 0) {
+			/* eat the IPC, eat the IPC, eat the IPC, eat the IPC
+			 * die in awful pain, die in awful pain, awful pain
+			 */
+			void *utcb = thread_get_utcb(self);
+			L4_VREG(utcb, L4_TCR_MR(0)) = (L4_MsgTag_t){
+				.X.label = 0xfff0 }.raw;
+			self->ipc_from = L4_GlobalId(found, 1);
+			set_ipc_return_regs(&self->ctx, self, utcb);
+			if(self->status == TS_RUNNING) self->status = TS_READY;
+			assert(IS_READY(self->status));
+			*preempt_p = false;
+			return true;
+		}
+	}
 
 	/* find sender. */
 	struct thread *from = NULL;

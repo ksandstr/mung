@@ -19,6 +19,7 @@
 #include <ukernel/thread.h>
 #include <ukernel/trace.h>
 #include <ukernel/hook.h>
+#include <ukernel/bug.h>
 #include <ukernel/sched.h>
 
 
@@ -119,6 +120,9 @@ const char *sched_status_str(struct thread *t)
 }
 
 
+/* FIXME: this and sq_remove_thread() must become atomic against, while
+ * remaining callable from, interrupts!
+ */
 void sq_insert_thread(struct thread *t)
 {
 	assert(t->status != TS_STOPPED && t->status != TS_DEAD);

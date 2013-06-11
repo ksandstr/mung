@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <stdint.h>
 #include <stdlib.h>
+#include <stdbool.h>
 #include <assert.h>
 
 #include <ccan/alignof/alignof.h>
@@ -12,14 +13,17 @@
 
 #include <l4/types.h>
 #include <l4/vregs.h>
+#include <l4/kip.h>
 
 #include <ukernel/x86.h>
+#include <ukernel/interrupt.h>
 #include <ukernel/mm.h>
 #include <ukernel/slab.h>
 #include <ukernel/ipc.h>
 #include <ukernel/misc.h>
 #include <ukernel/space.h>
 #include <ukernel/gdt.h>
+#include <ukernel/kip.h>
 #include <ukernel/sched.h>
 #include <ukernel/trace.h>
 #include <ukernel/bug.h>
@@ -30,6 +34,17 @@
 /* for exregs, threadctl, threadswitch prints */
 #define TRACE(fmt, ...) TRACE_MSG(TRID_THREAD, fmt, __VA_ARGS__)
 
+
+/* interrupt routing state. */
+struct interrupt
+{
+	struct thread *pager;	/* set in ThreadControl */
+	bool request, pending;
+};
+
+
+static struct interrupt *int_table = NULL;
+static int num_ints = 0;
 
 struct htable thread_hash = HTABLE_INITIALIZER(thread_hash,
 	hash_thread_by_id, NULL);
@@ -76,6 +91,14 @@ static bool check_thread_module(int opt)
 
 COLD void init_threading(void)
 {
+	num_ints = last_int_threadno() + 1;
+	int_table = malloc(num_ints * sizeof(struct interrupt));
+	for(int i=0; i < num_ints; i++) {
+		int_table[i] = (struct interrupt){
+			.pager = NULL, .pending = false, .request = false,
+		};
+	}
+
 	assert(thread_slab == NULL);
 	thread_slab = kmem_cache_create("thread_slab", sizeof(struct thread),
 		ALIGNOF(struct thread), 0, NULL, NULL);
@@ -440,6 +463,7 @@ void thread_ipc_fail(struct thread *t)
 
 void *thread_get_utcb(struct thread *t)
 {
+	assert(t != NULL);
 	assert(t->space != NULL);
 	assert(t->utcb_pos >= 0);
 	assert(t->utcb_pos < NUM_UTCB_PAGES(t->space->utcb_area) * UTCB_PER_PAGE);
@@ -447,6 +471,7 @@ void *thread_get_utcb(struct thread *t)
 	int page_ix = t->utcb_pos / UTCB_PER_PAGE,
 		offset = t->utcb_pos & (UTCB_PER_PAGE - 1);
 	struct page *p = t->space->utcb_pages[page_ix];
+	assert(p != NULL);
 	assert(p->vm_addr != NULL);
 	/* the UTCB pointer starts with the kernel-defined MR0 slot, and has at
 	 * least 200 bytes available at negative offsets.
@@ -743,6 +768,180 @@ fail:
 }
 
 
+static inline void int_disable(int intnum)
+{
+	if(intnum < 8) pic_set_mask(1 << intnum, 0);
+	else pic_set_mask(0, 1 << (intnum - 8));
+}
+
+
+static L4_Word_t interrupt_ctl(
+	L4_Word_t *ec_p,
+	struct thread *current,
+	L4_ThreadId_t dest_tid,
+	L4_ThreadId_t pager,
+	L4_ThreadId_t scheduler UNUSED,
+	L4_Word_t utcb_loc UNUSED)
+{
+	int intnum = L4_ThreadNo(dest_tid);
+	assert(L4_Version(dest_tid) == 1);
+	assert(intnum < num_ints);
+
+	struct thread *pgt = thread_find(pager.raw);
+	if(pager.raw != dest_tid.raw && pgt == NULL) {
+		*ec_p = 2;		/* "unavailable thread", when pager isn't valid */
+		return 0;
+	}
+	assert(pgt != NULL || pager.raw == dest_tid.raw);
+
+	/* TODO: add mechanism for clearing TF_INTR also */
+	x86_irq_disable();
+	struct interrupt *it = &int_table[intnum];
+	it->pager = pgt;
+	it->request = false;
+	it->pending = false;
+
+	if(pgt == NULL) {
+		int_disable(intnum);
+	} else {
+		/* enable it. */
+		pgt->flags |= TF_INTR;
+		if(intnum < 8) pic_clear_mask(1 << intnum, 0);
+		else pic_clear_mask(0, 1 << (intnum - 8));
+	}
+	x86_irq_enable();
+
+	*ec_p = 0;
+	return 1;
+}
+
+
+static void send_int_ipc(int ivec, struct thread *t)
+{
+	assert(t != NULL);
+
+	if(!CHECK_FLAG(t->flags, TF_INTR)
+		|| t->status != TS_RECV_WAIT
+		|| (t->ipc_from.raw != L4_anythread.raw
+			&& t->ipc_from.raw != L4_GlobalId(ivec, 1).raw))
+	{
+		/* nope.jpg */
+		return;
+	}
+
+	/* FIXME: check an interrupt-protected exclusion mechanism to see if
+	 * something was rummaging around the scheduler queue, or @t, when the
+	 * interrupt occurred. if so, push (@ivec, @t) in an interrupt-protected
+	 * list that's cleared at the end of the non-interruptable section.
+	 *
+	 * right now this does bad, bad things if the interrupt happens during
+	 * scheduling, IPC, or whatever.
+	 */
+
+	void *utcb = thread_get_utcb(t);
+	L4_VREG(utcb, L4_TCR_MR(0)) = (L4_MsgTag_t){ .X.label = 0xfff0 }.raw;
+	t->ipc_from = L4_GlobalId(ivec, 1);
+	set_ipc_return_regs(&t->ctx, t, utcb);
+	thread_wake(t);
+}
+
+
+/* called from deleting ThreadControl */
+static void int_kick(struct thread *t)
+{
+	assert(CHECK_FLAG(t->flags, TF_INTR));
+
+	/* brute force, but acceptable given how rare this is and that a list_head
+	 * would cost 8/16 bytes for every thread.
+	 *
+	 * (TODO: but recycle dead_link for that purpose in the future.)
+	 */
+	x86_irq_disable();
+	for(int i=0; i < num_ints; i++) {
+		struct interrupt *it = &int_table[i];
+		if(it->pager != t) continue;
+		it->pager = NULL;
+		it->request = false;
+		it->pending = false;
+		int_disable(i);
+	}
+	x86_irq_enable();
+}
+
+
+/* called from irq.c with interrupts disabled */
+bool int_trigger(int intnum)
+{
+	assert(intnum < num_ints);
+	struct interrupt *it = &int_table[intnum];
+	if(unlikely(it->pager == NULL)) return false;
+
+	if(!it->pending) {
+		assert(!it->request);
+		it->pending = true;
+		send_int_ipc(intnum, it->pager);
+	} else {
+		/* may overwrite previous request. effective queue depth is two. */
+		it->request = true;
+	}
+
+	return true;
+}
+
+
+/* called when a recipient doesn't ReplyWait to the interrupt.
+ *
+ * when @intnum == -1, always selects lowest number first. returns -1 when no
+ * interrupt is pending; and non-negative when an interrupt is pending.
+ */
+int int_poll(struct thread *t, int intnum)
+{
+	assert(intnum == -1 || intnum < num_ints);
+
+	x86_irq_disable();
+	int retval = -1;
+	if(intnum >= 0) {
+		struct interrupt *it = &int_table[intnum];
+		if(it->pager == t && it->pending) retval = intnum;
+	} else {
+		for(int i=0; i < num_ints; i++) {
+			struct interrupt *it = &int_table[i];
+			if(it->pager == t && it->pending) {
+				retval = i;
+				break;
+			}
+		}
+	}
+	x86_irq_enable();
+
+	return retval;
+}
+
+
+/* called from ipc_send_half() on reply to interrupt thread */
+bool int_clear(int intnum, struct thread *sender)
+{
+	assert(sender != NULL);
+	assert(intnum < num_ints);
+
+	struct interrupt *it = &int_table[intnum];
+	if(unlikely(sender != it->pager)) {
+		return false;
+	} else {
+		x86_irq_disable();
+		assert(it->pending);
+		it->pending = it->request;
+		it->request = false;
+		if(it->pending && it->pager != NULL) {
+			send_int_ipc(intnum, it->pager);
+		}
+
+		x86_irq_enable();
+		return true;
+	}
+}
+
+
 /* TODO: make this function atomic on error? it seems a proper microkernel
  * should be like that.
  */
@@ -770,6 +969,16 @@ void sys_threadcontrol(struct x86_exregs *regs)
 		L4_ThreadNo(spacespec), L4_Version(spacespec));
 	TRACE("%s: utcb_loc %p\n", __func__, (void *)utcb_loc);
 
+	/* interrupt control. */
+	if(dest_tid.raw == spacespec.raw
+		&& TID_VERSION(dest_tid.raw) == 1
+		&& TID_THREADNUM(dest_tid.raw) <= last_int_threadno())
+	{
+		result = interrupt_ctl(&ec, current, dest_tid, pager,
+			scheduler, utcb_loc);
+		goto end;
+	}
+
 	if(unlikely(L4_IsLocalId(dest_tid)
 		|| L4_ThreadNo(dest_tid) < first_user_threadno()))
 	{
@@ -777,7 +986,7 @@ void sys_threadcontrol(struct x86_exregs *regs)
 		goto end;
 	}
 	if(!L4_IsNilThread(spacespec)
-		&& unlikely(L4_ThreadNo(spacespec) < NUM_KERNEL_THREADS
+		&& unlikely(L4_ThreadNo(spacespec) < first_user_threadno()
 			|| L4_Version(spacespec) == 0))
 	{
 		goto invd_space;
@@ -826,6 +1035,7 @@ void sys_threadcontrol(struct x86_exregs *regs)
 			abort_thread_ipc(dest);
 		}
 		if(!CHECK_FLAG(dest->flags, TF_HALT)) thread_halt(dest);
+		if(CHECK_FLAG(dest->flags, TF_INTR)) int_kick(dest);
 		abort_waiting_ipc(dest, 2 << 1);	/* "lost partner" */
 		post_exn_fail(dest);
 		if(dest->status != TS_STOPPED) {
@@ -933,7 +1143,9 @@ dead:
 	result = 1;
 
 end:
-	L4_VREG(utcb, L4_TCR_ERRORCODE) = ec;
+	if(result == 0) {
+		L4_VREG(utcb, L4_TCR_ERRORCODE) = ec;
+	}
 	regs->eax = result;
 
 	assert(check_thread_module(0));

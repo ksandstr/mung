@@ -592,6 +592,12 @@ static void keyboard_thread(void *param UNUSED)
 
 		L4_LoadMR(0, 0);
 		L4_Reply(irq_tid);
+
+#if 0
+		printf("[keyb] sleeping for 1 second...\n");
+		L4_Sleep(L4_TimePeriod(1 * 1000 * 1000));
+		printf("[keyb] woke up hale & hearty\n");
+#endif
 	}
 
 end:

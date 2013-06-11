@@ -21,12 +21,6 @@ static void set_int_gate(
 }
 
 
-#define FAST_IRQ_GATE(ints, sel, num) \
-	do { \
-		extern void isr_irq##num##_top(void); \
-		set_int_gate((ints), 0x20 + (num), &isr_irq##num##_top, (sel)); \
-	} while(false)
-
 #define IRQ_GATE(ints, sel, num) \
 	do { \
 		extern void isr_irq##num##_top(void); \
@@ -64,8 +58,22 @@ void setup_idt(int code_seg)
 	/* (permit access to syscall interrupts to ring 3.) */
 	for(int i=0x8d; i <= 0x8f; i++) ints[i].type_attr |= 3 << 5;
 
-	FAST_IRQ_GATE(ints, code_sel, 0);	/* IRQ0 (timer) */
-	IRQ_GATE(ints, code_sel, 1);		/* IRQ1 (keyboard) */
+	IRQ_GATE(ints, code_sel, 0);	/* IRQ0 (timer) */
+	IRQ_GATE(ints, code_sel, 1);
+	/* cascade is ignored */
+	IRQ_GATE(ints, code_sel, 3);
+	IRQ_GATE(ints, code_sel, 4);
+	IRQ_GATE(ints, code_sel, 5);
+	IRQ_GATE(ints, code_sel, 6);
+	IRQ_GATE(ints, code_sel, 7);
+	IRQ_GATE(ints, code_sel, 8);
+	IRQ_GATE(ints, code_sel, 9);
+	IRQ_GATE(ints, code_sel, 10);
+	IRQ_GATE(ints, code_sel, 11);
+	IRQ_GATE(ints, code_sel, 12);
+	IRQ_GATE(ints, code_sel, 13);	/* IRQ13 is doubtful */
+	IRQ_GATE(ints, code_sel, 14);
+	IRQ_GATE(ints, code_sel, 15);
 
 	struct {
 		uint16_t limit;
