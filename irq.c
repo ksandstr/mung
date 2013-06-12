@@ -15,31 +15,28 @@
 #include <ukernel/interrupt.h>
 
 
-static void *irq_stack[16];
-static uint32_t irq_pending[16];
+/* temporary stack for when interrupts occur in kernel space -- i.e. during a
+ * syscall. (or possibly NMIs during a regular interrupt, but that's a TODO.)
+ */
+static void *irq_stack = NULL;
 
 
-static void isr_irq_bottom_soft(int irq, struct x86_exregs *regs)
-{
-	assert(irq >= 0 && irq <= 15);
-	if(!int_trigger(irq)) {
-		printf("got unexpected irq# %#x\n", (unsigned)irq);
-	} else {
-		pic_send_eoi(irq);
-	}
-}
-
-
-static void isr_irq_bottom_wrap(void *parameter)
+static void isr_irq_bottom_soft(void *parameter)
 {
 	struct x86_exregs *regs = parameter;
 	int irq = regs->reason - 0x20;
-	x86_irq_enable();
-	isr_irq_bottom_soft(irq, regs);
-	x86_irq_disable();
-	if(unlikely(irq_pending[irq] > 1)) {
-		irq_pending[irq] = 1;
-		isr_irq_bottom_wrap(parameter);
+
+	assert(irq >= 0 && irq <= 15);
+	if(unlikely(!int_trigger(irq))) {
+		printf("got unexpected irq# %#x\n", (unsigned)irq);
+		static int last = -1, repeat = 0;
+		if(irq != last) {
+			last = irq;
+			repeat = 0;
+		} else if(++repeat == 5) {
+			/* TODO */
+			panic("FIXME: should mask interrupt!");
+		}
 	}
 }
 
@@ -68,37 +65,31 @@ static bool irq_switched_stack(void)
 void isr_irq_bottom(struct x86_exregs *regs)
 {
 	const int vecn = regs->reason, irq = vecn - 0x20;
-
-#if 0
-	printf("%s: frame at 0x%x, syscall_stack at 0x%x\n", __func__,
-		(uintptr_t)regs, (uintptr_t)&syscall_stack[0]);
-#endif
-
 	pic_send_eoi(irq);
-	if(unlikely(irq_pending[irq]++ > 0)) return;
 	if(likely(irq_switched_stack())) {
-		/* stack was switched. install the IRQ stack in the TSS segment and
-		 * proceed.
+		/* user thread was interrupted. stack is the interrupt handler and
+		 * syscall stack, which can support isr_irq_bottom_soft().
 		 */
-		intptr_t old_esp0 = kernel_tss.esp0;
-		kernel_tss.esp0 = (intptr_t)irq_stack[irq];
-		assert(kernel_tss.esp0 != old_esp0);
-		isr_irq_bottom_wrap(regs);
-		kernel_tss.esp0 = old_esp0;
+		isr_irq_bottom_soft(regs);
 	} else {
-		/* was called on a kernel stack. call handler on IRQ stack. */
-		void *stk_top = irq_stack[irq] + PAGE_SIZE;
+		/* interrupt occurred in kernel space. the frame is on the
+		 * previously-installed kernel stack, which may be the syscall stack
+		 * or the scheduler thread's stack, or whatever. call the handler on a
+		 * separate IRQ stack.
+		 */
+		void *stk_top = irq_stack + PAGE_SIZE;
 		stk_top -= sizeof(struct x86_exregs *);
 		*(struct x86_exregs **)stk_top = regs;
-		call_on_stack(&isr_irq_bottom_wrap, stk_top);
+		call_on_stack(&isr_irq_bottom_soft, stk_top);
 	}
-
-	assert(irq_pending[irq] == 1);
-	irq_pending[irq] = 0;
 }
 
 
-/* the timer interrupt. runs with interrupts disabled by design. */
+/* the timer interrupt. runs with interrupts disabled.
+ *
+ * TODO: the preemption bit is way, way too large. unify it with
+ * thread-switching due to interrupt.
+ */
 void isr_irq0_bottom(struct x86_exregs *regs)
 {
 	uint64_t now = ++global_timer_count;
@@ -171,14 +162,6 @@ void isr_irq0_bottom(struct x86_exregs *regs)
 
 COLD void init_irq(void)
 {
-	/* allocate IRQ stacks. (TODO: don't allocate for IRQs that are nulled out
-	 * in the IDT.)
-	 */
-	for(int i=0; i < 16; i++) {
-		irq_pending[i] = 0;
-
-		struct page *p = get_kern_page(0);
-		/* TODO: record it as reserved */
-		irq_stack[i] = p->vm_addr;
-	}
+	struct page *p = get_kern_page(0);	/* TODO: record this somewhere */
+	irq_stack = p->vm_addr;
 }
