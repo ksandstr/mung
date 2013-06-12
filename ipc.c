@@ -1084,6 +1084,7 @@ bool ipc_resume(struct thread *t, bool *preempt_p)
 		panic("can't handle more faults from resumed typed xfer");
 	}
 
+	/* typed transfer completed. */
 	assert(dest->ipc == NULL);
 	dest->status = TS_READY;
 	dest->wakeup_time = 0;
@@ -1256,22 +1257,20 @@ static bool ipc_send_half(
 		&& self->ipc_to.raw != L4_anylocalthread.raw
 		&& self->ipc_to.raw != L4_anythread.raw);
 
+	int err_code = 0;
+
 	if(CHECK_FLAG(self->flags, TF_INTR)
 		&& L4_Version(self->ipc_to) == 1
 		&& L4_ThreadNo(self->ipc_to) <= last_int_threadno()
 		&& L4_VREG(self_utcb, L4_TCR_MR(0)) == 0)
 	{
 		/* eat an interrupt reply. */
-		bool illegal = !int_clear(L4_ThreadNo(self->ipc_to), self);
-		if(illegal) {
-			/* pop "non-existing partner" when the interrupt isn't associated
-			 * to the sender.
-			 */
-			goto no_partner;
+		err_code = int_clear(L4_ThreadNo(self->ipc_to), self);
+		if(err_code != 0) goto error;
+		else {
+			*preempt_p = false;
+			return true;
 		}
-
-		*preempt_p = false;
-		return true;
 	}
 
 	struct thread *dest = resolve_tid_spec(self->space, self->ipc_to);
@@ -1442,7 +1441,10 @@ static bool ipc_send_half(
 	assert(false);
 
 no_partner:
-	set_ipc_error(self_utcb, (2 << 1) | 0);
+	err_code = 2;
+
+error:
+	set_ipc_error(self_utcb, (err_code << 1) | 0);
 	self->status = TS_READY;
 	*preempt_p = false;
 	return false;

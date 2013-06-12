@@ -47,6 +47,7 @@ extern NORETURN void switch_thread_u2u(struct thread *next);
 /* returns clock value that fits thread->wakeup_time */
 extern uint64_t wakeup_at(L4_Time_t period);
 
+
 /* scheduling queues */
 extern void sq_insert_thread(struct thread *t);
 extern void sq_remove_thread(struct thread *t);

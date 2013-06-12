@@ -20,6 +20,7 @@
 #include <ukernel/trace.h>
 #include <ukernel/hook.h>
 #include <ukernel/bug.h>
+#include <ukernel/interrupt.h>
 #include <ukernel/sched.h>
 
 
@@ -36,7 +37,6 @@ uint64_t task_switch_time = 0;
 L4_Word_t *scheduler_mr1 = NULL;
 int preempt_task_pri = 0;
 bool preempt_delayed = false;
-
 
 
 COLD void init_sched(struct thread *current)
@@ -120,9 +120,6 @@ const char *sched_status_str(struct thread *t)
 }
 
 
-/* FIXME: this and sq_remove_thread() must become atomic against, while
- * remaining callable from, interrupts!
- */
 void sq_insert_thread(struct thread *t)
 {
 	assert(t->status != TS_STOPPED && t->status != TS_DEAD);
@@ -453,8 +450,11 @@ NORETURN void scheduler_loop(struct thread *self)
 	while(true) {
 		*scheduler_mr1 = L4_nilthread.raw;
 		self->status = TS_READY;
+		if(kernel_irq_deferred) int_latent();
 		if(!schedule()) {
-			asm volatile ("hlt");
+			kernel_irq_ok = true;
+			asm volatile ("hlt" ::: "memory");
+			kernel_irq_ok = false;
 		} else if(*scheduler_mr1 != L4_nilthread.raw) {
 			L4_ThreadId_t prev_tid = { .raw = *scheduler_mr1 };
 			assert(L4_IsGlobalId(prev_tid));
@@ -713,7 +713,9 @@ void sys_schedule(struct x86_exregs *regs)
 	dest->max_delay = max_delay;
 
 end:
-	if(dest != NULL && dest->status != TS_STOPPED) sq_update_thread(dest);
+	if(dest != NULL && dest->status != TS_STOPPED) {
+		sq_update_thread(dest);
+	}
 
 end_noupdate:
 	if(unlikely(ec != 0)) {

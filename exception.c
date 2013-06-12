@@ -14,6 +14,7 @@
 #include <ukernel/space.h>
 #include <ukernel/slab.h>
 #include <ukernel/ipc.h>
+#include <ukernel/interrupt.h>
 #include <ukernel/syscall.h>
 #include <ukernel/cpu.h>
 #include <ukernel/kip.h>
@@ -225,7 +226,7 @@ void isr_exn_basic_sc_bottom(struct x86_exregs *regs)
 
 	int sc_num = regs->ebx;
 	const int num_sc = sizeof(fn) / sizeof(fn[0]);
-	if(unlikely(sc_num >= num_sc) || unlikely(fn[sc_num] == NULL)) {
+	if(unlikely(sc_num >= num_sc || fn[sc_num] == NULL)) {
 		struct thread *current = get_current_thread();
 		printf("unknown basic syscall %lu (caller stopped)\n", regs->eax);
 		thread_halt(current);
@@ -234,6 +235,10 @@ void isr_exn_basic_sc_bottom(struct x86_exregs *regs)
 	} else {
 		assert(x86_frame_len(regs) == sizeof(*regs));
 		(*fn[sc_num])(regs);
+		if(kernel_irq_deferred && int_latent()) {
+			printf("%s: post-syscall preempt!\n", __func__);
+			/* FIXME: implement! */
+		}
 	}
 }
 
@@ -243,12 +248,20 @@ void isr_exn_exregs_sc_bottom(struct x86_exregs *regs)
 	regs->eax = sys_exregs((L4_ThreadId_t){ .raw = regs->eax },
 		&regs->ecx, &regs->edx, &regs->esi, &regs->edi, &regs->ebx,
 		(L4_ThreadId_t *)&regs->ebp);
+	if(kernel_irq_deferred && int_latent()) {
+		printf("%s: post-syscall preempt!\n", __func__);
+		/* FIXME: implement! */
+	}
 }
 
 
 void isr_exn_memctl_sc_bottom(struct x86_exregs *regs)
 {
 	printf("%s: MemoryControl called\n", __func__);
+	if(kernel_irq_deferred && int_latent()) {
+		printf("%s: post-syscall preempt!\n", __func__);
+		/* FIXME: implement! */
+	}
 }
 
 
@@ -596,6 +609,10 @@ void isr_exn_pf_bottom(struct x86_exregs *regs)
 		space_put_page(current->space, fault_addr,
 			mapdb_page_id_in_entry(e, fault_addr), L4_Rights(e->range));
 		space_commit(current->space);
+		if(kernel_irq_deferred && int_latent()) {
+			printf("%s: post-syscall preempt!\n", __func__);
+			/* FIXME: implement! */
+		}
 	} else {
 #ifndef NDEBUG
 		repeat_count = 0;	/* sufficiently userspacey. */

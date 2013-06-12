@@ -21,13 +21,21 @@
 static void *irq_stack = NULL;
 
 
+static inline bool irq_switched_stack(void)
+{
+	char foo = 0;
+	intptr_t pos = (intptr_t)&foo;
+	return (pos & ~PAGE_MASK) == (kernel_tss.esp0 & ~PAGE_MASK);
+}
+
+
 static void isr_irq_bottom_soft(void *parameter)
 {
 	struct x86_exregs *regs = parameter;
 	int irq = regs->reason - 0x20;
 
 	assert(irq >= 0 && irq <= 15);
-	if(unlikely(!int_trigger(irq))) {
+	if(unlikely(!int_trigger(irq, !irq_switched_stack()))) {
 		printf("got unexpected irq# %#x\n", (unsigned)irq);
 		static int last = -1, repeat = 0;
 		if(irq != last) {
@@ -54,19 +62,11 @@ static inline void call_on_stack(void (*fn)(void *), void *stack)
 }
 
 
-static bool irq_switched_stack(void)
-{
-	char foo = 0;
-	intptr_t pos = (intptr_t)&foo;
-	return (pos & ~PAGE_MASK) == (kernel_tss.esp0 & ~PAGE_MASK);
-}
-
-
 void isr_irq_bottom(struct x86_exregs *regs)
 {
 	const int vecn = regs->reason, irq = vecn - 0x20;
 	pic_send_eoi(irq);
-	if(likely(irq_switched_stack())) {
+	if(irq_switched_stack()) {
 		/* user thread was interrupted. stack is the interrupt handler and
 		 * syscall stack, which can support isr_irq_bottom_soft().
 		 */
