@@ -28,7 +28,8 @@ testbench: testbench.ld crt0.o testbench.o dlmalloc.o heap.o thread.o tsd.o \
 		delay.o process.o exn-store.o log.o tap.o test.o util.o \
 		idlsupp.o pg_stats.o pg_drop.o \
 		sched_suite.o space_suite.o thread_suite.o string_suite.o \
-		ipc_suite.o self_suite.o type_suite.o x86_suite.o \
+		ipc_suite.o self_suite.o type_suite.o \
+		x86_suite.o interrupt_suite.o \
 		legacy.o thread_test.o \
 		syscalls.o ccan-list.o ccan-htable.o ccan-hash.o ccan-crc.o \
 		ipc-suite-service.o ipc-suite-client.o ipc-suite-common.o \
