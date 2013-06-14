@@ -147,16 +147,6 @@ void sq_remove_thread(struct thread *t)
 }
 
 
-bool preempted_by(
-	struct thread *self,
-	uint64_t switch_at_us,
-	struct thread *other)
-{
-	return other->pri > self->pri
-		&& other->wakeup_time <= switch_at_us + self->quantum;
-}
-
-
 /* simple IPC timeout. signaled to exactly one thread. */
 static void timeout_ipc(struct thread *t)
 {
