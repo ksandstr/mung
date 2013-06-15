@@ -46,28 +46,7 @@ static void computchar(unsigned char ch)
 		}
 	}
 
-	/* could poll things, but the FIFO will do all the blocking nonsense for
-	 * us. there's no point given that callers aren't supposed to yield to
-	 * another process.
-	 */
-#if 0
-	/* we'll poll the LSR until the transmit register is empty. */
-	while((inb(COM_PORT + UART_LSR) & UART_LSR_ETHR) == 0) {
-		/* whee */
-	}
-#endif
-
 	outb(COM_PORT + UART_RDWR, ch);
-
-#if 0
-	/* and then poll again until the holding register is empty, i.e. until
-	 * the FIFO is no longer stuffed.
-	 */
-	while((inb(COM_PORT + UART_LSR) & UART_LSR_EDHR) == 0) {
-		/* spin spin */
-	}
-#endif
-
 	if(ch == '\n') computchar('\r');
 }
 
