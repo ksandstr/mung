@@ -21,6 +21,21 @@ static void set_int_gate(
 }
 
 
+static void set_trap_gate(
+	struct idt_entry *ints,
+	int vector,
+	void (*tophalf)(void),
+	int selector)
+{
+	ints[vector] = (struct idt_entry){
+		.offset_1 = (uintptr_t)tophalf & 0xffff,
+		.offset_2 = (uintptr_t)tophalf >> 16,
+		.selector = selector,
+		.type_attr = IDT_PRESENT | 0xf,		/* 32-bit trap gate */
+	};
+}
+
+
 #define IRQ_GATE(ints, sel, num) \
 	do { \
 		extern void isr_irq##num##_top(void); \
@@ -30,7 +45,7 @@ static void set_int_gate(
 #define EXN_GATE(ints, sel, num, name) \
 	do { \
 		extern void isr_exn_##name##_top(void); \
-		set_int_gate((ints), (num), &isr_exn_##name##_top, (sel)); \
+		set_trap_gate((ints), (num), &isr_exn_##name##_top, (sel)); \
 	} while(false)
 
 
@@ -41,9 +56,6 @@ void setup_idt(int code_seg)
 		ints[i] = (struct idt_entry){ /* all zero */ };
 	}
 
-	/* TODO: null out exceptions that aren't in use, also interrupts that are
-	 * likewise
-	 */
 	int code_sel = code_seg << 3;
 	EXN_GATE(ints, code_sel, 0, de);	/* divide error */
 	EXN_GATE(ints, code_sel, 3, int3);	/* int3 (KDB) */
