@@ -4,8 +4,10 @@
 #include <stdio.h>
 #include <stdint.h>
 #include <assert.h>
+
 #include <ukernel/ioport.h>
 #include <ukernel/interrupt.h>
+#include <ukernel/x86.h>
 
 
 #define IO_PIC1_CMD 0x20
@@ -23,6 +25,8 @@
 /* template courtesy of the osdev wiki */
 void initialize_pics(int off_pic1, int off_pic2)
 {
+	assert(!x86_irq_is_enabled());
+
 	assert(off_pic1 >= 0 && off_pic1 <= 255 && (off_pic1 & 0x7) == 0);
 	assert(off_pic2 >= 0 && off_pic2 <= 255 && (off_pic2 & 0x7) == 0);
 
@@ -48,6 +52,8 @@ void initialize_pics(int off_pic1, int off_pic2)
 
 void pic_send_eoi(int irq)
 {
+	assert(!x86_irq_is_enabled());
+
 	if(irq >= 8) outb(IO_PIC2_CMD, PIC_EOI);
 	outb(IO_PIC1_CMD, PIC_EOI);
 }
@@ -55,6 +61,8 @@ void pic_send_eoi(int irq)
 
 void pic_clear_mask(uint8_t pic1, uint8_t pic2)
 {
+	assert(!x86_irq_is_enabled());
+
 	if(pic1 != 0) outb(IO_PIC1_DATA, inb(IO_PIC1_DATA) & ~pic1);
 	if(pic2 != 0) outb(IO_PIC2_DATA, inb(IO_PIC2_DATA) & ~pic2);
 }
@@ -62,6 +70,8 @@ void pic_clear_mask(uint8_t pic1, uint8_t pic2)
 
 void pic_set_mask(uint8_t pic1, uint8_t pic2)
 {
+	assert(!x86_irq_is_enabled());
+
 	if(pic1 != 0) outb(IO_PIC1_DATA, inb(IO_PIC1_DATA) | pic1);
 	if(pic2 != 0) outb(IO_PIC2_DATA, inb(IO_PIC2_DATA) | pic2);
 }

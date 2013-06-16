@@ -952,6 +952,7 @@ static void int_kick(struct thread *t)
 /* called from irq.c with interrupts disabled */
 bool int_trigger(int intnum, bool in_kernel)
 {
+	assert(!x86_irq_is_enabled());
 	assert(intnum < num_ints);
 	struct interrupt *it = &int_table[intnum];
 	if(unlikely(it->pager == NULL)) return false;

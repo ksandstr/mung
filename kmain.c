@@ -530,16 +530,18 @@ void kmain(void *bigp, unsigned int magic)
 	thread_start(s0_thread);
 	if(roottask != NULL) thread_start(roottask);
 
-	printf("enabling timer interrupt\n");
-	setup_timer_ch0();
-	pic_clear_mask(0x01, 0x00);
-
 	first_thread->pri = 0;
 	first_thread->sens_pri = 0;
 	first_thread->total_quantum = 0;
 	first_thread->quantum = 10000;
 	first_thread->ts_len = L4_TimePeriod(10000);
 	sq_update_thread(first_thread);
+
+	printf("enabling timer interrupt\n");
+	x86_irq_disable();
+	setup_timer_ch0();
+	pic_clear_mask(0x01, 0x00);
+	x86_irq_enable();
 
 	printf("entering kernel scheduler\n");
 	scheduler_loop(first_thread);
