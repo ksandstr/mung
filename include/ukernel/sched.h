@@ -37,6 +37,12 @@ extern NORETURN void return_to_scheduler(void);
  */
 extern NORETURN void return_to_ipc(struct thread *target);
 
+/* ISRs that don't call return_to_*() should instead call return_from_exn() as
+ * their last line. it disables interrupts until the interrupt flag is
+ * reloaded by IRET.
+ */
+extern void return_from_exn(void);
+
 extern struct thread *get_current_thread(void);
 
 /* switches from current thread, which must be an userspace thread. caller

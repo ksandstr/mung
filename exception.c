@@ -31,6 +31,36 @@ static struct kmem_cache *fpu_context_slab = NULL;
 static void *next_fpu_context = NULL;
 
 
+/* this must be the last line of an exception handler that doesn't call one of
+ * the return_to_*() family of kernel exits. it tests for and handles latent
+ * interrupts, restoring the interrupt flag from saved user context. (the
+ * reason why return_to_*() callers don't need it is that return_to_*() family
+ * already does this, as they must.)
+ *
+ * NOTE: this'll likely be expanded to a more general, preemption-handling ISR
+ * exit path.
+ *
+ * NOTE: exported in <ukernel/sched.h> .
+ */
+void return_from_exn(void)
+{
+	x86_irq_disable();
+	if(unlikely(kernel_irq_deferred)) {
+		do {
+			x86_irq_enable();
+			if(int_latent()) {
+				/* FIXME: or, like, pop off to another thread entirely? that
+				 * could happen.
+				 */
+				printf("%s: preemption! (caller %p)\n", __func__,
+					__builtin_return_address(0));
+			}
+			x86_irq_disable();
+		} while(kernel_irq_deferred);
+	}
+}
+
+
 void isr_exn_de_bottom(struct x86_exregs *regs)
 {
 	printf("#DE(0x%lx) at eip 0x%lx, esp 0x%lx\n", regs->error,
@@ -66,6 +96,7 @@ void isr_exn_ud_bottom(struct x86_exregs *regs)
 		 * TODO: get proper values at some point.
 		 */
 		regs->esi = (23 << 24) | (17 << 16);	/* KERNEL ID */
+		return_from_exn();
 	} else {
 		printf("#UD at eip 0x%lx, esp 0x%lx\n", regs->eip, regs->esp);
 		/* TODO: pop an "invalid opcode" exception. */
@@ -164,6 +195,8 @@ void isr_exn_nm_bottom(struct x86_exregs *regs)
 	}
 
 	fpu_thread = current;
+
+	return_from_exn();
 }
 
 
@@ -235,10 +268,7 @@ void isr_exn_basic_sc_bottom(struct x86_exregs *regs)
 	} else {
 		assert(x86_frame_len(regs) == sizeof(*regs));
 		(*fn[sc_num])(regs);
-		if(kernel_irq_deferred && int_latent()) {
-			printf("%s: post-syscall preempt!\n", __func__);
-			/* FIXME: implement! */
-		}
+		return_from_exn();
 	}
 }
 
@@ -248,20 +278,14 @@ void isr_exn_exregs_sc_bottom(struct x86_exregs *regs)
 	regs->eax = sys_exregs((L4_ThreadId_t){ .raw = regs->eax },
 		&regs->ecx, &regs->edx, &regs->esi, &regs->edi, &regs->ebx,
 		(L4_ThreadId_t *)&regs->ebp);
-	if(kernel_irq_deferred && int_latent()) {
-		printf("%s: post-syscall preempt!\n", __func__);
-		/* FIXME: implement! */
-	}
+	return_from_exn();
 }
 
 
 void isr_exn_memctl_sc_bottom(struct x86_exregs *regs)
 {
 	printf("%s: MemoryControl called\n", __func__);
-	if(kernel_irq_deferred && int_latent()) {
-		printf("%s: post-syscall preempt!\n", __func__);
-		/* FIXME: implement! */
-	}
+	return_from_exn();
 }
 
 
@@ -609,10 +633,7 @@ void isr_exn_pf_bottom(struct x86_exregs *regs)
 		space_put_page(current->space, fault_addr,
 			mapdb_page_id_in_entry(e, fault_addr), L4_Rights(e->range));
 		space_commit(current->space);
-		if(kernel_irq_deferred && int_latent()) {
-			printf("%s: post-syscall preempt!\n", __func__);
-			/* FIXME: implement! */
-		}
+		return_from_exn();
 	} else {
 #ifndef NDEBUG
 		repeat_count = 0;	/* sufficiently userspacey. */

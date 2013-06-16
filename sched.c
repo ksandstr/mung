@@ -526,6 +526,7 @@ void return_to_scheduler(void)
 	next->status = TS_RUNNING;
 	current_thread = next;
 
+	return_from_exn();
 	assert((next->ctx.eflags & (1 << 14)) == 0);
 	iret_to_scheduler(&next->ctx);
 }
@@ -561,6 +562,7 @@ static void return_to_other(struct thread *current, struct thread *other)
 	}
 
 	entering_thread(other);
+	return_from_exn();
 	switch_thread_u2u(other);
 }
 
