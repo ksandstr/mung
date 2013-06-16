@@ -39,7 +39,7 @@
 struct interrupt
 {
 	struct thread *pager;	/* set in ThreadControl */
-	bool request, pending, delivered;
+	bool pending, delivered;
 };
 
 
@@ -100,7 +100,7 @@ COLD void init_threading(void)
 	int_table = malloc(num_ints * sizeof(struct interrupt));
 	for(int i=0; i < num_ints; i++) {
 		int_table[i] = (struct interrupt){
-			.pager = NULL, .pending = false, .request = false,
+			.pager = NULL, .pending = false,
 		};
 	}
 	const int wordsize = sizeof(L4_Word_t) * 8;
@@ -781,10 +781,17 @@ fail:
 }
 
 
-static inline void int_disable(int intnum)
+static void int_disable(int intnum)
 {
 	if(intnum < 8) pic_set_mask(1 << intnum, 0);
 	else pic_set_mask(0, 1 << (intnum - 8));
+}
+
+
+static void int_enable(int intnum)
+{
+	if(intnum < 8) pic_clear_mask(1 << intnum, 0);
+	else pic_clear_mask(0, 1 << (intnum - 8));
 }
 
 
@@ -811,7 +818,6 @@ static L4_Word_t interrupt_ctl(
 	x86_irq_disable();
 	struct interrupt *it = &int_table[intnum];
 	it->pager = pgt;
-	it->request = false;
 	it->pending = false;
 	it->delivered = false;
 
@@ -820,8 +826,7 @@ static L4_Word_t interrupt_ctl(
 	} else {
 		/* enable it. */
 		pgt->flags |= TF_INTR;
-		if(intnum < 8) pic_clear_mask(1 << intnum, 0);
-		else pic_clear_mask(0, 1 << (intnum - 8));
+		int_enable(intnum);
 	}
 	x86_irq_enable();
 
@@ -936,7 +941,6 @@ static void int_kick(struct thread *t)
 		struct interrupt *it = &int_table[i];
 		if(it->pager != t) continue;
 		it->pager = NULL;
-		it->request = false;
 		it->pending = false;
 		it->delivered = false;
 		int_disable(i);
@@ -952,13 +956,10 @@ bool int_trigger(int intnum, bool in_kernel)
 	struct interrupt *it = &int_table[intnum];
 	if(unlikely(it->pager == NULL)) return false;
 
-	if(!it->pending) {
-		assert(!it->request);
+	if(likely(!it->pending)) {
 		it->pending = true;
 		if(send_int_ipc(intnum, it->pager, in_kernel)) it->delivered = true;
-	} else {
-		/* may overwrite previous request. effective queue depth is two. */
-		it->request = true;
+		int_disable(intnum);
 	}
 
 	return true;
@@ -1020,27 +1021,10 @@ int int_clear(int intnum, struct thread *sender)
 			return 1;		/* timeout */
 		}
 
-		it->pending = it->request;
-		it->request = false;
+		it->pending = false;
 		it->delivered = false;
-
-		/* this path is only active when @sender is virtual, the actual thread
-		 * is waiting for IPC somewhere, and there is a queued interrupt. the
-		 * case is real, though, and must be handled. (TODO: and tested.)
-		 */
-		if(unlikely(sender != get_current_thread() && it->pending)) {
-			struct thread *pgt = it->pager;
-			it->delivered = true;
-			x86_irq_enable();
-			bool sent = send_int_ipc(intnum, pgt, false);
-			if(!sent) {
-				x86_irq_disable();
-				it->delivered = false;
-				x86_irq_enable();
-			}
-		} else {
-			x86_irq_enable();
-		}
+		int_enable(intnum);
+		x86_irq_enable();
 		return 0;
 	}
 }
