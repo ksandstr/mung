@@ -309,21 +309,22 @@ void thread_start(struct thread *t)
 
 void thread_halt(struct thread *t)
 {
+	assert(!IS_KERNEL_THREAD(t));
+
 	TRACE("%s: called for %lu:%lu from %p\n", __func__,
 		TID_THREADNUM(t->id), TID_VERSION(t->id), __builtin_return_address(0));
 
-	assert(!CHECK_FLAG(t->flags, TF_HALT));
+	assert(!CHECK_FLAG_ANY(t->flags, TF_HALT | TF_PRE_RECV));
 	assert(t->status != TS_DEAD);
 
 	t->flags |= TF_HALT;
-	if(t->status == TS_READY || t->status == TS_RUNNING) {
+	if(t->status == TS_READY
+		|| t->status == TS_RUNNING
+		|| t->status == TS_R_RECV)
+	{
+		if(t->status == TS_R_RECV) t->flags |= TF_PRE_RECV;
 		t->status = TS_STOPPED;
 		sq_remove_thread(t);
-
-		if(t == get_current_thread()) {
-			if(IS_KERNEL_THREAD(t)) schedule();
-			/* otherwise, rely on the caller to invoke the scheduler */
-		}
 	}
 }
 
@@ -332,10 +333,14 @@ void thread_resume(struct thread *t)
 {
 	assert(CHECK_FLAG(t->flags, TF_HALT));
 
-	t->flags &= ~TF_HALT;
+	int old = t->flags;
+	t->flags &= ~(TF_HALT | TF_PRE_RECV);
 	if(t->status == TS_STOPPED) {
-		t->status = TS_READY;
-		t->wakeup_time = 0;
+		t->status = CHECK_FLAG(old, TF_PRE_RECV) ? TS_R_RECV : TS_READY;
+		if(t->status != TS_R_RECV) {
+			/* it shouldn't be lost in R_RECV. */
+			t->wakeup_time = 0;
+		}
 		sq_insert_thread(t);
 	}
 }

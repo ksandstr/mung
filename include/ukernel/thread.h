@@ -28,8 +28,9 @@ typedef L4_Word_t thread_id;
 #define TID_VERSION(tid) ((tid) & TID_VERSION_MASK)
 
 /* values of <struct thread>.flags */
-#define TF_HALT		0x1		/* after IPC completion, go to TS_STOPPED */
-#define TF_SENDER	0x2		/* is the sender of a suspended typed transfer */
+#define TF_HALT		0x1	/* after IPC completion, go to TS_STOPPED */
+#define TF_SENDER	0x2	/* is the sender of a suspended typed transfer */
+#define TF_PRE_RECV	0x8	/* halted in TS_R_RECV (restored on resume) */
 
 /* thread states (<struct thread>.status); see also sched_status_str() */
 #define TS_STOPPED 0
