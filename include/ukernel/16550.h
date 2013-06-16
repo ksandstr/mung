@@ -74,7 +74,7 @@
 #define UART_IIR_INT_THEI		0x02	/* transmitter holding register empty */
 #define UART_IIR_INT_RDAI		0x04	/* received data available */
 #define UART_IIR_INT_RLSI		0x06	/* receiver line status */
-#define UART_IIR_PENDING		0x01	/* interrupt pending for a bending */
+#define UART_IIR_NOT_PENDING	0x01	/* no interrupt pending */
 
 /* FCR bits. (write only.) */
 /* bits 7 and 6 are the fifo depth select. */
