@@ -246,6 +246,8 @@ static void sys_spacecontrol_wrap(struct x86_exregs *regs)
 /* basically the slowest possible syscall wrappers. */
 void isr_exn_basic_sc_bottom(struct x86_exregs *regs)
 {
+	assert(x86_irq_is_enabled());
+
 	static void (*const fn[])(struct x86_exregs *regs) = {
 		[SC_IPC] = &sys_ipc,
 		[SC_LIPC] = &sys_ipc,
@@ -275,6 +277,7 @@ void isr_exn_basic_sc_bottom(struct x86_exregs *regs)
 
 void isr_exn_exregs_sc_bottom(struct x86_exregs *regs)
 {
+	assert(x86_irq_is_enabled());
 	regs->eax = sys_exregs((L4_ThreadId_t){ .raw = regs->eax },
 		&regs->ecx, &regs->edx, &regs->esi, &regs->edi, &regs->ebx,
 		(L4_ThreadId_t *)&regs->ebp);
@@ -284,6 +287,7 @@ void isr_exn_exregs_sc_bottom(struct x86_exregs *regs)
 
 void isr_exn_memctl_sc_bottom(struct x86_exregs *regs)
 {
+	assert(x86_irq_is_enabled());
 	printf("%s: MemoryControl called\n", __func__);
 	return_from_exn();
 }
@@ -575,8 +579,7 @@ void isr_exn_gp_bottom(struct x86_exregs *regs)
 void isr_exn_pf_bottom(struct x86_exregs *regs)
 {
 	L4_Word_t fault_addr;
-	__asm__ __volatile__("\tmovl %%cr2, %0\n" : "=r" (fault_addr)
-		:: "memory");
+	asm volatile ("movl %%cr2, %0": "=r" (fault_addr));
 
 	struct thread *current = get_current_thread();
 

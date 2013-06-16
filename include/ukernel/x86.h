@@ -142,24 +142,20 @@ static inline void x86_set_eflags(uint32_t mask) {
 }
 
 
-static inline void x86_clear_eflags(uint32_t mask) {
-	__asm__ __volatile__ (
-		"\tpushf\n"
-		"\tandl (%%esp), %0\n"
-		"\tmovl %0, (%%esp)\n"
-		"\tpopf\n"
-		:: "r" (~mask));
-}
-
-
 static inline uint32_t x86_get_eflags(void) {
 	uint32_t output;
 	__asm__ __volatile__ (
 		"\tpushf\n"
 		"\tmovl (%%esp), %0\n"
-		"\tpopf\n"
+		"\taddl $4, %%esp\n"
 		: "=r" (output));
 	return output;
+}
+
+
+static inline bool x86_irq_is_enabled(void) {
+	uint16_t flags = x86_get_eflags();
+	return CHECK_FLAG(flags, 1 << 9);	/* interrupt enable */
 }
 
 
