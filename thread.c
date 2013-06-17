@@ -891,7 +891,13 @@ void sys_threadcontrol(struct x86_exregs *regs)
 			goto end;
 		}
 		struct space *sp = space_find(spacespec.raw);
-		if(sp == NULL) sp = space_new();
+		if(sp == NULL) {
+			if(spacespec.raw == dest_tid.raw) sp = space_new();
+			else {
+				ec = 3;	/* invalid space */
+				goto end;
+			}
+		}
 		space_add_thread(sp, dest);
 	} else if(L4_IsNilThread(spacespec) && dest != NULL) {
 		/* thread/space deletion */
