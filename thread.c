@@ -417,7 +417,6 @@ void thread_halt(struct thread *t)
 		TID_THREADNUM(t->id), TID_VERSION(t->id), __builtin_return_address(0));
 
 	assert(!CHECK_FLAG(t->flags, TF_HALT));
-	assert(t->status != TS_STOPPED);
 	assert(t->status != TS_DEAD);
 
 	t->flags |= TF_HALT;
