@@ -27,7 +27,7 @@ START_TEST(threadctl_basic)
 	const L4_Word_t utcb_size = 512;
 
 	int n_tests;
-	plan_tests(n_tests = 2 + L4_Size(utcb_area) / utcb_size);
+	plan_tests(n_tests = 4 + L4_Size(utcb_area) / utcb_size);
 
 	L4_ThreadId_t tid = L4_GlobalId(2369, 199), self = L4_Myself();
 	L4_Word_t res = L4_ThreadControl(tid, tid, self, L4_nilthread,
@@ -66,7 +66,18 @@ START_TEST(threadctl_basic)
 
 	/* TODO: test UTCB position change while thread is activated. */
 
-	/* TODO: destroy thread, space */
+	res = L4_ThreadControl(tid, L4_nilthread, L4_nilthread,
+		L4_nilthread, (void *)-1);
+	ok(res == 1, "thread/space delete ok");
+
+	/* test that further threads cannot be created since the space is gone. */
+	res = L4_ThreadControl(L4_GlobalId(2300, 123), tid, L4_MyGlobalId(),
+		L4_nilthread, (void *)-1);
+	if(!ok(res == 0 && L4_ErrorCode() == 3,
+		"post-delete thread creation fails properly"))
+	{
+		diag("res=%lu, ec=%#lx", res, L4_ErrorCode());
+	}
 }
 END_TEST
 
@@ -75,9 +86,11 @@ Suite *thread_suite(void)
 {
 	Suite *s = suite_create("thread");
 
-	TCase *ctl_case = tcase_create("ctl");
-	tcase_add_test(ctl_case, threadctl_basic);
-	suite_add_tcase(s, ctl_case);
+	{
+		TCase *tc = tcase_create("api");
+		tcase_add_test(tc, threadctl_basic);
+		suite_add_tcase(s, tc);
+	}
 
 	return s;
 }
