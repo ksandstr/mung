@@ -9,6 +9,7 @@
 #include <string.h>
 
 #include <l4/types.h>
+#include <l4/kip.h>
 #include <l4/ipc.h>
 #include <l4/syscall.h>
 
@@ -23,11 +24,12 @@ START_TEST(threadctl_basic)
 	L4_Fpage_t kip_area = L4_FpageLog2(0x100000, 12),
 		utcb_area = L4_FpageLog2(0x200000, 12);
 
-	/* FIXME: get this from KIP */
-	const L4_Word_t utcb_size = 512;
+	L4_KernelInterfacePage_t *kip = L4_GetKernelInterface();
+	const L4_Word_t utcb_size = L4_UtcbSize(kip);
 
 	int n_tests;
 	plan_tests(n_tests = 4 + L4_Size(utcb_area) / utcb_size);
+	diag("utcb_size=%lu", utcb_size);
 
 	L4_ThreadId_t tid = L4_GlobalId(2369, 199), self = L4_Myself();
 	L4_Word_t res = L4_ThreadControl(tid, tid, self, L4_nilthread,

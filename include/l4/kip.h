@@ -201,4 +201,20 @@ static inline L4_Word_t L4_MemoryDescHigh(const L4_MemoryDesc_t *m) {
 }
 
 
+static inline L4_Word_t L4_UtcbAreaSizeLog2(void *kip_ptr) {
+	L4_KernelInterfacePage_t *kip = kip_ptr;
+	return kip->UtcbAreaInfo.X.s;
+}
+
+static inline L4_Word_t L4_UtcbAlignmentLog2(void *kip_ptr) {
+	L4_KernelInterfacePage_t *kip = kip_ptr;
+	return kip->UtcbAreaInfo.X.a;
+}
+
+static inline L4_Word_t L4_UtcbSize(void *kip_ptr) {
+	L4_KernelInterfacePage_t *kip = kip_ptr;
+	return (1 << kip->UtcbAreaInfo.X.a) * kip->UtcbAreaInfo.X.m;
+}
+
+
 #endif
