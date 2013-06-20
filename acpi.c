@@ -55,7 +55,7 @@ static struct rsdp_v20 *find_rsdp(void)
 	const struct rsdp_v20 *tmp = p;
 	int len = tmp->revision >= 1 ? sizeof(struct rsdp_v20) : 20;
 	p = malloc(len);
-	/* FIXME: use a proper "copy_from_phys()" routine, eventually, one
+	/* TODO: use a proper "copy_from_phys()" routine, eventually, one
 	 * day...
 	 */
 	assert(PAGE_ADDR((uintptr_t)tmp + len - 1) == PAGE_ADDR((uintptr_t)tmp));
@@ -101,7 +101,7 @@ static struct sdt_header *sdt_copy(uintptr_t phys_addr)
 		delay_valid = false;
 	}
 
-	unsigned length = sdt->length;	/* sdt dies at 2nd put_supervisor_page() */
+	unsigned length = sdt->length;	/* "sdt" dies at 2nd put_supervisor_page() */
 	copy = malloc(length);
 	unsigned pos = 0;
 	while(pos < length) {
@@ -163,7 +163,7 @@ static void dump_madt(const struct acpi_madt *madt)
 				memcpy(&flags, &b[4], sizeof(flags));
 				printf("processor-local APIC: cpu %d, apic %d, flags %#x\n",
 					acpi_cpuid, apic_id, flags);
-				/* TODO: this is actually a CPU declaration. bit 0 of flags
+				/* NOTE: this is actually a CPU declaration. bit 0 of flags
 				 * being on indicates that it's a valid, usable CPU. record
 				 * these somewhere; they're relevant for the KIP and so forth.
 				 */
@@ -334,10 +334,6 @@ int acpi_init(void)
 			free(dsdt);
 		}
 	}
-
-#if 0
-	panic("in development!");
-#endif
 
 	return 0;
 }
