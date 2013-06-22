@@ -80,6 +80,7 @@ extern void suite_add_tcase(Suite *s, TCase *tc);
 extern TCase *tcase_create(const char *name);
 extern void tcase_add_unchecked_fixture(TCase *tc, SFun setup, SFun teardown);
 extern void tcase_add_checked_fixture(TCase *tc, SFun setup, SFun teardown);
+extern void tcase_set_fork(TCase *tc, bool do_fork);
 
 extern void tcase_add_test_info(TCase *tc, const struct test_info *info);
 

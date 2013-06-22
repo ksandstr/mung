@@ -12,6 +12,10 @@
 #include <ccan/hash/hash.h>
 #include <ccan/str/str.h>
 
+#include <l4/types.h>
+#include <l4/thread.h>
+#include <l4/ipc.h>
+
 #include <ukernel/util.h>
 
 #include "defs.h"
@@ -43,6 +47,7 @@ struct TCase
 {
 	struct list_node suite_link;
 	struct list_head tests, u_fixtures, c_fixtures;
+	bool do_fork;
 	char name[];
 };
 
@@ -130,8 +135,7 @@ TCase *tcase_create(const char *name)
 {
 	int len = strlen(name);
 	TCase *tc = malloc(sizeof(TCase) + len + 1);
-	memset(tc, '\0', sizeof(*tc));
-	tc->suite_link = (struct list_node){ };
+	*tc = (TCase){ .do_fork = true };
 	list_head_init(&tc->tests);
 	list_head_init(&tc->c_fixtures);
 	list_head_init(&tc->u_fixtures);
@@ -163,6 +167,11 @@ void tcase_add_unchecked_fixture(TCase *tc, SFun setup, SFun teardown) {
 
 void tcase_add_checked_fixture(TCase *tc, SFun setup, SFun teardown) {
 	add_fixture(&tc->c_fixtures, setup, teardown);
+}
+
+
+void tcase_set_fork(TCase *tc, bool do_fork) {
+	tc->do_fork = do_fork;
 }
 
 
@@ -511,45 +520,102 @@ static void run_test_in_case(
 	int iter,
 	int report_mode)
 {
-	printf("*** begin test `%s'", t->name);
-	if(t->low < t->high) printf(" iter %d", iter); else assert(iter == 0);
-	printf("\n");
+	if(!tc->do_fork && !list_empty(&tc->c_fixtures)) {
+		printf("*** tcase `%s' has checked fixtures, but do_fork=%s!\n",
+			tc->name, btos(tc->do_fork));
+		abort();
+	}
+
+	L4_ThreadId_t parent_tid = L4_Myself(), child_tid = L4_nilthread;
+	int child = 0;
+	if(tc->do_fork) {
+		child = fork_tid(&child_tid);
+		if(child == -1) {
+			printf("*** fork failed\n");
+			abort();
+		}
+	}
 
 	bool failed = true;
 	int rc = 0;
+	if(child == 0) {
+		printf("*** begin test `%s'", t->name);
+		if(t->low < t->high) printf(" iter %d", iter); else assert(iter == 0);
+		printf("\n");
 
-	if(!list_empty(&tc->c_fixtures)
-		&& !run_fixture_list(&tc->c_fixtures, false))
-	{
-		/* TODO: do an exit-to-restart here just in case the microkernel has
-		 * become fucked. but note the test sequence run so far, or something.
-		 *
-		 * FIXME: at least signal that a test case was skipped!
-		 *
-		 * for now this just goes on to the next tcase, leaving fixtures
-		 * before the failed one in place. that's pretty bad.
-		 */
-		printf("*** test `%s': checked fixture setup failed\n", t->name);
-		goto end;
-	}
+		if(!list_empty(&tc->c_fixtures)
+			&& !run_fixture_list(&tc->c_fixtures, false))
+		{
+			/* TODO: do an exit-to-restart here just in case the microkernel
+			 * has become fucked. but note the test sequence run so far, or
+			 * something.
+			 *
+			 * FIXME: at least signal that a test case was skipped!
+			 *
+			 * for now this just goes on to the next tcase, leaving fixtures
+			 * before the failed one in place. that's pretty bad.
+			 */
+			printf("*** test `%s': checked fixture setup failed\n", t->name);
+			goto end;
+		}
 
-	flush_log(false);
-	tap_reset();
-	failed = !run_test(tc, t, iter);
+		flush_log(false);
+		tap_reset();
+		failed = !run_test(tc, t, iter);
 
-	rc = exit_status();
-	if(rc > 0 || failed) {
-		/* TODO: gather results for unplanned and unexecuted test points,
-		 * report according to report_mode.
-		 */
-		flush_log(true);
-	}
+		rc = exit_status();
+		if(rc > 0 || failed) {
+			/* TODO: gather results for unplanned and unexecuted test points,
+			 * report according to report_mode.
+			 */
+			flush_log(true);
+		}
 
-	if(!list_empty(&tc->c_fixtures)
-		&& !run_fixture_list(&tc->c_fixtures, true))
-	{
-		printf("*** test `%s': checked fixture teardown failed\n", t->name);
-		/* FIXME: do exit-to-restart or something */
+		if(!list_empty(&tc->c_fixtures)
+			&& !run_fixture_list(&tc->c_fixtures, true))
+		{
+			printf("*** test `%s': checked fixture teardown failed\n", t->name);
+			/* FIXME: do exit-to-restart or something */
+		}
+
+		if(tc->do_fork) {
+			L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 2 }.raw);
+			L4_LoadMR(1, (int)failed);
+			L4_LoadMR(2, rc);
+			L4_MsgTag_t tag = L4_Call(parent_tid);
+			if(L4_IpcFailed(tag)) {
+				printf("*** return status to parent failed: ec=%#lx\n",
+					L4_ErrorCode());
+				abort();
+			}
+
+			exit(rc);
+		}
+	} else {
+		L4_MsgTag_t tag = L4_Receive(child_tid);
+		if(L4_IpcFailed(tag)) {
+			printf("*** receive from child failed: ec=%#lx\n",
+				L4_ErrorCode());
+			abort();
+		}
+		L4_Word_t tmp;
+		L4_StoreMR(1, &tmp); failed = (bool)tmp;
+		L4_StoreMR(2, &tmp); rc = (int)tmp;
+		L4_LoadMR(0, 0);
+		tag = L4_Reply(child_tid);
+		if(L4_IpcFailed(tag)) {
+			printf("*** reply to child failed: ec=%#lx\n", L4_ErrorCode());
+			abort();
+		}
+
+		int status, dead_id;
+		do {
+			status = 0;
+			dead_id = wait(&status);
+			if(dead_id != child) {
+				printf("*** unexpected dead child PID %d\n", dead_id);
+			}
+		} while(dead_id >= 0 && dead_id != child);
 	}
 
 end:

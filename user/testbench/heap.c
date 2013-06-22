@@ -75,8 +75,6 @@ void *sbrk(intptr_t increment)
 		if(use_forkserv_sbrk) {
 			if(L4_IsNilThread(heap_tid)) {
 				heap_tid = L4_Pager();
-				printf("heap TID is now %lu:%lu\n", L4_ThreadNo(heap_tid),
-					L4_Version(heap_tid));
 				assert(!L4_IsNilThread(heap_tid));
 			}
 			L4_LoadMR(0, (L4_MsgTag_t){ .X.label = FORKSERV_SBRK,
