@@ -84,6 +84,36 @@ START_TEST(threadctl_basic)
 END_TEST
 
 
+/* create a non-activated thread and overwrite its version bits.
+ *
+ * (the real API test would start an actual thread, overwrite version, restart
+ * it on another stack, overwrite that again with the previous bits, then
+ * clean up with join_thread(). TODO: implement this.)
+ */
+START_TEST(tid_stomp)
+{
+	plan_tests(1);
+	const int tno = 1234;
+
+	L4_ThreadId_t first_tid = L4_GlobalId(tno, 1234);
+	assert((L4_Version(first_tid) & 0x3f) > 1);
+	L4_Word_t res = L4_ThreadControl(first_tid, first_tid, L4_Myself(),
+		L4_nilthread, (void *)-1);
+	fail_unless(res == 1, "ec=%#lx", L4_ErrorCode());
+
+	L4_ThreadId_t after_tid = L4_GlobalId(tno, L4_Version(first_tid) ^ 0x3f);
+	res = L4_ThreadControl(after_tid, first_tid, L4_nilthread,
+		L4_nilthread, (void *)-1);
+	if(!ok1(res == 1)) diag("ec=%#lx", L4_ErrorCode());
+
+	/* cleanup. */
+	res = L4_ThreadControl(after_tid, L4_nilthread, L4_nilthread,
+		L4_nilthread, (void *)-1);
+	fail_unless(res == 1, "ec=%#lx", L4_ErrorCode());
+}
+END_TEST
+
+
 Suite *thread_suite(void)
 {
 	Suite *s = suite_create("thread");
@@ -91,6 +121,12 @@ Suite *thread_suite(void)
 	{
 		TCase *tc = tcase_create("api");
 		tcase_add_test(tc, threadctl_basic);
+		suite_add_tcase(s, tc);
+	}
+
+	{
+		TCase *tc = tcase_create("panic");
+		tcase_add_test(tc, tid_stomp);
 		suite_add_tcase(s, tc);
 	}
 
