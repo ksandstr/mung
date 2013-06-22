@@ -366,6 +366,27 @@ child_fail:
 }
 
 
+int fork_tid(L4_ThreadId_t *tid_p)
+{
+	L4_MsgTag_t tag;
+	L4_ThreadId_t parent = L4_MyGlobalId();
+	int pid = fork();
+	if(pid != 0) {
+		tag = L4_Wait(tid_p);
+	} else {
+		*tid_p = L4_nilthread;
+		L4_LoadMR(0, 0);
+		tag = L4_Send(parent);
+	}
+	if(L4_IpcFailed(tag)) {
+		printf("%s: ec %#lx\n", __func__, L4_ErrorCode());
+		abort();
+	}
+
+	return pid;
+}
+
+
 int wait(int *status)
 {
 	L4_LoadMR(0, (L4_MsgTag_t){ .X.label = FORKSERV_WAIT }.raw);

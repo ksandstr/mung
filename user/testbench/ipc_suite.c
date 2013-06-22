@@ -154,25 +154,6 @@ IDL_FIXTURE(other_helper, ipc_helper, &helper_vtab,
 	!helper_ctx()->running);
 
 
-/* TODO: move this into util.c or some such */
-static int fork_tid(L4_ThreadId_t *tid_p)
-{
-	L4_MsgTag_t tag;
-	L4_ThreadId_t parent = L4_MyGlobalId();
-	int pid = fork();
-	if(pid != 0) {
-		tag = L4_Wait(tid_p);
-	} else {
-		*tid_p = L4_nilthread;
-		L4_LoadMR(0, 0);
-		tag = L4_Send(parent);
-	}
-	fail_if(L4_IpcFailed(tag), "%s: ec %#lx", __func__, L4_ErrorCode());
-
-	return pid;
-}
-
-
 /* sender thread utilities. these attempt to do an IPC with the caller thread
  * either from another thread in this process, or a thread in a forked address
  * space.

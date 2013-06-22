@@ -190,6 +190,7 @@ extern bool use_forkserv_sbrk;
 
 /* returns address space ID on parent, 0 on child. */
 extern int fork(void);
+extern int fork_tid(L4_ThreadId_t *tid_p);	/* fork(), and return child TID */
 extern int wait(int *status);
 extern NORETURN void exit(int status);
 extern int getpid(void);
