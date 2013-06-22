@@ -250,12 +250,12 @@ static void thread_destroy(struct thread *t)
 	assert(hook_empty(&t->post_exn_call));
 
 	struct space *sp = t->space;
-
 	if(t->utcb_ptr_seg != 0) {
 		release_gdt_ptr_seg(L4_Address(sp->utcb_area)
 			+ t->utcb_pos * UTCB_SIZE + 256 - 4, t->utcb_ptr_seg);
 		t->utcb_ptr_seg = 0;
 	}
+	space_remove_thread(sp, t);
 
 	if(t->stack_page != NULL) {
 		free_kern_page(t->stack_page);
@@ -263,7 +263,6 @@ static void thread_destroy(struct thread *t)
 	}
 
 	cop_killa(t);
-	space_remove_thread(sp, t);
 	bool ok = htable_del(&thread_hash, int_hash(TID_THREADNUM(t->id)), t);
 	BUG_ON(!ok, "thread %lu:%lu not found in thread_hash",
 		TID_THREADNUM(t->id), TID_VERSION(t->id));
@@ -873,11 +872,11 @@ void sys_threadcontrol(struct x86_exregs *regs)
 	if(!L4_IsNilThread(spacespec)
 		&& TID_THREADNUM(spacespec.raw) < NUM_KERNEL_THREADS)
 	{
-		ec = 3;		/* invalid space specifier */
-		goto end;
+		goto invd_space;
 	}
 
 	struct thread *dest = thread_find(dest_tid.raw);
+	assert(dest == NULL || dest->space != NULL);
 	if(!L4_IsNilThread(spacespec) && dest == NULL) {
 		/* thread creation */
 		if(L4_IsNilThread(scheduler)) {
@@ -887,18 +886,19 @@ void sys_threadcontrol(struct x86_exregs *regs)
 
 		TRACE("%s: creating thread %lu:%lu\n", __func__,
 			TID_THREADNUM(dest_tid.raw), TID_VERSION(dest_tid.raw));
+		struct space *sp = space_find(spacespec.raw);
+		bool new_space = false;
+		if(sp == NULL && spacespec.raw != dest_tid.raw) goto invd_space;
+		else if(sp == NULL) {
+			sp = space_new();
+			if(sp == NULL) goto out_of_mem;
+			new_space = true;
+		}
+
 		dest = thread_new(dest_tid.raw);
 		if(dest == NULL) {
-			ec = 8;		/* "out of memory" */
-			goto end;
-		}
-		struct space *sp = space_find(spacespec.raw);
-		if(sp == NULL) {
-			if(spacespec.raw == dest_tid.raw) sp = space_new();
-			else {
-				ec = 3;	/* invalid space */
-				goto end;
-			}
+			if(new_space) space_free(sp);
+			goto out_of_mem;
 		}
 		space_add_thread(sp, dest);
 	} else if(L4_IsNilThread(spacespec) && dest != NULL) {
@@ -943,7 +943,8 @@ void sys_threadcontrol(struct x86_exregs *regs)
 
 		if(spacespec.raw != dest_tid.raw) {
 			struct space *to_sp = space_find(spacespec.raw);
-			if(to_sp != dest->space) {
+			if(unlikely(to_sp == NULL)) goto invd_space;
+			else if(to_sp != dest->space) {
 				/* FIXME: combine this with the TID stomp */
 				panic("TODO: movement of threads between spaces");
 			}
@@ -967,14 +968,11 @@ void sys_threadcontrol(struct x86_exregs *regs)
 			|| utcb_loc + UTCB_SIZE > L4_Address(sp->utcb_area) + L4_Size(sp->utcb_area)
 			|| (utcb_loc & (UTCB_SIZE - 1)) != 0)
 		{
-			ec = 6;
+			ec = 6;		/* "bad UTCB location" */
 			goto end;
 		}
 		bool ok = thread_set_utcb(dest, utcb_loc);
-		if(unlikely(!ok)) {
-			ec = 8;		/* "out of memory" */
-			goto end;
-		}
+		if(!ok) goto out_of_mem;
 
 		if(created) {
 			dest_utcb = thread_get_utcb(dest);
@@ -1019,4 +1017,13 @@ end:
 	regs->eax = result;
 
 	assert(check_thread_module(0));
+	return;
+
+out_of_mem:
+	ec = 8;
+	goto end;
+
+invd_space:
+	ec = 3;
+	goto end;
 }
