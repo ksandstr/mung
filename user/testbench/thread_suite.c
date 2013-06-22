@@ -73,12 +73,60 @@ START_TEST(threadctl_basic)
 	ok(res == 1, "thread/space delete ok");
 
 	/* test that further threads cannot be created since the space is gone. */
-	res = L4_ThreadControl(L4_GlobalId(2300, 123), tid, L4_MyGlobalId(),
+	L4_ThreadId_t non_tid = L4_GlobalId(2300, 123);
+	res = L4_ThreadControl(non_tid, tid, L4_MyGlobalId(),
 		L4_nilthread, (void *)-1);
 	if(!ok(res == 0 && L4_ErrorCode() == 3,
 		"post-delete thread creation fails properly"))
 	{
 		diag("res=%lu, ec=%#lx", res, L4_ErrorCode());
+
+		/* clean up if it was created anyway. */
+		res = L4_ThreadControl(non_tid, L4_nilthread, L4_nilthread,
+			L4_nilthread, (void *)-1);
+		fail_if(res != 1, "cleanup ThreadControl failed, ec=%#lx",
+			L4_ErrorCode());
+	}
+}
+END_TEST
+
+
+static L4_Word_t privilege_case(L4_Word_t *ec_p)
+{
+	/* ox cat, ruler of wildebeest */
+	L4_ThreadId_t tid = L4_GlobalId(0xca7, 111);
+	L4_Word_t res = L4_ThreadControl(tid, L4_Myself(), L4_Myself(),
+		L4_nilthread, (void *)-1);
+	*ec_p = L4_ErrorCode();
+	if(res == 1) {
+		/* clean up on success. */
+		L4_Word_t r2 = L4_ThreadControl(tid, L4_nilthread, L4_nilthread,
+			L4_nilthread, (void *)-1);
+		fail_if(r2 != 1, "on delete, ec=%#lx", L4_ErrorCode());
+	}
+
+	return res;
+}
+
+
+START_TEST(privilege)
+{
+	plan_tests(2);
+
+	/* point 1: should succeed from a privileged space. */
+	L4_Word_t ec, res = privilege_case(&ec);
+	if(!ok1(res == 1)) diag("ec=%#lx", ec);
+
+	/* point 2: should fail from a non-privileged (forked) space. */
+	int child = fork();
+	if(child == 0) {
+		res = privilege_case(&ec);
+		if(!ok1(res == 0 && ec == 1)) diag("res=%lu, ec=%#lx", res, ec);
+		exit(0);
+	} else {
+		int status, dead = wait(&status);
+		fail_unless(dead == child, "reaped %d (expected %d)",
+			dead, child);
 	}
 }
 END_TEST
@@ -121,6 +169,7 @@ Suite *thread_suite(void)
 	{
 		TCase *tc = tcase_create("api");
 		tcase_add_test(tc, threadctl_basic);
+		tcase_add_test(tc, privilege);
 		suite_add_tcase(s, tc);
 	}
 
