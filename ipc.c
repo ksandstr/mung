@@ -459,7 +459,6 @@ static void prexfer_ipc_hook(struct hook *hook, uintptr_t code, void *dataptr)
 			TID_VERSION(t->id));
 		send_xfer_fault(t, p_self->faults[p_self->pos], t->ctx.eip,
 			t->ipc->xferto_at);
-		assert(IS_IPC_WAIT(t->status));
 		TRACE("%s: next fault sent, state now %s\n", __func__,
 			sched_status_str(t));
 	} else if(p_other->pos < p_other->num) {
@@ -566,7 +565,6 @@ static bool set_prexfer_fault_state(
 			L4_Readable, -1);
 		send_xfer_fault(source, st->faults[0], source->ctx.eip,
 			st->xferto_at);
-		assert(IS_IPC_WAIT(source->status));
 	} else {
 		source->status = TS_SEND_WAIT;
 		thread_sleep(source, L4_Never);
@@ -575,10 +573,8 @@ static bool set_prexfer_fault_state(
 	if(nf_recv > 0) {
 		stritem_faults(&st->faults[nf_send], nf_recv, dest->space, recv_si,
 			L4_Writable | L4_Readable, -1);
-
 		send_xfer_fault(dest, st->faults[nf_send], dest->ctx.eip,
 			st->xferto_at);
-		assert(IS_IPC_WAIT(dest->status));
 	} else {
 		dest->status = TS_RECV_WAIT;
 		thread_sleep(dest, L4_Never);
@@ -613,7 +609,6 @@ static void set_xfer_fault_state(struct ipc_state *st, L4_Fpage_t fault)
 	 * caller's, outside of the ipc_resume() path) context.
 	 */
 	send_xfer_fault(ft, fault, ft->ctx.eip, st->xferto_at);
-	assert(IS_IPC_WAIT(ft->status));
 }
 
 
