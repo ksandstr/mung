@@ -849,10 +849,13 @@ void sys_threadcontrol(struct x86_exregs *regs)
 		pager = { .raw = regs->ecx },
 		scheduler = { .raw = regs->edx },
 		spacespec = { .raw = regs->esi };
-	L4_Word_t utcb_loc = regs->edi, result;
+	L4_Word_t utcb_loc = regs->edi, result = 0, ec = 0;
 	struct thread *current = get_current_thread();
-	/* TODO: check thread privilege */
 	void *utcb = thread_get_utcb(current);
+	if(unlikely(!CHECK_FLAG(current->space->flags, SF_PRIVILEGE))) {
+		ec = 1;		/* "no privilege" */
+		goto end;
+	}
 
 	TRACE("%s: called; dest %lu:%lu, pager %lu:%lu, scheduler %lu:%lu, space %lu:%lu\n",
 		__func__,
@@ -863,7 +866,6 @@ void sys_threadcontrol(struct x86_exregs *regs)
 	TRACE("%s: utcb_loc %p\n", __func__, (void *)utcb_loc);
 	result = 0;
 
-	L4_Word_t ec = 0;
 	if(TID_VERSION(dest_tid.raw) == 0) {
 		ec = 2;		/* "unavailable thread" */
 		goto end;
