@@ -924,12 +924,25 @@ void sys_threadcontrol(struct x86_exregs *regs)
 		TRACE("%s: modifying thread %lu:%lu (ptr %p)\n", __func__,
 			TID_THREADNUM(dest_tid.raw), TID_VERSION(dest_tid.raw),
 			dest);
+
+		if(dest->id != dest_tid.raw) {
+			/* version field and IPC stomp */
+			TRACE("%s: overwrite TID version to %lu:%lu\n", __func__,
+				L4_ThreadNo(dest_tid), L4_Version(dest_tid));
+			assert(L4_ThreadNo(dest_tid) == TID_THREADNUM(dest->id));
+			assert(L4_Version(dest_tid) != TID_VERSION(dest->id));
+			if(IS_IPC(dest->status)) abort_thread_ipc(dest);	/* "from" IPC */
+			/* cancel sends to the now-stale TID.
+			 * TODO: this should handle preemption vs. current_thread
+			 */
+			abort_waiting_ipc(dest, 3 << 1);
+			dest->id = dest_tid.raw;
+		}
+
 		if(spacespec.raw != dest_tid.raw) {
 			struct space *to_sp = space_find(spacespec.raw);
 			if(to_sp != dest->space) {
-				/* FIXME: needs a way to abort ongoing IPCs, and to remove
-				 * threads from spaces.
-				 */
+				/* FIXME: combine this with the TID stomp */
 				panic("TODO: movement of threads between spaces");
 			}
 		}

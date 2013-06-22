@@ -1120,9 +1120,11 @@ static L4_Word_t do_ipc_transfer(
 }
 
 
-/* used by the deleting mode of ThreadControl.
+/* used by the deleting and overwriting modes of ThreadControl.
  *
  * FIXME: untested!
+ * TODO: this should signal preemption when it occurs: one of the aborted
+ * senders may have priority.
  */
 void abort_waiting_ipc(struct thread *t, L4_Word_t errcode)
 {
