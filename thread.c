@@ -858,19 +858,19 @@ void sys_threadcontrol(struct x86_exregs *regs)
 
 	TRACE("%s: called; dest %lu:%lu, pager %lu:%lu, scheduler %lu:%lu, space %lu:%lu\n",
 		__func__,
-		TID_THREADNUM(dest_tid.raw), TID_VERSION(dest_tid.raw),
-		TID_THREADNUM(pager.raw), TID_VERSION(pager.raw),
-		TID_THREADNUM(scheduler.raw), TID_VERSION(scheduler.raw),
-		TID_THREADNUM(spacespec.raw), TID_VERSION(spacespec.raw));
+		L4_ThreadNo(dest_tid), L4_Version(dest_tid),
+		L4_ThreadNo(pager), L4_Version(pager),
+		L4_ThreadNo(scheduler), L4_Version(scheduler),
+		L4_ThreadNo(spacespec), L4_Version(spacespec));
 	TRACE("%s: utcb_loc %p\n", __func__, (void *)utcb_loc);
-	result = 0;
 
-	if(TID_VERSION(dest_tid.raw) == 0) {
+	if(unlikely(L4_Version(dest_tid) == 0)) {
 		ec = 2;		/* "unavailable thread" */
 		goto end;
 	}
 	if(!L4_IsNilThread(spacespec)
-		&& TID_THREADNUM(spacespec.raw) < NUM_KERNEL_THREADS)
+		&& unlikely(L4_ThreadNo(spacespec) < NUM_KERNEL_THREADS
+			|| L4_Version(spacespec) == 0))
 	{
 		goto invd_space;
 	}
@@ -879,13 +879,15 @@ void sys_threadcontrol(struct x86_exregs *regs)
 	assert(dest == NULL || dest->space != NULL);
 	if(!L4_IsNilThread(spacespec) && dest == NULL) {
 		/* thread creation */
-		if(L4_IsNilThread(scheduler)) {
+		if(unlikely(L4_IsNilThread(scheduler)
+			|| L4_Version(scheduler) == 0))
+		{
 			ec = 4;		/* invalid scheduler */
 			goto end;
 		}
 
 		TRACE("%s: creating thread %lu:%lu\n", __func__,
-			TID_THREADNUM(dest_tid.raw), TID_VERSION(dest_tid.raw));
+			L4_ThreadNo(dest_tid), L4_Version(dest_tid));
 		struct space *sp = space_find(spacespec.raw);
 		bool new_space = false;
 		if(sp == NULL && spacespec.raw != dest_tid.raw) goto invd_space;
@@ -904,7 +906,7 @@ void sys_threadcontrol(struct x86_exregs *regs)
 	} else if(L4_IsNilThread(spacespec) && dest != NULL) {
 		/* thread/space deletion */
 		TRACE("%s: deleting thread %lu:%lu (ptr %p)\n", __func__,
-			TID_THREADNUM(dest_tid.raw), TID_VERSION(dest_tid.raw),
+			L4_ThreadNo(dest_tid), L4_Version(dest_tid),
 			dest);
 		/* (could maintain dest->ipc_to to indicate if there's a waiting send
 		 * phase.)
@@ -924,7 +926,7 @@ void sys_threadcontrol(struct x86_exregs *regs)
 	} else if(!L4_IsNilThread(spacespec) && dest != NULL) {
 		/* modification only. (rest shared with creation.) */
 		TRACE("%s: modifying thread %lu:%lu (ptr %p)\n", __func__,
-			TID_THREADNUM(dest_tid.raw), TID_VERSION(dest_tid.raw),
+			L4_ThreadNo(dest_tid), L4_Version(dest_tid),
 			dest);
 
 		if(dest->id != dest_tid.raw) {
