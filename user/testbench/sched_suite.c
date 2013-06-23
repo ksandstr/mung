@@ -183,10 +183,11 @@ static L4_Word_t r_recv_timeout_case(int priority, bool spin, bool send)
 	fail_unless(!L4_IsNilThread(helper));
 
 	L4_Word_t res = L4_Set_Priority(helper, priority);
-	fail_unless((res & 0xff) != 0);
+	fail_unless((res & 0xff) != 0, "res=%#lx, ec=%#lx",
+		res, L4_ErrorCode());
 
 	L4_MsgTag_t tag = L4_Receive(helper);
-	fail_unless(L4_IpcSucceeded(tag));
+	fail_unless(L4_IpcSucceeded(tag), "ec=%#lx", L4_ErrorCode());
 
 	if(spin) {
 		L4_Clock_t start = L4_SystemClock();
@@ -215,14 +216,16 @@ static L4_Word_t r_recv_timeout_case(int priority, bool spin, bool send)
 START_TEST(r_recv_timeout_test)
 {
 	plan_tests(4);
+	const int own_pri = find_own_priority(), test_pri = own_pri - 2;
+	diag("test_pri=%d, own_pri=%d", test_pri, own_pri);
 
-	ok(r_recv_timeout_case(98, false, false) == 0x3,
+	ok(r_recv_timeout_case(test_pri, false, false) == 0x3,
 		"timeout in immediate nosend");
-	ok(r_recv_timeout_case(98, false, true) == 0,
+	ok(r_recv_timeout_case(test_pri, false, true) == 0,
 		"successful immediate send");
-	ok(r_recv_timeout_case(98, true, false) == 0x3,
+	ok(r_recv_timeout_case(test_pri, true, false) == 0x3,
 		"timeout in spin, nosend");
-	ok(r_recv_timeout_case(98, true, true) == 0x3,
+	ok(r_recv_timeout_case(test_pri, true, true) == 0x3,
 		"timeout in spin, send");
 }
 END_TEST
@@ -463,8 +466,9 @@ START_TEST(simple_preempt_test)
 	/* the result should be at least five wakeups with at least three ms in
 	 * between.
 	 */
-	diag("num_wake %d", (int)res->num_wake);
-	ok1(res->num_wake >= 5);
+	if(!ok1(res->num_wake >= 5)) {
+		diag("num_wake %d", (int)res->num_wake);
+	}
 
 	uint64_t prev = 0;
 	int count = 0;	/* # of intervals seen */
