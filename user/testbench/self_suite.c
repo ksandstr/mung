@@ -358,10 +358,12 @@ Suite *self_suite(void)
 	Suite *s = suite_create("self");
 
 	TCase *util_case = tcase_create("util");
+	tcase_set_fork(util_case, false);
 	tcase_add_test(util_case, basic_delay_test);
 	suite_add_tcase(s, util_case);
 
 	TCase *fork_case = tcase_create("fork");
+	tcase_set_fork(fork_case, false);
 	tcase_add_test(fork_case, basic_fork_and_wait);
 	tcase_add_test(fork_case, copy_on_write);
 	tcase_add_test(fork_case, return_exit_status);

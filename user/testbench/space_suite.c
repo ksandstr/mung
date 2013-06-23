@@ -478,6 +478,7 @@ Suite *space_suite(void)
 	suite_add_tcase(s, pager_case);
 
 	TCase *ctl_case = tcase_create("ctl");
+	tcase_set_fork(ctl_case, false);
 	tcase_add_test(ctl_case, spacectl_basic);
 	tcase_add_test(ctl_case, spacectl_iface);
 	suite_add_tcase(s, ctl_case);

@@ -168,6 +168,7 @@ Suite *thread_suite(void)
 
 	{
 		TCase *tc = tcase_create("api");
+		tcase_set_fork(tc, false);	/* must be run in privileged space */
 		tcase_add_test(tc, threadctl_basic);
 		tcase_add_test(tc, privilege);
 		suite_add_tcase(s, tc);
@@ -175,6 +176,7 @@ Suite *thread_suite(void)
 
 	{
 		TCase *tc = tcase_create("panic");
+		tcase_set_fork(tc, false);
 		tcase_add_test(tc, tid_stomp);
 		suite_add_tcase(s, tc);
 	}
