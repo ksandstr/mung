@@ -123,8 +123,8 @@ static int sigma0_ipc_loop(void *kip_base)
 				}
 				void *ptr = get_free_page_at(addr & ~PAGE_MASK, 12);
 				if(ptr == NULL) {
-					printf("page at %#lx unavailable in fault handler\n",
-						addr);
+					printf("page at %#lx not found (sender=%lu:%lu, ip=%#lx)\n",
+						addr, L4_ThreadNo(sender), L4_Version(sender), ip);
 					break;
 				}
 				assert((L4_Word_t)ptr == (addr & ~PAGE_MASK));

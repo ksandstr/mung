@@ -377,10 +377,10 @@ START_LOOP_TEST(partial_flush, iter, 0, 1)
 	L4_Fpage_t ptr_page = L4_FpageLog2((L4_Word_t)ptr, 12);
 	L4_Set_Rights(&ptr_page, L4_Writable);
 	if(recursive) {
-		L4_Word_t n = 1;
-		L4_MsgTag_t tag = forkserv_unmap(L4_Pager(), &n, &ptr_page);
-		fail_unless(L4_IpcSucceeded(tag), "forkserv_unmap failed: ec %#lx",
-			L4_ErrorCode());
+		unsigned num = 1;
+		int n = forkserv_unmap(L4_Pager(), &ptr_page, 1,
+			&ptr_page, &num);
+		fail_unless(n == 0, "n=%d", n);
 	} else {
 		L4_FlushFpages(1, &ptr_page);
 	}

@@ -69,9 +69,11 @@ START_TEST(basic_fork_and_wait)
 	int spid = fork();
 	if(spid == 0) {
 		/* child side */
+		diag("child running, sees pid=%d", getpid());
 		exit(0);
 		assert(false);
 	}
+	diag("spid=%d", spid);
 	ok(spid > 0, "fork succeeded");
 	int status = 0, dead = wait(&status);
 	ok(dead > 0 && dead == spid, "child exited");

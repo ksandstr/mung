@@ -1,6 +1,9 @@
 #ifndef _L4X2_IDL
 #define _L4X2_IDL
 
+#include <muidl.idl>
+
+
 module L4X2
 {
 
@@ -24,7 +27,8 @@ interface FaultHandler
 	void handle_fault(
 		[MR(1)] in word faddr,
 		[MR(2)] in word fip,
-		[map] out MapGrantItem page);
+		[map] out MapGrantItem page)
+			raises(muidl::NoReply);
 };
 
 }; // module L4X2

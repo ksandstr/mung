@@ -118,14 +118,11 @@ static bool handle_int(
 	for_each_thread(&stop_local_thread, non);
 
 	/* call fork. */
-	L4_LoadMR(0, (L4_MsgTag_t){ .X.label = FORKSERV_FORK }.raw);
-	L4_LoadBR(0, 0);
-	L4_MsgTag_t tag = L4_Call(L4_Pager());
-	L4_Word_t retval;
-	if(L4_IpcFailed(tag)) {
-		retval = ~0;		/* give up, go home */
-	} else {
-		L4_StoreMR(1, &retval);
+	int32_t retval = -1;
+	int n = forkserv_fork(L4_Pager(), &retval);
+	if(n != 0) {
+		printf("forkserv_fork() failed, n=%d\n", n);
+		retval = -1;		/* give up, go home */
 	}
 
 	/* restart our own threads now, and release the child stack on
@@ -138,11 +135,13 @@ static bool handle_int(
 
 	/* create the child process' entry thread. */
 	L4_ThreadId_t cp_tid;
-	tag = forkserv_new_thread(&cp_tid, retval, (L4_Word_t)&child_starter_fn,
-		(L4_Word_t)stk_pos,	thread_self());
-	if(L4_IpcFailed(tag)) {
+	int my_pri = find_own_priority();
+	n = forkserv_new_thread(L4_Pager(), &cp_tid.raw, retval,
+		(L4_Word_t)&child_starter_fn, (L4_Word_t)stk_pos, thread_self(),
+		L4_TimePeriod(10 * 1000), L4_Never, my_pri, my_pri, 0);
+	if(n != 0) {
 		/* TODO: cleanup */
-		printf("%s: ffffuuuuuu (ec %#lx)\n", __func__, L4_ErrorCode());
+		printf("%s: ffffuuuuuu (n=%d)\n", __func__, n);
 		abort();
 	}
 
@@ -153,7 +152,11 @@ static bool handle_int(
 	 */
 	L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 1 }.raw);
 	L4_LoadMR(1, L4_ThreadNo(cp_tid) - thread_self());
-	L4_Send(cp_tid);
+	L4_MsgTag_t tag = L4_Send(cp_tid);
+	if(L4_IpcFailed(tag)) {
+		printf("%s: child starter ipc failed, ec=%#lx\n", __func__,
+			L4_ErrorCode());
+	}
 
 end:
 	/* return the same stack frame, but set %eax to the fork() return value.
@@ -340,16 +343,13 @@ int fork(void)
 		L4_Set_ExceptionHandler(L4_nilthread);
 
 		/* now, who the fuck was I again? */
-		L4_LoadMR(0, (L4_MsgTag_t){ .X.label = FORKSERV_GETPID }.raw);
-		tag = L4_Call(L4_Pager());
-		if(L4_IpcFailed(tag)) {
-			printf("fork (child side): can't get own pid, ec %#lx\n",
-				L4_ErrorCode());
+		int32_t val;
+		int n = forkserv_getpid(L4_Pager(), &val);
+		if(n != 0) {
+			printf("fork (child side): can't get own pid, n=%d\n", n);
 			goto child_fail;
 		}
-		L4_Word_t val;
-		L4_StoreMR(1, &val);
-		if(tag.X.u < 1 || val <= 1) {
+		if(val <= 1) {
 			printf("fork (child side): getpid() failed\n");
 			goto child_fail;
 		}
@@ -389,24 +389,16 @@ int fork_tid(L4_ThreadId_t *tid_p)
 
 int wait(int *status)
 {
-	L4_LoadMR(0, (L4_MsgTag_t){ .X.label = FORKSERV_WAIT }.raw);
-	L4_MsgTag_t tag = L4_Call(L4_Pager());
-	if(L4_IpcFailed(tag) || tag.X.u < 2) return -1;
-
-	L4_Word_t st, id;
-	L4_StoreMR(1, &id);
-	L4_StoreMR(2, &st);
-	*status = st;
-	return id;
+	int32_t id;
+	int n = forkserv_wait(L4_Pager(), &id, status);
+	return n == 0 ? id : -1;
 }
 
 
 void exit(int status)
 {
 	for(int retry = 0; retry < 5; retry++) {
-		L4_LoadMR(0, (L4_MsgTag_t){ .X.label = FORKSERV_EXIT, .X.u = 1 }.raw);
-		L4_LoadMR(1, status);
-		L4_Call(L4_Pager());
+		forkserv_exit(L4_Pager(), status);
 	}
 	/* ultimate failure path */
 	asm volatile ("int $1");

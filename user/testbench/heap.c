@@ -77,12 +77,10 @@ void *sbrk(intptr_t increment)
 				heap_tid = L4_Pager();
 				assert(!L4_IsNilThread(heap_tid));
 			}
-			L4_LoadMR(0, (L4_MsgTag_t){ .X.label = FORKSERV_SBRK,
-				.X.u = 1 }.raw);
-			L4_LoadMR(1, heap_pos - increment);
-			L4_MsgTag_t tag = L4_Call(heap_tid);
-			if(L4_IpcFailed(tag)) {
-				printf("forkserv sbrk() failed: ec %#lx\n", L4_ErrorCode());
+			int n = forkserv_sbrk(heap_tid, heap_pos - increment);
+			if(n != 0) {
+				printf("forkserv_sbrk() failed, n=%d\n", n);
+				abort();		/* whut */
 			}
 			heap_pos -= increment;
 		} else {

@@ -101,18 +101,15 @@ int thread_on_fork(
 		 */
 	};
 
-	L4_LoadMR(0, (L4_MsgTag_t){ .X.label = FORKSERV_NEW_THREAD,
-		.X.u = 4 }.raw);
-	L4_LoadMR(1, ~(L4_Word_t)0);
-	L4_LoadMR(2, caller_ip);
-	L4_LoadMR(3, caller_sp);
-	L4_LoadMR(4, caller);
-	L4_MsgTag_t tag = L4_Call(L4_Pager());
-	if(L4_IpcFailed(tag)) {
-		return 1;		/* TODO: not a proper errno. */
+	/* TODO: instead figure out the caller's priority. */
+	int pri = find_own_priority();
+	int n = forkserv_new_thread(L4_Pager(), &caller_tid->raw, ~0ul,
+		caller_ip, caller_sp, caller, L4_TimePeriod(10 * 10000), L4_Never,
+		pri, pri, 0);
+	if(n != 0) {
+		printf("%s: new_thread failed, n=%d\n", __func__, n);
+		abort();
 	}
-
-	L4_StoreMR(1, &caller_tid->raw);
 	int new_caller = L4_ThreadNo(*caller_tid) - base_tnum;
 	assert(new_caller == caller);	/* avoids cleaning threads[caller] */
 	threads[new_caller] = copy;
@@ -227,12 +224,13 @@ L4_ThreadId_t start_thread_long(
 		 * to set the new_thread caller as the new thread's scheduler.
 		 */
 		L4_ThreadId_t out_tid;
-		L4_MsgTag_t tag = forkserv_new_thread(&out_tid, ~0ul,
-			(L4_Word_t)&thread_wrapper, stk_top, t);
-		if(L4_IpcFailed(tag) || L4_ThreadNo(out_tid) - base_tnum != t) {
-			printf("%s: forkserv_new_thread() failed, ec %#lx, out_tid %lu:%lu (%d)\n",
-				__func__, L4_ErrorCode(), L4_ThreadNo(out_tid),
-				L4_Version(out_tid), (int)L4_ThreadNo(out_tid) - base_tnum);
+		int n = forkserv_new_thread(L4_Pager(), &out_tid.raw, ~0ul,
+			(L4_Word_t)&thread_wrapper, stk_top, t, ts_len, total_quantum,
+			priority, priority, 0);
+		if(n != 0 || L4_ThreadNo(out_tid) - base_tnum != t) {
+			printf("%s: forkserv_new_thread() failed, n=%d, out_tid %lu:%lu (%d)\n",
+				__func__, n, L4_ThreadNo(out_tid), L4_Version(out_tid),
+				(int)L4_ThreadNo(out_tid) - base_tnum);
 			/* TODO: problem, officer? */
 			return L4_nilthread;
 		}
@@ -251,8 +249,10 @@ L4_ThreadId_t start_thread_long(
 			return L4_nilthread;
 		}
 
-		/* let forkserv know this should be paged for testbench */
-		add_fs_tid(getpid(), tid);
+		/* let forkserv know this should be paged for testbench, for which
+		 * space_id=1
+		 */
+		add_fs_tid(1, tid);
 
 		if(priority != -1) {
 			L4_Word_t r = L4_Set_Priority(tid, priority);
@@ -312,13 +312,9 @@ void *join_thread_long(L4_ThreadId_t tid, L4_Time_t timeout, L4_Word_t *ec_p)
 			return NULL;
 		}
 	} else {
-		L4_LoadMR(0, (L4_MsgTag_t){ .X.label = FORKSERV_EXIT_THREAD,
-			.X.u = 1}.raw);
-		L4_LoadMR(1, tid.raw);
-		tag = L4_Call(L4_Pager());
-		if(L4_IpcFailed(tag) || tag.X.u != 0) {
-			printf("%s: forkserv_exit_thread failed, ec %#lx (tag %#lx)\n",
-				__func__, L4_ErrorCode(), tag.raw);
+		int n = forkserv_exit_thread(L4_Pager(), tid.raw);
+		if(n != 0) {
+			printf("%s: forkserv_exit_thread failed, n=%d\n", __func__, n);
 			/* FIXME: ... and then what? */
 		}
 	}

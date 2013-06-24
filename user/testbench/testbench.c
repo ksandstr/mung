@@ -382,12 +382,9 @@ static const char *start_forkserv(void)
 static void send_one_page(L4_Word_t address, L4_Word_t space_id)
 {
 	/* "hey, prepare to receive." */
-	L4_LoadMR(0, (L4_MsgTag_t){ .X.label = FORKSERV_SEND_PAGE,
-		.X.u = 2 }.raw);
-	L4_LoadMR(1, address);
-	L4_LoadMR(2, space_id);
-	L4_MsgTag_t tag = L4_Call(forkserv_tid);
-	if(L4_IpcFailed(tag)) goto ipcfail;
+	int n = forkserv_send_page_timeout(forkserv_tid, address, space_id,
+		L4_Never);
+	if(n != 0) goto ipcfail;
 
 	L4_Fpage_t page = L4_Fpage(address, PAGE_SIZE);
 	L4_Set_Rights(&page, L4_FullyAccessible);
@@ -397,27 +394,34 @@ static void send_one_page(L4_Word_t address, L4_Word_t space_id)
 		.X.t = 2 }.raw);
 	L4_LoadMR(1, gi.raw[0]);
 	L4_LoadMR(2, gi.raw[1]);
-	tag = L4_Call(forkserv_tid);
-	if(L4_IpcFailed(tag)) goto ipcfail;
+	L4_MsgTag_t tag = L4_Call(forkserv_tid);
+	if(L4_IpcFailed(tag)) {
+		n = L4_ErrorCode();
+		goto ipcfail;
+	}
 
 	return;
 
 ipcfail:
-	printf("IPC failed: ec %#lx\n", L4_ErrorCode());
+	printf("IPC failed, n=%d\n", n);
 	abort();
 }
 
 
 void add_fs_tid(L4_Word_t space_id, L4_ThreadId_t tid)
 {
-	L4_LoadMR(0, (L4_MsgTag_t){ .X.label = FORKSERV_ADD_TID,
-		.X.u = 2 }.raw);
-	L4_LoadMR(1, space_id);
-	L4_LoadMR(2, tid.raw);
-	L4_MsgTag_t tag = L4_Call(forkserv_tid);
-	if(L4_IpcFailed(tag)) {
-		printf("%s: IPC failed: ec %#lx\n", __func__, L4_ErrorCode());
-		abort();
+#if 0
+	printf("%s: in %lu:%lu (%lu, %lu:%lu)\n", __func__,
+		L4_ThreadNo(L4_Myself()), L4_Version(L4_Myself()),
+		space_id, L4_ThreadNo(tid), L4_Version(tid));
+#endif
+	if(!L4_IsNilThread(forkserv_tid)) {
+		int n = forkserv_add_tid(forkserv_tid, space_id, tid.raw);
+		if(n != 0) {
+			printf("%s: IPC failed, n=%d, ec=%#lx\n", __func__, n,
+				L4_ErrorCode());
+			abort();
+		}
 	}
 }
 
@@ -483,17 +487,14 @@ static void transfer_to_forkserv(void)
 
 	/* inform forkserv of the shape of testbench's address space, i.e. the KIP
 	 * and UTCB locations.
+	 * space=1 is the testbench space's ID; s=13 means room for 16 threads.
 	 */
 	const L4_KernelInterfacePage_t *kip = L4_GetKernelInterface();
-	L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 3, .X.label = FORKSERV_AS_CFG }.raw);
-	L4_LoadMR(1, 1);		/* testbench initial space */
-	L4_LoadMR(2, L4_FpageLog2((L4_Word_t)kip, kip->KipAreaInfo.X.s).raw);
-	/* s = 13 means 16 threads. */
-	L4_LoadMR(3, L4_FpageLog2((L4_Word_t)__L4_Get_UtcbAddress(), 13).raw);
-	L4_MsgTag_t tag = L4_Call(forkserv_tid);
-	if(L4_IpcFailed(tag)) {
-		printf("%s: A/S config with forkserv failed, ec %#lx\n",
-			__func__, L4_ErrorCode());
+	int n = forkserv_as_cfg(forkserv_tid, 1,
+		L4_FpageLog2((L4_Word_t)kip, kip->KipAreaInfo.X.s),
+		L4_FpageLog2((L4_Word_t)__L4_Get_UtcbAddress(), 13));
+	if(n != 0) {
+		printf("%s: A/S config with forkserv failed, n=%d\n", __func__, n);
 		abort();
 	}
 

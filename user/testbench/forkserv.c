@@ -3,6 +3,7 @@
  * subprocesses (and subprocesses of those). this is useful for test cases
  * involving map operations in IPC, or the Unmap system call.
  */
+#define FORKSERV_IMPL_SOURCE
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -27,6 +28,10 @@
 
 #include "defs.h"
 #include "forkserv.h"
+#include "muidl.h"
+
+/* IDL bits */
+#include "forkserv-defs.h"
 
 
 #define TPS_SHIFT 3
@@ -92,6 +97,13 @@ struct helper_work {
 };
 
 
+/* used by forkserv to track async operation id to sender thread. */
+struct async_op {
+	L4_Word_t id;
+	L4_ThreadId_t from;
+};
+
+
 static size_t hash_word(const void *, void *);
 static size_t hash_threadno(const void *, void *);
 static struct fs_space *get_space(L4_Word_t id);
@@ -100,10 +112,10 @@ static struct fs_space *get_space(L4_Word_t id);
 /* thread_hash is hashed by threadno, but compared for equality with full TID
  * (i.e. word_cmp().) this is for handle_add_tid()'s overwrite function.
  */
-static struct htable thread_hash = HTABLE_INITIALIZER(thread_hash,
-	&hash_threadno, NULL);
-static struct htable space_hash = HTABLE_INITIALIZER(space_hash,
-	&hash_word, NULL);
+static struct htable
+	thread_hash = HTABLE_INITIALIZER(thread_hash, &hash_threadno, NULL),
+	space_hash = HTABLE_INITIALIZER(space_hash, &hash_word, NULL),
+	async_hash = HTABLE_INITIALIZER(async_hash, &hash_word, NULL);
 static LIST_HEAD(free_page_list);
 
 static L4_ThreadId_t console_tid, fpager_tid, helper_tid, forkserv_tid;
@@ -291,11 +303,12 @@ int sched_yield(void)
 }
 
 
-static bool handle_send_page(L4_ThreadId_t from)
+/* this is an oneway operation. the client is expected to complete the
+ * transaction with a SEND_PAGE_2 IPC.
+ */
+static void handle_send_page(L4_Word_t phys_addr, int32_t space_id)
 {
-	L4_Word_t phys_addr, space_id;
-	L4_StoreMR(1, &phys_addr);
-	L4_StoreMR(2, &space_id);
+	const L4_ThreadId_t from = muidl_get_sender();
 
 	L4_Fpage_t window;
 	struct fs_space *sp = get_space(space_id);
@@ -310,19 +323,21 @@ static bool handle_send_page(L4_ThreadId_t from)
 		window = L4_Fpage(map_range_pos, PAGE_SIZE);
 	}
 
-	L4_LoadMR(0, 0);
-	L4_MsgTag_t tag = L4_Reply(from);
-	if(L4_IpcFailed(tag)) goto ipcfail;
-
 	L4_LoadBR(0, window.raw);
-	tag = L4_Receive_Timeout(from, L4_TimePeriod(100 * 1000));
-	if(L4_IpcFailed(tag)) goto ipcfail;
+	L4_MsgTag_t tag = L4_Receive_Timeout(from, L4_TimePeriod(10 * 1000));
 	L4_LoadBR(0, 0);
+	if(L4_IpcFailed(tag)) {
+		printf("%s: IPC failed, ec %#lx\n", __func__, L4_ErrorCode());
+		return;
+	} else if(tag.X.label != FORKSERV_SEND_PAGE_2) {
+		printf("%s: wrong SEND_PAGE_2 label=%#x\n", __func__, tag.X.label);
+		return;
+	}
 
 	L4_MapItem_t mi;
 	L4_StoreMRs(1, 2, mi.raw);
 #if 0
-	printf("got page %#lx:%#lx, offset %#lx, phys_addr %lu:%#lx, local %#lx\n",
+	printf("got page %#lx:%#lx, offset %#lx, phys_addr %d:%#lx, local %#lx\n",
 		L4_Address(L4_MapItemSndFpage(mi)), L4_Size(L4_MapItemSndFpage(mi)),
 		L4_MapItemSndBase(mi), space_id, phys_addr, L4_Address(window));
 #endif
@@ -343,26 +358,24 @@ static bool handle_send_page(L4_ThreadId_t from)
 		&word_cmp, &p->address) == NULL);
 	htable_add(&sp->pages, int_hash(p->address), &p->address);
 
+	/* this replies to the SEND_PAGE_2 IPC. */
 	L4_LoadMR(0, 0);
-	return true;
-
-ipcfail:
-	printf("%s: IPC failed, ec %#lx\n", __func__,
-		L4_ErrorCode());
-	abort();
-	return false;
+	L4_Reply(from);
 }
 
 
 /* it'd be nice if this part could communicate with the outside world without
  * a pager thread in testbench. such as via a serial port.
  */
-static bool handle_pf(
-	L4_ThreadId_t from,
+static void handle_pf(
 	L4_Word_t addr,
 	L4_Word_t ip,
-	L4_Word_t fault_access)
+	L4_MapItem_t *page_ptr)
 {
+	assert(invariants("pf"));
+
+	L4_MsgTag_t tag = muidl_get_tag();
+	L4_Word_t fault_access = tag.X.label & 0xf;
 #if 0
 	printf("forkserv: pf [%c%c%c] in %d:%d (ip %#lx, addr %#lx)\n",
 		CHECK_FLAG(fault_access, L4_Readable) ? 'r' : '-',
@@ -378,16 +391,17 @@ static bool handle_pf(
 		printf("*** all work and no play makes jack a dull boy\n");
 		rep_count = 0;
 		last_addr = 0;
-		return false;
+		abort();		/* NOTE: this is useful for debugging. */
 	} else if(last_addr != addr) {
 		rep_count = 0;
 		last_addr = addr;
 	}
 
+	L4_ThreadId_t from = muidl_get_sender();
 	struct fs_space *sp = get_space_by_tid(from);
 	if(sp == NULL) {
 		printf("source %#lx isn't known\n", from.raw);
-		return false;
+		goto no_reply;
 	}
 
 	L4_Word_t page_addr = addr & ~PAGE_MASK;
@@ -409,7 +423,7 @@ static bool handle_pf(
 		printf("segfault in thread %lu:%lu, space %lu (brk %#lx)\n",
 			L4_ThreadNo(from), L4_Version(from), sp->id, sp->prog_brk);
 #endif
-		return false;
+		goto no_reply;
 	} else if(page->page->refcount == 1
 		&& !CHECK_FLAG_ALL(page->access, fault_access))
 	{
@@ -445,11 +459,11 @@ static bool handle_pf(
 
 	L4_Fpage_t fp = L4_FpageLog2(page->page->local_addr, PAGE_BITS);
 	L4_Set_Rights(&fp, page->access & fault_access);
-	L4_MapItem_t mi = L4_MapItem(fp, page->address);
-	L4_LoadMR(0, (L4_MsgTag_t){ .X.t = 2 }.raw);
-	L4_LoadMRs(1, 2, mi.raw);
+	*page_ptr = L4_MapItem(fp, page->address);
+	return;
 
-	return true;
+no_reply:
+	muidl_raise_no_reply();
 }
 
 
@@ -458,8 +472,9 @@ static bool handle_pf(
  * cause fuckups when forkserv's thread creation function is called from the
  * original testbench space.
  */
-static bool handle_add_tid(L4_Word_t space_id, L4_ThreadId_t tid)
+static void handle_add_tid(int32_t space_id, L4_Word_t raw_tid)
 {
+	const L4_ThreadId_t tid = { .raw = raw_tid };
 	struct fs_space *sp = get_space(space_id);
 	if(sp == NULL) sp = make_initial_space(space_id);
 
@@ -493,30 +508,23 @@ static bool handle_add_tid(L4_Word_t space_id, L4_ThreadId_t tid)
 			if(t->space->threads[slot] == NULL) break;
 		}
 		if(slot < 0) {
-			printf("%s: no slots left in space %lu!\n", __func__,
-				space_id);
-			return false;		/* (breaks unit testing, which is OK) */
+			printf("%s: no slots left in space %u!\n", __func__, space_id);
+			abort();	/* breaks unit testing, which is OK */
 		}
 		t->space->threads[slot] = t;
 	}
-
-	L4_LoadMR(0, 0);
-	return true;
 }
 
 
-static bool handle_sbrk(L4_ThreadId_t from, L4_Word_t new_break)
+static void handle_sbrk(L4_Word_t new_break)
 {
+	const L4_ThreadId_t from = muidl_get_sender();
 	struct fs_space *sp = get_space_by_tid(from);
 	if(sp == NULL) {
 		printf("%s: can't find for tid %#lx's fs_space\n", __func__, from.raw);
-		return false;
+	} else {
+		sp->prog_brk = MIN(L4_Word_t, sp->prog_brk, new_break);
 	}
-
-	sp->prog_brk = MIN(L4_Word_t, sp->prog_brk, new_break);
-
-	L4_LoadMR(0, 0);
-	return true;
 }
 
 
@@ -728,8 +736,9 @@ fail:
 }
 
 
-static bool handle_fork(L4_ThreadId_t from)
+static int32_t handle_fork(void)
 {
+	const L4_ThreadId_t from = muidl_get_sender();
 	L4_Word_t copy_id;
 
 	struct fs_space *sp = get_space_by_tid(from);
@@ -790,15 +799,12 @@ static bool handle_fork(L4_ThreadId_t from)
 	assert(!CHECK_FLAG(copy_id, 0x80000000ul));
 
 end:
-	L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 1 }.raw);
-	L4_LoadMR(1, copy_id);
-	return true;
+	return copy_id;
 }
 
 
-static bool handle_as_cfg(
-	L4_ThreadId_t from,
-	L4_Word_t space_id,
+static void handle_as_cfg(
+	int32_t space_id,
 	L4_Fpage_t kip_area,
 	L4_Fpage_t utcb_area)
 {
@@ -808,30 +814,31 @@ static bool handle_as_cfg(
 	if(!L4_IsNilFpage(utcb_area)) sp->utcb_area = utcb_area;
 
 #if 0
+	const L4_ThreadId_t from = muidl_get_sender();
 	printf("%s: from %#lx, space_id %#lx, kip_area %#lx:%#lx, utcb_area %#lx:%#lx\n",
 		__func__, from.raw, space_id, L4_Address(kip_area), L4_Size(kip_area),
 		L4_Address(utcb_area), L4_Size(utcb_area));
 #endif
-
-	return true;
 }
 
 
-static bool handle_unmap(
-	L4_ThreadId_t from,
-	L4_Word_t *n_p,
-	L4_Fpage_t *pages)
+static void handle_unmap(
+	const L4_Fpage_t *pages,
+	unsigned pages_len,
+	L4_Fpage_t *output,
+	unsigned *output_len)
 {
+	L4_ThreadId_t from = muidl_get_sender();
 	struct fs_space *sp = get_space_by_tid(from);
 	if(sp == NULL) {
 		printf("%s: unknown space for %#lx\n", __func__, from.raw);
-		return false;
+		return;
 	}
 
 	/* holy nested loops, batman! */
-	L4_Fpage_t local[63], output[63];
+	L4_Fpage_t local[63];
 	int outpos = 0;
-	for(int i=0, in_len = *n_p; i < in_len && outpos < 63; i++) {
+	for(int i=0, in_len = pages_len; i < in_len && outpos < 63; i++) {
 		for(L4_Word_t fp_addr = L4_Address(pages[i]),
 					  fp_max = fp_addr + L4_Size(pages[i]);
 			fp_addr < fp_max && outpos < 63;
@@ -851,9 +858,7 @@ static bool handle_unmap(
 	for(int i=0; i < outpos; i++) {
 		L4_Set_Rights(&output[outpos], L4_Rights(local[outpos]));
 	}
-	*n_p = outpos;
-
-	return true;
+	*output_len = outpos;
 }
 
 
@@ -872,42 +877,38 @@ static void destroy_space(struct fs_space *sp)
 }
 
 
-static bool handle_wait(L4_ThreadId_t ipc_from)
+static int32_t handle_wait(int32_t *status_ptr)
 {
+	L4_ThreadId_t ipc_from = muidl_get_sender();
 	struct fs_space *sp = get_space_by_tid(ipc_from);
-	if(sp == NULL) return false;
+	if(sp == NULL) {
+		printf("forkserv: don't know space for %lu:%lu\n",
+			L4_ThreadNo(ipc_from), L4_Version(ipc_from));
+		return -1;
+	}
 
-	if(list_empty(&sp->dead_children)) {
+	struct fs_space *dead = list_top(&sp->dead_children,
+		struct fs_space, dead_link);
+	if(dead == NULL) {
 		struct fs_thread *t = get_thread(ipc_from);
 		list_add_tail(&sp->waiting_threads, &t->wait_link);
-		return false;
+		muidl_raise_no_reply();
+		return -666;
 	} else {
-		struct fs_space *dead = list_top(&sp->dead_children,
-			struct fs_space, dead_link);
+		int id = dead->id;
+		*status_ptr = dead->exit_status;
 		list_del_from(&sp->dead_children, &dead->dead_link);
-		L4_Word_t wait_id = dead->id;
-		int status = dead->exit_status;
 		destroy_space(dead);
 
-		L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 2 }.raw);
-		L4_LoadMR(1, wait_id);
-		L4_LoadMR(2, status);
-		return true;
+		return id;
 	}
 }
 
 
-static bool handle_getpid(L4_ThreadId_t ipc_from)
+static int32_t handle_getpid(void)
 {
-	struct fs_space *sp = get_space_by_tid(ipc_from);
-	if(sp == NULL) {
-		L4_LoadMR(0, 0);
-		return true;
-	}
-
-	L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 1 }.raw);
-	L4_LoadMR(1, sp->id);
-	return true;
+	struct fs_space *sp = get_space_by_tid(muidl_get_sender());
+	return sp == NULL ? -1 : sp->id;
 }
 
 
@@ -936,13 +937,14 @@ static bool end_thread(L4_ThreadId_t tid)
 }
 
 
-static bool handle_exit(L4_ThreadId_t *ipc_from, int status)
+static void handle_exit(int32_t status)
 {
-	struct fs_space *sp = get_space_by_tid(*ipc_from);
+	L4_ThreadId_t ipc_from = muidl_get_sender();
+	struct fs_space *sp = get_space_by_tid(ipc_from);
 	if(sp == NULL) {
 		printf("forkserv/exit: unknown TID %lu:%lu\n",
-			L4_ThreadNo(*ipc_from), L4_Version(*ipc_from));
-		return false;
+			L4_ThreadNo(ipc_from), L4_Version(ipc_from));
+		return;
 	}
 	for(int i=0; i < THREADS_PER_SPACE; i++) {
 		if(sp->threads[i] != NULL) end_thread(sp->threads[i]->tid);
@@ -968,14 +970,16 @@ static bool handle_exit(L4_ThreadId_t *ipc_from, int status)
 	sp->utcb_area = L4_Nilpage;
 	L4_Word_t dead_id = sp->id;
 
-	/* activate waiting thread, or go to eternal sleep */
+	/* activate waiting thread, or make it immediately reapable (when there's
+	 * no waiter)
+	 */
 	struct fs_space *parent = get_space(sp->parent_id);
 	assert(parent != NULL);
 	assert(parent->id == sp->parent_id);
 	assert(sp != parent);		/* space 0 cannot die */
-	if(!list_empty(&parent->waiting_threads)) {
-		struct fs_thread *wakeup = list_top(&parent->waiting_threads,
-			struct fs_thread, wait_link);
+	struct fs_thread *wakeup = list_top(&parent->waiting_threads,
+		struct fs_thread, wait_link);
+	if(wakeup != NULL) {
 		list_del_from(&parent->waiting_threads, &wakeup->wait_link);
 		/* move own dead children over to parent */
 		destroy_space(sp);
@@ -983,55 +987,110 @@ static bool handle_exit(L4_ThreadId_t *ipc_from, int status)
 		L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 2 }.raw);
 		L4_LoadMR(1, dead_id);
 		L4_LoadMR(2, status);
-		*ipc_from = wakeup->tid;
-		return true;
+		L4_MsgTag_t tag = L4_Reply(wakeup->tid);
+		if(L4_IpcFailed(tag)) {
+			printf("forkserv: can't send wakeup, ec=%#lx\n",
+				L4_ErrorCode());
+		}
 	} else {
 		/* the dead walk */
 		list_add_tail(&parent->dead_children, &sp->dead_link);
 		sp->exit_status = status;
-		return false;
 	}
+
+	muidl_raise_no_reply();
 }
 
 
-static bool handle_exit_thread(
-	L4_ThreadId_t *from_p,
-	L4_ThreadId_t dest_tid)
+static void handle_exit_thread(L4_Word_t dest_raw)
 {
-	if(dest_tid.raw == L4_nilthread.raw) dest_tid = *from_p;
+	L4_ThreadId_t dest_tid = { .raw = dest_raw },
+		from = muidl_get_sender();
+	if(dest_tid.raw == L4_nilthread.raw) dest_tid = from;
 
 	struct fs_space *sp = get_space_by_tid(dest_tid);
-	if(sp == NULL || !end_thread(dest_tid)) return false;
+	if(sp == NULL || !end_thread(dest_tid)) return;
 
 	/* check if this was the last thread. */
+	bool is_last = true;
 	for(int i=0; i < THREADS_PER_SPACE; i++) {
 		if(sp->threads[i] != NULL) {
-			/* nopes. */
-			if(dest_tid.raw == from_p->raw) return false;
-			L4_LoadMR(0, 0);
-			return true;
+			is_last = false;
+			break;
 		}
 	}
 
-	/* yeah, drop the space too. */
-	if(dest_tid.raw == from_p->raw) return handle_exit(from_p, 0);
-	else {
+	if(is_last && dest_tid.raw == from.raw) handle_exit(0);
+	else if(is_last) {
 		/* would do exit of a process via exit_thread() from a foreign address
 		 * space. which is weird.
 		 */
 		printf("forkserv: weird exit_thread case not handled\n");
-		return false;
 	}
+
+	if(dest_tid.raw == from.raw) muidl_raise_no_reply();
 }
 
 
-/* used by forkserv_dispatch_loop to track async operation id to sender
- * thread.
- */
-struct async_op {
-	L4_Word_t id;
-	L4_ThreadId_t from;
-};
+static L4_Word_t forward_new_thread(
+	int32_t space_id,
+	L4_Word_t ip,
+	L4_Word_t sp,
+	int32_t req_tnum,
+	L4_Time_t ts_len,
+	L4_Time_t total_quantum,
+	uint8_t priority,
+	uint8_t sens_pri,
+	int32_t max_delay)
+{
+	assert(invariants("new_thread"));
+	const L4_ThreadId_t from = muidl_get_sender();
+	const L4_MsgTag_t tag = muidl_get_tag();
+
+	/* pass it to the queued handler */
+	L4_Word_t aid = next_async_id++;
+	struct async_op *op = malloc(sizeof(*op));
+	op->id = aid;
+	op->from = from;
+	htable_add(&async_hash, int_hash(op->id), &op->id);
+	struct helper_work *w = malloc(sizeof(struct helper_work)
+		+ 7 * sizeof(L4_Word_t));
+	w->from = from;
+	/* FIXME: this format is bizarre.
+	 * FIXME: and it doesn't carry the whole shebang.
+	 */
+	w->mrs[0] = (L4_MsgTag_t){
+			.X.u = 6, .X.label = FSHELPER_CHOPCHOP,
+		}.raw;
+	w->mrs[1] = aid;
+	w->mrs[2] = tag.raw;
+	w->mrs[3] = space_id;
+	w->mrs[4] = ip;
+	w->mrs[5] = sp;
+	w->mrs[6] = req_tnum;
+	L4_LoadMR(0, (L4_MsgTag_t){
+			.X.u = 1, .X.label = FSHELPER_CHOPCHOP,
+		}.raw);
+	L4_LoadMR(1, (L4_Word_t)w);
+	L4_MsgTag_t pass_tag = L4_Send_Timeout(helper_tid, L4_ZeroTime);
+	if(L4_IpcFailed(pass_tag) && L4_ErrorCode() == 2) {
+		do {
+			w->next = *(struct helper_work *volatile *)&helper_queue;
+		} while(!__sync_bool_compare_and_swap(&helper_queue, w->next, w));
+		L4_Time_t x, y;
+		L4_Word_t sr = L4_Timeslice(helper_tid, &x, &y);
+		printf("recursion recurs! sched result %lu\n", sr);
+	} else if(L4_IpcFailed(tag)) {
+		printf("helper_tid call failed: ec %#lx\n",
+			L4_ErrorCode());
+		free(w);
+	} else {
+		assert(L4_IpcSucceeded(tag));
+	}
+
+	muidl_raise_no_reply();	/* replied by the chopchop thread. */
+	return L4_nilthread.raw;
+}
 
 
 /* (not quite certain if this'll work with just a single thread. more RAM can
@@ -1039,57 +1098,37 @@ struct async_op {
  */
 static void forkserv_dispatch_loop(void)
 {
-	struct htable async_hash = HTABLE_INITIALIZER(async_hash,
-		&hash_word, NULL);
+	static const struct fork_serv_vtable vtable = {
+		.handle_fault = &handle_pf,
+		.as_cfg = &handle_as_cfg,
+		.send_page = &handle_send_page,
+		.add_tid = &handle_add_tid,
+		.fork = &handle_fork,
+		.sbrk = &handle_sbrk,
+		.exit_thread = &handle_exit_thread,
+		.exit = &handle_exit,
+		.wait = &handle_wait,
+		.unmap = &handle_unmap,
+		.getpid = &handle_getpid,
+		.new_thread = &forward_new_thread,	/* this one is a bit special. */
+	};
+
 	for(;;) {
-		L4_ThreadId_t from;
-		L4_MsgTag_t tag = L4_Wait(&from);
-		for(;;) {
-			if(L4_IpcFailed(tag)) {
-				printf("IPC failed: ec %#lx\n", L4_ErrorCode());
-				break;
-			}
-
-			bool reply = true;
+		L4_Word_t status = _muidl_fork_serv_dispatch(&vtable);
+		if(status == MUIDL_UNKNOWN_LABEL) {
+			L4_ThreadId_t sender = muidl_get_sender();
+			L4_MsgTag_t tag = muidl_get_tag();
 			switch(tag.X.label) {
-				case FORKSERV_AS_CFG: {
-					L4_Word_t space_id;
-					L4_Fpage_t kip_area, utcb_area;
-					L4_StoreMR(1, &space_id);
-					L4_StoreMR(2, &kip_area.raw);
-					L4_StoreMR(3, &utcb_area.raw);
-					assert(invariants("as_cfg"));
-					reply = handle_as_cfg(from, space_id,
-						kip_area, utcb_area);
-					break;
-				}
-
-				case FORKSERV_SEND_PAGE:
-					assert(invariants("send_page"));
-					reply = handle_send_page(from);
-					break;
-
-				case FORKSERV_ADD_TID: {
-					L4_Word_t space_id;
-					L4_ThreadId_t tid;
-					L4_StoreMR(1, &space_id);
-					L4_StoreMR(2, &tid.raw);
-					assert(invariants("add_tid"));
-					reply = handle_add_tid(space_id, tid);
-					break;
-				}
-
-				case FORKSERV_SBRK: {
-					L4_Word_t new_break;
-					L4_StoreMR(1, &new_break);
-					assert(invariants("sbrk"));
-					reply = handle_sbrk(from, new_break);
-					break;
-				}
-
-				case FORKSERV_FORK:
-					assert(invariants("fork"));
-					reply = handle_fork(from);
+				case FSHELPER_CHOPCHOP_DONE:
+					/* check the queue for our armless friend. */
+					assert(invariants("chopchop_done"));
+					if(helper_queue != NULL) {
+						L4_LoadMR(0, (L4_MsgTag_t){
+								.X.u = 1, .X.label = FSHELPER_CHOPCHOP,
+							}.raw);
+						L4_LoadMR(1, 0);        /* byoq */
+						L4_Reply(helper_tid);
+					}
 					break;
 
 				case FSHELPER_CHOPCHOP_REPLY: {
@@ -1098,7 +1137,8 @@ static void forkserv_dispatch_loop(void)
 					L4_StoreMR(1, &async_id);
 					L4_StoreMR(2, &reply_tag.raw);
 					L4_Word_t words[62];
-					L4_StoreMRs(3, reply_tag.X.u + reply_tag.X.t, words);
+					int n_words = reply_tag.X.u + reply_tag.X.t;
+					L4_StoreMRs(3, n_words, words);
 					assert(invariants("chopchop_reply"));
 					size_t hash = int_hash(async_id);
 					struct async_op *op = htable_get(&async_hash, hash,
@@ -1106,143 +1146,29 @@ static void forkserv_dispatch_loop(void)
 					if(op == NULL) {
 						printf("%s: unknown async op %#lx\n", __func__,
 							async_id);
-						reply = false;
 						break;
 					}
 					htable_del(&async_hash, hash, op);
-					from = op->from;
+					L4_ThreadId_t from = op->from;
 					free(op);
 					L4_LoadMR(0, reply_tag.raw);
-					L4_LoadMRs(1, reply_tag.X.u + reply_tag.X.t, words);
-					reply = true;
-					break;
-				}
-
-				case FSHELPER_CHOPCHOP_DONE:
-					/* check the queue for our armless friend. */
-					assert(invariants("chopchop_done"));
-					if(helper_queue != NULL) {
-						L4_LoadMR(0, (L4_MsgTag_t){
-								.X.u = 1, .X.label = FSHELPER_CHOPCHOP,
-							}.raw);
-						L4_LoadMR(1, 0);	/* byoq */
-						L4_Reply(helper_tid);
+					L4_LoadMRs(1, n_words, words);
+					L4_MsgTag_t tag = L4_Reply(from);
+					if(L4_IpcFailed(tag)) {
+						printf("%s: failed reply to %lu:%lu\n", __func__,
+							L4_ThreadNo(from), L4_Version(from));
 					}
-					reply = false;
-					break;
-
-				case FORKSERV_NEW_THREAD: {
-					L4_Word_t space_id, ip, sp, req_tnum;
-					L4_StoreMR(1, &space_id);
-					L4_StoreMR(2, &ip);
-					L4_StoreMR(3, &sp);
-					L4_StoreMR(4, &req_tnum);
-					assert(invariants("new_thread"));
-					/* pass it to the queued handler */
-					L4_Word_t aid = next_async_id++;
-					struct async_op *op = malloc(sizeof(*op));
-					op->id = aid;
-					op->from = from;
-					htable_add(&async_hash, int_hash(op->id), &op->id);
-					struct helper_work *w = malloc(sizeof(struct helper_work)
-						+ 7 * sizeof(L4_Word_t));
-					w->from = from;
-					/* FIXME: this format is bizarre. */
-					w->mrs[0] = (L4_MsgTag_t){
-							.X.u = 6, .X.label = FSHELPER_CHOPCHOP,
-						}.raw;
-					w->mrs[1] = aid;
-					w->mrs[2] = tag.raw;
-					w->mrs[3] = space_id;
-					w->mrs[4] = ip;
-					w->mrs[5] = sp;
-					w->mrs[6] = req_tnum;
-					L4_LoadMR(0, (L4_MsgTag_t){
-							.X.u = 1, .X.label = FSHELPER_CHOPCHOP,
-						}.raw);
-					L4_LoadMR(1, (L4_Word_t)w);
-					L4_MsgTag_t pass_tag = L4_Send_Timeout(helper_tid,
-						L4_ZeroTime);
-					if(L4_IpcFailed(pass_tag) && L4_ErrorCode() == 2) {
-						do {
-							w->next = *(struct helper_work *volatile *)&helper_queue;
-						} while(!__sync_bool_compare_and_swap(&helper_queue,
-							w->next, w));
-						L4_Time_t x, y;
-						L4_Word_t sr = L4_Timeslice(helper_tid, &x, &y);
-						printf("recursion recurs! sched result %lu\n", sr);
-						reply = false;
-					} else if(L4_IpcFailed(tag)) {
-						printf("helper_tid call failed: ec %#lx\n",
-							L4_ErrorCode());
-						free(w);
-						reply = false;
-					} else {
-						assert(L4_IpcSucceeded(tag));
-						reply = false;
-					}
-					break;
-				}
-
-				case FORKSERV_UNMAP: {
-					L4_Fpage_t pages[63];
-					L4_Word_t n = tag.X.u;
-					L4_StoreMRs(1, n, &pages[0].raw);
-					assert(invariants("unmap"));
-					reply = handle_unmap(from, &n, pages);
-					if(reply) {
-						L4_LoadMR(0, (L4_MsgTag_t){ .X.u = n }.raw);
-						L4_LoadMRs(1, n, &pages[0].raw);
-					}
-					break;
-				}
-
-				case FORKSERV_WAIT:
-					assert(invariants("wait"));
-					reply = handle_wait(from);
-					break;
-
-				case FORKSERV_GETPID:
-					assert(invariants("getpid"));
-					reply = handle_getpid(from);
-					break;
-
-				case FORKSERV_EXIT: {
-					L4_Word_t status;
-					L4_StoreMR(1, &status);
-					assert(invariants("exit"));
-					reply = handle_exit(&from, status);
-					break;
-				}
-
-				case FORKSERV_EXIT_THREAD: {
-					L4_ThreadId_t dest_tid;
-					L4_StoreMR(1, &dest_tid.raw);
-					assert(invariants("exit_thread"));
-					reply = handle_exit_thread(&from, dest_tid);
 					break;
 				}
 
 				default:
-					if((tag.X.label & 0xfff0) == 0xffe0
-						&& tag.X.u == 2 && tag.X.t == 0)
-					{
-						/* pagefault */
-						L4_Word_t ip, addr;
-						L4_StoreMR(1, &addr);
-						L4_StoreMR(2, &ip);
-						assert(invariants("pf"));
-						reply = handle_pf(from, addr, ip, tag.X.label & 0xf);
-					} else {
-						printf("label %#x not recognized\n",
-							(unsigned)tag.X.label);
-						reply = false;
-					}
-					break;
+					printf("forkserv: unknown label %#x from %lu:%lu\n",
+						muidl_get_tag().X.label, L4_ThreadNo(sender),
+						L4_Version(sender));
 			}
-			if(!reply) break;
-
-			tag = L4_ReplyWait(from, &from);
+		} else if(status != 0 && !MUIDL_IS_L4_ERROR(status)) {
+			printf("forkserv: dispatch status %#lx (last tag %#lx)\n",
+				status, muidl_get_tag().raw);
 		}
 	}
 }
@@ -1271,7 +1197,8 @@ static void helper_chopchop(L4_ThreadId_t reply_tid, struct helper_work *w)
 	free(w);
 	bool reply;
 	switch(tag.X.label) {
-		case FORKSERV_NEW_THREAD: {
+		/* the new_thread label. */
+		case 0x2e21: {
 			reply = handle_new_thread(from, space_id, ip, sp, req_tnum);
 			break;
 		}

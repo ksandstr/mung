@@ -1,0 +1,77 @@
+
+#include <muidl.idl>
+#include "l4x2.idl"
+
+
+[StubPrefix(forkserv)]
+interface ForkServ: L4X2::FaultHandler
+{
+	/* forkserv initialization calls. */
+	[Label(0x6143)]		/* "aC" */
+	void as_cfg(
+		in long roottask_id,
+		in L4X2::Fpage kip_area,
+		in L4X2::Fpage utcb_area);
+
+	[Label(0x7350), StubSendTimeout]		/* "sP" */
+	oneway void send_page(in L4X2::word address, in long space_id);
+
+#if 0
+	/* NOTE: due to uncertainty wrt µIDL and grant items, this one doesn't
+	 * appear in the dispatcher.
+	 */
+	[Label(0x7351)]		/* "sQ", not in dispatcher */
+	void send_page_2(
+		[grant] in MapGrantItem s_page,
+		[map] out MapGrantItem reply_map);
+#endif
+
+	[Label(0x6154)]		/* "aT" */
+	void add_tid(in long space_id, in L4X2::word tid);
+
+	[Label(0x664f)]		/* "fO" */
+	long fork();
+
+	[Label(0x7342)]		/* "sB" (more of a brk(2), though) */
+	void sbrk(in L4X2::word new_break);
+
+	[Label(0x7a54), StubSendTimeout]	/* "zT" */
+	void exit_thread(in L4X2::word dest_tid)
+		raises(muidl::NoReply);
+
+	[Label(0xdead), StubSendTimeout]	/* daid liek beefves */
+	void exit(in long status)
+		raises(muidl::NoReply);
+
+	[Label(0x7741)]		/* "wA" */
+	long wait([MR(2)] out long status)
+		raises(muidl::NoReply);
+
+	[Label(0x2e21)]	/* ".!" */
+	L4X2::word new_thread(		/* return valus is the new TID, or nilthread */
+		in long space_id,
+		in L4X2::word ip,
+		in L4X2::word sp,
+		in long req_threadno,
+		in L4X2::Time ts_len,	/* timectl */
+		in L4X2::Time total_quantum,
+		in octet priority,		/* prioctl */
+		in octet sens_pri,		/* preemptctl */
+		in long max_delay)		/*   16-bit microseconds */
+			raises(muidl::NoReply);
+
+	typedef sequence<L4X2::Fpage, 63> pages;
+
+	/* this one is used from unit tests, though. forkserv calls unmap (not
+	 * flush) on flexpages in the caller's virtual address space. fpages are
+	 * returned as accessed by forkserv, with 63 returned indicating that
+	 * there might've been more. calling it with 4k pages ensures 1:1
+	 * pass/return; otherwise @fpages should have at least 63 fpages' worth of
+	 * room.
+	 */
+	[Label(0x754d)]		/* "uM" */
+	void unmap(in pages unmap_pages, out pages out_pages);
+
+	[Label(0x6750)]		/* "gP" */
+	long getpid();
+};
