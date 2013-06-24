@@ -24,7 +24,7 @@ covercheck:
 	@PERL5OPT=-MDevel::Cover tests/run_all.pl
 
 
-testbench: testbench.ld crt0.o testbench.o dlmalloc.o heap.o thread.o \
+testbench: testbench.ld crt0.o testbench.o dlmalloc.o heap.o thread.o tsd.o \
 		delay.o process.o exn-store.o log.o tap.o test.o util.o \
 		idlsupp.o pg_stats.o pg_drop.o \
 		sched_suite.o space_suite.o thread_suite.o string_suite.o \

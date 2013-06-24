@@ -149,6 +149,10 @@ extern int thread_on_fork(
 	L4_Word_t caller_sp,
 	int new_base_tnum);
 
+
+/* from tsd.c */
+
+extern void tsd_clear(void);
 extern void tsd_key_create(int *key_p, void (*destructor)(void *ptr));
 extern void tsd_set(int key, void *ptr);
 extern void *tsd_get(int key);
