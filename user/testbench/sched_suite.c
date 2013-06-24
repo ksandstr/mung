@@ -350,7 +350,7 @@ struct preempt_exn_result
 /* test preemption exceptions. records just their time of occurrence, which
  * should coincide with preempt_fn's sleep or the thread's timeslice ending.
  */
-static bool preempt_exn_case(
+static void preempt_exn_case(
 	struct preempt_exn_result *r,
 	L4_Time_t spinner_ts,
 	bool signal_preempt,
@@ -360,7 +360,6 @@ static bool preempt_exn_case(
 {
 	const int loop_time_ms = 150;
 
-	bool ok = true;
 	int my_pri = find_own_priority();
 	L4_ThreadId_t spinner = start_spinner(my_pri - 2, spin_time_ms,
 		spinner_ts, signal_preempt, false, false);
@@ -396,16 +395,13 @@ static bool preempt_exn_case(
 			w->clock = now;
 			list_add_tail(&r->wakeups, &w->result_link);
 		} else {
-			log("wakeup at %lu not recorded [malloc fail]\n",
+			diag("malloc fail, wakeup at %lu not recorded",
 				(unsigned long)now.raw);
 		}
 
 		if(L4_IpcFailed(tag)) {
-			if(L4_ErrorCode() != 0x3) {
-				log("ipc error (code %#lx)\n", L4_ErrorCode());
-				ok = false;
-				break;
-			}
+			fail_unless(L4_ErrorCode() == 3, "unexpected ipc error (ec=%#lx)",
+				L4_ErrorCode());
 		} else if(tag.X.label >> 4 == (-4u & 0xfff)) {
 			const L4_Word_t *words = &mrs[1];
 
@@ -414,18 +410,15 @@ static bool preempt_exn_case(
 			L4_LoadMR(0, tag.raw);
 			L4_LoadMRs(1, num_words, words);
 			tag = L4_Reply(spinner);
-			if(L4_IpcFailed(tag)) {
-				log("spinner preempt reply failed: ec %#lx\n", L4_ErrorCode());
-				ok = false;
-				break;
-			}
+			fail_if(L4_IpcFailed(tag), "spinner preempt reply failed: ec %#lx",
+				L4_ErrorCode());
 			if(r->num_exn == 0) r->first_preempt = L4_SystemClock();
 			r->num_exn++;
 		} else if(tag.X.u == 0) {
 			/* ordinary regular spinner exit */
 			break;
 		} else {
-			log("got unexpected message (label %#lx, u %#lx, t %#lx)",
+			diag("got unexpected message (label=%#lx, u=%#lx, t=%#lx)",
 				(L4_Word_t)tag.X.label, (L4_Word_t)tag.X.u,
 				(L4_Word_t)tag.X.t);
 		}
@@ -433,8 +426,6 @@ static bool preempt_exn_case(
 
 	join_thread(spinner);
 	join_thread(preempt);
-
-	return ok;
 }
 
 
@@ -452,41 +443,40 @@ static void free_preempt_exn_result(struct preempt_exn_result *res)
 
 START_TEST(simple_preempt_test)
 {
-	plan_tests(6);
+	plan_tests(2);
 
 	struct preempt_exn_result *res = malloc(sizeof(*res));
 	list_head_init(&res->wakeups);
-	if(!preempt_exn_case(res, L4_TimePeriod(120 * 1000),
-		false, 0, 25, 4))
-	{
-		skip(666, "preempt_exn_case() failed");
-		goto end;
-	}
+	preempt_exn_case(res, L4_TimePeriod(120 * 1000), false, 0, 25, 4);
 
-	/* the result should be at least five wakeups with at least three ms in
-	 * between.
-	 */
+	/* part #1: result should be at least five wakeups */
 	if(!ok1(res->num_wake >= 5)) {
-		diag("num_wake %d", (int)res->num_wake);
+		diag("num_wake=%d", (int)res->num_wake);
 	}
 
+	/* part #2: they should have at least three ms in between. */
 	uint64_t prev = 0;
 	int count = 0;	/* # of intervals seen */
 	struct preempt_wakeup *w;
+	bool time_ok = true;
 	list_for_each(&res->wakeups, w, result_link) {
+		diag("  wkup@=%lu, was_exn=%s", (unsigned long)w->clock.raw,
+			btos(w->was_exn));
 		if(prev == 0) {
 			fail_unless(w == list_top(&res->wakeups, struct preempt_wakeup,
 				result_link));
 			prev = w->clock.raw;
 		} else {
 			int diff = w->clock.raw / 1000 - prev / 1000;
-			ok(diff >= 3, "preempted in at >= 3 ms (actual %d)", diff);
+			if(diff < 3) {
+				diag("preemption at %d ms (expected _ < 3)", diff);
+				time_ok = false;
+			}
 			if(++count == 4) break;
 		}
 	}
-	ok1(count >= 4);
+	if(!ok1(time_ok && count == 4)) diag("count=%d", count);
 
-end:
 	free_preempt_exn_result(res);
 }
 END_TEST
@@ -507,15 +497,8 @@ START_LOOP_TEST(preempt_exn_test, t, 0, 7)
 	struct preempt_exn_result *res = calloc(1, sizeof(*res));
 	list_head_init(&res->wakeups);
 	/* receive preempts the spinner once towards the end. */
-	if(!preempt_exn_case(res, L4_TimePeriod((big_ts ? 120 : 4) * 1000),
-		sig_pe, has_pe ? 10 : 0, 25, 22))
-	{
-		/* TODO: replace with skip_all() once nonlocal exits have been
-		 * implemented
-		 */
-		skip(!sig_pe ? 2 : 3, "preempt_exn_case() failed in iter %d", t);
-		goto end;
-	}
+	preempt_exn_case(res, L4_TimePeriod((big_ts ? 120 : 4) * 1000),
+		sig_pe, has_pe ? 10 : 0, 25, 22);
 
 	fail_unless(res->num_exn <= res->num_wake);
 	if(!sig_pe) {
@@ -561,7 +544,6 @@ START_LOOP_TEST(preempt_exn_test, t, 0, 7)
 		}
 	}
 
-end:
 	free_preempt_exn_result(res);
 }
 END_TEST
@@ -832,6 +814,7 @@ Suite *sched_suite(void)
 	Suite *s = suite_create("sched");
 
 	TCase *api_case = tcase_create("api");
+	tcase_set_fork(api_case, false);
 	tcase_add_test(api_case, syscall_errors);
 	suite_add_tcase(s, api_case);
 
@@ -839,13 +822,19 @@ Suite *sched_suite(void)
 	tcase_add_test(ipc_case, r_recv_timeout_test);
 	suite_add_tcase(s, ipc_case);
 
+	/* TODO: fix forkserv's new_thread() call to support all of the timeslice
+	 * etc. bits from start_thread_long(), then remove the no-fork attribute
+	 */
 	TCase *preempt_case = tcase_create("preempt");
+	tcase_set_fork(preempt_case, false);
 	tcase_add_test(preempt_case, simple_preempt_test);
 	tcase_add_test(preempt_case, preempt_exn_test);
 	tcase_add_test(preempt_case, delay_preempt);
 	suite_add_tcase(s, preempt_case);
 
+	/* TODO: see above */
 	TCase *yield_case = tcase_create("yield");
+	tcase_set_fork(yield_case, false);
 	tcase_add_test(yield_case, yield_timeslice_test);
 	suite_add_tcase(s, yield_case);
 
