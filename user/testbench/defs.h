@@ -67,8 +67,18 @@ static void fixture_name ## _teardown(void) { \
 	fixture_name ## _tid = L4_nilthread; \
 }
 
+/* regular fixtures are run _within_ the forked test process.
+ * _U fixtures are run in the pre-test process, which may be an unprivileged
+ * process.
+ *
+ * (_P fixtures will be run in the privileged roottask process,
+ * TODO: and should be added for completeness' sake at some point.)
+ */
 #define ADD_IDL_FIXTURE(tcase, fixture_name) \
 	tcase_add_checked_fixture((tcase), &fixture_name ## _setup, \
+		&fixture_name ## _teardown)
+#define ADD_IDL_FIXTURE_U(tcase, fixture_name) \
+	tcase_add_unchecked_fixture((tcase), &fixture_name ## _setup, \
 		&fixture_name ## _teardown)
 
 extern void idl_fixture_teardown(L4_ThreadId_t tid);

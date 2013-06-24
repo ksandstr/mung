@@ -626,8 +626,9 @@ Suite *ipc_suite(void)
 	suite_add_tcase(s, preempt_case);
 
 	TCase *timeout_case = tcase_create("timeout");
-	ADD_IDL_FIXTURE(timeout_case, helper);
-	ADD_IDL_FIXTURE(timeout_case, other_helper);
+	tcase_set_fork(timeout_case, false);
+	ADD_IDL_FIXTURE_U(timeout_case, helper);
+	ADD_IDL_FIXTURE_U(timeout_case, other_helper);
 	tcase_add_test(timeout_case, recv_timeout_from_send);
 	tcase_add_test(timeout_case, recv_timeout_from_preempt);
 	tcase_add_test(timeout_case, point_ipc_timeouts);
