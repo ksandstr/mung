@@ -466,15 +466,6 @@ uint64_t wakeup_at(L4_Time_t t)
 
 void thread_sleep(struct thread *t, L4_Time_t period)
 {
-#ifndef NDEBUG
-	if(!IS_IPC_WAIT(t->status) && t->status != TS_XFER) {
-		TRACE("%s: thread %lu:%lu status is %s\n", __func__,
-			TID_THREADNUM(t->id), TID_VERSION(t->id),
-			sched_status_str(t));
-	}
-#endif
-
-	assert(IS_IPC_WAIT(t->status) || t->status == TS_XFER);
 	/* NOTE: this function was merged with thread_wake(), which asserted
 	 * against {STOPPED, DEAD} rather than for the IPC wait states. callers
 	 * should handle R_RECV separately as it doesn't instantly promote to
@@ -502,6 +493,15 @@ void thread_sleep(struct thread *t, L4_Time_t period)
 			sq_update_thread(t);
 		}
 	} else {
+#ifndef NDEBUG
+		if(!IS_IPC_WAIT(t->status) && t->status != TS_XFER) {
+			printf("%s: thread %lu:%lu status is %s\n", __func__,
+				TID_THREADNUM(t->id), TID_VERSION(t->id),
+				sched_status_str(t));
+		}
+#endif
+
+		assert(IS_IPC_WAIT(t->status) || t->status == TS_XFER);
 		t->wakeup_time = wakeup_at(period);
 		sq_update_thread(t);
 	}
