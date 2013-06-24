@@ -17,6 +17,7 @@ native l4_time_t;
 typedef l4_time_t Time;
 
 
+[StubPrefix(__l4x2)]
 interface FaultHandler
 {
 	[TagMask(0xfff00000), Label(0xffe0)]
