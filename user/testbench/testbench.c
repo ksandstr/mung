@@ -336,7 +336,7 @@ static const char *start_forkserv(void)
 	}
 
 	/* set up the address space & start the main thread. */
-	forkserv_tid = L4_GlobalId(1366, 768);	/* yeah. so what? */
+	forkserv_tid = L4_GlobalId(23069, 42);		/* distinctive. */
 	L4_Word_t res = L4_ThreadControl(forkserv_tid, forkserv_tid,
 		forkserv_pager, forkserv_pager, (void *)-1);
 	if(res != 1) {
