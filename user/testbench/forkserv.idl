@@ -20,7 +20,7 @@ interface ForkServ: L4X2::FaultHandler
 	/* NOTE: due to uncertainty wrt µIDL and grant items, this one doesn't
 	 * appear in the dispatcher.
 	 */
-	[Label(0x7351)]		/* "sQ", not in dispatcher */
+	[Label(0x7351)]		/* "sQ" */
 	void send_page_2(
 		[grant] in MapGrantItem s_page,
 		[map] out MapGrantItem reply_map);
@@ -48,7 +48,7 @@ interface ForkServ: L4X2::FaultHandler
 		raises(muidl::NoReply);
 
 	[Label(0x2e21)]	/* ".!" */
-	L4X2::word new_thread(		/* return valus is the new TID, or nilthread */
+	L4X2::word new_thread(		/* return value is the new TID, or nilthread */
 		in long space_id,
 		in L4X2::word ip,
 		in L4X2::word sp,
@@ -62,12 +62,11 @@ interface ForkServ: L4X2::FaultHandler
 
 	typedef sequence<L4X2::Fpage, 63> pages;
 
-	/* this one is used from unit tests, though. forkserv calls unmap (not
-	 * flush) on flexpages in the caller's virtual address space. fpages are
-	 * returned as accessed by forkserv, with 63 returned indicating that
-	 * there might've been more. calling it with 4k pages ensures 1:1
-	 * pass/return; otherwise @fpages should have at least 63 fpages' worth of
-	 * room.
+	/* forkserv calls unmap (not flush) on flexpages in the caller's virtual
+	 * address space. fpages are returned as accessed by forkserv, with 63
+	 * returned indicating that there might've been more. calling it with 4k
+	 * pages ensures 1:1 pass/return; otherwise @out_pages must have at least
+	 * 63 fpages' worth of room.
 	 */
 	[Label(0x754d)]		/* "uM" */
 	void unmap(in pages unmap_pages, out pages out_pages);
