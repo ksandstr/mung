@@ -93,7 +93,13 @@ struct fs_thread
 struct helper_work {
 	struct helper_work *next;
 	L4_ThreadId_t from;
-	L4_Word_t mrs[];
+	L4_Word_t aid;	/* async ID */
+
+	/* new_thread parameters */
+	L4_Word_t ip, sp;
+	int32_t space_id, req_tnum, max_delay;
+	L4_Time_t ts_len, total_quantum;
+	uint8_t priority, sens_pri;
 };
 
 
@@ -595,13 +601,16 @@ static L4_Word_t fpager_spacectl(
 
 
 /* (this function just plain doesn't clean up on failure.) */
-static bool handle_new_thread(
-	L4_ThreadId_t from,
-	L4_Word_t space_id,
-	L4_Word_t instptr,
-	L4_Word_t stkptr,
-	int req_threadnum)
+static bool handle_new_thread(struct helper_work *w)
 {
+	/* (adaptation from previous function parameters, since moved into
+	 * helper_work proper.)
+	 */
+	L4_ThreadId_t from = w->from;
+	L4_Word_t space_id = w->space_id;
+	L4_Word_t instptr = w->ip, stkptr = w->sp;
+	int req_threadnum = w->req_tnum;
+
 	const char *what;
 
 	struct fs_space *sp;
@@ -663,6 +672,10 @@ static bool handle_new_thread(
 
 	/* set a lower priority so that the thread doesn't start up and cause
 	 * pagefaults before the second ThreadControl changes its pager TCR.
+	 *
+	 * FIXME: is this at all necessary? threads shouldn't become activated
+	 * until they have both a non-nil pager, and a valid UTCB address, and
+	 * pagefaults only start happening after breath-of-life.
 	 */
 	L4_Word_t timectl_out;
 	retval = L4_Schedule(new_tid, ~0ul, ~0ul, 80, ~0ul, &timectl_out);
@@ -680,6 +693,8 @@ static bool handle_new_thread(
 	/* finally, a breath-of-life IPC.
 	 *
 	 * TODO: strictly speaking this should be sent via forkserv_tid.
+	 * FIXME: make it propagate, once propagation starts working. (also set
+	 * the correct pager right away.)
 	 */
 	L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 2 }.raw);
 	L4_LoadMR(1, instptr);
@@ -1053,24 +1068,15 @@ static L4_Word_t forward_new_thread(
 	op->id = aid;
 	op->from = from;
 	htable_add(&async_hash, int_hash(op->id), &op->id);
-	struct helper_work *w = malloc(sizeof(struct helper_work)
-		+ 7 * sizeof(L4_Word_t));
-	w->from = from;
-	/* FIXME: this format is bizarre.
-	 * FIXME: and it doesn't carry the whole shebang.
-	 */
-	w->mrs[0] = (L4_MsgTag_t){
-			.X.u = 6, .X.label = FSHELPER_CHOPCHOP,
-		}.raw;
-	w->mrs[1] = aid;
-	w->mrs[2] = tag.raw;
-	w->mrs[3] = space_id;
-	w->mrs[4] = ip;
-	w->mrs[5] = sp;
-	w->mrs[6] = req_tnum;
-	L4_LoadMR(0, (L4_MsgTag_t){
-			.X.u = 1, .X.label = FSHELPER_CHOPCHOP,
-		}.raw);
+	struct helper_work *w = malloc(sizeof(struct helper_work));
+	*w = (struct helper_work){
+		.from = from, .aid = aid,
+		.ip = ip, .sp = sp,
+		.space_id = space_id, .req_tnum = req_tnum, .max_delay = max_delay,
+		.ts_len = ts_len, .total_quantum = total_quantum,
+		.priority = priority, .sens_pri = sens_pri,
+	};
+	L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 1, .X.label = FSHELPER_CHOPCHOP }.raw);
 	L4_LoadMR(1, (L4_Word_t)w);
 	L4_MsgTag_t pass_tag = L4_Send_Timeout(helper_tid, L4_ZeroTime);
 	if(L4_IpcFailed(pass_tag) && L4_ErrorCode() == 2) {
@@ -1190,26 +1196,17 @@ static struct helper_work *reverse_work(struct helper_work *w)
 
 static void helper_chopchop(L4_ThreadId_t reply_tid, struct helper_work *w)
 {
-	L4_Word_t async_id = w->mrs[1], space_id = w->mrs[3],
-		ip = w->mrs[4], sp = w->mrs[5], req_tnum = w->mrs[6];
-	L4_MsgTag_t tag = { .raw = w->mrs[2] };
-	L4_ThreadId_t from = w->from;
-	free(w);
-	bool reply;
-	switch(tag.X.label) {
-		/* the new_thread label. */
-		case 0x2e21: {
-			reply = handle_new_thread(from, space_id, ip, sp, req_tnum);
-			break;
-		}
-
-		default:
-			printf("%s: unknown label %#lx\n", __func__,
-				(L4_Word_t)tag.X.label);
-			reply = false;
-	}
+	const L4_Word_t async_id = w->aid;
+	bool reply = handle_new_thread(w);
 
 	if(reply) {
+		/* this looks funny, and it sort of is. it essentially snarfs up the
+		 * IPC reply for handle_new_thread(), and resends it via the main
+		 * forkserv dispatcher thread.
+		 *
+		 * TODO: do this with propagation, once mung starts doing that, too.
+		 */
+		L4_MsgTag_t tag;
 		L4_Word_t tmp[64];
 		L4_StoreMR(0, &tag.raw);
 		int n_words = tag.X.u + tag.X.t;
@@ -1232,6 +1229,8 @@ static void helper_chopchop(L4_ThreadId_t reply_tid, struct helper_work *w)
 			printf("%s: reply failed; ec %#lx\n", __func__, L4_ErrorCode());
 		}
 	}
+
+	free(w);
 }
 
 
