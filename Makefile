@@ -2,8 +2,6 @@
 export CFGDIR:=$(abspath .)
 include config.mk
 
-# CFLAGS:=$(CFLAGS) -DCCAN_LIST_DEBUG -D_L4_DEBUG_ME_HARDER
-
 .PHONY: all clean distclean check qcheck
 
 
@@ -14,7 +12,7 @@ all: tags
 	+@make ia32-kernel
 
 clean:
-	@rm -f *.o
+	@rm -f *.o $(CLEAN_PATS)
 	+@make -C user clean
 	+@make -C mbiloader clean
 	+@make -C lib clean
@@ -51,7 +49,6 @@ tags: $(shell find . -iname "*.[ch]" -or -iname "*.p[lm]")
 	@ctags -R *
 
 
-# TODO: remove the GCC-ism for compatiblity with clang. (ha ha ha ha ha ha)
 ia32-kernel: linker.ld loader.o kmain.o kip.o cpu.o heap.o thread.o \
 		trace.o sched.o exception.o space.o ipc.o mapdb.o \
 		acpi.o gdt.o idt.o irq.o pic.o isr.o timer.o context.o \
