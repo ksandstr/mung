@@ -200,20 +200,19 @@ static void thread_wrapper(void (*function)(void *), void *parameter)
 
 struct thread *thread_new(thread_id tid)
 {
+	/* keep thread_new() calls after init_threading() */
+	assert(thread_slab != NULL);
+
+	/* must be a currently not-existing thread number */
 	assert(thread_find(tid) == NULL);
-	if(unlikely(thread_slab == NULL)) {
-		panic("thread_new() called before init_threading()");
+
+	struct thread *t = list_top(&dead_thread_list, struct thread, dead_link);
+	if(t == NULL) {
+		t = kmem_cache_alloc(thread_slab);
+	} else {
+		list_del_from(&dead_thread_list, &t->dead_link);
 	}
 
-	struct thread *t;
-	if(list_empty(&dead_thread_list)) {
-		t = kmem_cache_alloc(thread_slab);
-		TRACE("%s: allocated new thread %p\n", __func__, t);
-	} else {
-		t = list_top(&dead_thread_list, struct thread, dead_link);
-		list_del_from(&dead_thread_list, &t->dead_link);
-		TRACE("%s: took dead thread %p\n", __func__, t);
-	}
 	*t = (struct thread){
 		.id = tid,
 		.status = TS_STOPPED,
@@ -266,11 +265,7 @@ static void thread_destroy(struct thread *t)
 	}
 
 	cop_killa(t);
-	bool ok = htable_del(&thread_hash, int_hash(TID_THREADNUM(t->id)), t);
-	BUG_ON(!ok, "thread %lu:%lu not found in thread_hash",
-		TID_THREADNUM(t->id), TID_VERSION(t->id));
-
-	TRACE("%s: freeing %p\n", __func__, t);
+	htable_del(&thread_hash, int_hash(TID_THREADNUM(t->id)), t);
 	kmem_cache_free(thread_slab, t);
 }
 
@@ -556,29 +551,21 @@ void *thread_get_utcb(struct thread *t)
 }
 
 
-struct thread *thread_get_pager(struct thread *t, void *utcb)
+static struct thread *get_tcr_thread(struct thread *t, void *utcb, int tcr)
 {
-	if(utcb == NULL) utcb = thread_get_utcb(t);
-	L4_ThreadId_t pager_id = { .raw = L4_VREG(utcb, L4_TCR_PAGER) };
-	if(unlikely(L4_IsNilThread(pager_id))) {
-		return NULL;
-	} else {
-		return resolve_tid_spec(t->space, pager_id);
-	}
+	assert(utcb != NULL);
+	L4_ThreadId_t tid = { .raw = L4_VREG(utcb, tcr) };
+	return L4_IsNilThread(tid) ? NULL : resolve_tid_spec(t->space, tid);
 }
 
 
-struct thread *thread_get_exnh(struct thread *t, void *utcb)
-{
-	if(utcb == NULL) utcb = thread_get_utcb(t);
-	L4_ThreadId_t exh_tid = {
-		.raw = L4_VREG(utcb, L4_TCR_EXCEPTIONHANDLER),
-	};
-	if(unlikely(L4_IsNilThread(exh_tid))) {
-		return NULL;
-	} else {
-		return resolve_tid_spec(t->space, exh_tid);
-	}
+struct thread *thread_get_pager(struct thread *t, void *utcb) {
+	return get_tcr_thread(t, utcb, L4_TCR_PAGER);
+}
+
+
+struct thread *thread_get_exnh(struct thread *t, void *utcb) {
+	return get_tcr_thread(t, utcb, L4_TCR_EXCEPTIONHANDLER);
 }
 
 
