@@ -12,6 +12,7 @@
 
 #include <l4/types.h>
 #include <l4/vregs.h>
+
 #include <ukernel/x86.h>
 #include <ukernel/mm.h>
 #include <ukernel/slab.h>
@@ -22,6 +23,7 @@
 #include <ukernel/sched.h>
 #include <ukernel/trace.h>
 #include <ukernel/bug.h>
+#include <ukernel/kip.h>
 #include <ukernel/thread.h>
 
 
@@ -864,7 +866,9 @@ void sys_threadcontrol(struct x86_exregs *regs)
 		L4_ThreadNo(spacespec), L4_Version(spacespec));
 	TRACE("%s: utcb_loc %p\n", __func__, (void *)utcb_loc);
 
-	if(unlikely(L4_Version(dest_tid) == 0)) {
+	if(unlikely(L4_IsLocalId(dest_tid)
+		|| L4_ThreadNo(dest_tid) < first_user_threadno()))
+	{
 		ec = 2;		/* "unavailable thread" */
 		goto end;
 	}
