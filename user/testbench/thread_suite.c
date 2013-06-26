@@ -7,6 +7,7 @@
 #include <stdlib.h>
 #include <stdint.h>
 #include <string.h>
+#include <ccan/compiler/compiler.h>
 
 #include <l4/types.h>
 #include <l4/kip.h>
@@ -17,6 +18,16 @@
 
 #include "defs.h"
 #include "test.h"
+
+
+/* TODO: move this into util.c or somewhere */
+static void del_thread(L4_ThreadId_t tid)
+{
+	/* "i liked the part where he said L4_nilthread" */
+	L4_Word_t res = L4_ThreadControl(tid, L4_nilthread, L4_nilthread,
+		L4_nilthread, (void *)-1);
+	fail_unless(res == 1, "ec=%#lx", L4_ErrorCode());
+}
 
 
 START_TEST(threadctl_basic)
@@ -140,32 +151,21 @@ static int try_create_thread(L4_ThreadId_t tid)
 		L4_nilthread, (void *)-1);
 	if(res == 0) return L4_ErrorCode();
 	else {
-		/* delete it right away.
-		 * "i liked the part where he said L4_nilthread"
-		 */
-		res = L4_ThreadControl(tid, L4_nilthread, L4_nilthread,
-			L4_nilthread, (void *)-1);
-		fail_if(res == 0, "deleting TC failed, ec=%#lx", L4_ErrorCode());
+		del_thread(tid);
 		return 0;
 	}
 }
 
 
-/* there are three ranges of thread number: interrupts, kernel threads, and
- * user threads. the former two should not fly for creating new threads in
- * this same address space.
- *
- * similarly there's two kinds of version field: those that have the last bits
- * cleared (i.e. local TIDs), and those that don't. the former is not valid
- * for creation, and the latter is.
- *
- * so that's six test points.
- *
- * TODO: add a similar test for space IDs, also.
+/* there's two kinds of version field: those that have the last bits cleared
+ * (i.e. local TIDs), and those that don't. the former is not valid for
+ * creation, and the latter is. this tests tries both for cases where the
+ * example is supposed to pass; those are user threads that've got valid
+ * version numbers.
  */
 START_TEST(thread_id_validity)
 {
-	plan_tests(7);
+	plan_tests(7);	/* 5 cases, 2 repeated */
 
 	L4_KernelInterfacePage_t *kip = L4_GetKernelInterface();
 	int last_int = kip->ThreadInfo.X.SystemBase - 1,
@@ -228,10 +228,7 @@ START_TEST(tid_stomp)
 		L4_nilthread, (void *)-1);
 	if(!ok1(res == 1)) diag("ec=%#lx", L4_ErrorCode());
 
-	/* cleanup. */
-	res = L4_ThreadControl(after_tid, L4_nilthread, L4_nilthread,
-		L4_nilthread, (void *)-1);
-	fail_unless(res == 1, "ec=%#lx", L4_ErrorCode());
+	del_thread(after_tid);
 }
 END_TEST
 
