@@ -30,6 +30,32 @@ static void del_thread(L4_ThreadId_t tid)
 }
 
 
+static void nothing_fn(void *param UNUSED) {
+	/* jack shit. */
+}
+
+
+/* NOTE: this can be called with utcb=true at most once. after that, it'll
+ * fail with the UTCB reuse code.
+ */
+static void mk_thread(L4_ThreadId_t tid, bool utcb)
+{
+	L4_KernelInterfacePage_t *kip = L4_GetKernelInterface();
+	L4_Word_t utcb_ptr = (L4_Word_t)-1l;
+	if(utcb) {
+		L4_ThreadId_t other = start_thread(&nothing_fn, NULL);
+		L4_ThreadId_t ltid = L4_LocalIdOf(other);
+		join_thread(other);
+		utcb_ptr = ltid.raw & ~(L4_UtcbSize(kip) - 1);
+	}
+	L4_Word_t res = L4_ThreadControl(tid, L4_Myself(), L4_Myself(),
+		L4_nilthread, (void *)utcb_ptr);
+	fail_unless(res == 1, "ec=%#lx", L4_ErrorCode());
+	fail_unless(!utcb
+		|| (L4_LocalIdOf(tid).raw & ~(L4_UtcbSize(kip) - 1)) == utcb_ptr);
+}
+
+
 START_TEST(threadctl_basic)
 {
 	L4_Fpage_t kip_area = L4_FpageLog2(0x100000, 12),
@@ -206,6 +232,69 @@ START_TEST(thread_id_validity)
 END_TEST
 
 
+/* returns 0 on success, ErrorCode on failure */
+static int try_scheduler_id(L4_ThreadId_t sched_tid)
+{
+	L4_ThreadId_t t_tid = L4_GlobalId(0xbeef, 3);
+	mk_thread(t_tid, false);
+
+	/* now, the experiment. */
+	L4_Word_t res = L4_ThreadControl(t_tid, L4_Myself(), sched_tid,
+		L4_nilthread, (void *)-1);
+	int rv = res == 0 ? L4_ErrorCode() : 0;
+
+	del_thread(t_tid);
+	return rv;
+}
+
+
+/* four things:
+ *   - that interrupts and kernel threads cannot be set as scheduler;
+ *   - that valid, existing thread IDs will be accepted for scheduler;
+ *   - that those will be accepted even if specified as local thread IDs;
+ *   - that thread IDs that don't exist won't be accepted for scheduler.
+ *
+ * it follows from what ThreadControl will create that invalid thread IDs will
+ * not be accepted.
+ */
+START_TEST(scheduler_id_validity)
+{
+	plan_tests(7);
+	const L4_ThreadId_t valid_tid = L4_GlobalId(0xdead, 17),
+		nonex_tid = L4_GlobalId(0xb007, 19);	/* bovine footwear */
+	int (*try)(L4_ThreadId_t thing) = &try_scheduler_id;
+
+	/* part 1. */
+	const L4_KernelInterfacePage_t *kip = L4_GetKernelInterface();
+	int last_kern = kip->ThreadInfo.X.UserBase - 1,
+		last_int = kip->ThreadInfo.X.SystemBase - 1;
+	ok1(try(L4_GlobalId(last_int, 1)) == 4);
+	ok1(try(L4_GlobalId(last_kern, 13)) == 4);
+
+	/* part 2. */
+	/* shouldn't be valid before creation. */
+	ok(try(valid_tid) != 0, "valid rejected before create");
+	mk_thread(valid_tid, true);
+	ok(try(valid_tid) == 0, "valid works after create");
+	L4_ThreadId_t ltid = L4_LocalIdOf(valid_tid);
+	fail_unless(L4_IsLocalId(ltid));
+	ok(try(ltid) == 0, "valid works as local tid");		/* part 3 */
+	del_thread(valid_tid);
+
+	/* part 4. */
+	mk_thread(nonex_tid, true);
+	ltid = L4_LocalIdOf(nonex_tid);
+	del_thread(nonex_tid);
+	ok1(try(nonex_tid) == 4);
+	fail_unless(L4_IsNilThread(L4_LocalIdOf(nonex_tid)));
+	fail_unless(L4_IsNilThread(L4_GlobalIdOf(ltid)));
+	if(!ok(try(ltid) == 4, "reject nonexistant local TID")) {
+		diag("ltid=%#lx", ltid.raw);
+	}
+}
+END_TEST
+
+
 /* create a non-activated thread and overwrite its version bits.
  *
  * (the real API test would start an actual thread, overwrite version, restart
@@ -243,6 +332,7 @@ Suite *thread_suite(void)
 		tcase_add_test(tc, threadctl_basic);
 		tcase_add_test(tc, privilege);
 		tcase_add_test(tc, thread_id_validity);
+		tcase_add_test(tc, scheduler_id_validity);
 		suite_add_tcase(s, tc);
 	}
 
