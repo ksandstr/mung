@@ -356,8 +356,10 @@ void space_switch(struct space *next)
 
 struct space *space_find(thread_id tid)
 {
+	assert(L4_IsGlobalId((L4_ThreadId_t){ .raw = tid }));
+
 	struct thread *t = thread_find(tid);
-	return t == NULL ? NULL : t->space;
+	return t == NULL || t->id != tid ? NULL : t->space;
 }
 
 
@@ -730,16 +732,15 @@ L4_Word_t sys_spacecontrol(
 		goto end;
 	}
 
-	struct thread *space_thread = thread_find(spacespec.raw);
-	if(unlikely(space_thread == NULL)) {
+	struct space *sp;
+	if(L4_IsNilThread(spacespec)
+		|| L4_IsLocalId(spacespec)
+		|| (sp = space_find(spacespec.raw)) == NULL)
+	{
 		*ec_p = 3;		/* invalid space */
 		result = 0;
 		goto end;
 	}
-
-	struct space *sp;
-	assert(space_thread->space != NULL);
-	sp = space_thread->space;
 
 	/* is there at least one active thread in this space? */
 	bool t_active = false;
