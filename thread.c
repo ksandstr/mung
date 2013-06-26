@@ -259,7 +259,8 @@ static void thread_destroy(struct thread *t)
 	}
 	space_remove_thread(sp, t);
 
-	if(t->stack_page != NULL) {
+	if(unlikely(t->stack_page != NULL)) {
+		assert(IS_KERNEL_THREAD(t));
 		free_kern_page(t->stack_page);
 		t->stack_page = NULL;
 	}
@@ -673,7 +674,7 @@ L4_Word_t sys_exregs(
 {
 	assert(check_thread_module(0));
 
-	struct thread *current = get_current_thread(), *dest_thread = NULL;
+	struct thread *current = get_current_thread();
 
 #ifndef NDEBUG
 	if(trace_is_enabled(TRID_THREAD)) {
@@ -684,6 +685,7 @@ L4_Word_t sys_exregs(
 			if(CHECK_FLAG(*control_p, 1 << i)) ctl_buf[cp++] = ctl_chars[i];
 		}
 		ctl_buf[cp] = '\0';
+		/* NOTE: this doesn't handle local TIDs at all well. */
 		TRACE("%s: called from %lu:%lu on %lu:%lu; control %#lx (%s)\n",
 			__func__,
 			TID_THREADNUM(current->id), TID_VERSION(current->id),
@@ -692,11 +694,11 @@ L4_Word_t sys_exregs(
 	}
 #endif
 
-	if(!L4_IsNilThread(dest)) {
-		dest_thread = resolve_tid_spec(current->space, dest);
-	}
-	if(dest_thread == NULL || dest_thread->utcb_pos < 0
-		|| dest_thread->space != current->space)
+	struct thread *dest_thread;
+	if(L4_IsNilThread(dest)
+		|| (dest_thread = resolve_tid_spec(current->space, dest)) == NULL
+		|| dest_thread->space != current->space
+		|| dest_thread->utcb_pos < 0)
 	{
 		L4_VREG(thread_get_utcb(current), L4_TCR_ERRORCODE) = 2;
 		return L4_nilthread.raw;
