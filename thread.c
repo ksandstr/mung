@@ -603,6 +603,19 @@ struct thread *thread_find(thread_id tid)
 }
 
 
+static struct thread *resolve_tid_spec(
+	struct space *ref_space,
+	L4_ThreadId_t tid)
+{
+	if(L4_IsLocalId(tid)) {
+		return space_find_local_thread(ref_space, tid.local);
+	} else {
+		struct thread *t = thread_find(tid.raw);
+		return t != NULL && t->id == tid.raw ? t : NULL;
+	}
+}
+
+
 size_t hash_thread_by_id(const void *ptr, void *dataptr) {
 	const struct thread *t = ptr;
 	return int_hash(TID_THREADNUM(t->id));
@@ -680,11 +693,7 @@ L4_Word_t sys_exregs(
 #endif
 
 	if(!L4_IsNilThread(dest)) {
-		if(dest.local.X.zeros == 0) {
-			dest_thread = space_find_local_thread(current->space, dest.local);
-		} else {
-			dest_thread = thread_find(dest.global.raw);
-		}
+		dest_thread = resolve_tid_spec(current->space, dest);
 	}
 	if(dest_thread == NULL || dest_thread->utcb_pos < 0
 		|| dest_thread->space != current->space)
@@ -694,7 +703,7 @@ L4_Word_t sys_exregs(
 	}
 
 	L4_ThreadId_t result;
-	if(dest.local.X.zeros != 0) {
+	if(L4_IsGlobalId(dest)) {
 		result.local.raw = L4_Address(dest_thread->space->utcb_area)
 			+ dest_thread->utcb_pos * UTCB_SIZE + 256;
 		assert(result.local.X.zeros == 0);
@@ -883,12 +892,11 @@ void sys_threadcontrol(struct x86_exregs *regs)
 	assert(dest == NULL || dest->space != NULL);
 	if(!L4_IsNilThread(spacespec) && dest == NULL) {
 		/* thread creation */
-		if(unlikely(L4_IsNilThread(scheduler)
-			|| L4_Version(scheduler) == 0))
-		{
-			ec = 4;		/* invalid scheduler */
-			goto end;
-		}
+		if(unlikely(L4_IsNilThread(scheduler))) goto invd_sched;
+
+		/* validate the scheduler before space/thread creation. */
+		struct thread *sched = resolve_tid_spec(current->space, scheduler);
+		if(unlikely(sched == NULL)) goto invd_sched;
 
 		TRACE("%s: creating thread %lu:%lu\n", __func__,
 			L4_ThreadNo(dest_tid), L4_Version(dest_tid));
@@ -907,6 +915,10 @@ void sys_threadcontrol(struct x86_exregs *regs)
 			goto out_of_mem;
 		}
 		space_add_thread(sp, dest);
+
+		/* resolves local TID, avoids second call to resolve_tid_spec() */
+		dest->scheduler.raw = sched->id;
+		scheduler = L4_nilthread;
 	} else if(L4_IsNilThread(spacespec) && dest != NULL) {
 		/* thread/space deletion */
 		TRACE("%s: deleting thread %lu:%lu (ptr %p)\n", __func__,
@@ -964,7 +976,11 @@ void sys_threadcontrol(struct x86_exregs *regs)
 	assert(dest != NULL);
 	struct space *sp = dest->space;
 	void *dest_utcb = NULL;
-	if(!L4_IsNilThread(scheduler)) dest->scheduler = scheduler;
+	if(!L4_IsNilThread(scheduler)) {
+		struct thread *sched = resolve_tid_spec(current->space, scheduler);
+		if(unlikely(sched == NULL)) goto invd_sched;
+		dest->scheduler.raw = sched->id;
+	}
 
 	if(utcb_loc != ~0ul) {
 		bool created = dest->utcb_pos < 0;
@@ -1015,6 +1031,9 @@ void sys_threadcontrol(struct x86_exregs *regs)
 		}
 	}
 
+	assert(!L4_IsNilThread(dest->scheduler));
+	assert(L4_IsGlobalId(dest->scheduler));
+
 dead:
 	result = 1;
 
@@ -1031,5 +1050,9 @@ out_of_mem:
 
 invd_space:
 	ec = 3;
+	goto end;
+
+invd_sched:
+	ec = 4;
 	goto end;
 }
