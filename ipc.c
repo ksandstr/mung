@@ -1222,7 +1222,7 @@ static bool ipc_send_half(struct thread *self, bool *preempt_p)
 		&& self->ipc_to.raw != L4_anylocalthread.raw
 		&& self->ipc_to.raw != L4_anythread.raw);
 
-	struct thread *dest = thread_find(self->ipc_to.raw);
+	struct thread *dest = resolve_tid_spec(self->space, self->ipc_to);
 	if(dest == NULL) {
 		TRACE("%s: can't find peer %lu:%lu\n", __func__,
 			TID_THREADNUM(self->ipc_to.raw), TID_VERSION(self->ipc_to.raw));
@@ -1242,12 +1242,7 @@ static bool ipc_send_half(struct thread *self, bool *preempt_p)
 		L4_ThreadId_t vs_tid = {
 			.raw = L4_VREG(self_utcb, L4_TCR_VA_SENDER),
 		};
-		struct thread *vs;
-		if(L4_IsLocalId(vs_tid)) {
-			vs = space_find_local_thread(self->space, vs_tid.local);
-		} else {
-			vs = thread_find(vs_tid.raw);
-		}
+		struct thread *vs = resolve_tid_spec(self->space, vs_tid);
 		/* FIXME: also check interrupt propagation, redirector chain */
 		if(vs != NULL && (self->space == vs->space
 			|| self->space == dest->space))

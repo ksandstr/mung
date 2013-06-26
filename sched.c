@@ -613,13 +613,17 @@ void sys_threadswitch(struct x86_exregs *regs)
 	TRACE("%s: called in %lu:%lu; target is %lu:%lu\n",
 		__func__, TID_THREADNUM(current->id), TID_VERSION(current->id),
 		L4_ThreadNo(target), L4_Version(target));
-	struct thread *other = L4_IsNilThread(target) ? NULL : thread_find(target.raw);
-	if(other != NULL) return_to_other(current, other);
-
-	current->status = TS_READY;
-	/* the thread gets a new quantum once other threads have run. */
-	current->quantum = 0;
-	return_to_scheduler();
+	struct thread *other;
+	if(!L4_IsNilThread(target)
+		&& (other = resolve_tid_spec(current->space, target)) != NULL)
+	{
+		return_to_other(current, other);
+	} else {
+		current->status = TS_READY;
+		/* the thread gets a new quantum once other threads have run. */
+		current->quantum = 0;
+		return_to_scheduler();
+	}
 }
 
 
@@ -639,8 +643,14 @@ void sys_schedule(struct x86_exregs *regs)
 	/* outputs */
 	L4_Word_t old_timectl = 0, result = L4_SCHEDRESULT_ERROR, ec = 0;
 
-	struct thread *dest = thread_find(dest_tid.raw);
-	if(dest == NULL || IS_KERNEL_THREAD(dest)) goto inv_param;
+	/* FIXME: test for user TID range! */
+	struct thread *dest = NULL;
+	if(L4_IsNilThread(dest_tid)
+		|| (dest = resolve_tid_spec(current->space, dest_tid)) == NULL
+		|| IS_KERNEL_THREAD(dest))
+	{
+		goto inv_param;
+	}
 
 	/* cooked inputs */
 	L4_Time_t ts_len = { .raw = (timectl >> 16) & 0xffff },

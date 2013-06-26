@@ -263,6 +263,12 @@ extern struct thread *thread_get_exnh(struct thread *t, void *utcb);
 extern void thread_save_ctx(struct thread *t, const struct x86_exregs *regs);
 
 
+/* compares version bits for global IDs, resolves locak IDs in ref_space */
+extern struct thread *resolve_tid_spec(
+	struct space *ref_space,
+	L4_ThreadId_t tid);
+
+
 /* for htable */
 extern size_t hash_thread_by_id(const void *threadptr, void *dataptr);
 
