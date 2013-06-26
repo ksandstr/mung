@@ -132,6 +132,80 @@ START_TEST(privilege)
 END_TEST
 
 
+/* returns 0 on success, ErrorCode on failure */
+static int try_create_thread(L4_ThreadId_t tid)
+{
+	L4_ThreadId_t space = L4_Myself();
+	L4_Word_t res = L4_ThreadControl(tid, space, L4_Myself(),
+		L4_nilthread, (void *)-1);
+	if(res == 0) return L4_ErrorCode();
+	else {
+		/* delete it right away.
+		 * "i liked the part where he said L4_nilthread"
+		 */
+		res = L4_ThreadControl(tid, L4_nilthread, L4_nilthread,
+			L4_nilthread, (void *)-1);
+		fail_if(res == 0, "deleting TC failed, ec=%#lx", L4_ErrorCode());
+		return 0;
+	}
+}
+
+
+/* there are three ranges of thread number: interrupts, kernel threads, and
+ * user threads. the former two should not fly for creating new threads in
+ * this same address space.
+ *
+ * similarly there's two kinds of version field: those that have the last bits
+ * cleared (i.e. local TIDs), and those that don't. the former is not valid
+ * for creation, and the latter is.
+ *
+ * so that's six test points.
+ *
+ * TODO: add a similar test for space IDs, also.
+ */
+START_TEST(thread_id_validity)
+{
+	plan_tests(7);
+
+	L4_KernelInterfacePage_t *kip = L4_GetKernelInterface();
+	int last_int = kip->ThreadInfo.X.SystemBase - 1,
+		last_kern = kip->ThreadInfo.X.UserBase - 1;
+	fail_if(last_int == 0);
+	fail_if(last_kern <= last_int,
+		"last_kern=%d, last_int=%d", last_kern, last_int);
+
+	const struct {
+		L4_ThreadId_t tid;
+		bool pass;
+	} cases[5] = {
+		{ L4_GlobalId(last_int, 1), false },
+		{ L4_GlobalId(last_kern, 1), false },
+		{ L4_GlobalId(last_kern + 9999, 1), true },
+		{ L4_GlobalId(0x3ffff, 2), true },
+		{ L4_GlobalId(0x12345, 256), false },	/* local TID, still */
+	};
+	for(int version=1; version >= 0; --version) {
+		for(int i=0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+			if(!version && !cases[i].pass) {
+				/* no point in testing when there's no pass/fail line */
+				continue;
+			}
+			L4_ThreadId_t test_tid = L4_GlobalId(L4_ThreadNo(cases[i].tid),
+				version ? L4_Version(cases[i].tid) : 0);
+			int n = try_create_thread(test_tid);
+			bool expect = cases[i].pass && L4_IsGlobalId(test_tid);
+			if(!ok((n == 0) == expect, "%s creation of %lu:%lu",
+				expect ? "succeed" : "fail",
+				L4_ThreadNo(test_tid), L4_Version(test_tid)))
+			{
+				diag("n=%d, expect=%s", n, btos(expect));
+			}
+		}
+	}
+}
+END_TEST
+
+
 /* create a non-activated thread and overwrite its version bits.
  *
  * (the real API test would start an actual thread, overwrite version, restart
@@ -171,6 +245,7 @@ Suite *thread_suite(void)
 		tcase_set_fork(tc, false);	/* must be run in privileged space */
 		tcase_add_test(tc, threadctl_basic);
 		tcase_add_test(tc, privilege);
+		tcase_add_test(tc, thread_id_validity);
 		suite_add_tcase(s, tc);
 	}
 
