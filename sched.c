@@ -489,11 +489,17 @@ NORETURN void scheduler_loop(struct thread *self)
 		if(!schedule()) {
 			asm volatile ("hlt");
 		} else if(*scheduler_mr1 != L4_nilthread.raw) {
+			L4_ThreadId_t prev_tid = { .raw = *scheduler_mr1 };
+			assert(L4_IsGlobalId(prev_tid));
 			struct thread *prev = thread_find(*scheduler_mr1);
-			if(prev == NULL) continue;
+			if(prev == NULL
+				|| TID_VERSION(prev->id) != L4_Version(prev_tid))
+			{
+				continue;
+			}
 
 			TRACE("%s: thread %lu:%lu was preempted at %#llx\n",
-				__func__, TID_THREADNUM(prev->id), TID_VERSION(prev->id),
+				__func__, L4_ThreadNo(prev_tid), L4_Version(prev_tid),
 				read_global_timer());
 			void *utcb = thread_get_utcb(prev);
 			L4_Word_t *preempt_p = &L4_VREG(utcb, L4_TCR_COP_PREEMPT),

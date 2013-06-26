@@ -614,11 +614,9 @@ static bool cmp_thread_to_id(const void *cand, void *ptr)
 }
 
 
-struct thread *thread_find(thread_id tid)
-{
-	struct thread *t = htable_get(&thread_hash, int_hash(TID_THREADNUM(tid)),
+struct thread *thread_find(thread_id tid) {
+	return htable_get(&thread_hash, int_hash(TID_THREADNUM(tid)),
 		&cmp_thread_to_id, &tid);
-	return t;
 }
 
 

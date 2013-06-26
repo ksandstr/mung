@@ -789,9 +789,10 @@ L4_Word_t sys_spacecontrol(
 
 	if(redirector.raw == L4_anythread.raw) {
 		sp->redirector = L4_anythread.raw;
-	} else if(!L4_IsNilThread(redirector)) {
-		struct thread *red = thread_find(redirector.raw);
-		if(red != NULL) sp->redirector = red->id;
+	} else if(!L4_IsNilThread(redirector)
+		&& redirector.raw != L4_anylocalthread.raw)
+	{
+		sp->redirector = redirector.raw;
 	}
 
 	result = 1;
