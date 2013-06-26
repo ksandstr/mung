@@ -641,8 +641,12 @@ static bool handle_new_thread(struct helper_work *w)
 		if(t >= THREADS_PER_SPACE) goto fail;
 	}
 
-	L4_ThreadId_t new_tid = L4_GlobalId((space_id << TPS_SHIFT) + t, space_id + 1),
-		space_tid = new_tid;
+	L4_ThreadId_t new_tid = L4_GlobalId((space_id << TPS_SHIFT) + t, space_id + 1);
+	if(L4_IsLocalId(new_tid)) {
+		new_tid.global.X.version++;
+		assert(L4_IsGlobalId(new_tid));
+	}
+	L4_ThreadId_t space_tid = new_tid;
 	for(int i=0; i < THREADS_PER_SPACE; i++) {
 		if(sp->threads[i] != NULL) {
 			assert(!L4_IsNilThread(sp->threads[i]->tid));
