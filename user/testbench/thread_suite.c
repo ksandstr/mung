@@ -304,17 +304,15 @@ END_TEST
 START_TEST(tid_stomp)
 {
 	plan_tests(1);
-	const int tno = 1234;
+	const int tno = 0xfade;
 
-	L4_ThreadId_t first_tid = L4_GlobalId(tno, 1234);
-	assert((L4_Version(first_tid) & 0x3f) > 1);
-	L4_Word_t res = L4_ThreadControl(first_tid, first_tid, L4_Myself(),
-		L4_nilthread, (void *)-1);
-	fail_unless(res == 1, "ec=%#lx", L4_ErrorCode());
+	const L4_ThreadId_t first_tid = L4_GlobalId(tno, 1234);
+	assert((L4_Version(first_tid) & 0x3f) != 0);
+	mk_thread(first_tid, false);
 
 	L4_ThreadId_t after_tid = L4_GlobalId(tno, L4_Version(first_tid) ^ 0x3f);
-	res = L4_ThreadControl(after_tid, first_tid, L4_nilthread,
-		L4_nilthread, (void *)-1);
+	L4_Word_t res = L4_ThreadControl(after_tid, L4_Myself(),
+		L4_nilthread, L4_nilthread, (void *)-1);
 	if(!ok1(res == 1)) diag("ec=%#lx", L4_ErrorCode());
 
 	del_thread(after_tid);
