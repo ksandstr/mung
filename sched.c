@@ -512,8 +512,8 @@ NORETURN void scheduler_loop(struct thread *self)
 				 * entered next.
 				 */
 				/* send an immediate preemption exception. */
-				struct thread *exh = get_thread_exh(prev, utcb);
-				if(exh != NULL) {
+				struct thread *exh = thread_get_exnh(prev, utcb);
+				if(likely(exh != NULL)) {
 					build_exn_ipc(prev, utcb, -4, &prev->ctx);
 					ipc_user(prev, exh, 0);
 					/* halt the thread if its exception handler is AWOL. */

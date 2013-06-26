@@ -85,18 +85,15 @@ extern void cop_killa(struct thread *dead);
  * while saving prior message registers. doesn't perform IPC or set the
  * message tag's label field. sets up a reply handler that stores the message
  * in "t"'s context.
+ *
+ * (TODO: this should be moved into an architecture-independent header, and
+ * the x86_exregs structure should be made opaque to portable code.)
  */
 extern void build_exn_ipc(
 	struct thread *t,
 	void *utcb,
 	int label,
 	const struct x86_exregs *regs);
-
-/* (TODO: this should be moved into an architecture-independent header, like
- * build_exn_ipc(); and the x86_exregs structure should be made opaque to
- * portable code.)
- */
-extern struct thread *get_thread_exh(struct thread *t, void *utcb);
 
 
 static inline size_t x86_frame_len(const struct x86_exregs *frame)

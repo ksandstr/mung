@@ -31,6 +31,11 @@
 #define TRACE(fmt, ...) TRACE_MSG(TRID_THREAD, fmt, __VA_ARGS__)
 
 
+static struct thread *resolve_tid_spec(
+	struct space *ref_space,
+	L4_ThreadId_t tid);
+
+
 struct htable thread_hash = HTABLE_INITIALIZER(thread_hash,
 	hash_thread_by_id, NULL);
 
@@ -561,6 +566,20 @@ struct thread *thread_get_pager(struct thread *t, void *utcb)
 	if(utcb == NULL) utcb = thread_get_utcb(t);
 	L4_ThreadId_t pager_id = { .raw = L4_VREG(utcb, L4_TCR_PAGER) };
 	return !L4_IsNilThread(pager_id) ? thread_find(pager_id.raw) : NULL;
+}
+
+
+struct thread *thread_get_exnh(struct thread *t, void *utcb)
+{
+	if(utcb == NULL) utcb = thread_get_utcb(t);
+	L4_ThreadId_t exh_tid = {
+		.raw = L4_VREG(utcb, L4_TCR_EXCEPTIONHANDLER),
+	};
+	if(unlikely(L4_IsNilThread(exh_tid))) {
+		return NULL;
+	} else {
+		return resolve_tid_spec(t->space, exh_tid);
+	}
 }
 
 

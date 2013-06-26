@@ -495,17 +495,6 @@ static void receive_pf_reply(struct hook *hook, uintptr_t code, void *priv)
 }
 
 
-struct thread *get_thread_exh(struct thread *t, void *utcb)
-{
-	assert(utcb != NULL);
-
-	L4_ThreadId_t exh_tid = {
-		.raw = L4_VREG(utcb, L4_TCR_EXCEPTIONHANDLER),
-	};
-	return L4_IsNilThread(exh_tid) ? NULL : thread_find(exh_tid.raw);
-}
-
-
 void isr_exn_int3_bottom(struct x86_exregs *regs) {
 	handle_kdb_enter(get_current_thread(), regs);
 }
@@ -537,7 +526,7 @@ void isr_exn_gp_bottom(struct x86_exregs *regs)
 #endif
 
 		void *utcb = thread_get_utcb(current);
-		struct thread *exh = get_thread_exh(current, utcb);
+		struct thread *exh = thread_get_exnh(current, utcb);
 		if(exh != NULL) {
 			build_exn_ipc(current, utcb, -5, regs);
 			return_to_ipc(exh);

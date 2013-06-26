@@ -259,6 +259,7 @@ extern bool post_exn_ok(struct thread *t);
 /* complicated accessors */
 extern PURE void *thread_get_utcb(struct thread *t);
 extern struct thread *thread_get_pager(struct thread *t, void *utcb);
+extern struct thread *thread_get_exnh(struct thread *t, void *utcb);
 extern void thread_save_ctx(struct thread *t, const struct x86_exregs *regs);
 
 
