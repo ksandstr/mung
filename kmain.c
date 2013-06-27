@@ -71,24 +71,8 @@ void __assert_failure(
 {
 	printf("assert(%s) failed in `%s' (%s:%u)\n", condition, function,
 		file, line);
-#ifndef NDEBUG
-	printf("  second-level call returns to %p\n",
-		__builtin_return_address(1));
-#endif
 	panic("*** assertion failure");
 }
-
-
-#if 0
-static int __attribute__((pure)) list_length(struct list_head *list)
-{
-	int count = 0;
-	for(struct list_node *n = list->n.next; n != &list->n; n = n->next) {
-		count++;
-	}
-	return count;
-}
-#endif
 
 
 static struct page *find_page_by_id(uint32_t id)
@@ -221,6 +205,8 @@ static void init_kernel_tss(struct tss *t)
 
 static void add_s0_pages(L4_Word_t start, L4_Word_t end)
 {
+	assert(sigma0_space != NULL);
+
 	uint32_t ids[128];
 	int count = (end - start + 1) >> PAGE_BITS, done = 0;
 	printf("adding %#lx .. %#lx to sigma0 (%d pages)\n", start, end, count);
@@ -431,31 +417,22 @@ void kmain(void *bigp, unsigned int magic)
 	asm volatile ("lldt %%ax" :: "a" (0));
 	init_kernel_tss(&kernel_tss);
 
-#if 0
-	printf("dumping gdt...\n");
-	struct gdt_desc gd;
-	asm volatile ("sgdt %0" : "=m" (gd));
-	dump_gdt(&gd);
-#endif
-
 	setup_gdt();
 	setup_idt(SEG_KERNEL_CODE);
 
 	/* map olde-timey PC interrupts 0-15 to 0x20 .. 0x2f inclusive */
-	printf("initializing PIC...\n");
 	initialize_pics(0x20, 0x28);
 	pic_set_mask(0xff, 0xff);	/* mask them all off for now. */
 
 	init_irq();
 
-	printf("initializing FPU...\n");
 	/* set MP. clear EMulation, NoExceptions, TaskSwitch. */
 	x86_alter_cr0(~(X86_CR0_EM | X86_CR0_NE | X86_CR0_TS), X86_CR0_MP);
 	x86_init_fpu();
 
 	x86_irq_enable();
 
-	printf("setting up paging (id maps between %#lx and %#lx)...\n",
+	printf("setting up paging (kernel ram [%#lx..%#lx])\n",
 		(L4_Word_t)resv_start, (L4_Word_t)resv_end);
 	struct list_head ksp_resv = LIST_HEAD_INIT(ksp_resv);
 	init_spaces(&ksp_resv);
@@ -480,14 +457,13 @@ void kmain(void *bigp, unsigned int magic)
 		panic("mung doesn't work without ACPI anymore. bawwww");
 	}
 
-	/* initialize KIP */
+	/* initialize KIP & vaguely related bits */
 	kip_mem = kcp_base;
 	assert(kcp_base == (void *)&kcp_copy[0]);
 	make_kip(kip_mem, resv_start & ~PAGE_MASK, resv_end | PAGE_MASK);
 	systemclock_p = kip_mem + PAGE_SIZE - sizeof(uint64_t);
 	*systemclock_p = 0;
-	global_timer_count = 0;		/* and the clock accumulator */
-	printf("KIP on page id %lu\n", (L4_Word_t)kip_mem >> PAGE_BITS);
+	global_timer_count = 0;
 	kcp_base = (void *)0xdeadbeef;
 
 	/* move the kernel to a high linear address, and change its segments so
@@ -564,7 +540,8 @@ void kmain(void *bigp, unsigned int magic)
 	first_thread->ts_len = L4_TimePeriod(10000);
 	sq_update_thread(first_thread);
 
-	printf("kmain() entering halt-schedule loop.\n");
+	printf("entering kernel scheduler\n");
 	scheduler_loop(first_thread);
-	assert(false);
+
+	panic("kmain() returned from halt-schedule loop? what.");
 }
