@@ -114,12 +114,11 @@ static inline void set_ipc_error(void *utcb, L4_Word_t ec)
 }
 
 
-static void set_ipc_return_regs(
+static inline void set_ipc_return_regs(
 	struct x86_exregs *regs,
 	struct thread *current,
 	void *utcb)
 {
-	assert(utcb == thread_get_utcb(current));
 	regs->eax = current->ipc_from.raw;
 	regs->esi = L4_VREG(utcb, L4_TCR_MR(0));
 	regs->ebx = L4_VREG(utcb, L4_TCR_MR(1));
@@ -127,18 +126,19 @@ static void set_ipc_return_regs(
 }
 
 
-static void set_ipc_return_thread(struct thread *t)
+static inline void set_ipc_return_thread(struct thread *t, void *utcb)
 {
-	if(likely(!IS_KERNEL_THREAD(t))) {
-		set_ipc_return_regs(&t->ctx, t, thread_get_utcb(t));
-	}
+	assert(!IS_KERNEL_THREAD(t));
+	set_ipc_return_regs(&t->ctx, t, utcb);
 }
 
 
+/* exported for sched.c */
 void set_ipc_error_thread(struct thread *t, L4_Word_t ec)
 {
-	set_ipc_error(thread_get_utcb(t), ec);
-	set_ipc_return_thread(t);
+	void *utcb = thread_get_utcb(t);
+	set_ipc_error(utcb, ec);
+	set_ipc_return_thread(t, utcb);
 }
 
 
@@ -1022,6 +1022,12 @@ bool ipc_resume(struct thread *t, bool *preempt_p)
 		__func__, TID_THREADNUM(source->id), TID_VERSION(source->id),
 		TID_THREADNUM(dest->id), TID_VERSION(dest->id));
 
+	/* resumption applies only to string transfers. kernel threads are
+	 * forbidden from doing string transfers.
+	 */
+	assert(!IS_KERNEL_THREAD(dest));
+	assert(!IS_KERNEL_THREAD(source));
+
 	/* FIXME: a pointer to the sender's UTCB range has been retained in the
 	 * ipc_state. it should instead have a pointer to a copy, like it does of
 	 * the receiver's buffer items. (FIXME: is this still true?)
@@ -1063,13 +1069,13 @@ bool ipc_resume(struct thread *t, bool *preempt_p)
 	dest->wakeup_time = 0;
 	sq_update_thread(dest);
 	dest->ipc_from.raw = source->id;
-	set_ipc_return_thread(dest);
+	set_ipc_return_thread(dest, thread_get_utcb(dest));
 
 	assert(source->ipc == NULL);
 	if(L4_IsNilThread(source->ipc_from)) {
 		source->status = TS_READY;
 		source->wakeup_time = 0;
-		set_ipc_return_thread(source);
+		set_ipc_return_thread(source, thread_get_utcb(source));
 		TRACE("%s: source returns to userspace\n", __func__);
 	} else {
 		source->status = TS_R_RECV;
@@ -1100,22 +1106,22 @@ struct thread *ipc_partner(struct thread *t)
 
 
 /* returns ErrorCode value, or 0 for success. */
-static L4_Word_t do_ipc_transfer(
+static inline L4_Word_t do_ipc_transfer(
 	struct thread *source,
-	struct thread *dest)
+	const void *s_utcb,
+	struct thread *dest,
+	void *d_utcb)
 {
-	const void *s_base = thread_get_utcb(source);
-	void *d_base = thread_get_utcb(dest);
-	L4_MsgTag_t tag = { .raw = L4_VREG(s_base, L4_TCR_MR(0)) };
-	L4_VREG(d_base, L4_TCR_MR(0)) = tag.raw;
+	L4_MsgTag_t tag = { .raw = L4_VREG(s_utcb, L4_TCR_MR(0)) };
+	L4_VREG(d_utcb, L4_TCR_MR(0)) = tag.raw;
 	for(int i=0; i < tag.X.u; i++) {
 		int reg = L4_TCR_MR(i + 1);
-		L4_VREG(d_base, reg) = L4_VREG(s_base, reg);
+		L4_VREG(d_utcb, reg) = L4_VREG(s_utcb, reg);
 	}
 
 	if(tag.X.t == 0) return 0;
 	else {
-		return do_typed_transfer(source, s_base, dest, d_base, tag);
+		return do_typed_transfer(source, s_utcb, dest, d_utcb, tag);
 	}
 }
 
@@ -1205,13 +1211,11 @@ void abort_thread_ipc(struct thread *t)
 }
 
 
-/* TODO: this function is rather sub-optimal wrt thread_get_utcb(). the
- * pointers should really be grabbed once and passed as parameters to
- * do_ipc_transfer() etc.
- *
- * postcond: !@retval || @self->status \in {READY, R_RECV, STOPPED}
- */
-static bool ipc_send_half(struct thread *self, bool *preempt_p)
+/* postcond: !@retval || @self->status \in {READY, R_RECV, STOPPED} */
+static bool ipc_send_half(
+	struct thread *self,
+	void *self_utcb,
+	bool *preempt_p)
 {
 	assert(preempt_p != NULL);
 	/* must look this alive to attempt active send */
@@ -1226,14 +1230,13 @@ static bool ipc_send_half(struct thread *self, bool *preempt_p)
 	if(dest == NULL) {
 		TRACE("%s: can't find peer %lu:%lu\n", __func__,
 			TID_THREADNUM(self->ipc_to.raw), TID_VERSION(self->ipc_to.raw));
-		set_ipc_error(thread_get_utcb(self), 2 << 1 | 0);
+		set_ipc_error(self_utcb, 2 << 1 | 0);
 		self->status = TS_READY;
 		*preempt_p = false;
 		return false;
 	}
 
 	/* TODO: quicker tag access? maybe keep it next to ipc_to? */
-	void *self_utcb = thread_get_utcb(self);
 	L4_MsgTag_t tag = { .raw = L4_VREG(self_utcb, L4_TCR_MR(0)) };
 	L4_ThreadId_t self_id = { .raw = self->id };
 	bool propagated = false;
@@ -1292,22 +1295,22 @@ static bool ipc_send_half(struct thread *self, bool *preempt_p)
 		 * fault is generated.
 		 */
 		bool had_no_ipc = self->ipc == NULL;
-		L4_Word_t error = do_ipc_transfer(self, dest);
+		void *dest_utcb = thread_get_utcb(dest);
+		L4_Word_t error = do_ipc_transfer(self, self_utcb, dest, dest_utcb);
 		if(unlikely(error != 0)) {
 			int code = (error & 0xe) >> 1;
 			if(code >= 4) {
 				/* mutual error; signal to partner also. */
 				dest->ipc_from = L4_nilthread;
 				if(likely(!post_exn_fail(dest))) {
-					set_ipc_error(thread_get_utcb(dest), error | 1);
-					set_ipc_return_thread(dest);
+					set_ipc_error_thread(dest, error | 1);
 				}
 				thread_wake(dest);
 				*preempt_p = dest->pri > self->pri;
 			} else {
 				*preempt_p = false;
 			}
-			set_ipc_error(thread_get_utcb(self), error & ~1ul);
+			set_ipc_error(self_utcb, error & ~1ul);
 			assert(self->status == TS_RUNNING);
 			self->status = TS_READY;
 			return false;
@@ -1330,9 +1333,10 @@ static bool ipc_send_half(struct thread *self, bool *preempt_p)
 		dest->status = status;
 		if(!post_exn_ok(dest)) {
 			/* ordinary IPC; set up the IPC return registers. */
-			set_ipc_return_thread(dest);
+			if(likely(!IS_KERNEL_THREAD(dest))) {
+				set_ipc_return_thread(dest, dest_utcb);
+			}
 			if(propagated) {
-				void *dest_utcb = thread_get_utcb(dest);
 				assert(CHECK_FLAG(L4_VREG(dest_utcb, L4_TCR_MR(0)),
 					0x1000));
 				L4_VREG(dest_utcb, L4_TCR_VA_SENDER) = self->id;
@@ -1387,7 +1391,8 @@ static bool ipc_send_half(struct thread *self, bool *preempt_p)
 		return false;
 	} else {
 		/* instant timeout. */
-		set_ipc_error_thread(self, (1 << 1) | 0);
+		set_ipc_error(self_utcb, (1 << 1) | 0);
+		set_ipc_return_thread(self, self_utcb);
 		self->status = TS_READY;
 		return false;
 	}
@@ -1404,12 +1409,13 @@ void ipc_user(
 	from->send_timeout = L4_Never;
 	from->recv_timeout = L4_Never;
 
+	void *from_utcb = thread_get_utcb(from);
 	bool preempt = false;
-	if(ipc_send_half(from, &preempt)
+	if(ipc_send_half(from, from_utcb, &preempt)
 		&& !preempt
 		&& from->status == TS_R_RECV)
 	{
-		ipc_recv_half(from, &preempt);
+		ipc_recv_half(from, from_utcb, &preempt);
 		/* NOTE: preempt is discarded. if @from is the currently running
 		 * thread, this can have the effect of failing to pre-empt @from when
 		 * the IPC from @to is satisfied by a propagated passive send.
@@ -1424,7 +1430,10 @@ void ipc_user(
 
 
 /* postcond: !@retval || @self->status \in {READY, R_RECV, STOPPED} */
-bool ipc_recv_half(struct thread *self, bool *preempt_p)
+bool ipc_recv_half(
+	struct thread *self,
+	void *self_utcb,
+	bool *preempt_p)
 {
 	assert(preempt_p != NULL);
 
@@ -1507,7 +1516,8 @@ bool ipc_recv_half(struct thread *self, bool *preempt_p)
 			TID_THREADNUM(self->id), TID_VERSION(self->id));
 		assert(from->status == TS_SEND_WAIT || from->status == TS_XFER);
 
-		L4_Word_t error = do_ipc_transfer(from, self);
+		void *from_utcb = thread_get_utcb(from);
+		L4_Word_t error = do_ipc_transfer(from, from_utcb, self, self_utcb);
 		if(unlikely(error != 0)) {
 			TRACE("%s: active receive caused errorcode %#lx\n",
 				__func__, error);
@@ -1517,12 +1527,12 @@ bool ipc_recv_half(struct thread *self, bool *preempt_p)
 				 * receive phase, if any)
 				 */
 				if(!post_exn_fail(from)) {
-					set_ipc_error(thread_get_utcb(from), error & ~1ul);
-					set_ipc_return_thread(from);
+					set_ipc_error(from_utcb, error & ~1ul);
+					set_ipc_return_thread(from, from_utcb);
 				}
 				thread_wake(from);
 			}
-			set_ipc_error(thread_get_utcb(self), error | 1);
+			set_ipc_error(self_utcb, error | 1);
 			assert(self->status == TS_RUNNING);
 			self->status = TS_READY;	/* failed active receive -> READY. */
 			return false;
@@ -1541,8 +1551,6 @@ bool ipc_recv_half(struct thread *self, bool *preempt_p)
 		self->ipc_from.raw = from_tid.raw;
 		if(from_tid.raw != from->id) {
 			/* propagation parameter delivery */
-			/* TODO: get the utcb ptr somewhere else... */
-			void *self_utcb = thread_get_utcb(self);
 			assert(CHECK_FLAG(L4_VREG(self_utcb, L4_TCR_MR(0)), 0x1000));
 			L4_VREG(self_utcb, L4_TCR_VA_SENDER) = from->id;
 		}
@@ -1612,7 +1620,7 @@ L4_MsgTag_t kipc(
 
 	L4_MsgTag_t tag = { .raw = 0 };		/* "no error" */
 	bool preempt = false;
-	if(likely(!L4_IsNilThread(to)) && !ipc_send_half(current, &preempt)) {
+	if(likely(!L4_IsNilThread(to)) && !ipc_send_half(current, utcb, &preempt)) {
 		if(current->status == TS_SEND_WAIT) {
 			/* passive send. */
 			thread_sleep(current, current->send_timeout);
@@ -1631,7 +1639,7 @@ L4_MsgTag_t kipc(
 	assert(current->status != TS_XFER);
 
 	if(likely(!L4_IsNilThread(current->ipc_from)) && !preempt) {
-		if(!ipc_recv_half(current, &preempt)) {
+		if(!ipc_recv_half(current, utcb, &preempt)) {
 			if(current->status == TS_RECV_WAIT) {
 				/* passive receive.
 				 *
@@ -1666,7 +1674,7 @@ static void ipc(struct thread *current, void *utcb, bool *preempt_p)
 	/* send phase. */
 	if(!L4_IsNilThread(current->ipc_to)) {
 		TRACE("%s: IPC send phase.\n", __func__);
-		if(!ipc_send_half(current, preempt_p)) {
+		if(!ipc_send_half(current, utcb, preempt_p)) {
 			/* error case. */
 			goto end;
 		}
@@ -1677,7 +1685,7 @@ static void ipc(struct thread *current, void *utcb, bool *preempt_p)
 	{
 		/* receive phase. */
 		TRACE("%s: IPC receive phase.\n", __func__);
-		ipc_recv_half(current, preempt_p);
+		ipc_recv_half(current, utcb, preempt_p);
 		assert(current->status == TS_READY
 			|| current->status == TS_RECV_WAIT);
 	}
@@ -1713,6 +1721,7 @@ void sys_ipc(struct x86_exregs *regs)
 	ipc(current, utcb, &preempt);
 	if(preempt && IS_READY(current->status)) {
 		/* would return, but was pre-empted */
+		assert(!IS_KERNEL_THREAD(current));		/* >implying */
 		TRACE("%s: scheduling (pre-empted)\n", __func__);
 		thread_save_ctx(current, regs);
 		set_ipc_return_regs(&current->ctx, current, utcb);
@@ -1729,6 +1738,7 @@ void sys_ipc(struct x86_exregs *regs)
 		/* return from IPC at once. */
 		TRACE("%s: returning to caller\n", __func__);
 		assert(current->status == TS_RUNNING);
+		assert(!IS_KERNEL_THREAD(current));
 		set_ipc_return_regs(regs, current, utcb);
 	}
 }

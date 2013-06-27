@@ -429,7 +429,8 @@ bool schedule(void)
 		 * scheduling queue after the receive phase.
 		 */
 		assert(!IS_KERNEL_THREAD(next));
-		bool preempt = false, r_done = ipc_recv_half(next, &preempt);
+		bool preempt = false, r_done;
+		r_done = ipc_recv_half(next, thread_get_utcb(next), &preempt);
 		if((!r_done && next->status == TS_RECV_WAIT) || (r_done && preempt)) {
 			/* either entered passive receive (and not eligible to run
 			 * anymore), or preempted by the sender. try again.
