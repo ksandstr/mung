@@ -633,11 +633,12 @@ void sys_schedule(struct x86_exregs *regs)
 	/* FIXME: test for user TID range! */
 	struct thread *dest = NULL;
 	if(L4_IsNilThread(dest_tid)
-		|| (dest = resolve_tid_spec(current->space, dest_tid)) == NULL
-		|| IS_KERNEL_THREAD(dest))
+		|| (dest = resolve_tid_spec(current->space, dest_tid)) == NULL)
 	{
-		goto inv_param;
+		result = L4_SCHEDRESULT_DEAD;
+		goto end_noupdate;
 	}
+	if(IS_KERNEL_THREAD(dest)) goto inv_param;
 
 	/* cooked inputs */
 	L4_Time_t ts_len = { .raw = (timectl >> 16) & 0xffff },
@@ -731,6 +732,7 @@ void sys_schedule(struct x86_exregs *regs)
 end:
 	if(dest != NULL && dest->status != TS_STOPPED) sq_update_thread(dest);
 
+end_noupdate:
 	if(unlikely(ec != 0)) {
 		assert((result & 0xff) == L4_SCHEDRESULT_ERROR);
 		L4_VREG(thread_get_utcb(current), L4_TCR_ERRORCODE) = ec;
