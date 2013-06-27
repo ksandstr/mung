@@ -33,12 +33,13 @@ static COLD void init_kthread_ctx(struct thread *t, L4_Word_t sp, L4_Word_t ip)
 }
 
 
+/* FIXME: this function is entirely untested. there should be a kernel
+ * self-test mode to fix that even if end_kthread() is never used in anger.
+ */
 static NORETURN void end_kthread(void)
 {
 	struct thread *self = get_current_thread();
 	assert(IS_KERNEL_THREAD(self));
-	printf("%s: kthread %lu:%lu terminating\n", __func__,
-		TID_THREADNUM(self->id), TID_VERSION(self->id));
 
 	list_del_from(&self->space->threads, &self->space_link);
 	htable_del(&thread_hash, int_hash(TID_THREADNUM(self->id)), self);
@@ -47,7 +48,7 @@ static NORETURN void end_kthread(void)
 	sq_remove_thread(self);
 	schedule();
 
-	panic("schedule() in end_kthread() returned???");
+	panic("schedule() returned to dead thread???");
 }
 
 
@@ -70,7 +71,11 @@ struct thread *kth_start(void (*function)(void *), void *parameter)
 		/* TODO: account for this somehow? */
 		t->stack_page = get_kern_page(0);
 	} else {
-		/* TODO: make t->stack_page->vm_addr valid */
+		/* TODO: make t->stack_page->vm_addr valid
+		 *
+		 * FIXME: ... this panic() is valid because as of right now, kthreads
+		 * never exit. which means end_kthread() is completely untested, too.
+		 */
 		panic("arrrrrgggghhhh!");
 	}
 	space_add_thread(kernel_space, t);
@@ -112,7 +117,7 @@ COLD struct thread *kth_init(L4_ThreadId_t boot_tid)
 	next_kthread_num = L4_ThreadNo(boot_tid) + 1;
 
 	struct thread *boot = kmem_cache_zalloc(thread_slab);
-	init_kthread_ctx(boot, 0xdeadf123, 0xdeade123);
+	init_kthread_ctx(boot, 0xdeadface, 0xabadc0de);
 	GUARD_INIT(boot, sched_rb_0);
 	GUARD_INIT(boot, sched_rb_1);
 	boot->stack_page = NULL;
