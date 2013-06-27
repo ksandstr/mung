@@ -12,6 +12,7 @@
 #include <l4/types.h>
 #include <l4/message.h>
 #include <l4/vregs.h>
+#include <l4/schedule.h>
 #include <l4/ipc.h>
 
 #include <ukernel/misc.h>
@@ -55,7 +56,7 @@ struct fault_peer
 };
 
 
-/* in-progress typed transfer. */
+/* in-progress typed transfer. at most one per two threads. */
 struct ipc_state
 {
 	/* non-derived parameters to do_typed_transfer(). (UTCB pointers aren't
@@ -1119,6 +1120,12 @@ struct thread *ipc_partner(struct thread *t)
 	assert(IS_IPC(partner->status));
 	assert(partner->ipc == t->ipc);
 	return partner;
+}
+
+
+int ipc_tstate(struct thread *t) {
+	assert(t->ipc != NULL);
+	return t->ipc->to == t ? L4_SCHEDRESULT_RECEIVING : L4_SCHEDRESULT_SENDING;
 }
 
 
