@@ -40,7 +40,7 @@ struct htable thread_hash = HTABLE_INITIALIZER(thread_hash,
 struct list_head dead_thread_list = LIST_HEAD_INIT(dead_thread_list);
 
 static struct kmem_cache *thread_slab = NULL;
-static int next_kthread_num = 24;
+static int next_kthread_num = -1;
 
 
 #ifndef NDEBUG
@@ -97,6 +97,8 @@ COLD struct thread *init_threading(thread_id boot_tid)
 	assert(thread_slab == NULL);
 	thread_slab = kmem_cache_create("thread_slab", sizeof(struct thread),
 		ALIGNOF(struct thread), 0, NULL, NULL);
+	assert(next_kthread_num < 0);
+	next_kthread_num = TID_THREADNUM(boot_tid) + 1;
 
 	struct thread *boot = kmem_cache_zalloc(thread_slab);
 	init_kthread_ctx(boot, 0xdeadf123, 0xdeade123);
@@ -274,8 +276,10 @@ struct thread *create_kthread(
 	void (*function)(void *),
 	void *parameter)
 {
+	assert(next_kthread_num > 0);	/* must be past init */
 	L4_ThreadId_t tid = { .raw = THREAD_ID(next_kthread_num++, 1) };
-	assert(TID_THREADNUM(tid.raw) < NUM_KERNEL_THREADS);
+	assert(L4_ThreadNo(tid) > last_int_threadno());
+	assert(L4_ThreadNo(tid) < first_user_threadno());	/* out of kthreads */
 
 	struct thread *t = thread_new(tid.raw);
 	if(t->stack_page == NULL) {
@@ -287,7 +291,7 @@ struct thread *create_kthread(
 	}
 	space_add_thread(kernel_space, t);
 	bool ok = thread_set_utcb(t, L4_Address(kernel_space->utcb_area)
-		+ TID_THREADNUM(tid.raw) * UTCB_SIZE);
+		+ (TID_THREADNUM(tid.raw) - 1 - last_int_threadno()) * UTCB_SIZE);
 	if(unlikely(!ok)) {
 		/* TODO: free t->stack_page */
 		space_remove_thread(kernel_space, t);

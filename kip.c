@@ -7,8 +7,9 @@
 #include <l4/kip.h>
 
 #include <ukernel/mm.h>
-#include <ukernel/kip.h>
 #include <ukernel/syscall.h>
+#include <ukernel/thread.h>
+#include <ukernel/kip.h>
 
 
 void *kip_mem = NULL;
@@ -147,7 +148,10 @@ void make_kip(void *mem, L4_Word_t kern_start, L4_Word_t kern_end)
 		(L4_Word_t)L4_TimePeriod(1000).raw << 16
 		| (L4_Word_t)L4_TimePeriod(1000).raw;
 	/* ThreadInfo: UserBase 128, SystemBase 16, full bits in threadno */
-	*(L4_Word_t *)(mem + 0xc4) = 128 << 20 | 16 << 8 | 18;
+	/* FIXME: grab the interrupt count from somewhere. */
+	const int last_int = 15;
+	*(L4_Word_t *)(mem + 0xc4) = (last_int + 1 + NUM_KERNEL_THREADS) << 20
+		| (last_int + 1) << 8 | 18;
 	/* PageInfo: page-size mask for only 4k pages (for now);
 	 *           rw independent (execute implied by read).
 	 */

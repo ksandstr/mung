@@ -51,10 +51,10 @@ typedef L4_Word_t thread_id;
 /* (requires inclusion of <ukernel/space.h>) */
 #define IS_KERNEL_THREAD(thread) ((thread)->space == kernel_space)
 
-/* let's leave this at 128. interrupts also get UTCBs as interrupt IPCs are
- * done that way.
+/* there's need for two kernel threads: the boot (scheduler) thread, and the
+ * sigma0 pager.
  */
-#define NUM_KERNEL_THREADS 128
+#define NUM_KERNEL_THREADS 2
 
 
 struct space;

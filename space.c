@@ -833,6 +833,7 @@ COLD void init_spaces(struct list_head *resv_list)
 
 	/* UTCB pages */
 	int ua_shift = size_to_shift(UTCB_SIZE * NUM_KERNEL_THREADS);
+	if(ua_shift < PAGE_BITS) ua_shift = PAGE_BITS;
 	kernel_space->utcb_area = L4_FpageLog2(
 		ALIGN_TO_SHIFT(KERNEL_HEAP_TOP, ua_shift), ua_shift);
 	static struct page *kernel_utcb_pages[(UTCB_SIZE * NUM_KERNEL_THREADS + PAGE_SIZE - 1)
