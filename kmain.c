@@ -22,6 +22,7 @@
 #include <ukernel/timer.h>
 #include <ukernel/ipc.h>
 #include <ukernel/thread.h>
+#include <ukernel/kth.h>
 #include <ukernel/sched.h>
 #include <ukernel/mapdb.h>
 #include <ukernel/kip.h>
@@ -514,8 +515,9 @@ void kmain(void *bigp, unsigned int magic)
 	init_ipc();
 
 	cop_init();
-	struct thread *first_thread = init_threading(
-		THREAD_ID(last_int_threadno() + 1, 1));
+	init_threading();
+	struct thread *first_thread = kth_init(
+		L4_GlobalId(last_int_threadno() + 1, 1));
 	space_add_thread(kernel_space, first_thread);
 	init_sched(first_thread);
 
@@ -524,7 +526,7 @@ void kmain(void *bigp, unsigned int magic)
 	 * segfaults, so that's OK.
 	 */
 	int next_user_tno = first_user_threadno();
-	struct thread *sigma0_pager = create_kthread(&pager_thread, NULL),
+	struct thread *sigma0_pager = kth_start(&pager_thread, NULL),
 		*s0_thread = spawn_kernel_server(THREAD_ID(next_user_tno++, 1),
 			&s0_mod, sigma0_pager, PAGE_BITS, true),
 		*roottask = NULL;

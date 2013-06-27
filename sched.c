@@ -27,8 +27,6 @@
 
 static struct thread *current_thread = NULL, *scheduler_thread = NULL;
 static struct rb_root sched_tree = { };
-extern struct list_head thread_list, dead_thread_list;
-extern struct htable thread_hash;
 
 /* these control the timer interrupt. write with irqs disabled only. */
 uint64_t preempt_timer_count = ~(uint64_t)0;
@@ -458,24 +456,6 @@ bool schedule(void)
 	assert(self->status == TS_RUNNING);
 
 	return true;
-}
-
-
-NORETURN void end_kthread(void)
-{
-	struct thread *self = get_current_thread();
-	printf("%s: kthread %lu:%lu terminating\n", __func__,
-		TID_THREADNUM(self->id), TID_VERSION(self->id));
-
-	assert(self->space == kernel_space);
-	list_del_from(&self->space->threads, &self->space_link);
-	htable_del(&thread_hash, int_hash(TID_THREADNUM(self->id)), self);
-	list_add(&dead_thread_list, &self->dead_link);
-	self->status = TS_DEAD;
-	sq_remove_thread(self);
-	schedule();
-
-	panic("schedule() in end_kthread() returned???");
 }
 
 

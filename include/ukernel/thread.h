@@ -152,11 +152,14 @@ struct thread
 
 /* keyed by int_hash(thread->id), members are <struct thread *> */
 extern struct htable thread_hash;
+/* kernel threads thru dead_link */
+extern struct list_head dead_thread_list;
 
-extern struct thread *init_threading(thread_id boot_tid);
-extern struct thread *create_kthread(
-	void (*function)(void *),
-	void *parameter);
+/* allocates <struct thread> after init_threading() */
+extern struct kmem_cache *thread_slab;
+
+
+extern void init_threading(void);
 
 extern void thread_set_space(struct thread *t, struct space *sp);
 /* finds by thread ID, ignores version. */

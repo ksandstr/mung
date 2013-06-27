@@ -73,9 +73,6 @@ extern void sys_threadswitch(struct x86_exregs *regs);
  */
 extern bool schedule(void);
 
-/* called by the kthread wrapper function. */
-extern NORETURN void end_kthread(void);
-
 /* where CPU-starting threads go to cause proper scheduling */
 extern NORETURN void scheduler_loop(struct thread *self);
 

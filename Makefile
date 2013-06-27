@@ -49,7 +49,7 @@ tags: $(shell find . -iname "*.[ch]" -or -iname "*.p[lm]")
 	@ctags -R *
 
 
-ia32-kernel: linker.ld loader.o kmain.o kip.o cpu.o heap.o thread.o \
+ia32-kernel: linker.ld loader.o kmain.o kip.o cpu.o heap.o thread.o kth.o \
 		trace.o sched.o exception.o space.o ipc.o mapdb.o \
 		acpi.o gdt.o idt.o irq.o pic.o isr.o timer.o context.o \
 		dlmalloc.o ccan-htable.o ccan-list.o
