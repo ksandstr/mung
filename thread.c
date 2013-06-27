@@ -127,17 +127,19 @@ static void restore_saved_regs(struct hook *hook, uintptr_t code, void *priv)
 {
 	struct thread *t = container_of(hook, struct thread, post_exn_call);
 
-	/* TODO: make this a TRACE(). it's useful for catching mis-nesting of
-	 * restore_saved_regs() and save_ipc_regs(), i.e. spots where
-	 * post_exn_{ok,fail}() isn't being called properly.
+#ifndef NDEBUG
+	/* this is useful for catching mis-nesting of restore_saved_regs() and
+	 * save_ipc_regs(), i.e. spots where post_exn_{ok,fail}() isn't being
+	 * called properly.
 	 */
-#if 0
-	printf("%s: called for %lu:%lu (%d MRs, %d BRs) on %s\n", __func__,
-		TID_THREADNUM(t->id), TID_VERSION(t->id),
-		(int)t->saved_mrs, (int)t->saved_brs,
-		code != 0 ? "IPC fail" : "IPC success");
-#endif
+	if(t->saved_mrs <= 0 && t->saved_brs <= 0) {
+		printf("%s: called for %lu:%lu (%d MRs, %d BRs) on %s\n", __func__,
+			TID_THREADNUM(t->id), TID_VERSION(t->id),
+			(int)t->saved_mrs, (int)t->saved_brs,
+			code != 0 ? "IPC fail" : "IPC success");
+	}
 	assert(t->saved_mrs > 0 || t->saved_brs > 0);
+#endif
 
 	void *utcb = thread_get_utcb(t);
 	memcpy(&L4_VREG(utcb, L4_TCR_MR(0)), t->saved_regs,
@@ -153,8 +155,7 @@ static void restore_saved_regs(struct hook *hook, uintptr_t code, void *priv)
 
 void save_ipc_regs(struct thread *t, int mrs, int brs)
 {
-	/* TODO: see above */
-#if 0
+#ifndef NDEBUG
 	if(t->saved_mrs != 0 || t->saved_brs != 0) {
 		printf("%s: called for %lu:%lu (%d MRs, %d BRs) from %p\n", __func__,
 			TID_THREADNUM(t->id), TID_VERSION(t->id), mrs, brs,
@@ -501,9 +502,9 @@ void thread_sleep(struct thread *t, L4_Time_t period)
 				TID_THREADNUM(t->id), TID_VERSION(t->id),
 				sched_status_str(t));
 		}
+		assert(IS_IPC_WAIT(t->status) || t->status == TS_XFER);
 #endif
 
-		assert(IS_IPC_WAIT(t->status) || t->status == TS_XFER);
 		t->wakeup_time = wakeup_at(period);
 		sq_update_thread(t);
 	}
@@ -571,18 +572,14 @@ void thread_save_ctx(struct thread *t, const struct x86_exregs *regs)
 		assert(IS_KERNEL_THREAD(t));
 		t->ctx.ss = regs->ds;
 		t->ctx.esp = (L4_Word_t)regs + flen;
-#if 0
-		printf("%s: saved kernel thread %d:%d: eip %#lx, esp %#lx\n", __func__,
+		TRACE("%s: saved kernel thread %lu:%lu: eip %#lx, esp %#lx\n", __func__,
 			TID_THREADNUM(t->id), TID_VERSION(t->id),
 			t->ctx.eip, t->ctx.esp);
-#endif
 	} else {
 		assert(!IS_KERNEL_THREAD(t));
-#if 0
-		printf("%s: saved user thread %d:%d: eip %#lx, esp %#lx\n", __func__,
+		TRACE("%s: saved user thread %lu:%lu: eip %#lx, esp %#lx\n", __func__,
 			TID_THREADNUM(t->id), TID_VERSION(t->id),
 			t->ctx.eip, t->ctx.esp);
-#endif
 	}
 }
 
