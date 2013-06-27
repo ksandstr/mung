@@ -419,45 +419,16 @@ static struct map_entry *probe_group_addr(struct map_group *g, uintptr_t addr)
 {
 	if(g->num_entries == 0) return NULL;
 
-	/* common binary search. there's a segment that might handle sparse inputs
-	 * correctly in there, but it's quite untested.
-	 */
+	/* common binary search. */
 	int imin = 0, imax = g->num_entries - 1;
 	int iters = 0;
 	while(imax >= imin && ++iters < 100) {
 		int probe = (imin + imax) / 2, slide = probe;
 		struct map_entry *ent = &g->entries[probe];
-#if 0
-		if(L4_IsNilFpage(ent->range)) {
-			/* sparse storage handling.
-			 *
-			 * TODO: maybe put this to use one day? the insertion routines
-			 * don't currently produce sparse arrays, so this complexity is
-			 * pointless.
-			 *
-			 * NOTE: handling of nil ranges should be added to everywhere that
-			 * iterates over map_entries. that might be ugly.
-			 *
-			 * TODO: needs thorough testing.
-			 */
-			for(int i = probe - 1;
-				i >= imin && L4_IsNilFpage(ent->range);
-				i--)
-			{
-				assert(i >= imin && i <= imax);
-				ent = &g->entries[i];
-			}
-			for(int i = probe + 1;
-				L4_IsNilFpage(ent->range) && i <= imax;
-				i++)
-			{
-				assert(i >= imin && i <= imax);
-				ent = &g->entries[i];
-			}
-			if(L4_IsNilFpage(ent->range)) return NULL;
-			slide = ent - &g->entries[0];
-		}
-#endif
+		/* NOTE: could do sparse storage support here. see commit
+		 * 3a617b7947ab4ff1badc51254cf70a41e34d66d1 for a related code
+		 * fragment that used to be here.
+		 */
 		assert(slide >= 0 && slide < MAX_ENTRIES_PER_GROUP);
 
 		if(addr < L4_Address(ent->range)) {
@@ -1034,12 +1005,6 @@ int mapdb_map_pages(
 		}
 		return L4_Rights(p);
 	} else {
-#if 0
-		TRACE("%s: first->range %#lx:%#lx; map_page %#lx:%#lx\n", __func__,
-			L4_Address(first->range), L4_Size(first->range),
-			L4_Address(map_page), L4_Size(map_page));
-#endif
-
 		struct map_entry *ent = first;
 		L4_Word_t pos = MAX(L4_Word_t, L4_Address(ent->range), first_addr),
 			limit = last_addr + 1;
@@ -1670,21 +1635,11 @@ int mapdb_unmap_fpage(
 	/* TODO: move postconditions into another function */
 #ifndef NDEBUG
 	if(unmap_rights != 0 && immediate) {
-#if 0
-		printf("checking unmap %#lx:%#lx (%#lx)\n", L4_Address(range),
-			L4_Size(range), unmap_rights);
-#endif
 		for(L4_Word_t addr = FPAGE_LOW(range);
 			addr < FPAGE_HIGH(range);
 			addr += PAGE_SIZE)
 		{
 			struct map_entry *e = mapdb_probe(db, addr);
-#if 0
-			if(e != NULL) {
-				printf("... entry %#lx:%#lx (%#lx)\n", L4_Address(e->range),
-					L4_Size(e->range), L4_Rights(e->range));
-			}
-#endif
 			assert(e == NULL || !CHECK_FLAG_ALL(L4_Rights(e->range), unmap_rights));
 		}
 	}
@@ -1724,13 +1679,9 @@ COLD void mapdb_init_range(
 {
 	assert(check_mapdb_module(0));
 
-#if 1
 	TRACE("%s: start_addr %#lx, num_pages %u (%#x bytes)\n", __func__,
 		(L4_Word_t)start_addr, num_pages, num_pages * PAGE_SIZE);
-#endif
-#ifndef NDEBUG
 	unsigned int done = 0;
-#endif
 	for(uintptr_t g_addr = GROUP_ADDR(start_addr),
 				  g_last = GROUP_ADDR(start_addr + num_pages * PAGE_SIZE - 1);
 		g_addr <= g_last;
@@ -1793,9 +1744,7 @@ COLD void mapdb_init_range(
 			}
 
 			range_pos += 1 << mag;
-#ifndef NDEBUG
 			done += 1 << (mag - 12);
-#endif
 		}
 	}
 
