@@ -299,7 +299,7 @@ msgfail:
 
 static void handle_io_fault(struct thread *current, struct x86_exregs *regs)
 {
-	if(IS_KERNEL_THREAD(current)) panic("kernel IO fault!");
+	assert(!IS_KERNEL_THREAD(current));
 	thread_save_ctx(current, regs);
 
 	uint8_t insn_buf[16], *insn = insn_buf;
@@ -504,7 +504,10 @@ void isr_exn_gp_bottom(struct x86_exregs *regs)
 {
 	struct thread *current = get_current_thread();
 
-	if(IS_KERNEL_THREAD(current)) {
+	if(unlikely(IS_KERNEL_THREAD(current))) {
+		/* this shouldn't happen. stop the thread in question & limp along
+		 * regardless.
+		 */
 		printf("KERNEL #GP(%#lx) at eip %#lx, esp %#lx in %lu:%lu\n",
 			regs->error, regs->eip, regs->esp,
 			TID_THREADNUM(current->id), TID_VERSION(current->id));
