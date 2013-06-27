@@ -100,9 +100,26 @@ static void send_xfer_fault(
 	L4_Word_t ip,
 	uint64_t xfto_abs);
 
+static size_t hash_threadid(const void *tid, void *priv);
+
 
 static struct kmem_cache *ipc_wait_slab = NULL;
-static struct htable sendwait_hash;
+static struct htable sendwait_hash = HTABLE_INITIALIZER(
+	sendwait_hash, &hash_threadid, NULL);
+
+
+static size_t hash_threadid(const void *tid, void *priv) {
+	const L4_ThreadId_t *p = tid;
+	return int_hash(p->raw);
+}
+
+
+COLD void init_ipc(void)
+{
+	ipc_wait_slab = kmem_cache_create("ipc_wait_slab",
+		sizeof(struct ipc_wait), ALIGNOF(struct ipc_wait),
+		0, NULL, NULL);
+}
 
 
 static inline void set_ipc_error(void *utcb, L4_Word_t ec)
@@ -1222,6 +1239,10 @@ static bool ipc_send_half(
 	assert(!CHECK_FLAG(self->flags, TF_HALT));
 	assert(self->status != TS_STOPPED);
 
+	/* NOTE: this assert can blow under some curious timing circumstances.
+	 * those are provoked by DEBUG_ME_HARDER, i.e. the super nasty invariant
+	 * checks in mapdb.c .
+	 */
 	assert(!L4_IsNilThread(self->ipc_to)
 		&& self->ipc_to.raw != L4_anylocalthread.raw
 		&& self->ipc_to.raw != L4_anythread.raw);
@@ -1578,12 +1599,6 @@ bool ipc_recv_half(
 		*preempt_p = self == get_current_thread()
 			&& preempted_by(self, task_switch_time * 1000, from);
 		if(*preempt_p) {
-#if 0
-			TRACE("%s: thread %u:%u (pri %d) was preempted by partner %u:%u (pri %d)\n",
-				__func__, TID_THREADNUM(self->id), TID_VERSION(self->id),
-				(int)self->pri, TID_THREADNUM(from->id), TID_VERSION(from->id),
-				(int)from->pri);
-#endif
 			assert(self->status == TS_RUNNING || self->status == TS_R_RECV
 				|| self->status == TS_READY);
 			self->status = TS_READY;
@@ -1596,6 +1611,9 @@ bool ipc_recv_half(
 
 /* IPC in a kernel thread. string transfers are forbidden, enforced by
  * checking that BR0.s == 0 .
+ *
+ * TODO: move this into kth.c; it uses a kernel stack instead of the L4.X2 IPC
+ * state machine.
  */
 L4_MsgTag_t kipc(
 	L4_ThreadId_t to,
@@ -1663,7 +1681,7 @@ L4_MsgTag_t kipc(
 
 static void ipc(struct thread *current, void *utcb, bool *preempt_p)
 {
-	assert(utcb == thread_get_utcb(current));
+	assert(utcb != NULL);
 	assert(preempt_p != NULL);
 
 	*preempt_p = false;
@@ -1738,20 +1756,4 @@ void sys_ipc(struct x86_exregs *regs)
 		assert(!IS_KERNEL_THREAD(current));
 		set_ipc_return_regs(regs, current, utcb);
 	}
-}
-
-
-static size_t hash_threadid(const void *tid, void *priv) {
-	const L4_ThreadId_t *p = tid;
-	return int_hash(p->raw);
-}
-
-
-COLD void init_ipc(void)
-{
-	ipc_wait_slab = kmem_cache_create("ipc_wait_slab",
-		sizeof(struct ipc_wait), ALIGNOF(struct ipc_wait),
-		0, NULL, NULL);
-
-	htable_init(&sendwait_hash, &hash_threadid, NULL);
 }
