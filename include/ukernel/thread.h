@@ -161,7 +161,6 @@ extern struct kmem_cache *thread_slab;
 
 extern void init_threading(void);
 
-extern void thread_set_space(struct thread *t, struct space *sp);
 /* finds by thread ID, ignores version. */
 extern struct thread *thread_find(thread_id tid);
 

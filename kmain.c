@@ -351,7 +351,8 @@ static struct thread *spawn_kernel_server(
 	 * mappings.
 	 */
 	space_set_kip_area(sp, L4_FpageLog2((L4_Word_t)kip_mem, PAGE_BITS));
-	thread_set_space(t, sp);
+	space_add_thread(sp, t);
+	assert(t->space == sp);
 	bool ok = thread_set_utcb(t, L4_Address(sp->utcb_area));
 	BUG_ON(!ok, "thread_set_utcb() failed");
 	t->ts_len = L4_Never;

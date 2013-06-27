@@ -227,16 +227,6 @@ static void thread_destroy(struct thread *t)
 }
 
 
-void thread_set_space(struct thread *t, struct space *sp)
-{
-	if(t->space != NULL) {
-		assert(t->space == sp);
-		space_remove_thread(sp, t);
-	}
-	space_add_thread(sp, t);
-}
-
-
 void thread_set_spip(struct thread *t, L4_Word_t sp, L4_Word_t ip)
 {
 	assert(!IS_KERNEL_THREAD(t));
