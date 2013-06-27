@@ -555,21 +555,11 @@ void *thread_get_utcb(struct thread *t)
 }
 
 
-static struct thread *get_tcr_thread(struct thread *t, void *utcb, int tcr)
+struct thread *get_tcr_thread(struct thread *t, void *utcb, int tcr)
 {
 	assert(utcb != NULL);
 	L4_ThreadId_t tid = { .raw = L4_VREG(utcb, tcr) };
 	return L4_IsNilThread(tid) ? NULL : resolve_tid_spec(t->space, tid);
-}
-
-
-struct thread *thread_get_pager(struct thread *t, void *utcb) {
-	return get_tcr_thread(t, utcb, L4_TCR_PAGER);
-}
-
-
-struct thread *thread_get_exnh(struct thread *t, void *utcb) {
-	return get_tcr_thread(t, utcb, L4_TCR_EXCEPTIONHANDLER);
 }
 
 

@@ -258,10 +258,12 @@ extern bool post_exn_ok(struct thread *t);
 
 /* complicated accessors */
 extern PURE void *thread_get_utcb(struct thread *t);
-extern struct thread *thread_get_pager(struct thread *t, void *utcb);
-extern struct thread *thread_get_exnh(struct thread *t, void *utcb);
+extern struct thread *get_tcr_thread(struct thread *t, void *utcb, int tcr);
 extern void thread_save_ctx(struct thread *t, const struct x86_exregs *regs);
 
+/* legacy accessors, to be removed */
+#define thread_get_pager(t, utcb) get_tcr_thread((t), (utcb), L4_TCR_PAGER)
+#define thread_get_exnh(t, utcb) get_tcr_thread((t), (utcb), L4_TCR_EXCEPTIONHANDLER)
 
 /* compares version bits for global IDs, resolves locak IDs in ref_space */
 extern struct thread *resolve_tid_spec(

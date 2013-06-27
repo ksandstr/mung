@@ -1242,10 +1242,7 @@ static bool ipc_send_half(
 	bool propagated = false;
 	if(CHECK_FLAG(tag.X.flags, 0x1)) {
 		/* propagation (sender fakery). */
-		L4_ThreadId_t vs_tid = {
-			.raw = L4_VREG(self_utcb, L4_TCR_VA_SENDER),
-		};
-		struct thread *vs = resolve_tid_spec(self->space, vs_tid);
+		struct thread *vs = get_tcr_thread(self, self_utcb, L4_TCR_VA_SENDER);
 		/* FIXME: also check interrupt propagation, redirector chain */
 		if(vs != NULL && (self->space == vs->space
 			|| self->space == dest->space))
