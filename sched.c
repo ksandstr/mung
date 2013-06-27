@@ -674,29 +674,26 @@ void sys_schedule(struct x86_exregs *regs)
 		&& (!hook_empty(&dest->post_exn_call)
 			|| dest->saved_mrs > 0 || dest->saved_brs > 0))
 	{
-		result = 3;		/* "running", as IPC not by usermode */
+		result = L4_SCHEDRESULT_RUNNING;
 	} else {
 		static const uint8_t status_to_schedresult[] = {
 			[TS_STOPPED] = L4_SCHEDRESULT_INACTIVE,
+			[TS_DEAD] = L4_SCHEDRESULT_DEAD,	/* kth only */
 			[TS_RUNNING] = L4_SCHEDRESULT_RUNNING,
 			[TS_READY] = L4_SCHEDRESULT_RUNNING,
 			[TS_SEND_WAIT] = L4_SCHEDRESULT_PENDING_SEND,
 			[TS_RECV_WAIT] = L4_SCHEDRESULT_WAITING,
 			[TS_R_RECV] = L4_SCHEDRESULT_WAITING,
-			/* TODO: 5 "sending" (in the middle of string transfer, send)
-			 *       7 "receiving" (same, receive)
-			 */
+			[TS_XFER] = 0,		/* signals a thing */
 		};
 		int s = dest->status;
-		if(s < 0 || s >= NUM_ELEMENTS(status_to_schedresult)) {
-			printf("WARNING: %s: unknown state %d in thread %lu:%lu\n",
-				__func__, (int)dest->status, TID_THREADNUM(dest->id),
-				TID_VERSION(dest->id));
-			ec = L4_ERROR_INVALID_THREAD;
-			goto end;
+		if(s == TS_XFER) result = ipc_tstate(dest);
+		else {
+			assert(s >= 0 && s < NUM_ELEMENTS(status_to_schedresult));
+			result = status_to_schedresult[s];
+			assert(result > 0);
 		}
-
-		result = status_to_schedresult[s];
+		assert(IS_KERNEL_THREAD(dest) || result != L4_SCHEDRESULT_DEAD);
 	}
 
 	/* timectl */
