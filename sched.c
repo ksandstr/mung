@@ -14,6 +14,7 @@
 #include <ukernel/util.h>
 #include <ukernel/ipc.h>
 #include <ukernel/space.h>
+#include <ukernel/bug.h>
 #include <ukernel/misc.h>
 #include <ukernel/thread.h>
 #include <ukernel/trace.h>
@@ -123,18 +124,9 @@ void sq_insert_thread(struct thread *t)
 	assert(t->status != TS_STOPPED && t->status != TS_DEAD);
 
 	struct thread *dupe = sq_insert_thread_helper(&sched_tree, t);
-	if(unlikely(dupe != NULL)) {
-		printf("%s: thread %lu:%lu already in tree\n", __func__,
-			TID_THREADNUM(t->id), TID_VERSION(t->id));
-		return;
-	}
+	BUG_ON(dupe != NULL, "thread %lu:%lu already in tree",
+		TID_THREADNUM(t->id), TID_VERSION(t->id));
 	rb_insert_color(&t->sched_rb, &sched_tree);
-
-#if 0
-	TRACE("%s: inserted %lu:%lu (status %s, wakeup %#llx, pri %d)\n", __func__,
-		TID_THREADNUM(t->id), TID_VERSION(t->id), sched_status_str(t),
-		t->wakeup_time, (int)t->pri);
-#endif
 }
 
 
