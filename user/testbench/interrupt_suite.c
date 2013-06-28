@@ -349,7 +349,8 @@ Suite *interrupt_suite(void)
 
 	{
 		TCase *tc = tcase_create("api");
-		tcase_add_checked_fixture(tc, &com_setup, &com_teardown);
+		tcase_set_fork(tc, false);
+		tcase_add_unchecked_fixture(tc, &com_setup, &com_teardown);
 		tcase_add_test(tc, basic_api_test);
 		tcase_add_test(tc, serial_interrupt_test);
 		suite_add_tcase(s, tc);
@@ -357,7 +358,8 @@ Suite *interrupt_suite(void)
 
 	{
 		TCase *tc = tcase_create("context");
-		tcase_add_checked_fixture(tc, &com_setup, &com_teardown);
+		tcase_set_fork(tc, false);
+		tcase_add_unchecked_fixture(tc, &com_setup, &com_teardown);
 		tcase_add_test(tc, int_from_wait);
 		tcase_add_test(tc, int_from_user);
 		tcase_add_test(tc, int_under_other);
