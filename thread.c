@@ -491,14 +491,6 @@ void *thread_get_utcb(struct thread *t)
 }
 
 
-struct thread *get_tcr_thread(struct thread *t, void *utcb, int tcr)
-{
-	assert(utcb != NULL);
-	L4_ThreadId_t tid = { .raw = L4_VREG(utcb, tcr) };
-	return L4_IsNilThread(tid) ? NULL : resolve_tid_spec(t->space, tid);
-}
-
-
 void thread_save_ctx(struct thread *t, const struct x86_exregs *regs)
 {
 	size_t flen = x86_frame_len(regs);

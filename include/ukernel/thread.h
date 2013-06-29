@@ -9,6 +9,7 @@
 #include <ccan/compiler/compiler.h>
 
 #include <l4/types.h>
+#include <l4/vregs.h>
 
 #include <ukernel/mm.h>
 #include <ukernel/rbtree.h>
@@ -262,17 +263,26 @@ extern bool post_exn_ok(struct thread *t);
 
 /* complicated accessors */
 extern PURE void *thread_get_utcb(struct thread *t);
-extern struct thread *get_tcr_thread(struct thread *t, void *utcb, int tcr);
 extern void thread_save_ctx(struct thread *t, const struct x86_exregs *regs);
-
-/* legacy accessors, to be removed */
-#define thread_get_pager(t, utcb) get_tcr_thread((t), (utcb), L4_TCR_PAGER)
-#define thread_get_exnh(t, utcb) get_tcr_thread((t), (utcb), L4_TCR_EXCEPTIONHANDLER)
 
 /* compares version bits for global IDs, resolves locak IDs in ref_space */
 extern struct thread *resolve_tid_spec(
 	struct space *ref_space,
 	L4_ThreadId_t tid);
+
+static inline struct thread *get_tcr_thread(
+	struct thread *t,
+	void *utcb,
+	int tcr)
+{
+	assert(utcb != NULL);
+	L4_ThreadId_t tid = { .raw = L4_VREG(utcb, tcr) };
+	return L4_IsNilThread(tid) ? NULL : resolve_tid_spec(t->space, tid);
+}
+
+/* legacy accessors, to be removed */
+#define thread_get_pager(t, utcb) get_tcr_thread((t), (utcb), L4_TCR_PAGER)
+#define thread_get_exnh(t, utcb) get_tcr_thread((t), (utcb), L4_TCR_EXCEPTIONHANDLER)
 
 
 /* for htable */
