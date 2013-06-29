@@ -791,9 +791,7 @@ static L4_Word_t interrupt_ctl(
 	L4_Word_t *ec_p,
 	struct thread *current,
 	L4_ThreadId_t dest_tid,
-	L4_ThreadId_t pager,
-	L4_ThreadId_t scheduler UNUSED,
-	L4_Word_t utcb_loc UNUSED)
+	L4_ThreadId_t pager)
 {
 	int intnum = L4_ThreadNo(dest_tid);
 	assert(L4_Version(dest_tid) == 1);
@@ -864,6 +862,7 @@ static bool send_int_ipc(int ivec, struct thread *t, bool kernel_irq)
 
 bool int_latent(void)
 {
+	assert(x86_irq_is_enabled());
 	assert(kernel_irq_deferred);
 	assert(!kernel_irq_ok);
 
@@ -923,6 +922,7 @@ bool int_latent(void)
 /* called from deleting ThreadControl */
 static void int_kick(struct thread *t)
 {
+	assert(x86_irq_is_enabled());
 	assert(CHECK_FLAG(t->flags, TF_INTR));
 
 	/* brute force, but acceptable because interrupts are usually few.
@@ -966,6 +966,7 @@ bool int_trigger(int intnum, bool in_kernel)
  */
 int int_poll(struct thread *t, int intnum)
 {
+	assert(x86_irq_is_enabled());
 	assert(intnum == -1 || intnum < num_ints);
 
 	x86_irq_disable();
@@ -994,6 +995,7 @@ int int_poll(struct thread *t, int intnum)
 /* called from ipc_send_half() on reply to interrupt thread */
 int int_clear(int intnum, struct thread *sender)
 {
+	assert(x86_irq_is_enabled());
 	assert(sender != NULL);
 	assert(intnum < num_ints);
 
@@ -1055,8 +1057,7 @@ void sys_threadcontrol(struct x86_exregs *regs)
 		&& TID_VERSION(dest_tid.raw) == 1
 		&& TID_THREADNUM(dest_tid.raw) <= last_int_threadno())
 	{
-		result = interrupt_ctl(&ec, current, dest_tid, pager,
-			scheduler, utcb_loc);
+		result = interrupt_ctl(&ec, current, dest_tid, pager);
 		goto end;
 	}
 
