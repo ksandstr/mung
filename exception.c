@@ -345,11 +345,6 @@ static void handle_io_fault(struct thread *current, struct x86_exregs *regs)
 
 	uint8_t insn_buf[16], *insn = insn_buf;
 	size_t n = space_memcpy_from(current->space, insn_buf, regs->eip, 16);
-#if 0
-	printf("insn bytes [%u]:", (unsigned)n);
-	for(int i=0; i < n; i++) printf(" %#02x", insn[i]);
-	printf("\n");
-#endif
 	if(n == 0) {
 		printf("can't read instructions at %#lx; stopping thread\n",
 			regs->eip);
@@ -414,12 +409,6 @@ static void handle_io_fault(struct thread *current, struct x86_exregs *regs)
 			 */
 			goto fail;
 	}
-
-#if 0
-	/* TODO: make this a TRACE() */
-	printf("#GP(IO): I/O fault; %s size %d in port %#lx at eip %#lx\n",
-		in ? "in" : "out", size, port, regs->eip);
-#endif
 
 	void *utcb = thread_get_utcb(current);
 	struct thread *pager = thread_get_pager(current, utcb);
@@ -679,8 +668,9 @@ void set_pf_msg(
 	L4_Word_t ip,
 	int fault_access)
 {
+	assert(utcb != NULL);
+
 	save_ipc_regs(t, 3, 1);
-	if(utcb == NULL) utcb = thread_get_utcb(t);
 	L4_VREG(utcb, L4_TCR_BR(0)) = L4_CompleteAddressSpace.raw;
 	L4_VREG(utcb, L4_TCR_MR(0)) = ((-2) & 0xfff) << 20		/* label */
 		| fault_access << 16	/* access */
