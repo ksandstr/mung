@@ -65,7 +65,7 @@ static inline void call_on_stack(void (*fn)(void *), void *stack)
 void isr_irq_bottom(struct x86_exregs *regs)
 {
 	const int vecn = regs->reason, irq = vecn - 0x20;
-	pic_send_eoi(irq);
+	(*global_pic.send_eoi)(irq);
 	if(irq_switched_stack()) {
 		/* user thread was interrupted. stack is the interrupt handler and
 		 * syscall stack, which can support isr_irq_bottom_soft().
@@ -94,7 +94,7 @@ void isr_irq0_bottom(struct x86_exregs *regs)
 {
 	uint64_t now = ++global_timer_count;
 	(*systemclock_p) += 1000;
-	pic_send_eoi(0);
+	(*global_pic.send_eoi)(0);
 
 	if(now >= preempt_timer_count) {
 		preempt_timer_count = ~(uint64_t)0;

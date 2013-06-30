@@ -12,7 +12,11 @@ extern void *kip_mem;
  * KIP. the range between kern_start and kern_end will be added to MemoryInfo
  * as a reserved range before the first dedicated range.
  */
-extern void make_kip(void *mem, L4_Word_t kern_start, L4_Word_t kern_end);
+extern void make_kip(
+	void *mem,
+	L4_Word_t kern_start,
+	L4_Word_t kern_end,
+	int max_irq);
 
 
 /* friendly neighbourhood accessors */

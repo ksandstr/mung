@@ -773,18 +773,8 @@ fail:
 }
 
 
-static void int_disable(int intnum)
-{
-	if(intnum < 8) pic_set_mask(1 << intnum, 0);
-	else pic_set_mask(0, 1 << (intnum - 8));
-}
-
-
-static void int_enable(int intnum)
-{
-	if(intnum < 8) pic_clear_mask(1 << intnum, 0);
-	else pic_clear_mask(0, 1 << (intnum - 8));
-}
+#define int_disable(irq) (*global_pic.mask_irq)((irq))
+#define int_enable(irq) (*global_pic.unmask_irq)((irq))
 
 
 static L4_Word_t interrupt_ctl(

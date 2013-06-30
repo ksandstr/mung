@@ -87,7 +87,7 @@ static void make_systemclock_stub(void *start, int *len_p)
 
 
 /* compose a 32-bit little-endian kernel interface page. */
-void make_kip(void *mem, L4_Word_t kern_start, L4_Word_t kern_end)
+void make_kip(void *mem, L4_Word_t kern_start, L4_Word_t kern_end, int max_irq)
 {
 	/* preserve memorydescs from the KCP, while adding two entries at the
 	 * front: the virtual address space, and the kernel's reserved slice
@@ -147,11 +147,11 @@ void make_kip(void *mem, L4_Word_t kern_start, L4_Word_t kern_end)
 	*(L4_Word_t *)(mem + 0xc0) =
 		(L4_Word_t)L4_TimePeriod(1000).raw << 16
 		| (L4_Word_t)L4_TimePeriod(1000).raw;
-	/* ThreadInfo: UserBase 128, SystemBase 16, full bits in threadno */
-	/* FIXME: grab the interrupt count from somewhere. */
-	const int last_int = 15;
-	*(L4_Word_t *)(mem + 0xc4) = (last_int + 1 + NUM_KERNEL_THREADS) << 20
-		| (last_int + 1) << 8 | 18;
+	/* ThreadInfo: UserBase 128, SystemBase max_irq + 1, full bits in
+	 * threadno
+	 */
+	*(L4_Word_t *)(mem + 0xc4) = (max_irq + 1 + NUM_KERNEL_THREADS) << 20
+		| (max_irq + 1) << 8 | 18;
 	/* PageInfo: page-size mask for only 4k pages (for now);
 	 *           rw independent (execute implied by read).
 	 */

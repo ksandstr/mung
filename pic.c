@@ -23,7 +23,7 @@
 
 
 /* template courtesy of the osdev wiki */
-void initialize_pics(int off_pic1, int off_pic2)
+static void initialize_pics(int off_pic1, int off_pic2)
 {
 	assert(!x86_irq_is_enabled());
 
@@ -46,7 +46,9 @@ void initialize_pics(int off_pic1, int off_pic2)
 	outb(IO_PIC1_DATA, mask1);
 	outb(IO_PIC2_DATA, mask2);
 
+#if 0
 	printf("PIC1 mask is 0x%x; PIC2 mask is 0x%x\n", mask1, mask2);
+#endif
 }
 
 
@@ -59,19 +61,57 @@ void pic_send_eoi(int irq)
 }
 
 
-void pic_clear_mask(uint8_t pic1, uint8_t pic2)
+static void pic_mask_all(void)
 {
 	assert(!x86_irq_is_enabled());
 
-	if(pic1 != 0) outb(IO_PIC1_DATA, inb(IO_PIC1_DATA) & ~pic1);
-	if(pic2 != 0) outb(IO_PIC2_DATA, inb(IO_PIC2_DATA) & ~pic2);
+	outb(IO_PIC1_DATA, 0xff);
+	outb(IO_PIC2_DATA, 0xff);
 }
 
 
-void pic_set_mask(uint8_t pic1, uint8_t pic2)
+void pic_mask_irq(int irq)
 {
-	assert(!x86_irq_is_enabled());
+	if(irq >= 8) {
+		irq -= 8;
+		outb(IO_PIC2_DATA, inb(IO_PIC2_DATA) | (1 << irq));
+	} else {
+		outb(IO_PIC1_DATA, inb(IO_PIC1_DATA) | (1 << irq));
+	}
+}
 
-	if(pic1 != 0) outb(IO_PIC1_DATA, inb(IO_PIC1_DATA) | pic1);
-	if(pic2 != 0) outb(IO_PIC2_DATA, inb(IO_PIC2_DATA) | pic2);
+
+void pic_unmask_irq(int irq)
+{
+	if(irq >= 8) {
+		irq -= 8;
+		outb(IO_PIC2_DATA, inb(IO_PIC2_DATA) & ~(1 << irq));
+	} else {
+		outb(IO_PIC1_DATA, inb(IO_PIC1_DATA) & ~(1 << irq));
+	}
+}
+
+
+COLD int xtpic_init(struct pic_ops *ops)
+{
+	/* olde-timey interrupts appear in 0x20..0x2f, i.e. irq# + 0x20 */
+	initialize_pics(0x20, 0x28);
+	pic_mask_all();
+
+	*ops = (struct pic_ops){
+		.send_eoi = &pic_send_eoi,
+		.mask_irq = &pic_mask_irq,
+		.unmask_irq = &pic_unmask_irq,
+	};
+
+	return 15;		/* highest interrupt number */
+}
+
+
+COLD void xtpic_disable(void)
+{
+	/* TODO: Linux uses a more fancy method to disconnect the XT-PIC. imitate
+	 * that, or see whether FreeBSD or Hurd do the same thing too.
+	 */
+	pic_mask_all();
 }

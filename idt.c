@@ -4,6 +4,7 @@
 
 #include <ukernel/gdt.h>
 #include <ukernel/idt.h>
+#include <ukernel/x86.h>
 
 
 static void set_int_gate(
@@ -49,7 +50,7 @@ static void set_trap_gate(
 	} while(false)
 
 
-void setup_idt(int code_seg)
+void setup_idt(int code_seg, int max_irq)
 {
 	static struct idt_entry ints[256];
 	for(int i=0; i < 256; i++) {
@@ -64,28 +65,28 @@ void setup_idt(int code_seg)
 	EXN_GATE(ints, code_sel, 13, gp);	/* general protection */
 	EXN_GATE(ints, code_sel, 14, pf);	/* pagefault */
 	EXN_GATE(ints, code_sel, 16, mf);	/* x87 floating-point exception */
+	/* FIXME: SSE math fault is missing! */
+
+	IRQ_GATE(ints, code_sel, 0);	/* IRQ0 (timer) */
+
+	if(apic_enabled) {
+		/* LAPIC fixed interrupt vectors, 0x21 .. (0x20 + max_irq) */
+		for(int i=0x21; i <= 0x20 + max_irq; i++) {
+			extern void isr_apic_top(void);
+			set_int_gate(ints, i, &isr_apic_top, code_sel);
+		}
+	} else {
+		/* hours and hours of footage of two giraffes fucking */
+		IRQ_GATE(ints, code_sel, 1);
+		/* FIXME: add the rest */
+	}
+
+	/* syscall ISRs; 0x80 .. 0x8f */
 	EXN_GATE(ints, code_sel, 0x8d, exregs_sc);	/* ExchangeRegisters */
 	EXN_GATE(ints, code_sel, 0x8e, memctl_sc);	/* MemoryControl */
 	EXN_GATE(ints, code_sel, 0x8f, basic_sc);	/* basic syscall */
-	/* (permit access to syscall interrupts to ring 3.) */
+	/* (permit access to defined syscall interrupts for user code.) */
 	for(int i=0x8d; i <= 0x8f; i++) ints[i].type_attr |= 3 << 5;
-
-	IRQ_GATE(ints, code_sel, 0);	/* IRQ0 (timer) */
-	IRQ_GATE(ints, code_sel, 1);
-	/* cascade is ignored */
-	IRQ_GATE(ints, code_sel, 3);
-	IRQ_GATE(ints, code_sel, 4);
-	IRQ_GATE(ints, code_sel, 5);
-	IRQ_GATE(ints, code_sel, 6);
-	IRQ_GATE(ints, code_sel, 7);
-	IRQ_GATE(ints, code_sel, 8);
-	IRQ_GATE(ints, code_sel, 9);
-	IRQ_GATE(ints, code_sel, 10);
-	IRQ_GATE(ints, code_sel, 11);
-	IRQ_GATE(ints, code_sel, 12);
-	IRQ_GATE(ints, code_sel, 13);	/* IRQ13 is doubtful */
-	IRQ_GATE(ints, code_sel, 14);
-	IRQ_GATE(ints, code_sel, 15);
 
 	struct {
 		uint16_t limit;

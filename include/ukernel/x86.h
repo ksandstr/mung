@@ -24,6 +24,7 @@
 #define X86_CR0_NE (1 << 5)
 
 /* CPUID page 01h EDX flag masks */
+#define X86_FEATURE_D_APIC (1 << 9)
 #define X86_FEATURE_D_FXSR (1 << 24)
 #define X86_FEATURE_D_SSE (1 << 25)
 #define X86_FEATURE_D_SSE2 (1 << 26)
@@ -39,6 +40,10 @@
  */
 #define CPU_HAS_FXSR() CHECK_FLAG(get_features()->edx, X86_FEATURE_D_FXSR)
 #define CPU_HAS_SSE() CHECK_FLAG(get_features()->edx, X86_FEATURE_D_SSE)
+
+
+/* MSRs */
+#define IA32_APIC_BASE	0x1b
 
 
 struct thread;
@@ -231,10 +236,87 @@ static inline void x86_fxrstor(void *ptr) {
 }
 
 
+/* MSR access */
+
+static inline uint64_t x86_rdmsr(uint32_t msrid) {
+	uint64_t val;
+	asm volatile ("rdmsr": "=A" (val): "c" (msrid));
+	return val;
+}
+
+
+static inline void x86_wrmsr(uint32_t msrid, uint64_t value) {
+	asm volatile ("wrmsr":: "A" (value), "c" (msrid));
+}
+
+
+/* memory-mapped I/O, modelled after the x86 I/O port crap.
+ * (point being to access the registers exactly once, which volatile pointers
+ * just don't do as neatly.)
+ *
+ * these don't have an "x86_" prefix because they're supposed to be portable
+ * between architectures, and most everything has MMIO. so an "arm64.h" would
+ * likewise define mm_inl() and the rest.
+ *
+ * NOTE: the mm_outX() family could all have a __builtin_constant_p() branch.
+ */
+static inline uint32_t mm_inl(uintptr_t address) {
+	uint32_t value;
+	asm volatile ("movl %1, %0"
+		: "=r" (value)
+		: "m" (*(uint32_t *)address));
+	return value;
+}
+
+
+static inline void mm_outl(uintptr_t address, uint32_t value) {
+	if(__builtin_constant_p(value)) {
+		asm volatile ("movl %0, %1"
+			:: "i" (value), "m" (*(uint32_t *)address));
+	} else {
+		asm volatile ("movl %0, %1"
+			:: "r" (value), "m" (*(uint32_t *)address));
+	}
+}
+
+
+static inline void mm_outb(uintptr_t address, uint8_t value) {
+	if(__builtin_constant_p(value)) {
+		asm volatile ("movb %0, %1"
+			:: "i" (value), "m" (*(uint32_t *)address));
+	} else {
+		asm volatile ("movb %0, %1"
+			:: "q" (value), "m" (*(uint32_t *)address));
+	}
+}
+
+
+static inline void mm_andl(uintptr_t address, uint32_t mask) {
+	asm volatile ("andl %0, %1"
+		:: "r" (mask), "m" (*(uint32_t *)address));
+}
+
+
+static inline void mm_orl(uintptr_t address, uint32_t mask) {
+	asm volatile ("orl %0, %1"
+		:: "r" (mask), "m" (*(uint32_t *)address));
+}
+
+
+
 /* from cpu.c (should be in x86.c or some such, or in an ia32 directory
  * alongside gdt, idt, etc. bits?)
  */
 extern void scan_cpuid(void);
+
+
+/* from apic.c */
+
+extern bool apic_enabled;
+extern int apic_probe(void);	/* depends on CPUID; ret < 0 when no APIC */
+
+/* NOTE: this unmasks the IRQ! */
+extern int ioapic_route_legacy_irq(int irqnum, int ioa_vector);
 
 
 #endif

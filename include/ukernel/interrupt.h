@@ -11,17 +11,35 @@
 struct thread;
 
 
-/* from pic.c */
+/* PIC/APIC operations. @irq is a global interrupt number in the range
+ * [0..SystemBase).
+ *
+ * (yes, indirect calls suck -- this would be a real good spot for some
+ * boot-time patching sometime after SMP and that sort of things...)
+ */
+struct pic_ops
+{
+	void (*send_eoi)(int irq);
+	void (*mask_irq)(int irq);
+	void (*unmask_irq)(int irq);
+};
 
-/* x86 architecture without APIC */
-extern void initialize_pics(int off_pic1, int off_pic2);
 
-/* send end-of-interrupt via PIC */
-extern void pic_send_eoi(int irq);
+/* from kmain.c */
 
-extern void pic_set_mask(uint8_t pic1, uint8_t pic2);
-extern void pic_clear_mask(uint8_t pic1, uint8_t pic2);
+extern struct pic_ops global_pic;
 
+
+/* from pic.c. support for x86 without APIC, or where APIC is disabled. */
+
+/* returns highest interrupt number, or negative on error. */
+extern int xtpic_init(struct pic_ops *ops);
+extern void xtpic_disable(void);	/* on APIC enable */
+
+
+/* from apic.c. support for the I/O APIC. */
+
+extern int ioapic_init(struct pic_ops *ops);
 
 /* from irq.c */
 

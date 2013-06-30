@@ -33,6 +33,8 @@
 struct tss kernel_tss;
 struct space *sigma0_space = NULL;
 
+struct pic_ops global_pic;
+
 static struct list_head resv_page_list = LIST_HEAD_INIT(resv_page_list);
 static struct page *next_dir_page = NULL;
 
@@ -412,26 +414,21 @@ void kmain(void *bigp, unsigned int magic)
 	scan_cpuid();
 	if(!CHECK_FLAG(get_features()->edx, 1)) panic("math is hard!");
 
-	/* initialize interrupt-related data structures with the I bit cleared. */
+	/* initialize CPU fundamentals and interrupt controllers etc. with the I
+	 * bit cleared.
+	 */
 	x86_irq_disable();
 
 	asm volatile ("lldt %%ax" :: "a" (0));
 	init_kernel_tss(&kernel_tss);
 
 	setup_gdt();
-	setup_idt(SEG_KERNEL_CODE);
-
-	/* map olde-timey PC interrupts 0-15 to 0x20 .. 0x2f inclusive */
-	initialize_pics(0x20, 0x28);
-	pic_set_mask(0xff, 0xff);	/* mask them all off for now. */
-
+	setup_idt(SEG_KERNEL_CODE, 15);		/* XT-PIC, for now */
 	init_irq();
 
 	/* set MP. clear EMulation, NoExceptions, TaskSwitch. */
 	x86_alter_cr0(~(X86_CR0_EM | X86_CR0_NE | X86_CR0_TS), X86_CR0_MP);
 	x86_init_fpu();
-
-	x86_irq_enable();
 
 	printf("setting up paging (kernel ram [%#lx..%#lx])\n",
 		(L4_Word_t)resv_start, (L4_Word_t)resv_end);
@@ -458,10 +455,27 @@ void kmain(void *bigp, unsigned int magic)
 		panic("mung doesn't work without ACPI anymore. bawwww");
 	}
 
+	printf("enabling interrupt controllers...\n");
+	int max_irq = -1;
+	if(apic_probe() < 0 || (max_irq = ioapic_init(&global_pic)) < 0) {
+		printf("IOAPIC not found, or disabled; falling back to XT-PIC\n");
+		if((max_irq = xtpic_init(&global_pic)) < 0) {
+			panic("could not initialize IOAPIC or XT-PIC!");
+		}
+	} else {
+		/* the bright new world of interrupt routing hardware! yaaaay */
+		assert(apic_enabled);
+		xtpic_disable();
+	}
+	assert(max_irq >= 0);
+
+	printf("re-enabling interrupt processing...\n");
+	x86_irq_enable();
+
 	/* initialize KIP & vaguely related bits */
 	kip_mem = kcp_base;
 	assert(kcp_base == (void *)&kcp_copy[0]);
-	make_kip(kip_mem, resv_start & ~PAGE_MASK, resv_end | PAGE_MASK);
+	make_kip(kip_mem, resv_start & ~PAGE_MASK, resv_end | PAGE_MASK, max_irq);
 	systemclock_p = kip_mem + PAGE_SIZE - sizeof(uint64_t);
 	*systemclock_p = 0;
 	global_timer_count = 0;
@@ -474,7 +488,7 @@ void kmain(void *bigp, unsigned int magic)
 
 	go_high();
 	setup_gdt();
-	setup_idt(SEG_KERNEL_CODE_HIGH);
+	setup_idt(SEG_KERNEL_CODE_HIGH, max_irq);
 
 	/* then unmap the low space. */
 	int last_resv_dir = (resv_end + (1 << 22) - 1) >> 22;
@@ -540,7 +554,8 @@ void kmain(void *bigp, unsigned int magic)
 	printf("enabling timer interrupt\n");
 	x86_irq_disable();
 	setup_timer_ch0();
-	pic_clear_mask(0x01, 0x00);
+	if(apic_enabled) ioapic_route_legacy_irq(0, 0x20);
+	(*global_pic.unmask_irq)(0);
 	x86_irq_enable();
 
 	printf("entering kernel scheduler\n");
