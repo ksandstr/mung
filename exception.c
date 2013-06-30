@@ -527,7 +527,7 @@ void isr_exn_gp_bottom(struct x86_exregs *regs)
 {
 	struct thread *current = get_current_thread();
 
-	if(unlikely(IS_KERNEL_THREAD(current))) {
+	if(unlikely(x86_frame_len(regs) < sizeof(*regs))) {
 		/* this shouldn't happen. stop the thread in question & limp along
 		 * regardless.
 		 */
