@@ -77,7 +77,7 @@ struct ioapic_info
 };
 
 
-bool apic_enabled = false;
+bool apic_enabled = false, apic_disable_opt = false;
 struct lapic_info cpu_apics[1];		/* still an UP kernel. */
 
 struct ioapic_info *global_ioapics = NULL;
@@ -337,14 +337,17 @@ static COLD void lapic_init(void)
 
 COLD int apic_probe(void)
 {
+	apic_enabled = false;
+
 	if(!CHECK_FLAG(get_features()->edx, X86_FEATURE_D_APIC)) {
 		printf("APIC not detected in CPUID flags.\n");
 		return -1;
 	}
 
-	/* TODO: check an apic_disable_opt variable, return -1 and printf
-	 * something about force-disabling the IO-APIC
-	 */
+	if(apic_disable_opt) {
+		printf("APIC found, but instructed to disable it\n");
+		return -1;
+	}
 
 	lapic_init();	/* per CPU */
 	apic_enabled = true;

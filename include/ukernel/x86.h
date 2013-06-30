@@ -312,7 +312,7 @@ extern void scan_cpuid(void);
 
 /* from apic.c */
 
-extern bool apic_enabled;
+extern bool apic_enabled, apic_disable_opt;
 extern int apic_probe(void);	/* depends on CPUID; ret < 0 when no APIC */
 
 /* NOTE: this unmasks the IRQ! */

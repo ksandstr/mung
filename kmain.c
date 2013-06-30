@@ -455,6 +455,10 @@ void kmain(void *bigp, unsigned int magic)
 		panic("mung doesn't work without ACPI anymore. bawwww");
 	}
 
+#ifdef DISABLE_APIC
+	apic_disable_opt = true;
+#endif
+
 	printf("enabling interrupt controllers...\n");
 	int max_irq = -1;
 	if(apic_probe() < 0 || (max_irq = ioapic_init(&global_pic)) < 0) {
