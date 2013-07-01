@@ -458,8 +458,10 @@ static void receive_exn_reply(struct hook *hook, uintptr_t code, void *priv)
 	for(int i=0; i < num_vars; i++) {
 		*(exvarptrs[i]) = L4_VREG(utcb, L4_TCR_MR(i + 1));
 	}
-	/* retain privileged EFLAGS bits from thread context. */
-	regs->eflags = (regs->eflags & 0xffffff00) | (eflags & 0xff);
+	/* retain privileged EFLAGS bits from thread context, except for the trap
+	 * flag, which userspace may set.
+	 */
+	regs->eflags = (regs->eflags & 0xfffffe00) | (eflags & 0x1ff);
 	/* set reserved bits correctly */
 	regs->eflags &= 0xffffffd7;
 	regs->eflags |= 0x00000002;
