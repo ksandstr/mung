@@ -31,6 +31,43 @@ interface FaultHandler
 			raises(muidl::NoReply);
 };
 
+
+[StubPrefix(__l4x2)]
+interface ExceptionHandler
+{
+	[TagMask(0xfff00000), Label(0xffc0)]
+	void sys_exception(
+		[MR(1)] inout word eip,
+		[MR(2)] inout word eflags,
+		[MR(3)] inout word exception_no,
+		[MR(4)] inout word errorcode,
+		[MR(5)] inout word edi,
+		[MR(6)] inout word esi,
+		[MR(7)] inout word ebp,
+		[MR(8)] inout word esp,
+		[MR(9)] inout word ebx,
+		[MR(10)] inout word edx,
+		[MR(11)] inout word ecx,
+		[MR(12)] inout word eax)
+			raises(muidl::NoReply);
+
+	[TagMask(0xfff00000), Label(0xffb0)]
+	void arch_exception(
+		[MR(1)] inout word eip,
+		[MR(2)] inout word eflags,
+		[MR(3)] inout word exception_no,
+		[MR(4)] inout word errorcode,
+		[MR(5)] inout word edi,
+		[MR(6)] inout word esi,
+		[MR(7)] inout word ebp,
+		[MR(8)] inout word esp,
+		[MR(9)] inout word ebx,
+		[MR(10)] inout word edx,
+		[MR(11)] inout word ecx,
+		[MR(12)] inout word eax)
+			raises(muidl::NoReply);
+};
+
 }; // module L4X2
 
 #endif
