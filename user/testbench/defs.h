@@ -11,6 +11,7 @@
 #include <ccan/compiler/compiler.h>
 
 #include <l4/types.h>
+#include <muidl.h>
 
 
 /* TODO: fetch from KIP at init */

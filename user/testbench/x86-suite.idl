@@ -1,0 +1,11 @@
+
+#include "l4x2.idl"
+
+
+[StubPrefix(__x86)]
+interface X86ExHandler: L4X2::ExceptionHandler
+{
+	long last_interrupt();
+
+	long get_trace_count();
+};

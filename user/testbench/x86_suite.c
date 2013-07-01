@@ -1,17 +1,21 @@
 
+#define X86EXHANDLER_IMPL_SOURCE 1
+
 #include <math.h>
 #include <stdint.h>
 #include <string.h>
+#include <ccan/compiler/compiler.h>
 
 #include <l4/types.h>
 #include <l4/ipc.h>
 #include <l4/schedule.h>
 #include <l4/syscall.h>
 
-#include <ccan/compiler/compiler.h>
+#include <ukernel/util.h>
 
 #include "test.h"
 #include "defs.h"
+#include "x86-suite-defs.h"
 
 
 #ifdef __MMX__
@@ -189,6 +193,151 @@ START_TEST(sse_smoketest)
 END_TEST
 
 
+struct ex_ctx
+{
+	int last_int, trace_count;
+	bool running;
+};
+
+
+static struct ex_ctx *ex_ctx(void)
+{
+	static int ex_key = -1;
+
+	if(ex_key == -1) tsd_key_create(&ex_key, &free);
+	void *ptr = tsd_get(ex_key);
+	if(ptr == NULL) {
+		struct ex_ctx *ctx = malloc(sizeof(*ctx));
+		ptr = ctx;
+		*ctx = (struct ex_ctx){ .running = true, .last_int = -1 };
+		tsd_set(ex_key, ptr);
+	}
+	return ptr;
+}
+
+
+static int32_t x86_exh_last_interrupt(void) {
+	return ex_ctx()->last_int;
+}
+
+
+static int32_t x86_exh_get_trace_count(void) {
+	return ex_ctx()->trace_count;
+}
+
+
+static void x86_exh_handle_exn(
+	L4_Word_t *eip_p,
+	L4_Word_t *eflags_p,
+	L4_Word_t *exception_no_p,
+	L4_Word_t *errorcode_p,
+	L4_Word_t *edi_p, L4_Word_t *esi_p, L4_Word_t *ebp_p, L4_Word_t *esp_p,
+	L4_Word_t *ebx_p, L4_Word_t *edx_p, L4_Word_t *ecx_p, L4_Word_t *eax_p)
+{
+	struct ex_ctx *ctx = ex_ctx();
+	const uint8_t *insn = (uint8_t *)*eip_p;
+
+	ctx->last_int = *errorcode_p >> 3;
+
+	switch(ctx->last_int) {
+		default:
+			/* assume INT imm8 */
+			diag("exception at ip=%#lx, errorcode=%#lx", *eip_p, *errorcode_p);
+			fail_unless(insn[0] == 0xcd, "insn=%#02x", insn[0]);
+			*eip_p += 2;
+			break;
+
+		case 0x24:
+			/* enable tracing. */
+			diag("enabling tracing (old tf=%s)",
+				btos(CHECK_FLAG(*eflags_p, 1 << 8)));
+			*eflags_p |= 1 << 8;	/* set TF */
+			*eip_p += 2;
+			break;
+
+		case 0x25:
+			/* disable it. */
+			diag("disabling tracing (old tf=%s)",
+				btos(CHECK_FLAG(*eflags_p, 1 << 8)));
+			*eflags_p &= ~(1 << 8);
+			*eip_p += 2;
+			break;
+
+		case 1:
+			/* the tracing debug vector! */
+			ctx->trace_count++;
+			diag("trace, eip'=%#lx", *eip_p);
+			/* eip advanced by tracing mechanism. */
+			break;
+	}
+}
+
+
+static const struct x86ex_handler_vtable exh_vtable = {
+	.last_interrupt = &x86_exh_last_interrupt,
+	.get_trace_count = &x86_exh_get_trace_count,
+	.sys_exception = &x86_exh_handle_exn,
+	.arch_exception = &x86_exh_handle_exn,
+};
+
+IDL_FIXTURE(x86_exh, x86ex_handler, &exh_vtable, !ex_ctx()->running);
+
+
+/* tests interrupt delivery to an exception handler thread. */
+START_TEST(int_exn)
+{
+	plan_tests(3);
+
+	/* part 1: there should not be a previous exception at the start. */
+	int last_int, n = __x86_last_interrupt(x86_exh_tid, &last_int);
+	fail_if(n != 0, "n=%d", n);
+	ok1(last_int < 0);
+
+	/* part 2: raising exception 0x23 should change last_int to 0x23. */
+	L4_ThreadId_t old_exh = L4_ExceptionHandler();
+	L4_Set_ExceptionHandler(x86_exh_tid);
+	asm volatile ("int $0x23");
+	n = __x86_last_interrupt(x86_exh_tid, &last_int);
+	if(!ok1(last_int == 0x23)) diag("last_int=%#x", last_int);
+
+	/* part 3: similarly, raising exception 0x69 should do the same. */
+	asm volatile ("int $0x69");
+	n = __x86_last_interrupt(x86_exh_tid, &last_int);
+	if(!ok1(last_int == 0x69)) diag("last_int=%#x", last_int);
+
+	L4_Set_ExceptionHandler(old_exh);
+}
+END_TEST
+
+
+START_TEST(trace_exn)
+{
+	plan_tests(2);
+
+	/* part 1: no tracing events, yet. */
+	int tct, n = __x86_get_trace_count(x86_exh_tid, &tct);
+	fail_if(n != 0, "n=%d", n);
+	ok1(tct == 0);
+
+	/* part 2: there should be two tracing events, as there are two
+	 * instructions between the controlling interrupts.
+	 */
+	L4_ThreadId_t old_exh = L4_ExceptionHandler();
+	L4_Set_ExceptionHandler(x86_exh_tid);
+	asm volatile ("int $0x24");		/* enable tracing */
+	asm volatile ("xorl %%eax, %%eax" ::: "eax");
+	asm volatile ("xorl %%ebx, %%ebx" ::: "ebx");
+	asm volatile ("int $0x25");		/* disable it */
+	tct = 0; n = __x86_get_trace_count(x86_exh_tid, &tct);
+	fail_if(n != 0, "n=%d", n);
+	diag("tct=%d", tct);
+	ok1(tct > 0);
+
+	L4_Set_ExceptionHandler(old_exh);
+}
+END_TEST
+
+
 struct Suite *x86_suite(void)
 {
 	Suite *s = suite_create("x86");
@@ -206,6 +355,15 @@ struct Suite *x86_suite(void)
 		TCase *tc = tcase_create("hwctx");
 		tcase_add_test(tc, fpu_cw_restore);
 		tcase_add_test(tc, sse_cw_restore);
+		suite_add_tcase(s, tc);
+	}
+
+	/* exception handling tests */
+	{
+		TCase *tc = tcase_create("exn");
+		ADD_IDL_FIXTURE(tc, x86_exh);
+		tcase_add_test(tc, int_exn);
+		tcase_add_test(tc, trace_exn);
 		suite_add_tcase(s, tc);
 	}
 
