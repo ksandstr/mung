@@ -302,12 +302,12 @@ bool thread_set_utcb(struct thread *t, L4_Word_t start)
 		release_gdt_ptr_seg(L4_Address(sp->utcb_area)
 			+ t->utcb_pos * UTCB_SIZE + 256 - 4, t->utcb_ptr_seg);
 		t->utcb_ptr_seg = 0;
-	}
-
-	if(sp->utcb_pages == NULL) {
+	} else if(sp->utcb_pages == NULL) {
 		sp->utcb_pages = calloc(sizeof(struct page *),
 			NUM_UTCB_PAGES(sp->utcb_area));
 	}
+	assert(sp->utcb_pages != NULL);
+	assert(t->utcb_ptr_seg == 0);
 
 	/* (could call a space_ensure_utcb() function or something, but why.) */
 	int new_pos = (start - L4_Address(sp->utcb_area)) / UTCB_SIZE,
