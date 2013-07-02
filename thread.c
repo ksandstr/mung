@@ -748,7 +748,10 @@ L4_Word_t sys_exregs(
 			assert(dest_utcb != NULL);
 			L4_VREG(dest_utcb, L4_TCR_USERDEFINEDHANDLE) = udh_in;
 		}
-		if(CHECK_FLAG(ctl_in, CTL_f)) dest_thread->ctx.eflags = flags_in;
+		if(CHECK_FLAG(ctl_in, CTL_f)) {
+			dest_thread->ctx.eflags = x86_clean_eflags(
+				dest_thread->ctx.eflags, flags_in);
+		}
 		if(CHECK_FLAG(ctl_in, CTL_i)) dest_thread->ctx.eip = ip_in;
 		if(CHECK_FLAG(ctl_in, CTL_s)) dest_thread->ctx.esp = sp_in;
 

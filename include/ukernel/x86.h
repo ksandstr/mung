@@ -200,6 +200,19 @@ static inline void x86_alter_cr0(uint32_t and, uint32_t or)
 }
 
 
+/* retain privileged EFLAGS bits from thread context (passed in @t_eflags),
+ * except for the trap flag, which userspace may set.
+ */
+static inline uint32_t x86_clean_eflags(uint32_t t_eflags, uint32_t in)
+{
+	uint32_t r = (t_eflags & 0xfffffe00) | (in & 0x1ff);
+	/* set reserved bits correctly */
+	r &= 0xffffffd7;
+	r |= 0x00000002;
+	return r;
+}
+
+
 struct cpuid_out {
 	uint32_t eax, ebx, ecx, edx;
 };
