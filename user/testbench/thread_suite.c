@@ -295,6 +295,39 @@ START_TEST(scheduler_id_validity)
 END_TEST
 
 
+/* test whether UTCB relocation retains TCR values (it should) */
+START_TEST(relocate_utcb)
+{
+	plan_tests(4);
+	const L4_Word_t udh_val = 0xbeefc0de;
+	const L4_ThreadId_t pager_tid = L4_GlobalId(0xbaaa, 17);
+
+	/* create a thread and set its pager and udh. */
+	L4_ThreadId_t o_tid = L4_GlobalId(0xbeef, 5);
+	mk_thread(o_tid, true);
+	L4_Set_UserDefinedHandleOf(o_tid, udh_val);
+	L4_Set_PagerOf(o_tid, pager_tid);
+
+	/* part 1: examine that the UDH etc. are right before the UTCB switch. */
+	ok1(L4_UserDefinedHandleOf(o_tid) == udh_val);
+	ok1(L4_PagerOf(o_tid).raw == pager_tid.raw);
+
+	/* part 2: relocate the UTCB, re-check these values */
+	L4_KernelInterfacePage_t *kip = L4_GetKernelInterface();
+	L4_Word_t utcb = L4_LocalIdOf(o_tid).raw & ~(L4_UtcbSize(kip) - 1),
+		new_utcb = utcb + L4_UtcbSize(kip);
+	diag("moving utcb=%#lx -> utcb'=%#lx", utcb, new_utcb);
+	L4_Word_t ret = L4_ThreadControl(o_tid, o_tid, L4_nilthread, L4_nilthread,
+		(void *)new_utcb);
+	fail_if(ret == 0, "ec=%#lx", L4_ErrorCode());
+	ok1(L4_UserDefinedHandleOf(o_tid) == udh_val);
+	ok1(L4_PagerOf(o_tid).raw == pager_tid.raw);
+
+	del_thread(o_tid);
+}
+END_TEST
+
+
 /* create a non-activated thread and overwrite its version bits.
  *
  * (the real API test would start an actual thread, overwrite version, restart
@@ -331,6 +364,7 @@ Suite *thread_suite(void)
 		tcase_add_test(tc, privilege);
 		tcase_add_test(tc, thread_id_validity);
 		tcase_add_test(tc, scheduler_id_validity);
+		tcase_add_test(tc, relocate_utcb);
 		suite_add_tcase(s, tc);
 	}
 
