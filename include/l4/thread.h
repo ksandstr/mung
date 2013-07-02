@@ -218,6 +218,16 @@ static inline L4_ThreadState_t L4_Stop_SpIpFlags(
 }
 
 
+static inline L4_Word_t L4_UserDefinedHandleOf(L4_ThreadId_t dest)
+{
+	L4_Word_t dummy, ret;
+	L4_ThreadId_t dummy_id;
+	L4_ExchangeRegisters(dest, 0x200, 0, 0, 0, 0, L4_nilthread,
+		&dummy, &dummy, &dummy, &dummy, &ret, &dummy_id);
+	return ret;
+}
+
+
 static inline void L4_Set_UserDefinedHandleOf(
 	L4_ThreadId_t dest,
 	L4_Word_t value)
