@@ -269,6 +269,26 @@ void thread_set_spip(struct thread *t, L4_Word_t sp, L4_Word_t ip)
 }
 
 
+static void copy_tcrs(void *dst, const void *src)
+{
+	/* all the user-writable TCRs. */
+	static const int vregs[] = {
+		L4_TCR_VA_SENDER,
+		L4_TCR_XFERTIMEOUTS,
+		L4_TCR_COP_PREEMPT,
+		L4_TCR_EXCEPTIONHANDLER,
+		L4_TCR_PAGER,
+		L4_TCR_USERDEFINEDHANDLE,
+		L4_TCR_THREADWORD0,
+		L4_TCR_THREADWORD1,
+	};
+
+	for(int i=0; i < sizeof(vregs) / sizeof(vregs[0]); i++) {
+		L4_VREG(dst, vregs[i]) = L4_VREG(src, vregs[i]);
+	}
+}
+
+
 /* FIXME: check return values from calloc(), mapdb_add_map(), etc */
 bool thread_set_utcb(struct thread *t, L4_Word_t start)
 {
@@ -284,14 +304,14 @@ bool thread_set_utcb(struct thread *t, L4_Word_t start)
 		t->utcb_ptr_seg = 0;
 	}
 
-	int new_pos = (start - L4_Address(sp->utcb_area)) / UTCB_SIZE;
 	if(sp->utcb_pages == NULL) {
 		sp->utcb_pages = calloc(sizeof(struct page *),
 			NUM_UTCB_PAGES(sp->utcb_area));
 	}
 
 	/* (could call a space_ensure_utcb() function or something, but why.) */
-	int page = new_pos / UTCB_PER_PAGE;
+	int new_pos = (start - L4_Address(sp->utcb_area)) / UTCB_SIZE,
+		page = new_pos / UTCB_PER_PAGE;
 	assert(page < NUM_UTCB_PAGES(sp->utcb_area));
 	if(sp->utcb_pages[page] == NULL) {
 		struct page *p = get_kern_page(0);
@@ -309,6 +329,7 @@ bool thread_set_utcb(struct thread *t, L4_Word_t start)
 		assert(sp->utcb_pages[page]->vm_addr != NULL);
 		void *utcb_mem = sp->utcb_pages[page]->vm_addr + offset * UTCB_SIZE;
 		memset(utcb_mem, 0, UTCB_SIZE);
+		if(t->utcb_pos >= 0) copy_tcrs(utcb_mem + 256, thread_get_utcb(t));
 		L4_VREG(utcb_mem + 256, L4_TCR_MYGLOBALID) = t->id;
 		*(L4_Word_t *)(utcb_mem + 256 - 4) = start + 256;
 	}
