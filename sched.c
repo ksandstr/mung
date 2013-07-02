@@ -236,6 +236,7 @@ static void entering_thread(struct thread *next)
 
 	/* write parameters used by the irq0 handler */
 	preempt_at = (preempt_at + 999) / 1000;
+	assert(x86_irq_is_enabled());
 	x86_irq_disable();
 	current_thread = next;
 	preempt_timer_count = preempt_at;
@@ -526,6 +527,7 @@ void return_to_scheduler(void)
 	next->status = TS_RUNNING;
 	current_thread = next;
 
+	if(!x86_irq_is_enabled()) x86_irq_enable();		/* for r_f_e() */
 	return_from_exn();
 	assert((next->ctx.eflags & (1 << 14)) == 0);
 	iret_to_scheduler(&next->ctx);

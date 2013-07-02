@@ -9,6 +9,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <stdbool.h>
+#include <assert.h>
 
 #include <ukernel/tss.h>
 #include <ukernel/ioport.h>
@@ -165,13 +166,26 @@ static inline bool x86_irq_is_enabled(void) {
 
 
 static inline void x86_irq_disable(void) {
+	assert(x86_irq_is_enabled());
 	asm volatile ("cli" ::: "memory");
 }
 
 
 static inline void x86_irq_enable(void) {
+	assert(!x86_irq_is_enabled());
 	asm volatile ("sti" ::: "memory");
 }
+
+
+/* must appear in a proper block, though the variable declaration already
+ * errors if it doesn't.
+ */
+#define x86_irq_disable_push() \
+	bool __saved_i = x86_irq_is_enabled(); \
+	if(__saved_i) x86_irq_disable();
+
+#define x86_irq_restore() \
+	do { if(__saved_i) x86_irq_enable(); } while(0)
 
 
 static inline void x86_alter_cr0(uint32_t and, uint32_t or)

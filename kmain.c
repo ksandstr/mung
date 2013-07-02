@@ -93,18 +93,18 @@ static struct page *find_page_by_id(uint32_t id)
 
 uint64_t read_global_timer(void)
 {
-	x86_irq_disable();
+	x86_irq_disable_push();
 	uint64_t value = global_timer_count;
-	x86_irq_enable();
+	x86_irq_restore();
 	return value;
 }
 
 
 uint64_t ksystemclock(void)
 {
-	x86_irq_disable();
+	x86_irq_disable_push();
 	uint64_t value = *systemclock_p;
-	x86_irq_enable();
+	x86_irq_restore();
 	return value;
 }
 
@@ -417,7 +417,7 @@ void kmain(void *bigp, unsigned int magic)
 	/* initialize CPU fundamentals and interrupt controllers etc. with the I
 	 * bit cleared.
 	 */
-	x86_irq_disable();
+	if(x86_irq_is_enabled()) x86_irq_disable();
 
 	asm volatile ("lldt %%ax" :: "a" (0));
 	init_kernel_tss(&kernel_tss);

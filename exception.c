@@ -44,6 +44,7 @@ static void *next_fpu_context = NULL;
  */
 void return_from_exn(void)
 {
+	assert(x86_irq_is_enabled());
 	x86_irq_disable();
 	if(unlikely(kernel_irq_deferred)) {
 		do {
@@ -71,6 +72,8 @@ void isr_exn_de_bottom(struct x86_exregs *regs)
 
 void isr_exn_ud_bottom(struct x86_exregs *regs)
 {
+	assert(x86_irq_is_enabled());
+
 	/* see if it's a LOCK NOP. (this is why the "syscall" is so slow.) */
 
 	/* NOTE: could extend the kernel data segment to the full address space,
@@ -164,6 +167,8 @@ void cop_killa(struct thread *dead)
 /* device not available exception (fpu/mmx context switch) */
 void isr_exn_nm_bottom(struct x86_exregs *regs)
 {
+	assert(x86_irq_is_enabled());
+
 	x86_alter_cr0(~X86_CR0_TS, 0);
 
 	struct thread *current = get_current_thread(), *prev = fpu_thread;
@@ -569,6 +574,8 @@ void isr_exn_gp_bottom(struct x86_exregs *regs)
 
 void isr_exn_pf_bottom(struct x86_exregs *regs)
 {
+	assert(x86_irq_is_enabled());
+
 	L4_Word_t fault_addr;
 	asm volatile ("movl %%cr2, %0": "=r" (fault_addr));
 
