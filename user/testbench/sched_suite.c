@@ -9,6 +9,7 @@
 #include <ukernel/util.h>
 
 #include <l4/types.h>
+#include <l4/kip.h>
 #include <l4/thread.h>
 #include <l4/ipc.h>
 #include <l4/schedule.h>
@@ -53,8 +54,18 @@ static void starvin_marvin(void *param UNUSED)
 }
 
 
+static bool try_sched(L4_ThreadId_t o_tid)
+{
+	const int my_pri = find_own_priority();
+	L4_Word_t dummy, res = L4_Schedule(o_tid,
+		(L4_Word_t)L4_TimePeriod(10000).raw << 16 | L4_Never.raw,
+		0, my_pri, my_pri << 16 | L4_ZeroTime.raw, &dummy);
+	return res != L4_SCHEDRESULT_ERROR;
+}
+
+
 /* provoke as many distinct errors as possible in a single address space. */
-START_TEST(syscall_errors)
+START_TEST(single_as_errors)
 {
 	const int ref_pri = find_own_priority();
 	const L4_Word_t ref_timectl = (L4_Word_t)L4_TimePeriod(15 * 1000).raw << 16
@@ -142,14 +153,37 @@ START_TEST(syscall_errors)
 END_TEST
 
 
-static bool try_sched(L4_ThreadId_t o_tid)
+/* test for the correct error results for attempting to schedule the interrupt
+ * and system TID ranges.
+ */
+START_TEST(range_errors)
 {
-	const int my_pri = find_own_priority();
-	L4_Word_t dummy, res = L4_Schedule(o_tid,
-		(L4_Word_t)L4_TimePeriod(10000).raw << 16 | L4_Never.raw,
-		0, my_pri, my_pri << 16 | L4_ZeroTime.raw, &dummy);
-	return res != L4_SCHEDRESULT_ERROR;
+	plan_tests(5);
+	L4_KernelInterfacePage_t *kip = L4_GetKernelInterface();
+	const int last_int = kip->ThreadInfo.X.SystemBase - 1,
+		last_sys = kip->ThreadInfo.X.UserBase - 1;
+	diag("last_int=%d, last_sys=%d", last_int, last_sys);
+
+	/* base case: can schedule self. */
+	ok1(try_sched(L4_Myself()));
+
+	/* part 1: scheduling an interrupt ain't cool. */
+	skip_start(last_int < 0, 2, "no interrupt range!");
+		ok(!try_sched(L4_GlobalId(last_int, 1)),
+			"can't schedule an interrupt");
+		L4_Word_t ec = L4_ErrorCode();
+		if(!ok(ec == 2, "code is ``invalid thread''")) diag("ec=%#lx", ec);
+	skip_end;
+
+	/* part 2: same for the system range. */
+	skip_start(last_sys <= last_int, 2, "no system range!");
+		ok(!try_sched(L4_GlobalId(last_sys, 17)),
+			"can't schedule a system thread");
+		L4_Word_t ec = L4_ErrorCode();
+		if(!ok(ec == 2, "code is ``invalid thread''")) diag("ec=%#lx", ec);
+	skip_end;
 }
+END_TEST
 
 
 /* test whether the "caller in same space as dest's scheduler" condition
@@ -870,8 +904,9 @@ Suite *sched_suite(void)
 
 	TCase *api_case = tcase_create("api");
 	tcase_set_fork(api_case, false);
-	tcase_add_test(api_case, syscall_errors);
+	tcase_add_test(api_case, single_as_errors);
 	tcase_add_test(api_case, syscall_access);
+	tcase_add_test(api_case, range_errors);
 	suite_add_tcase(s, api_case);
 
 	TCase *ipc_case = tcase_create("ipc");
