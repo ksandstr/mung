@@ -53,11 +53,7 @@ static void starvin_marvin(void *param UNUSED)
 }
 
 
-/* provoke as many distinct errors as possible.
- *
- * (TODO: not complete; "X may call Schedule on Y" isn't tested because other
- * threads always have the current thread as scheduler.)
- */
+/* provoke as many distinct errors as possible in a single address space. */
 START_TEST(syscall_errors)
 {
 	const int ref_pri = find_own_priority();
@@ -142,6 +138,59 @@ START_TEST(syscall_errors)
 
 	send_quit(other);
 	join_thread(other);
+}
+END_TEST
+
+
+static bool try_sched(L4_ThreadId_t o_tid)
+{
+	const int my_pri = find_own_priority();
+	L4_Word_t dummy, res = L4_Schedule(o_tid,
+		(L4_Word_t)L4_TimePeriod(10000).raw << 16 | L4_Never.raw,
+		0, my_pri, my_pri << 16 | L4_ZeroTime.raw, &dummy);
+	return res != L4_SCHEDRESULT_ERROR;
+}
+
+
+/* test whether the "caller in same space as dest's scheduler" condition
+ * checks out.
+ */
+START_TEST(syscall_access)
+{
+	plan_tests(4);
+
+	/* part 1: allowed to call Schedule on a local thread. */
+	L4_ThreadId_t o_tid = start_thread(&starvin_marvin, NULL);
+	fail_if(L4_IsNilThread(o_tid));
+	if(!ok(try_sched(o_tid), "local sched ok")) {
+		diag("ec=%#lx", L4_ErrorCode());
+	}
+	fail_unless(send_quit(o_tid), "ec=%#lx", L4_ErrorCode());
+	join_thread(o_tid);
+
+	/* part 2: should be allowed to call Schedule on a remote thread when
+	 * scheduler is set to the local space; and not when the Scheduler TCR is
+	 * set to the same thread.
+	 */
+	int child = fork_tid(&o_tid);
+	if(child == 0) {
+		starvin_marvin(NULL);
+		exit(0);
+	} else {
+		L4_Word_t res = L4_ThreadControl(o_tid, o_tid, L4_Myself(),
+			L4_Pager(), (void *)-1);
+		fail_if(res == 0, "ec=%#lx", L4_ErrorCode());
+		ok(try_sched(o_tid), "remote sched ok");
+
+		res = L4_ThreadControl(o_tid, o_tid, o_tid, L4_Pager(), (void *)-1);
+		fail_if(res == 0, "ec=%#lx", L4_ErrorCode());
+		ok(!try_sched(o_tid), "remote sched fail");
+		ok(L4_ErrorCode() == 1, "fail is ``no privilege''");
+
+		fail_unless(send_quit(o_tid), "ec=%#lx", L4_ErrorCode());
+		int st = 0, dead = wait(&st);
+		fail_if(dead != child, "dead=%d, st=%d, child=%d", dead, st, child);
+	}
 }
 END_TEST
 
@@ -822,6 +871,7 @@ Suite *sched_suite(void)
 	TCase *api_case = tcase_create("api");
 	tcase_set_fork(api_case, false);
 	tcase_add_test(api_case, syscall_errors);
+	tcase_add_test(api_case, syscall_access);
 	suite_add_tcase(s, api_case);
 
 	TCase *ipc_case = tcase_create("ipc");
