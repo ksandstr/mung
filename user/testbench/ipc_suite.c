@@ -478,6 +478,8 @@ end:
 /* tests that a send from a lower to higher priority thread causes a
  * scheduling preemption. also tests that a send to a same-priority thread
  * causes no preemption.
+ *
+ * FIXME: see comment at r_recv_timeout_case; same applies here
  */
 START_LOOP_TEST(send_preempt, iter, 0, 1)
 {
@@ -621,6 +623,7 @@ Suite *ipc_suite(void)
 	suite_add_tcase(s, panic_case);
 
 	TCase *preempt_case = tcase_create("preempt");
+	tcase_set_fork(preempt_case, false);
 	tcase_add_test(preempt_case, send_preempt);
 	/* TODO: also one for receive */
 	suite_add_tcase(s, preempt_case);

@@ -172,6 +172,12 @@ static void r_recv_timeout_fn(void *param_ptr)
 }
 
 
+/* FIXME: change thread.c, forkserv to set scheduler for forked processes'
+ * threads like it is in the root task's threads, i.e. that the creator can
+ * schedule its own threads.
+ *
+ * for now the test runs without fork.
+ */
 static L4_Word_t r_recv_timeout_case(int priority, bool spin, bool send)
 {
 	const int timeout_ms = 20;
@@ -819,6 +825,7 @@ Suite *sched_suite(void)
 	suite_add_tcase(s, api_case);
 
 	TCase *ipc_case = tcase_create("ipc");
+	tcase_set_fork(ipc_case, false);
 	tcase_add_test(ipc_case, r_recv_timeout_test);
 	suite_add_tcase(s, ipc_case);
 
