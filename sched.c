@@ -630,6 +630,16 @@ void sys_schedule(struct x86_exregs *regs)
 	}
 	if(IS_KERNEL_THREAD(dest)) goto inv_param;
 
+	/* access check */
+	struct thread *sched_thread = resolve_tid_spec(
+		dest->space, dest->scheduler);
+	if(unlikely(sched_thread == NULL)) goto inv_param;
+	if(sched_thread->space != current->space) {
+		result = L4_SCHEDRESULT_ERROR;
+		ec = L4_ERROR_NO_PRIVILEGE;
+		goto end_noupdate;
+	}
+
 	/* cooked inputs */
 	L4_Time_t ts_len = { .raw = (timectl >> 16) & 0xffff },
 		total_quantum = { .raw = timectl & 0xffff };
