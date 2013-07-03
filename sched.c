@@ -14,6 +14,7 @@
 #include <ukernel/util.h>
 #include <ukernel/ipc.h>
 #include <ukernel/space.h>
+#include <ukernel/kip.h>
 #include <ukernel/bug.h>
 #include <ukernel/misc.h>
 #include <ukernel/thread.h>
@@ -620,7 +621,13 @@ void sys_schedule(struct x86_exregs *regs)
 	/* outputs */
 	L4_Word_t old_timectl = 0, result = L4_SCHEDRESULT_ERROR, ec = 0;
 
-	/* FIXME: test for user TID range! */
+	/* test for user TID range */
+	if(unlikely(L4_ThreadNo(dest_tid) < first_user_threadno())) {
+		result = L4_SCHEDRESULT_ERROR;
+		ec = L4_ERROR_INVALID_THREAD;
+		goto end_noupdate;
+	}
+
 	struct thread *dest = NULL;
 	if(L4_IsNilThread(dest_tid)
 		|| (dest = resolve_tid_spec(current->space, dest_tid)) == NULL)
