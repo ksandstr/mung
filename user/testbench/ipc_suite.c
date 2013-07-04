@@ -229,18 +229,6 @@ static void close_sender(L4_ThreadId_t sender)
 }
 
 
-/* TODO: move into util.h or some such. this isn't found in the Pistachio
- * <l4/ipc.h> API declaration, but maybe should be.
- */
-static inline L4_MsgTag_t L4_WaitLocal_Timeout(
-	L4_Time_t rcv_timeout,
-	L4_ThreadId_t *from_p)
-{
-	return L4_Ipc(L4_nilthread, L4_anylocalthread,
-		L4_Timeouts(L4_Never, rcv_timeout), from_p);
-}
-
-
 /* test four things about the L4_anylocalthread FromSpecifier:
  *   1) that when no thread at all is sending, L4_anylocalthread should cause
  *      a timeout (base case);

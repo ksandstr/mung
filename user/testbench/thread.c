@@ -24,6 +24,8 @@
 #define THREAD_STACK_SIZE (32 * 1024)
 #define MAX_THREADS 12
 
+#define PREJOIN_LABEL 0xf00d
+
 
 struct thread
 {
@@ -150,9 +152,25 @@ void exit_thread(void *return_value)
 
 	tsd_clear();
 
-	/* exit via the exception to the parent thread, i.e. join_thread()
-	 * caller.
+	/* wait for message from the join_thread() caller, which may be any local
+	 * thread.
 	 */
+	L4_MsgTag_t tag;
+	L4_ThreadId_t new_parent;
+	do {
+		tag = L4_WaitLocal_Timeout(L4_Never, &new_parent);
+		if(L4_IpcFailed(tag)) {
+			printf("%s: local receive failed, ec=%#lx\n", __func__,
+				L4_ErrorCode());
+		} else if(tag.X.label != PREJOIN_LABEL) {
+			printf("%s: weird IPC from %lu:%lu, tag=%#08lx\n", __func__,
+				L4_ThreadNo(new_parent), L4_Version(new_parent),
+				tag.raw);
+		}
+	} while(!L4_IpcSucceeded(tag) || tag.X.label != PREJOIN_LABEL);
+	assert(!L4_IsNilThread(new_parent));
+	L4_Set_ExceptionHandler(new_parent);
+
 	for(;;) {
 		asm volatile ("int $1");
 	}
@@ -291,7 +309,14 @@ void *join_thread_long(L4_ThreadId_t tid, L4_Time_t timeout, L4_Word_t *ec_p)
 	assert(t < MAX_THREADS);
 	assert(abs(threads[t].version) == L4_Version(tid));
 
-	L4_MsgTag_t tag = L4_Receive_Timeout(tid_of(t), timeout);
+	L4_LoadMR(0, (L4_MsgTag_t){ .X.label = PREJOIN_LABEL }.raw);
+	L4_MsgTag_t tag = L4_Send_Timeout(tid_of(t), timeout);
+	if(L4_IpcFailed(tag)) {
+		*ec_p = L4_ErrorCode();
+		return NULL;
+	}
+
+	tag = L4_Receive_Timeout(tid_of(t), timeout);
 	if(L4_IpcFailed(tag)) {
 		L4_Word_t ec = L4_ErrorCode();
 		if(ec != 3) {

@@ -97,6 +97,16 @@ static inline L4_MsgTag_t L4_Wait(L4_ThreadId_t *from_p) {
 }
 
 
+/* TODO: not found in Pistachio, IIRC; add _NP() and update call sites */
+static inline L4_MsgTag_t L4_WaitLocal_Timeout(
+	L4_Time_t rcv_timeout,
+	L4_ThreadId_t *from_p)
+{
+	return L4_Ipc(L4_nilthread, L4_anylocalthread,
+		L4_Timeouts(L4_Never, rcv_timeout), from_p);
+}
+
+
 static inline L4_MsgTag_t L4_ReplyWait_Timeout(
 	L4_ThreadId_t to,
 	L4_Time_t rcv_timeout,

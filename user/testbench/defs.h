@@ -132,6 +132,8 @@ extern void add_fs_tid(L4_Word_t space_id, L4_ThreadId_t tid);
 
 /* from thread.c */
 
+extern int thread_self(void);
+
 extern L4_ThreadId_t start_thread(void (*fn)(void *), void *param);
 extern L4_ThreadId_t start_thread_long(
 	void (*fn)(void *),
@@ -140,16 +142,31 @@ extern L4_ThreadId_t start_thread_long(
 	L4_Time_t ts_len,
 	L4_Time_t total_quantum);
 
+/* NOTE: as there is no manager thread in the testbench process, exit_thread()
+ * and join_thread() do an active handshake to make sure that a join_thread()
+ * will only terminate a thread that's called exit_thread(). for threads that
+ * wait for IPC from L4_anythread or L4_anylocalthread, a join_thread can send
+ * PREJOIN_LABEL (0xf00d) with u=t=0 in an attempt to sync with a call to
+ * exit_thread().
+ *
+ * therefore as a rule of thumb, threads that do waits should have an exit
+ * handshake that guarantees the next IPC receive will be done from
+ * exit_thread(). (that one filters until it hits PREJOIN_LABEL, so the
+ * converse problem doesn't apply.)
+ *
+ * be warned that an out-of-order join_thread() can terribly confuse an
+ * unprepared receiver.
+ */
 extern NORETURN void exit_thread(void *return_value);
 extern void *join_thread(L4_ThreadId_t tid);
 extern void *join_thread_long(
 	L4_ThreadId_t tid,
 	L4_Time_t timeout,
 	L4_Word_t *ec_p);
+
 extern void for_each_thread(
 	void (*fn)(L4_ThreadId_t tid, void *ptr),
 	void *ptr);
-extern int thread_self(void);
 
 /* 0 on success, errno on failure. the thread indicated by *caller_tid_p will
  * be preserved & recreated, and the new TID stored in *caller_tid_p . the new
