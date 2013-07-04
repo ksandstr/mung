@@ -103,6 +103,7 @@ static inline void ioapic_write(
 	uint8_t address,
 	uint32_t value)
 {
+	assert(!x86_irq_is_enabled());
 	mm_outb(ioa->base_addr + 0, address);	/* IOREGSEL */
 	mm_outl(ioa->base_addr + 0x10, value);	/* IOWIN */
 }
@@ -110,6 +111,7 @@ static inline void ioapic_write(
 
 static inline uint32_t ioapic_read(struct ioapic_info *ioa, uint8_t address)
 {
+	assert(!x86_irq_is_enabled());
 	mm_outb(ioa->base_addr + 0, address);
 	return mm_inl(ioa->base_addr + 0x10);
 }
@@ -120,6 +122,7 @@ static inline uint32_t ioapic_read(struct ioapic_info *ioa, uint8_t address)
  */
 static void ioapic_send_eoi(int irq)
 {
+	assert(!x86_irq_is_enabled());
 	struct lapic_info *apic = &cpu_apics[0];
 	/* the specs say that 0 is the right thing to write here. */
 	mm_outl(apic->base_addr + APIC_EOI, 0);
