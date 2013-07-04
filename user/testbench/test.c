@@ -193,6 +193,7 @@ struct test_thread_param
 	TCase *tc;
 	struct test *t;
 	int val;
+	L4_ThreadId_t end_tid;
 };
 
 
@@ -203,6 +204,15 @@ static void test_wrapper_fn(void *param_ptr)
 	tsd_set(in_test_key, (void *)IN_TEST_MAGIC);
 	(*p->t->t_fun)(p->val);
 	/* TODO: fill in a test_status report, return it through exit_thread() */
+
+	L4_LoadMR(0, 0);
+	L4_MsgTag_t tag = L4_Send(p->end_tid);
+	if(L4_IpcFailed(tag)) {
+		printf("*** %s: pre-exit sync failed, ec=%#lx\n", __func__,
+			L4_ErrorCode());
+	}
+
+	exit_thread(NULL);
 }
 
 
@@ -228,45 +238,60 @@ bool in_test(void) {
 }
 
 
+struct fixture_param {
+	SFun fn;
+	L4_ThreadId_t sync_tid;
+};
+
+
 static void fixture_wrapper_fn(void *param_ptr)
 {
-	SFun *param = param_ptr;
-	(**param)();
+	struct fixture_param *p = param_ptr;
+	(*p->fn)();
+
+	L4_LoadMR(0, 0);
+	L4_Send(p->sync_tid);
 }
 
 
-static bool run_fixture_list(
-	struct list_head *list,
-	bool teardown)
+static bool run_fixture_list(struct list_head *list, bool teardown)
 {
+	const L4_Time_t max_fixture_time = L4_TimePeriod(250 * 1000);
 	bool rc = true;
 	struct fixture *f;
 	list_for_each(list, f, link) {
-		SFun *param = malloc(sizeof(*param));
-		*param = teardown ? f->teardown : f->setup;
-		L4_ThreadId_t thread = start_thread(&fixture_wrapper_fn, param);
+		struct fixture_param *p = malloc(sizeof(*p));
+		*p = (struct fixture_param){
+			.fn = teardown ? f->teardown : f->setup,
+			.sync_tid = L4_Myself(),
+		};
+		L4_ThreadId_t thread = start_thread(&fixture_wrapper_fn, p);
 		if(L4_IsNilThread(thread)) {
 			printf("*** %s: start_thread() failed\n", __func__);
-			free(param);
+			free(p);
 			return false;
 		}
 
-		L4_Word_t ec = 0;
-		struct test_status *status = join_thread_long(thread,
-			L4_TimePeriod(500000), &ec);	/* half a second */
-		if(status == NULL) {
-			if(ec == 3) {
-				printf("*** error: test fixture timed out\n");
-			} else if(ec != 0) {
+		/* pre-join sync */
+		L4_MsgTag_t tag = L4_Receive_Timeout(thread, max_fixture_time);
+		if(L4_IpcFailed(tag) && L4_ErrorCode() == 3) {
+			printf("*** error: test fixture timed out\n");
+		} else if(L4_IpcFailed(tag)) {
+			printf("*** can't sync fixture, ec=%#lx\n", L4_ErrorCode());
+		} else {
+			L4_Word_t ec = 0;
+			struct test_status *status = join_thread_long(thread,
+				L4_TimePeriod(1500000), &ec); /* >1.5s indicates bad errors */
+			if(status == NULL && ec != 0) {
 				printf("*** error: join of fixture thread failed, ec %#lx\n",
 					ec);
+				abort();
+			} else {
+				if(status != NULL) rc = status->rc;
+				free(status);
+				free(p);
 			}
-		} else {
-			rc = status->rc;
-			free(status);
 		}
-
-		free(param);
 
 		if(!rc) break;
 	}
@@ -281,11 +306,25 @@ static bool run_test(TCase *tc, struct test *t, int test_value)
 
 	struct test_thread_param *param = malloc(sizeof(*param));
 	*param = (struct test_thread_param){
-		.tc = tc, .t = t, .val = test_value,
+		.tc = tc, .t = t, .val = test_value, .end_tid = L4_Myself(),
 	};
 	L4_ThreadId_t thread = start_thread(&test_wrapper_fn, param);
 	if(L4_IsNilThread(thread)) {
 		printf("*** %s: start_thread() failed\n", __func__);
+		rc = false;
+		goto end;
+	}
+
+	/* sync with wrapper end
+	 *
+	 * FIXME: change the 3s timeout to a parameter of how long tests can take.
+	 * this should be available to all tests, and perhaps modifiable per
+	 * TCase.
+	 */
+	L4_MsgTag_t tag = L4_Receive_Timeout(thread, L4_TimePeriod(3000 * 1000));
+	if(L4_IpcFailed(tag)) {
+		printf("*** %s: wrapper sync failed, ec=%#lx\n", __func__,
+			L4_ErrorCode());
 		rc = false;
 		goto end;
 	}

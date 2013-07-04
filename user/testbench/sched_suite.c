@@ -245,6 +245,12 @@ static void r_recv_timeout_fn(void *param_ptr)
 	L4_Word_t *param = param_ptr;
 	L4_ThreadId_t partner = { .raw = param[0] };
 	L4_Time_t timeout = { .raw = param[1] };
+#if 0
+	diag("in helper %lu:%lu; partner=%lu:%lu, timeout=%u µs",
+		L4_ThreadNo(L4_Myself()), L4_Version(L4_Myself()),
+		L4_ThreadNo(partner), L4_Version(partner),
+		(unsigned)L4_PeriodUs_NP(timeout));
+#endif
 
 	L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 1 }.raw);
 	L4_LoadMR(1, 0xfedcba98);
@@ -252,6 +258,9 @@ static void r_recv_timeout_fn(void *param_ptr)
 	L4_MsgTag_t tag = L4_Ipc(partner, partner,
 		L4_Timeouts(L4_Never, timeout), &dummy);
 	if(L4_IpcSucceeded(tag)) param[0] = 0; else param[0] = L4_ErrorCode();
+
+	L4_LoadMR(0, 0);
+	L4_Send(partner);
 }
 
 
@@ -265,7 +274,8 @@ static L4_Word_t r_recv_timeout_case(int priority, bool spin, bool send)
 {
 	const int timeout_ms = 20;
 
-	static L4_Word_t param[2];
+	L4_Word_t *param = malloc(sizeof(*param) * 2);
+	fail_if(param == NULL);
 	param[0] = L4_Myself().raw;
 	param[1] = L4_TimePeriod(timeout_ms * 1000).raw;
 	L4_ThreadId_t helper = start_thread(&r_recv_timeout_fn, param);
@@ -296,9 +306,16 @@ static L4_Word_t r_recv_timeout_case(int priority, bool spin, bool send)
 		L4_Reply(helper);
 	}
 
-	join_thread(helper);
+	/* get sync */
+	tag = L4_Receive_Timeout(helper, L4_TimePeriod(150 * 1000));
+	fail_if(L4_IpcFailed(tag), "helper sync failed, ec=%#lx",
+		L4_ErrorCode());
 
-	return param[0];
+	join_thread(helper);
+	L4_Word_t ret = param[0];
+	free(param);
+
+	return ret;
 }
 
 
