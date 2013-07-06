@@ -78,7 +78,8 @@ static void start_local_thread(L4_ThreadId_t tid, void *ptr)
 		L4_nilthread, &dummy, &dummy, &dummy, &dummy, &dummy,
 		&dummy_tid);
 	if(L4_IsNilThread(out)) {
-		printf("thread restart failed: ec %#lx\n", L4_ErrorCode());
+		printf("thread %lu:%lu restart failed: ec %#lx\n",
+			L4_ThreadNo(tid), L4_Version(tid), L4_ErrorCode());
 	}
 }
 

@@ -425,9 +425,10 @@ static void handle_pf(
 #endif
 		htable_add(&sp->pages, int_hash(page_addr), &page->address);
 	} else if(page == NULL) {
-#if 0
+#if 1
 		printf("segfault in thread %lu:%lu, space %lu (brk %#lx)\n",
 			L4_ThreadNo(from), L4_Version(from), sp->id, sp->prog_brk);
+		printf("  addr %#lx, ip %#lx\n", addr, ip);
 #endif
 		goto no_reply;
 	} else if(page->page->refcount == 1
