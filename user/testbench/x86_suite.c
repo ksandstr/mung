@@ -226,6 +226,11 @@ static int32_t x86_exh_get_trace_count(void) {
 }
 
 
+static void x86_exh_quit(void) {
+	ex_ctx()->running = false;
+}
+
+
 static void x86_exh_handle_exn(
 	L4_Word_t *eip_p,
 	L4_Word_t *eflags_p,
@@ -278,6 +283,7 @@ static const struct x86ex_handler_vtable exh_vtable = {
 	.get_trace_count = &x86_exh_get_trace_count,
 	.sys_exception = &x86_exh_handle_exn,
 	.arch_exception = &x86_exh_handle_exn,
+	.quit = &x86_exh_quit,
 };
 
 IDL_FIXTURE(x86_exh, x86ex_handler, &exh_vtable, !ex_ctx()->running);

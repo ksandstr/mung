@@ -5,7 +5,9 @@
 [StubPrefix(__x86)]
 interface X86ExHandler: L4X2::ExceptionHandler
 {
-	long last_interrupt();
+	[Label(0xdead)]
+	oneway void quit();
 
+	long last_interrupt();
 	long get_trace_count();
 };
