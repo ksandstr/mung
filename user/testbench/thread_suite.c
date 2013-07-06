@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
+#include <stdarg.h>
 #include <string.h>
 #include <ccan/compiler/compiler.h>
 
@@ -18,6 +19,42 @@
 
 #include "defs.h"
 #include "test.h"
+
+
+/* TODO: move these into test.h */
+/* >implying implications */
+#define imply_ok1(left, right) \
+	ok(!(left) || (right), "%s --> %s", #left, #right)
+
+#define imply_ok(left, right, test, ...) \
+	ok(!(left) || (right), test, ##__VA_ARGS__)
+
+/* NOTE: alias for left == right, printed as "iff". useful, but not used right
+ * now.
+ */
+#define iff_ok1(left, right) \
+	ok((left) == (right), "%s iff %s", #left, #right)
+
+
+/* TODO: make a self-test for this, and thr_exists()! */
+static bool as_exists(L4_ThreadId_t space_id)
+{
+	/* it's not properly specified in L4.X2, but a L4_Nilpage is the no-op for
+	 * SpaceControl's fields.
+	 */
+	L4_Word_t old_ctl, res = L4_SpaceControl(space_id, 0, L4_Nilpage,
+		L4_Nilpage, L4_nilthread, &old_ctl);
+	L4_Word_t ec = L4_ErrorCode();
+	fail_if(res == 0 && ec != L4_ERROR_INVALID_SPACE,
+		"res=%lu, ec=%#lx", res, ec);
+	return res == 1;
+}
+
+
+static bool thr_exists(L4_ThreadId_t tid) {
+	/* funnily enough, as all threads exist within a space, ... */
+	return as_exists(L4_GlobalIdOf(tid));
+}
 
 
 /* TODO: move this into util.c or somewhere */
@@ -211,7 +248,7 @@ START_TEST(thread_id_validity)
 		{ L4_GlobalId(0x12345, 256), false },	/* local TID, still */
 	};
 	for(int version=1; version >= 0; --version) {
-		for(int i=0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+		for(int i=0; i < NUM_ELEMENTS(cases); i++) {
 			if(!version && !cases[i].pass) {
 				/* no point in testing when there's no pass/fail line */
 				continue;
@@ -295,6 +332,169 @@ START_TEST(scheduler_id_validity)
 END_TEST
 
 
+static bool try_mk_in_space(
+	L4_ThreadId_t tid,
+	L4_ThreadId_t spacespec,
+	L4_Word_t *ec_p)
+{
+	L4_Word_t res = L4_ThreadControl(tid, spacespec, L4_Myself(),
+		L4_nilthread, (void *)-1);
+	if(res == 1) {
+		/* delete it right away. */
+		del_thread(tid);
+		*ec_p = 0;
+	} else {
+		*ec_p = L4_ErrorCode();
+	}
+
+	return res == 1;
+}
+
+
+/* check negative properties of SpaceSpecifier with all five settings:
+ *
+ *   - first, that only SpaceSpecifier = non-nil Global TID creates threads;
+ *     - (also, conveniently, that SpaceSpecifier = nil succeeds on a
+ *       non-extant thread)
+ *   - second, that only SpaceSpecifier = nil deletes threads;
+ *   - third, that only SpaceSpecifier = dest creates address spaces;
+ *   - fourth, that a sub-user or local SpaceSpecifier isn't valid;
+ *   - (TODO) fifth, that SpaceSpecifier != nil migrates threads
+ *     - (sixth, implied), that it works even to an address space that's
+ *       created by the moving ThreadControl.
+ *
+ * (testing for presence in an address space can be done with another thread
+ * that does an ExchangeRegisters on the global ID. if the result is
+ * L4_nilthread, then it's in a foreign space. so for inter-space migrations
+ * this could test the pre-state and both ends of the transition, but for the
+ * "created space" case only that the thread has left the building.
+ *
+ * clearly that's not good enough, so parts five and six are left for another
+ * day.)
+ */
+START_LOOP_TEST(spacespec_validity, iter, 0, 14)
+{
+	L4_KernelInterfacePage_t *kip = L4_GetKernelInterface();
+	int last_int = kip->ThreadInfo.X.SystemBase - 1,
+		last_kern = kip->ThreadInfo.X.UserBase - 1;
+	if(last_int == 0 || last_kern <= last_int) {
+		/* TODO: skip some individual cases instead? */
+		plan_skip_all("no interrupt or system threads");
+		return;
+	}
+
+	/* different kinds of SpaceSpecifier. */
+	const L4_ThreadId_t oth = L4_GlobalId(0xb00b, 17),	/* aka. udder */
+		oth_nonex = L4_GlobalId(L4_ThreadNo(oth) + 1,
+			(L4_Version(oth) + 1) | 7),
+		local = L4_LocalIdOf(L4_Myself()),
+		test_tid = L4_GlobalId(0xc0de, 13);		/* moo cant */
+	assert(L4_IsLocalId(local));
+	assert(!thr_exists(test_tid));
+	mk_thread(oth, false);
+	const struct {
+		L4_ThreadId_t space;
+		const char *name;
+		bool valid;		/* false if it's never supposed to pass */
+	} cases[15] = {
+		/* part 4: the invalid SpaceSpecifiers. */
+		{ local, "local TID", false },
+		{ L4_GlobalId(last_int, 1), "int range, v=1", false },
+		{ L4_GlobalId(last_int, 0), "int range, v=0", false },
+		{ L4_GlobalId(last_int, 41), "int range, v=41", false },
+		{ L4_GlobalId(last_int, 0x1f00),
+			"int range, local id, nonzero version", false },
+		{ L4_GlobalId(last_kern, 1), "kern range", false },
+		{ L4_GlobalId(L4_ThreadNo(test_tid), L4_Version(test_tid) ^ 0x1f),
+			"dest with wrong version", false },
+		{ L4_GlobalId(L4_ThreadNo(oth), L4_Version(oth) ^ 0x1f),
+			"extant with wrong version", false },
+
+		/* special ones */
+		{ L4_anythread, "anythread", false },
+		{ L4_anylocalthread, "anylocalthread", false },
+		{ (L4_ThreadId_t){ .raw = ~0u }, "xmas tree", false },
+
+		/* the rest */
+		{ L4_nilthread, "nil", true },
+		{ oth, "extant TID", true },
+		{ oth_nonex, "non-extant TID", true },
+		{ test_tid, "SpaceSpecifier = dest", true },
+	};
+	assert(iter >= 0 && iter < NUM_ELEMENTS(cases));
+
+	plan_tests(6);
+
+	const L4_ThreadId_t spec = cases[iter].space;
+	const bool valid = cases[iter].valid;
+	const char *name = cases[iter].name;
+	assert(strstr(name, "local") == NULL || L4_IsLocalId(spec));
+	diag("for %s [spec.raw=%#08lx, dest.raw=%#lx]:", name,
+		spec.raw, test_tid.raw);
+
+	const bool is_nil = L4_IsNilThread(spec),
+		is_local = L4_IsLocalId(spec),
+		is_int = L4_ThreadNo(spec) <= last_int,
+		is_system = L4_ThreadNo(spec) <= last_kern && !is_int,
+		is_user = !is_int && !is_system,
+		is_nonex = spec.raw == oth_nonex.raw;
+	assert(!valid || !is_local || is_nil);
+	L4_Word_t ec;
+
+	/* part 1: only SpaceSpecifier != nil creates threads. */
+	{
+		assert(!thr_exists(test_tid));
+		bool create_ok = try_mk_in_space(test_tid, spec, &ec),
+			invd_space = !create_ok && ec == L4_ERROR_INVALID_SPACE;
+		assert(!thr_exists(test_tid));
+		imply_ok1(!valid, invd_space);		/* part 4: the test point */
+		imply_ok1(create_ok, (is_user && !is_local && !is_nonex) || is_nil);
+
+		/* bonus! */
+		if(!imply_ok(is_nil, ec == 0, "deletion idempotence")) {
+			diag("is_nil=%s, ec=%#lx", btos(is_nil), ec);
+		}
+	}
+
+	/* part 2: only SpaceSpecifier == nil deletes threads. */
+	{
+		mk_thread(test_tid, false);
+		assert(thr_exists(test_tid));
+		L4_ThreadControl(test_tid, spec, L4_nilthread,
+			L4_nilthread, (void *)-1);
+		iff_ok1(!thr_exists(test_tid), is_nil);
+
+		if(thr_exists(test_tid)) del_thread(test_tid);
+	}
+
+	/* part 3: only SpaceSpecifier == dest creates spaces. */
+	{
+		assert(!as_exists(test_tid));
+		assert(!as_exists(oth_nonex));
+		const bool ex_before = as_exists(spec);
+		L4_Word_t res = L4_ThreadControl(test_tid, spec, L4_Myself(),
+			L4_Myself(), (void *)-1);
+		if(res == 0) diag("res=%lu, ec=%#lx", res, L4_ErrorCode());
+		const bool create_ok = res != 0,
+			did_create = !ex_before && as_exists(test_tid);
+		iff_ok1(did_create, create_ok && spec.raw == test_tid.raw);
+
+		/* in particular, the non-existent but otherwise valid & non-"dest"
+		 * spacespec doesn't create.
+		 */
+		imply_ok1(is_nonex, !did_create);
+
+		if(as_exists(test_tid)) del_thread(test_tid);
+		assert(!as_exists(test_tid));
+	}
+
+	/* TODO: parts 5 and 6 */
+
+	del_thread(oth);
+}
+END_TEST
+
+
 /* test whether UTCB relocation retains TCR values (it should) */
 START_TEST(relocate_utcb)
 {
@@ -364,6 +564,7 @@ Suite *thread_suite(void)
 		tcase_add_test(tc, privilege);
 		tcase_add_test(tc, thread_id_validity);
 		tcase_add_test(tc, scheduler_id_validity);
+		tcase_add_test(tc, spacespec_validity);
 		tcase_add_test(tc, relocate_utcb);
 		suite_add_tcase(s, tc);
 	}
