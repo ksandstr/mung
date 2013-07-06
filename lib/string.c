@@ -172,8 +172,22 @@ char *strrchr(const char *s, int c)
 {
 	const char *t = s + strlen(s);
 	while(*t != c && t != s) t--;
-	assert(t == s || *t == c);
 	return t != s ? (char *)t : NULL;
+}
+
+
+char *strstr(const char *haystack, const char *needle)
+{
+	if(*needle == '\0') return (char *)haystack;
+
+	size_t len = strlen(haystack), nlen = strlen(needle);
+	for(size_t i=0; i <= len - nlen; i++) {
+		if(memcmp(&haystack[i], needle, nlen) == 0) {
+			return (char *)&haystack[i];
+		}
+	}
+
+	return NULL;
 }
 
 
