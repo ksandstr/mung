@@ -113,6 +113,7 @@ struct async_op {
 static size_t hash_word(const void *, void *);
 static size_t hash_threadno(const void *, void *);
 static struct fs_space *get_space(L4_Word_t id);
+static void handle_pf(L4_Word_t addr, L4_Word_t ip, L4_MapItem_t *page_ptr);
 
 
 /* thread_hash is hashed by threadno, but compared for equality with full TID
@@ -329,16 +330,41 @@ static void handle_send_page(L4_Word_t phys_addr, int32_t space_id)
 		window = L4_Fpage(map_range_pos, PAGE_SIZE);
 	}
 
-	L4_LoadBR(0, window.raw);
-	L4_MsgTag_t tag = L4_Receive_Timeout(from, L4_TimePeriod(10 * 1000));
-	L4_LoadBR(0, 0);
-	if(L4_IpcFailed(tag)) {
-		printf("%s: IPC failed, ec %#lx\n", __func__, L4_ErrorCode());
-		return;
-	} else if(tag.X.label != FORKSERV_SEND_PAGE_2) {
-		printf("%s: wrong SEND_PAGE_2 label=%#x\n", __func__, tag.X.label);
-		return;
-	}
+	L4_MsgTag_t tag;
+	do {
+		L4_LoadBR(0, window.raw);
+		tag = L4_Receive_Timeout(from, L4_TimePeriod(10 * 1000));
+		L4_LoadBR(0, 0);
+		if(L4_IpcFailed(tag)) {
+			printf("%s: IPC failed, ec %#lx\n", __func__, L4_ErrorCode());
+			return;
+		} else if((tag.X.label & 0xfff0) == 0xffe0
+			&& tag.X.u == 2 && tag.X.t == 0)
+		{
+			/* intervening pagefault. handle it. */
+			L4_Word_t faddr, fip;
+			L4_StoreMR(1, &faddr);
+			L4_StoreMR(2, &fip);
+#if 0
+			printf("%s: inter-send pf, faddr=%#lx, fip=%#lx\n", __func__,
+				faddr, fip);
+#endif
+			muidl_set_tag(tag);
+			L4_MapItem_t map = { };
+			handle_pf(faddr, fip, &map);
+			L4_LoadMR(0, (L4_MsgTag_t){ .X.t = 2 }.raw);
+			L4_LoadMRs(1, 2, map.raw);
+			L4_MsgTag_t r = L4_Reply(from);
+			if(L4_IpcFailed(r)) {
+				printf("%s: reply to intervening pf failed, ec=%#lx\n",
+					__func__, L4_ErrorCode());
+				return;
+			}
+		} else if(tag.X.label != FORKSERV_SEND_PAGE_2) {
+			printf("%s: wrong SEND_PAGE_2 label=%#x\n", __func__, tag.X.label);
+			return;
+		}
+	} while(tag.X.label != FORKSERV_SEND_PAGE_2);
 
 	L4_MapItem_t mi;
 	L4_StoreMRs(1, 2, mi.raw);
