@@ -19,6 +19,17 @@
 #define ok1(cond) \
 	_gen_result(!!(cond), __func__, __FILE__, __LINE__, "%s", #cond)
 
+/* >implying implications */
+#define imply_ok1(left, right) \
+	ok(!(left) || (right), "%s --> %s", #left, #right)
+
+#define imply_ok(left, right, test, ...) \
+	ok(!(left) || (right), test, ##__VA_ARGS__)
+
+/* alias for left == right, printed as "iff". */
+#define iff_ok1(left, right) \
+	ok((left) == (right), "%s iff %s", #left, #right)
+
 #define pass(test, ...) ok(true, (test), ##__VA_ARGS__)
 #define fail(test, ...) ok(false, (test), ##__VA_ARGS__)
 

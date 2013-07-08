@@ -6,7 +6,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
-#include <stdarg.h>
 #include <string.h>
 #include <ccan/compiler/compiler.h>
 
@@ -21,22 +20,6 @@
 #include "test.h"
 
 
-/* TODO: move these into test.h */
-/* >implying implications */
-#define imply_ok1(left, right) \
-	ok(!(left) || (right), "%s --> %s", #left, #right)
-
-#define imply_ok(left, right, test, ...) \
-	ok(!(left) || (right), test, ##__VA_ARGS__)
-
-/* NOTE: alias for left == right, printed as "iff". useful, but not used right
- * now.
- */
-#define iff_ok1(left, right) \
-	ok((left) == (right), "%s iff %s", #left, #right)
-
-
-/* TODO: make a self-test for this, and thr_exists()! */
 static bool as_exists(L4_ThreadId_t space_id)
 {
 	/* it's not properly specified in L4.X2, but a L4_Nilpage is the no-op for
