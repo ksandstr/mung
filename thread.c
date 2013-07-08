@@ -12,6 +12,7 @@
 #include <ccan/compiler/compiler.h>
 
 #include <l4/types.h>
+#include <l4/thread.h>
 #include <l4/vregs.h>
 #include <l4/kip.h>
 
@@ -1078,12 +1079,11 @@ void sys_threadcontrol(struct x86_exregs *regs)
 	if(unlikely(L4_IsLocalId(dest_tid)
 		|| L4_ThreadNo(dest_tid) < first_user_threadno()))
 	{
-		ec = 2;		/* "unavailable thread" */
-		goto end;
+		goto unav_thread;
 	}
 	if(!L4_IsNilThread(spacespec)
-		&& unlikely(L4_ThreadNo(spacespec) < first_user_threadno()
-			|| L4_Version(spacespec) == 0))
+		&& unlikely(L4_IsLocalId(spacespec)
+			|| L4_ThreadNo(spacespec) < first_user_threadno()))
 	{
 		goto invd_space;
 	}
@@ -1098,12 +1098,10 @@ void sys_threadcontrol(struct x86_exregs *regs)
 		struct thread *sched = resolve_tid_spec(current->space, scheduler);
 		if(unlikely(sched == NULL)) goto invd_sched;
 
-		TRACE("%s: creating thread %lu:%lu\n", __func__,
-			L4_ThreadNo(dest_tid), L4_Version(dest_tid));
 		struct space *sp = space_find(spacespec.raw);
 		bool new_space = false;
-		if(sp == NULL && spacespec.raw != dest_tid.raw) goto invd_space;
-		else if(sp == NULL) {
+		if(sp == NULL) {
+			if(spacespec.raw != dest_tid.raw) goto invd_space;
 			sp = space_new();
 			if(sp == NULL) goto out_of_mem;
 			new_space = true;
@@ -1119,11 +1117,18 @@ void sys_threadcontrol(struct x86_exregs *regs)
 		/* resolves local TID, avoids second call to resolve_tid_spec() */
 		dest->scheduler.raw = sched->id;
 		scheduler = L4_nilthread;
-	} else if(L4_IsNilThread(spacespec) && dest != NULL) {
+	} else if(L4_IsNilThread(spacespec)) {
 		/* thread/space deletion */
-		TRACE("%s: deleting thread %lu:%lu (ptr %p)\n", __func__,
-			L4_ThreadNo(dest_tid), L4_Version(dest_tid),
-			dest);
+		if(dest == NULL) {
+			/* idempotence: return success when spacespec = nil, and thread
+			 * doesn't exist.
+			 */
+			goto dead;
+		} else if(dest->id != dest_tid.raw) {
+			/* different version bits. tut-tut. */
+			goto unav_thread;
+		}
+
 		/* (could maintain dest->ipc_to to indicate if there's a waiting send
 		 * phase.)
 		 */
@@ -1142,14 +1147,8 @@ void sys_threadcontrol(struct x86_exregs *regs)
 		goto dead;
 	} else if(!L4_IsNilThread(spacespec) && dest != NULL) {
 		/* modification only. (rest shared with creation.) */
-		TRACE("%s: modifying thread %lu:%lu (ptr %p)\n", __func__,
-			L4_ThreadNo(dest_tid), L4_Version(dest_tid),
-			dest);
-
 		if(dest->id != dest_tid.raw) {
 			/* version field and IPC stomp */
-			TRACE("%s: overwrite TID version to %lu:%lu\n", __func__,
-				L4_ThreadNo(dest_tid), L4_Version(dest_tid));
 			assert(L4_ThreadNo(dest_tid) == TID_THREADNUM(dest->id));
 			assert(L4_Version(dest_tid) != TID_VERSION(dest->id));
 			if(IS_IPC(dest->status)) abort_thread_ipc(dest);	/* "from" IPC */
@@ -1170,8 +1169,7 @@ void sys_threadcontrol(struct x86_exregs *regs)
 		}
 	} else {
 		/* parameter fuckup. */
-		ec = 2;
-		goto end;
+		goto unav_thread;
 	}
 
 	assert(dest != NULL);
@@ -1249,6 +1247,10 @@ end:
 
 out_of_mem:
 	ec = 8;
+	goto end;
+
+unav_thread:
+	ec = L4_ERROR_INVALID_THREAD;
 	goto end;
 
 invd_space:
