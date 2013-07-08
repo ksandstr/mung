@@ -1124,9 +1124,6 @@ void sys_threadcontrol(struct x86_exregs *regs)
 			 * doesn't exist.
 			 */
 			goto dead;
-		} else if(dest->id != dest_tid.raw) {
-			/* different version bits. tut-tut. */
-			goto unav_thread;
 		}
 
 		/* (could maintain dest->ipc_to to indicate if there's a waiting send
