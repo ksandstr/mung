@@ -1772,25 +1772,36 @@ end:
 
 void sys_ipc(struct x86_exregs *regs)
 {
+	L4_ThreadId_t to = { .raw = regs->eax }, from = { .raw = regs->edx };
+	L4_Word_t timeouts = regs->ecx, mr0 = regs->esi;
+	// L4_Word_t utcb_addr = regs->edi;
+
 	struct thread *current = get_current_thread();
-	current->ipc_to.raw = regs->eax;
-	current->ipc_from.raw = regs->edx;
-	L4_Word_t timeouts = regs->ecx;
 	TRACE("%s: called in %lu:%lu; to %#lx, from %#lx, timeouts %#lx\n",
 		__func__, TID_THREADNUM(current->id), TID_VERSION(current->id),
 		regs->eax, regs->edx, regs->ecx);
-	current->send_timeout.raw = timeouts >> 16;
-	current->recv_timeout.raw = timeouts & 0xffff;
 
-	// L4_Word_t utcb_addr = regs->edi;
 	/* TODO: could translate "utcb_addr" into a user-space pointer,
 	 * verify that it points to the current thread's UTCB, and if not,
 	 * do this slower thing.
 	 */
 	void *utcb = thread_get_utcb(current);
-	L4_VREG(utcb, L4_TCR_MR(0)) = regs->esi;
+
+	/* parameter validation. */
+	if(unlikely(to.raw == L4_anythread.raw
+		|| to.raw == L4_anylocalthread.raw))
+	{
+		set_ipc_error(utcb, 4);		/* non-existing partner */
+		set_ipc_return_regs(regs, current, utcb);
+		return;
+	}
 
 	bool preempt = false;
+	current->ipc_to = to;
+	current->ipc_from = from;
+	current->send_timeout.raw = timeouts >> 16;
+	current->recv_timeout.raw = timeouts & 0xffff;
+	L4_VREG(utcb, L4_TCR_MR(0)) = mr0;
 	ipc(current, utcb, &preempt);
 	if(preempt && IS_READY(current->status)) {
 		/* would return, but was pre-empted */
