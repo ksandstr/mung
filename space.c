@@ -419,6 +419,12 @@ struct thread *space_find_local_thread(
 	{
 		L4_Word_t off = ltid.raw - L4_Address(sp->utcb_area) - 256;
 		int ix = off / UTCB_SIZE;
+		if(unlikely(L4_Address(sp->utcb_area) + 256 + ix * UTCB_SIZE
+			!= ltid.raw))
+		{
+			/* malformed local TID. */
+			return NULL;
+		}
 		struct thread *t;
 		list_for_each(&sp->threads, t, space_link) {
 			if(t->utcb_pos == ix) return t;
