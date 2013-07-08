@@ -528,6 +528,43 @@ START_TEST(relocate_utcb)
 END_TEST
 
 
+static bool try_del(L4_ThreadId_t tid) {
+	L4_Word_t res = L4_ThreadControl(tid, L4_nilthread, L4_nilthread,
+		L4_nilthread, (void *)-1);
+	return res != 0;
+}
+
+
+/* test that a deleting ThreadControl identifies "dest" by its ThreadNo field
+ * alone. version bits should be ignored.
+ */
+START_TEST(deletion)
+{
+	plan_tests(4);
+
+	L4_ThreadId_t tid = L4_GlobalId(0xb007, 17);
+	assert(!thr_exists(tid));
+
+	/* base case: should delete with the exact same thread ID. */
+	mk_thread(tid, false);
+	bool del_ok = try_del(tid);
+	ok(del_ok, "base case");
+	imply_ok1(del_ok, !thr_exists(tid));
+	if(thr_exists(tid)) del_thread(tid);
+
+	/* part 1: should delete also with a different version number. */
+	mk_thread(tid, false);
+	L4_ThreadId_t new_ver = L4_GlobalId(L4_ThreadNo(tid),
+		L4_Version(tid) ^ 0x1f);
+	assert(L4_Version(tid) != L4_Version(new_ver));
+	del_ok = try_del(new_ver);
+	ok(del_ok, "delete altered version");
+	imply_ok1(del_ok, !thr_exists(tid) && !thr_exists(new_ver));
+	if(thr_exists(tid)) del_thread(tid);
+}
+END_TEST
+
+
 /* create a non-activated thread and overwrite its version bits.
  *
  * (the real API test would start an actual thread, overwrite version, restart
@@ -566,6 +603,7 @@ Suite *thread_suite(void)
 		tcase_add_test(tc, scheduler_id_validity);
 		tcase_add_test(tc, spacespec_validity);
 		tcase_add_test(tc, relocate_utcb);
+		tcase_add_test(tc, deletion);
 		suite_add_tcase(s, tc);
 	}
 
