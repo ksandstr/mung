@@ -57,6 +57,129 @@ static bool thr_exists(L4_ThreadId_t tid) {
 }
 
 
+struct ir_param {
+	L4_ThreadId_t partner;
+	L4_Word_t value;
+};
+
+
+static void ipc_returner(void *param)
+{
+	struct ir_param *p = param;
+	L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 1, .X.label = 0xdaf7 }.raw);
+	L4_LoadMR(1, p->value ^ 0xbabe);	/* also known as a calf */
+	L4_MsgTag_t tag = L4_Call(p->partner);
+	if(L4_IpcFailed(tag)) {
+		diag("%s: call failed, ec=%#lx", __func__, L4_ErrorCode());
+	}
+	L4_Word_t do_exit;
+	L4_StoreMR(1, &do_exit);
+	if(do_exit != 0) {
+		/* distinguish from a plain exit. (the outer clause is there because
+		 * this is also called from test_as_exists, which uses forking and
+		 * thus shouldn't call exit_thread().)
+		 */
+		exit_thread(param);
+	}
+}
+
+
+/* confirm the properties of thr_exists(). mainly that when we know that a
+ * thread exists (i.e. it does a particular IPC operation back to us),
+ * thr_exists() returns true; and when that thread has been joined,
+ * thr_exists() returns false.
+ */
+START_TEST(test_thr_exists)
+{
+	plan_tests(4);
+
+	struct ir_param *p = malloc(sizeof(*p));
+	p->partner = L4_Myself();
+	p->value = 0x82904ba4;
+	L4_ThreadId_t test_tid = start_thread(&ipc_returner, p),
+		wrong_ver = L4_GlobalId(L4_ThreadNo(test_tid),
+			L4_Version(test_tid) ^ 0x1f);
+	fail_unless(L4_IsGlobalId(test_tid));
+
+	L4_MsgTag_t tag = L4_Receive_Timeout(test_tid, TEST_IPC_DELAY);
+	fail_if(L4_IpcFailed(tag), "ec=%#lx", L4_ErrorCode());
+	L4_Word_t value;
+	L4_StoreMR(1, &value);
+	fail_unless(value == (p->value ^ 0xbabe));
+	ok(thr_exists(test_tid), "exists during call");
+	ok(!thr_exists(wrong_ver), "wrong version doesn't exist");
+
+	/* verify the thread's presence with ExchangeRegisters, too. */
+	L4_ThreadId_t test_ltid = L4_LocalIdOf(test_tid);
+	fail_if(L4_IsNilThread(test_ltid), "ec=%#lx", L4_ErrorCode());
+
+	L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 1 }.raw);
+	L4_LoadMR(1, 1);		/* plz to be calling exit_thread() */
+	tag = L4_Reply(test_tid);
+	fail_if(L4_IpcFailed(tag), "ec=%#lx", L4_ErrorCode());
+
+	L4_Word_t ec = 0;
+	void *result = join_thread_long(test_tid, L4_TimePeriod(10 * 1000), &ec);
+	fail_if(result != p, "can't join helper thread: ec=%#lx", ec);
+	ok(!thr_exists(test_tid), "removed after join");
+	ok(!thr_exists(wrong_ver), "wrong version still doesn't exist");
+
+	/* same for its absence. */
+	test_ltid = L4_LocalIdOf(test_tid);
+	fail_unless(L4_IsNilThread(test_ltid));
+
+	free(p);
+}
+END_TEST
+
+
+/* similar to test_thr_exists, but instead of start_thread() and end_thread()
+ * there'll be forking.
+ */
+START_TEST(test_as_exists)
+{
+	plan_tests(4);
+
+	struct ir_param *p = malloc(sizeof(*p));
+	p->partner = L4_Myself();
+	p->value = 0x82904ba4;
+	L4_ThreadId_t test_tid;
+	int child = fork_tid(&test_tid);
+	if(child == 0) {
+		diag("child-side getpid()=%d", getpid());
+		ipc_returner(p);
+		free(p);
+		exit(0);
+	}
+
+	L4_ThreadId_t wrong_ver = L4_GlobalId(L4_ThreadNo(test_tid),
+		L4_Version(test_tid) ^ 0x1f);
+
+	L4_MsgTag_t tag = L4_Receive_Timeout(test_tid, TEST_IPC_DELAY);
+	fail_if(L4_IpcFailed(tag), "ec=%#lx", L4_ErrorCode());
+	L4_Word_t value;
+	L4_StoreMR(1, &value);
+	fail_unless(value == (p->value ^ 0xbabe));
+	ok(as_exists(test_tid), "exists during call");
+	ok(!as_exists(wrong_ver), "wrong version doesn't exist");
+
+	L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 1 }.raw);
+	L4_LoadMR(1, 0);	/* no thread exits please, we're british */
+	tag = L4_Reply(test_tid);
+	fail_if(L4_IpcFailed(tag), "ec=%#lx", L4_ErrorCode());
+
+	int st, dead = wait(&st);
+	fail_if(dead < 0);
+	fail_if(dead != child, "expected dead=%d, got %d instead",
+		child, dead);
+	ok(!as_exists(test_tid), "removed after wait");
+	ok(!as_exists(wrong_ver), "wrong version still doesn't exist");
+
+	free(p);
+}
+END_TEST
+
+
 /* TODO: move this into util.c or somewhere */
 static void del_thread(L4_ThreadId_t tid)
 {
@@ -64,11 +187,6 @@ static void del_thread(L4_ThreadId_t tid)
 	L4_Word_t res = L4_ThreadControl(tid, L4_nilthread, L4_nilthread,
 		L4_nilthread, (void *)-1);
 	fail_unless(res == 1, "ec=%#lx", L4_ErrorCode());
-}
-
-
-static void nothing_fn(void *param UNUSED) {
-	/* jack shit. */
 }
 
 
@@ -80,7 +198,8 @@ static void mk_thread(L4_ThreadId_t tid, bool utcb)
 	L4_KernelInterfacePage_t *kip = L4_GetKernelInterface();
 	L4_Word_t utcb_ptr = (L4_Word_t)-1l;
 	if(utcb) {
-		L4_ThreadId_t other = start_thread(&nothing_fn, NULL);
+		/* c wut I did thar? */
+		L4_ThreadId_t other = start_thread(&exit_thread, NULL);
 		L4_ThreadId_t ltid = L4_LocalIdOf(other);
 		join_thread(other);
 		utcb_ptr = ltid.raw & ~(L4_UtcbSize(kip) - 1);
@@ -593,6 +712,14 @@ END_TEST
 Suite *thread_suite(void)
 {
 	Suite *s = suite_create("thread");
+
+	{
+		TCase *tc = tcase_create("self");
+		tcase_set_fork(tc, false);	/* for consistency */
+		tcase_add_test(tc, test_thr_exists);
+		tcase_add_test(tc, test_as_exists);
+		suite_add_tcase(s, tc);
+	}
 
 	{
 		TCase *tc = tcase_create("api");
