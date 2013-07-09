@@ -4,6 +4,7 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+#include <assert.h>
 
 #include <ccan/list/list.h>
 #include <ccan/compiler/compiler.h>
@@ -263,6 +264,7 @@ extern bool post_exn_ok(struct thread *t);
 
 /* complicated accessors */
 extern PURE void *thread_get_utcb(struct thread *t);
+extern PURE L4_ThreadId_t get_local_id(struct thread *t);
 extern void thread_save_ctx(struct thread *t, const struct x86_exregs *regs);
 
 /* compares version bits for global IDs, resolves locak IDs in ref_space */

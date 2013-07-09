@@ -592,6 +592,19 @@ static void receive_breath_of_life(
 }
 
 
+L4_ThreadId_t get_local_id(struct thread *t)
+{
+	assert(t->space != NULL);
+	assert(t->utcb_pos >= 0);
+	L4_ThreadId_t result = {
+		.raw = L4_Address(t->space->utcb_area)
+			+ t->utcb_pos * UTCB_SIZE + 256,
+	};
+	assert(L4_IsLocalId(result));
+	return result;
+}
+
+
 /* system calls */
 
 /* exregs control bitmasks (W RCdh pufi sSRH) */
@@ -649,8 +662,7 @@ L4_Word_t sys_exregs(
 
 	L4_ThreadId_t result;
 	if(L4_IsGlobalId(dest)) {
-		result.local.raw = L4_Address(dest_thread->space->utcb_area)
-			+ dest_thread->utcb_pos * UTCB_SIZE + 256;
+		result = get_local_id(dest_thread);
 		assert(result.local.X.zeros == 0);
 	} else {
 		result.global.raw = dest_thread->id;
