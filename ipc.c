@@ -1548,7 +1548,6 @@ static struct thread *find_local_sender(
 				break;
 			}
 		}
-		assert(w != NULL);
 	} else {
 		/* TODO: use a per-space list of IPC senders, or something, and change
 		 * ipc_to so that it's always a local TID.
