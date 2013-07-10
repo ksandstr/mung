@@ -1238,6 +1238,12 @@ void abort_thread_ipc(struct thread *t)
 }
 
 
+static inline bool is_interrupt(L4_ThreadId_t tid) {
+	return L4_Version(tid) == 1
+		&& L4_ThreadNo(tid) <= last_int_threadno();
+}
+
+
 /* postcond: !@retval || @self->status \in {READY, R_RECV, STOPPED} */
 static bool ipc_send_half(
 	struct thread *self,
@@ -1260,8 +1266,7 @@ static bool ipc_send_half(
 	int err_code = 0;
 
 	if(CHECK_FLAG(self->flags, TF_INTR)
-		&& L4_Version(self->ipc_to) == 1
-		&& L4_ThreadNo(self->ipc_to) <= last_int_threadno()
+		&& is_interrupt(self->ipc_to)
 		&& L4_VREG(self_utcb, L4_TCR_MR(0)) == 0)
 	{
 		/* eat an interrupt reply. */
@@ -1481,6 +1486,114 @@ void ipc_user(
 }
 
 
+static struct thread *find_global_sender(
+	L4_ThreadId_t *from_tid_p,
+	struct thread *self)
+{
+	size_t hash = int_hash(self->id);
+	struct htable_iter it;
+	for(struct ipc_wait *w = htable_firstval(&sendwait_hash, &it, hash);
+		w != NULL;
+		w = htable_nextval(&sendwait_hash, &it, hash))
+	{
+		/* TODO: filter TS_STOPPED threads, as they don't participate in
+		 * IPC until restarted.
+		 */
+		if(w->dest_tid.raw == self->id
+			&& (self->ipc_from.raw == L4_anythread.raw
+				|| self->ipc_from.raw == w->send_tid.raw))
+		{
+			struct thread *from = w->thread;
+			*from_tid_p = w->send_tid;
+			htable_delval(&sendwait_hash, &it);
+			kmem_cache_free(ipc_wait_slab, w);
+			return from;
+		}
+	}
+
+	return NULL;
+}
+
+
+static struct thread *find_local_sender(
+	L4_ThreadId_t *from_tid_p,
+	bool *valid_p,
+	struct thread *self)
+{
+	assert(!L4_IsNilThread(self->ipc_from));
+	assert(L4_IsLocalId(self->ipc_from));
+
+	struct ipc_wait *w;
+	struct htable_iter it;
+	*valid_p = true;
+	if(self->ipc_from.raw != L4_anylocalthread.raw) {
+		/* a particular LTID either exists, or doesn't. */
+		struct thread *loc = space_find_local_thread(self->space,
+			self->ipc_from.local);
+		if(loc == NULL) {
+			*valid_p = false;
+			return NULL;
+		}
+
+		/* ... still need to remove the ipc_wait, though.
+		 * (FIXME: this is horribly inelegant. fix it.)
+		 */
+		size_t hash = int_hash(loc->ipc_to.raw);
+		for(w = htable_firstval(&sendwait_hash, &it, hash);
+			w != NULL;
+			w = htable_nextval(&sendwait_hash, &it, hash))
+		{
+			if(w->thread == loc) {
+				assert(w->dest_tid.raw == loc->ipc_to.raw);
+				break;
+			}
+		}
+		assert(w != NULL);
+	} else {
+		/* TODO: use a per-space list of IPC senders, or something, and change
+		 * ipc_to so that it's always a local TID.
+		 *
+		 * in the meantime, we'll just search the global sender list for the
+		 * local ID, then the global ID, while ignoring threads that aren't in
+		 * the same address space.
+		 */
+		L4_ThreadId_t ltid = get_local_id(self);
+		size_t hash = int_hash(ltid.raw);
+		for(w = htable_firstval(&sendwait_hash, &it, hash);
+			w != NULL;
+			w = htable_nextval(&sendwait_hash, &it, hash))
+		{
+			if(w->dest_tid.raw == ltid.raw) {
+				assert(w->thread->space == self->space);
+				break;
+			}
+		}
+		if(w == NULL) {
+			/* another round, with the global ID this time. */
+			hash = int_hash(self->id);
+			for(w = htable_firstval(&sendwait_hash, &it, hash);
+				w != NULL;
+				w = htable_nextval(&sendwait_hash, &it, hash))
+			{
+				if(w->dest_tid.raw == self->id
+					&& w->thread->space == self->space)
+				{
+					break;
+				}
+			}
+		}
+	}
+	if(w == NULL) return NULL;
+	else {
+		struct thread *from = w->thread;
+		*from_tid_p = w->send_tid;
+		htable_delval(&sendwait_hash, &it);
+		kmem_cache_free(ipc_wait_slab, w);
+		return from;
+	}
+}
+
+
 /* postcond: !@retval || @self->status \in {READY, R_RECV, STOPPED} */
 bool ipc_recv_half(
 	struct thread *self,
@@ -1492,8 +1605,7 @@ bool ipc_recv_half(
 	/* poll for interrupts where applicable. */
 	if(CHECK_FLAG(self->flags, TF_INTR)
 		&& (self->ipc_from.raw == L4_anythread.raw
-			|| (L4_Version(self->ipc_from) == 1
-				&& L4_ThreadNo(self->ipc_from) <= last_int_threadno())))
+			|| is_interrupt(self->ipc_from)))
 	{
 		int found = int_poll(self,
 			self->ipc_from.raw == L4_anythread.raw ? -1 : L4_ThreadNo(self->ipc_from));
@@ -1514,28 +1626,29 @@ bool ipc_recv_half(
 	}
 
 	/* find sender. */
-	struct thread *from = NULL;
-	L4_ThreadId_t from_tid = L4_nilthread;
-	size_t hash = int_hash(self->id);
-	struct htable_iter it;
-	for(struct ipc_wait *w = htable_firstval(&sendwait_hash, &it, hash);
-		w != NULL;
-		w = htable_nextval(&sendwait_hash, &it, hash))
-	{
-		/* TODO: filter TS_STOPPED threads, as they don't participate in
-		 * IPC until restarted.
-		 */
-		if(w->dest_tid.raw == self->id
-			&& (self->ipc_from.raw == L4_anythread.raw
-				|| self->ipc_from.raw == w->send_tid.raw
-				|| (self->ipc_from.raw == L4_anylocalthread.raw
-					&& w->thread->space == self->space)))
+	struct thread *from;
+	L4_ThreadId_t from_tid;
+	if(L4_IsLocalId(self->ipc_from)) {
+		assert(self->ipc_from.raw != L4_anythread.raw);
+		bool valid;
+		from = find_local_sender(&from_tid, &valid, self);
+		if(!valid) goto err_no_partner;
+	} else {
+		assert(self->ipc_from.raw != L4_anylocalthread.raw);
+		from = find_global_sender(&from_tid, self);
+		if(from == NULL && self->ipc_from.raw != L4_anythread.raw
+			&& !is_interrupt(self->ipc_from))
 		{
-			from = w->thread;
-			from_tid = w->send_tid;
-			htable_delval(&sendwait_hash, &it);
-			kmem_cache_free(ipc_wait_slab, w);
-			break;
+			/* check TID validity for everything that wasn't found as sender,
+			 * isn't this half's wildcard, and is supposed to be found in the
+			 * global thread table (i.e. everything but interrupts) when it
+			 * exists.
+			 *
+			 * some things IPC can't relay. for everything else, there's
+			 * passive receive.
+			 */
+			struct thread *t = thread_find(self->ipc_from.raw);
+			if(t == NULL || t->id != self->ipc_from.raw) goto err_no_partner;
 		}
 	}
 
@@ -1664,6 +1777,15 @@ bool ipc_recv_half(
 
 		return true;
 	}
+
+	assert(false);
+
+err_no_partner:
+	// printf("%s: ipc_from=%#lx wasn't valid\n", __func__, self->ipc_from.raw);
+	set_ipc_error(self_utcb, 5);
+	assert(self->status == TS_RUNNING);
+	self->status = TS_READY;	/* failed active receive -> READY. */
+	return false;
 }
 
 
@@ -1791,7 +1913,15 @@ void sys_ipc(struct x86_exregs *regs)
 	if(unlikely(to.raw == L4_anythread.raw
 		|| to.raw == L4_anylocalthread.raw))
 	{
-		set_ipc_error(utcb, 4);		/* non-existing partner */
+		set_ipc_error(utcb, 4);		/* non-existing partner, send phase */
+		set_ipc_return_regs(regs, current, utcb);
+		return;
+	}
+	if(unlikely(!L4_IsNilThread(from)
+		&& L4_ThreadNo(from) > last_int_threadno()
+		&& L4_ThreadNo(from) < first_user_threadno()))
+	{
+		set_ipc_error(utcb, 5);		/* non-existing partner, receive phase */
 		set_ipc_return_regs(regs, current, utcb);
 		return;
 	}
