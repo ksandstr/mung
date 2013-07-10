@@ -107,11 +107,15 @@ static inline bool L4_IsGlobalId(L4_ThreadId_t tid) {
 }
 
 static inline L4_Word_t L4_ThreadNo(L4_ThreadId_t tid) {
-	return tid.global.X.thread_no;
+	/* see below */
+	return tid.raw >> 14;
 }
 
 static inline L4_Word_t L4_Version(L4_ThreadId_t tid) {
-	return tid.global.X.version;
+	/* NOTE: if this value is accessed as tid.global.X.version, gcc will call
+	 * forth eldritch horrors from the dimension Öäy. so, like, don't do that.
+	 */
+	return tid.raw & 0x3fff;
 }
 
 
