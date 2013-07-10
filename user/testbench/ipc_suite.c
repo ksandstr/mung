@@ -601,6 +601,29 @@ END_TEST
 
 /* API tests wrt the Ipc system call. */
 
+static L4_ThreadId_t mutate_tid(L4_ThreadId_t tid)
+{
+	L4_ThreadId_t wrong_tid = tid;
+	if(L4_IsLocalId(wrong_tid)) {
+		/* local TIDs have the lowest six bits, i.e. 0x3f, set to zero. so
+		 * flipping the seventh bit ought to produce an invalid local ID
+		 * rather than refer to a neighbouring thread.
+		 */
+		wrong_tid.raw ^= 0x40;
+		diag("wrong_tid=%#lx", wrong_tid.raw);
+		assert(L4_IsLocalId(wrong_tid));
+	} else {
+		/* perturb the version somewhat. */
+		wrong_tid.global.X.version ^= 0x29;
+		wrong_tid.global.X.version |= 2;
+		diag("wrong_tid=%#lx", wrong_tid.raw);
+		assert(L4_IsGlobalId(wrong_tid));
+	}
+	assert(wrong_tid.raw != tid.raw);
+	return wrong_tid;
+}
+
+
 static void receive_once(void *param UNUSED) {
 	L4_ThreadId_t sender;
 	L4_Wait(&sender);
@@ -611,10 +634,6 @@ static void receive_once(void *param UNUSED) {
  * aren't valid in Ipc's @to; that global and local thread IDs are valid if
  * and only if the peer exists; and that wrong thread version numbers and
  * mangled local TIDs are rejected.
- *
- * (TODO: add another test for FromSpecifier: later clause same as for @to,
- * and also that L4_anythread and L4_anylocalthread are valid for
- * @FromSpecifier.)
  */
 START_TEST(tid_spec_to)
 {
@@ -657,22 +676,7 @@ START_TEST(tid_spec_to)
 		const char *kind = local ? "local" : "global";
 		fail_if(L4_IsNilThread(gtid));
 
-		L4_ThreadId_t wrong_tid = test_tid;
-		if(local) {
-			/* local TIDs have the lowest six bits, i.e. 0x3f, set to zero. so
-			 * flipping the seventh bit ought to produce an invalid local ID
-			 * rather than refer to a neighbouring thread.
-			 */
-			wrong_tid.raw ^= 0x40;
-			diag("wrong_tid=%#lx", wrong_tid.raw);
-			assert(L4_IsLocalId(wrong_tid));
-		} else {
-			/* perturb the version somewhat. */
-			wrong_tid.global.X.version ^= 0x29;
-			wrong_tid.global.X.version |= 2;
-			diag("wrong_tid=%#lx", wrong_tid.raw);
-			assert(L4_IsGlobalId(wrong_tid));
-		}
+		L4_ThreadId_t wrong_tid = mutate_tid(test_tid);
 
 		L4_LoadMR(0, 0);
 		L4_MsgTag_t tag = L4_Send_Timeout(test_tid, TEST_IPC_DELAY);
@@ -704,6 +708,73 @@ START_TEST(tid_spec_to)
 END_TEST
 
 
+static void send_once_fn(void *param)
+{
+	L4_ThreadId_t to = { .raw = (uintptr_t)param };
+	L4_LoadMR(0, 0);
+	L4_Send_Timeout(to, TEST_IPC_DELAY);
+}
+
+
+/* test that the kernel ThreadNo range isn't valid in Ipc's @from; that global
+ * and local thread IDs are valid if and only if the peer exists; and that
+ * wrong thread version numbers and mangled local TIDs are rejected.
+ *
+ * the interrupt range is tested in interrupt_suite.c, (TODO: or should be,
+ * anyway)
+ */
+START_TEST(tid_spec_from)
+{
+	plan_tests(2 + 2 * 7);
+
+	L4_KernelInterfacePage_t *kip = L4_GetKernelInterface();
+	int last_kern = kip->ThreadInfo.X.UserBase - 1;
+
+	/* part 1: invalid @to. */
+	L4_LoadMR(0, 0);
+	L4_MsgTag_t tag = L4_Receive_Timeout(L4_GlobalId(last_kern, 17),
+		L4_ZeroTime);
+	L4_Word_t ec = L4_ErrorCode();
+	if(!ok(L4_IpcFailed(tag), "last_kern shouldn't be valid Ipc.from")) {
+		diag("tag.raw=%#lx", tag.raw);
+	}
+	if(!ok1(ec == 5)) diag("ec=%#lx", ec);
+
+	/* part 2: local and global ID validity as @FromSpecifier. */
+	for(int i=0; i < 2; i++) {
+		const bool local = i > 0;
+		L4_ThreadId_t gtid = start_thread(&send_once_fn,
+				(void *)(uintptr_t)L4_Myself().raw),
+			test_tid = local ? L4_LocalIdOf(gtid) : gtid;
+		const char *kind = local ? "local" : "global";
+		fail_if(L4_IsNilThread(gtid));
+
+		L4_ThreadId_t wrong_tid = mutate_tid(test_tid);
+
+		L4_MsgTag_t tag = L4_Receive_Timeout(test_tid, TEST_IPC_DELAY);
+		ok(L4_IpcSucceeded(tag), "recv from extant %s TID", kind);
+
+		tag = L4_Receive_Timeout(wrong_tid, TEST_IPC_DELAY);
+		ec = L4_ErrorCode();
+		ok(L4_IpcFailed(tag), "recv from wrong %s TID", kind);
+		if(!ok1(ec == 5)) diag("ec=%#lx", ec);
+
+		join_thread(gtid);
+
+		tag = L4_Receive_Timeout(test_tid, TEST_IPC_DELAY);
+		ec = L4_ErrorCode();
+		ok(L4_IpcFailed(tag), "recv from joined %s TID", kind);
+		ok1(ec == 5);
+
+		tag = L4_Receive_Timeout(wrong_tid, TEST_IPC_DELAY);
+		ec = L4_ErrorCode();
+		ok(L4_IpcFailed(tag), "recv from wrong %s TID post-join", kind);
+		ok1(ec == 5);
+	}
+}
+END_TEST
+
+
 Suite *ipc_suite(void)
 {
 	Suite *s = suite_create("ipc");
@@ -711,6 +782,7 @@ Suite *ipc_suite(void)
 	{
 		TCase *tc = tcase_create("api");
 		tcase_add_test(tc, tid_spec_to);
+		tcase_add_test(tc, tid_spec_from);
 		suite_add_tcase(s, tc);
 	}
 
