@@ -601,22 +601,44 @@ END_TEST
 
 /* API tests wrt the Ipc system call. */
 
-static L4_ThreadId_t mutate_tid(L4_ThreadId_t tid)
+#define MUTATE_NUM_WAYS 2
+
+static L4_ThreadId_t mutate_tid(L4_ThreadId_t tid, int way)
 {
+	assert(way < MUTATE_NUM_WAYS && way >= 0);
 	L4_ThreadId_t wrong_tid = tid;
 	if(L4_IsLocalId(wrong_tid)) {
-		/* local TIDs have the lowest six bits, i.e. 0x3f, set to zero. so
-		 * flipping the seventh bit ought to produce an invalid local ID
-		 * rather than refer to a neighbouring thread.
-		 */
-		wrong_tid.raw ^= 0x40;
-		diag("wrong_tid=%#lx", wrong_tid.raw);
+		switch(way) {
+			default: abort();
+			case 0:
+				/* local TIDs have the lowest six bits, i.e. 0x3f, set to
+				 * zero. so flipping the seventh bit ought to produce an
+				 * invalid local ID rather than refer to a neighbouring
+				 * thread.
+				 */
+				wrong_tid.raw ^= 0x40;
+				break;
+			case 1:
+				/* this puts the local TID entirely outside the space's UTCB
+				 * segment.
+				 */
+				wrong_tid.raw ^= 0x94123000;
+				break;
+		}
 		assert(L4_IsLocalId(wrong_tid));
 	} else {
-		/* perturb the version somewhat. */
-		wrong_tid.global.X.version ^= 0x29;
-		wrong_tid.global.X.version |= 2;
-		diag("wrong_tid=%#lx", wrong_tid.raw);
+		switch(way) {
+			default: abort();
+			case 0:
+				/* perturb the version somewhat. */
+				wrong_tid.global.X.version ^= 0x29;
+				wrong_tid.global.X.version |= 2;
+				break;
+			case 1:
+				/* WHEEEEEEE! */
+				wrong_tid.raw ^= 0xf4a28007;
+				break;
+		}
 		assert(L4_IsGlobalId(wrong_tid));
 	}
 	assert(wrong_tid.raw != tid.raw);
@@ -624,18 +646,10 @@ static L4_ThreadId_t mutate_tid(L4_ThreadId_t tid)
 }
 
 
-static void receive_once(void *param UNUSED) {
-	L4_ThreadId_t sender;
-	L4_Wait(&sender);
-}
-
-
 /* test that L4_anythread, L4_anylocalthread, and the kernel ThreadNo range
- * aren't valid in Ipc's @to; that global and local thread IDs are valid if
- * and only if the peer exists; and that wrong thread version numbers and
- * mangled local TIDs are rejected.
+ * aren't valid in Ipc's @to.
  */
-START_TEST(tid_spec_to)
+START_TEST(tid_spec_to_fail)
 {
 	L4_KernelInterfacePage_t *kip = L4_GetKernelInterface();
 	int // last_int = kip->ThreadInfo.X.SystemBase - 1,
@@ -652,7 +666,7 @@ START_TEST(tid_spec_to)
 		 * should be, anyway)
 		 */
 	};
-	plan_tests(2 * NUM_ELEMENTS(invalid_cases) + 7 * 2);
+	plan_tests(2 * NUM_ELEMENTS(invalid_cases));
 
 	/* part 1: invalid @to. */
 	for(int i=0; i < NUM_ELEMENTS(invalid_cases); i++) {
@@ -667,43 +681,85 @@ START_TEST(tid_spec_to)
 		}
 		ok1(code == 2);
 	}
+}
+END_TEST
 
-	/* part 2: local and global ID validity as @to. */
-	for(int i=0; i < 2; i++) {
-		const bool local = i > 0;
-		L4_ThreadId_t gtid = start_thread(&receive_once, NULL),
-			test_tid = local ? L4_LocalIdOf(gtid) : gtid;
-		const char *kind = local ? "local" : "global";
-		fail_if(L4_IsNilThread(gtid));
 
-		L4_ThreadId_t wrong_tid = mutate_tid(test_tid);
+static void receive_once(void *param UNUSED) {
+	L4_ThreadId_t sender;
+	L4_Wait(&sender);
+}
 
-		L4_LoadMR(0, 0);
-		L4_MsgTag_t tag = L4_Send_Timeout(test_tid, TEST_IPC_DELAY);
-		ok(L4_IpcSucceeded(tag), "send to extant %s TID", kind);
 
-		L4_LoadMR(0, 0);
-		tag = L4_Send_Timeout(wrong_tid, TEST_IPC_DELAY);
-		L4_Word_t ec = L4_ErrorCode(), code = ec >> 1;
-		ok(L4_IpcFailed(tag), "send to wrong %s TID", kind);
-		if(!ok1(code == 2)) diag("ec=%#lx", ec);
+/* local and global ID validity as Ipc.to .
+ * 
+ * i.e. that global and local thread IDs are valid if and only if the peer
+ * exists, and that wrong thread version numbers and mangled local TIDs are
+ * rejected.
+ */
+START_LOOP_TEST(tid_spec_to_ok, iter, 0, MUTATE_NUM_WAYS * 2 - 1)
+{
+	plan_tests(7);
 
-		join_thread(gtid);
+	const bool local = CHECK_FLAG(iter, 1);
+	const char *kind = local ? "local" : "global";
+	const int mut_way = iter >> 1;
 
-		L4_LoadMR(0, 0);
-		tag = L4_Send_Timeout(test_tid, TEST_IPC_DELAY);
-		ec = L4_ErrorCode();
-		code = ec >> 1;
-		ok(L4_IpcFailed(tag), "send to joined %s TID", kind);
-		ok1(code == 2);
+	L4_ThreadId_t gtid = start_thread(&receive_once, NULL),
+		test_tid = local ? L4_LocalIdOf(gtid) : gtid,
+		wrong_tid = mutate_tid(test_tid, mut_way);
+	fail_if(L4_IsNilThread(gtid));
 
-		L4_LoadMR(0, 0);
-		tag = L4_Send_Timeout(wrong_tid, TEST_IPC_DELAY);
-		ec = L4_ErrorCode();
-		code = ec >> 1;
-		ok(L4_IpcFailed(tag), "send to wrong %s TID post-join", kind);
-		ok1(code == 2);
+	L4_LoadMR(0, 0);
+	L4_MsgTag_t tag = L4_Send_Timeout(test_tid, TEST_IPC_DELAY);
+	if(!ok(L4_IpcSucceeded(tag), "send to extant %s TID", kind)) {
+		 diag("ec=%#lx", L4_ErrorCode());
 	}
+
+	L4_LoadMR(0, 0);
+	tag = L4_Send_Timeout(wrong_tid, TEST_IPC_DELAY);
+	L4_Word_t ec = L4_ErrorCode();
+	ok(L4_IpcFailed(tag), "send to wrong %s TID", kind);
+	if(!ok1(ec == 4)) diag("ec=%#lx", ec);
+
+	join_thread(gtid);
+
+	L4_LoadMR(0, 0);
+	tag = L4_Send_Timeout(test_tid, TEST_IPC_DELAY);
+	ec = L4_ErrorCode();
+	ok(L4_IpcFailed(tag), "send to joined %s TID", kind);
+	ok1(ec == 4);
+
+	L4_LoadMR(0, 0);
+	tag = L4_Send_Timeout(wrong_tid, TEST_IPC_DELAY);
+	ec = L4_ErrorCode();
+	ok(L4_IpcFailed(tag), "send to wrong %s TID post-join", kind);
+	ok1(ec == 4);
+}
+END_TEST
+
+
+/* test that the kernel ThreadNo range isn't valid in Ipc's @from.
+ * (NOTE: this is not specified in the L4.X2 API document.)
+ *
+ * the interrupt range is tested in interrupt_suite.c, (TODO: or should be,
+ * anyway)
+ */
+START_TEST(tid_spec_from_fail)
+{
+	plan_tests(2);
+
+	L4_KernelInterfacePage_t *kip = L4_GetKernelInterface();
+	int last_kern = kip->ThreadInfo.X.UserBase - 1;
+
+	L4_LoadMR(0, 0);
+	L4_MsgTag_t tag = L4_Receive_Timeout(L4_GlobalId(last_kern, 17),
+		L4_ZeroTime);
+	L4_Word_t ec = L4_ErrorCode();
+	if(!ok(L4_IpcFailed(tag), "last_kern shouldn't be valid Ipc.from")) {
+		diag("tag.raw=%#lx", tag.raw);
+	}
+	if(!ok1(ec == 5)) diag("ec=%#lx", ec);
 }
 END_TEST
 
@@ -716,61 +772,51 @@ static void send_once_fn(void *param)
 }
 
 
-/* test that the kernel ThreadNo range isn't valid in Ipc's @from; that global
- * and local thread IDs are valid if and only if the peer exists; and that
- * wrong thread version numbers and mangled local TIDs are rejected.
- *
- * the interrupt range is tested in interrupt_suite.c, (TODO: or should be,
- * anyway)
+/* test that global and local thread IDs are valid if and only if the peer
+ * exists, and that wrong thread version numbers and mangled local TIDs are
+ * rejected.
  */
-START_TEST(tid_spec_from)
+START_LOOP_TEST(tid_spec_from_ok, iter, 0, MUTATE_NUM_WAYS * 4 - 1)
 {
-	plan_tests(2 + 2 * 7);
+	plan_tests(7);
+	const bool local = CHECK_FLAG(iter, 1),
+		pass_local = CHECK_FLAG(iter, 2);
+	const int mut_way = iter >> 2;
+	assert(mut_way < MUTATE_NUM_WAYS);
+	diag("local=%s, pass_local=%s, mut_way=%d", btos(local),
+		btos(pass_local), mut_way);
 
-	L4_KernelInterfacePage_t *kip = L4_GetKernelInterface();
-	int last_kern = kip->ThreadInfo.X.UserBase - 1;
+	const char *kind = local ? "local" : "global";
 
-	/* part 1: invalid @to. */
-	L4_LoadMR(0, 0);
-	L4_MsgTag_t tag = L4_Receive_Timeout(L4_GlobalId(last_kern, 17),
-		L4_ZeroTime);
-	L4_Word_t ec = L4_ErrorCode();
-	if(!ok(L4_IpcFailed(tag), "last_kern shouldn't be valid Ipc.from")) {
-		diag("tag.raw=%#lx", tag.raw);
+	L4_ThreadId_t parent_id = pass_local ? L4_MyLocalId() : L4_MyGlobalId(),
+		gtid = start_thread(&send_once_fn, (void *)(uintptr_t)parent_id.raw),
+		test_tid = local ? L4_LocalIdOf(gtid) : gtid,
+		wrong_tid = mutate_tid(test_tid, mut_way);
+	fail_if(L4_IsNilThread(gtid));
+	diag("parent_id=%#lx, test_tid=%#lx, wrong_tid=%#lx",
+		parent_id.raw, test_tid.raw, wrong_tid.raw);
+
+	L4_MsgTag_t tag = L4_Receive_Timeout(test_tid, TEST_IPC_DELAY);
+	if(!ok(L4_IpcSucceeded(tag), "recv from extant %s TID", kind)) {
+		diag("ec=%#lx", L4_ErrorCode());
 	}
+
+	tag = L4_Receive_Timeout(wrong_tid, TEST_IPC_DELAY);
+	L4_Word_t ec = L4_ErrorCode();
+	ok(L4_IpcFailed(tag), "recv from wrong %s TID", kind);
 	if(!ok1(ec == 5)) diag("ec=%#lx", ec);
 
-	/* part 2: local and global ID validity as @FromSpecifier. */
-	for(int i=0; i < 2; i++) {
-		const bool local = i > 0;
-		L4_ThreadId_t gtid = start_thread(&send_once_fn,
-				(void *)(uintptr_t)L4_Myself().raw),
-			test_tid = local ? L4_LocalIdOf(gtid) : gtid;
-		const char *kind = local ? "local" : "global";
-		fail_if(L4_IsNilThread(gtid));
+	join_thread(gtid);
 
-		L4_ThreadId_t wrong_tid = mutate_tid(test_tid);
+	tag = L4_Receive_Timeout(test_tid, TEST_IPC_DELAY);
+	ec = L4_ErrorCode();
+	ok(L4_IpcFailed(tag), "recv from joined %s TID", kind);
+	ok1(ec == 5);
 
-		L4_MsgTag_t tag = L4_Receive_Timeout(test_tid, TEST_IPC_DELAY);
-		ok(L4_IpcSucceeded(tag), "recv from extant %s TID", kind);
-
-		tag = L4_Receive_Timeout(wrong_tid, TEST_IPC_DELAY);
-		ec = L4_ErrorCode();
-		ok(L4_IpcFailed(tag), "recv from wrong %s TID", kind);
-		if(!ok1(ec == 5)) diag("ec=%#lx", ec);
-
-		join_thread(gtid);
-
-		tag = L4_Receive_Timeout(test_tid, TEST_IPC_DELAY);
-		ec = L4_ErrorCode();
-		ok(L4_IpcFailed(tag), "recv from joined %s TID", kind);
-		ok1(ec == 5);
-
-		tag = L4_Receive_Timeout(wrong_tid, TEST_IPC_DELAY);
-		ec = L4_ErrorCode();
-		ok(L4_IpcFailed(tag), "recv from wrong %s TID post-join", kind);
-		ok1(ec == 5);
-	}
+	tag = L4_Receive_Timeout(wrong_tid, TEST_IPC_DELAY);
+	ec = L4_ErrorCode();
+	ok(L4_IpcFailed(tag), "recv from wrong %s TID post-join", kind);
+	ok1(ec == 5);
 }
 END_TEST
 
@@ -781,8 +827,10 @@ Suite *ipc_suite(void)
 
 	{
 		TCase *tc = tcase_create("api");
-		tcase_add_test(tc, tid_spec_to);
-		tcase_add_test(tc, tid_spec_from);
+		tcase_add_test(tc, tid_spec_to_fail);
+		tcase_add_test(tc, tid_spec_to_ok);
+		tcase_add_test(tc, tid_spec_from_fail);
+		tcase_add_test(tc, tid_spec_from_ok);
 		suite_add_tcase(s, tc);
 	}
 
