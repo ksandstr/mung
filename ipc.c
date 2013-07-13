@@ -35,9 +35,9 @@
  */
 struct ipc_wait
 {
-	L4_ThreadId_t dest_tid;		/* key, ptr offset in sendwait_hash */
-	L4_ThreadId_t send_tid;		/* vs when propagated */
-	struct thread *thread;		/* sender thread (avoids lookup) */
+	L4_ThreadId_t dest_tid;		/* global ID. key, ptr in sendwait_hash */
+	L4_ThreadId_t send_tid;		/* GTID; thread->id or vs when propagated */
+	struct thread *thread;		/* sender thread */
 };
 
 
@@ -1221,18 +1221,29 @@ void abort_thread_ipc(struct thread *t)
 {
 	assert(t->status == TS_SEND_WAIT || t->status == TS_STOPPED);
 
-	size_t dst_hash = int_hash(t->ipc_to.raw);
+	L4_ThreadId_t partner_tid = t->ipc_to;
+	if(!L4_IsNilThread(partner_tid) && L4_IsLocalId(partner_tid)) {
+		struct thread *partner = space_find_local_thread(t->space,
+			partner_tid.local);
+		BUG_ON(partner == NULL, "invalid partner LTID!");
+		partner_tid.raw = partner->id;
+	} else if(L4_IsNilThread(partner_tid)) {
+		return;
+	}
+	assert(L4_IsGlobalId(partner_tid));
+
+	size_t dst_hash = int_hash(partner_tid.raw);
 	assert(offsetof(struct ipc_wait, dest_tid) == 0);
 	struct htable_iter it;
 	for(struct ipc_wait *w = htable_firstval(&sendwait_hash, &it, dst_hash);
 		w != NULL;
 		w = htable_nextval(&sendwait_hash, &it, dst_hash))
 	{
-		if(w->dest_tid.raw == t->ipc_to.raw && w->thread == t) {
-			assert(w->send_tid.raw == t->id);
+		if(w->thread == t) {
+			assert(w->dest_tid.raw == partner_tid.raw);
 			htable_delval(&sendwait_hash, &it);
 			kmem_cache_free(ipc_wait_slab, w);
-			break;	/* TODO: add assert to check that there's at most one */
+			break;
 		}
 	}
 }
@@ -1286,13 +1297,13 @@ static bool ipc_send_half(
 		goto no_partner;
 	}
 
-	/* TODO: quicker tag access? maybe keep it next to ipc_to? */
 	L4_MsgTag_t tag = { .raw = L4_VREG(self_utcb, L4_TCR_MR(0)) };
 	L4_ThreadId_t self_id = { .raw = self->id };
 	bool propagated = false;
+	struct thread *vs = NULL;
 	if(CHECK_FLAG(tag.X.flags, 0x1)) {
 		/* propagation (sender fakery). */
-		struct thread *vs = get_tcr_thread(self, self_utcb, L4_TCR_VA_SENDER);
+		vs = get_tcr_thread(self, self_utcb, L4_TCR_VA_SENDER);
 		/* FIXME: also check interrupt propagation, redirector chain */
 		if(vs != NULL && (self->space == vs->space
 			|| self->space == dest->space))
@@ -1301,13 +1312,19 @@ static bool ipc_send_half(
 			propagated = true;
 		}
 	}
+	assert(!propagated || vs != NULL);
+	assert(L4_IsGlobalId(self_id));
+
+	uint64_t now_us = ksystemclock();
+	const bool active_cond = dest->ipc_from.raw == self_id.raw
+		|| dest->ipc_from.raw == L4_anythread.raw
+		|| dest->ipc_from.raw == get_local_id(self).raw
+		|| (dest->ipc_from.raw == L4_anylocalthread.raw
+			&& dest->space == self->space);
 
 	/* override TS_R_RECV? */
 	int status = dest->status;
-	uint64_t now_us = ksystemclock();
-	if(status == TS_R_RECV && (dest->ipc_from.raw == self_id.raw
-		|| dest->ipc_from.raw == L4_anythread.raw))
-	{
+	if(active_cond && status == TS_R_RECV) {
 		if(now_us >= dest->wakeup_time) {
 			/* nah, time the peer out instead. */
 			dest->status = TS_RECV_WAIT;	/* required by thread_wake() */
@@ -1323,10 +1340,7 @@ static bool ipc_send_half(
 	}
 
 	if(status == TS_RECV_WAIT
-		&& (dest->ipc_from.raw == L4_anythread.raw
-			|| dest->ipc_from.raw == self_id.raw
-			|| (dest->ipc_from.raw == L4_anylocalthread.raw
-				&& dest->space == self->space))
+		&& active_cond
 		&& (dest->wakeup_time == ~(uint64_t)0u
 			|| dest->wakeup_time > now_us))
 	{
@@ -1371,7 +1385,12 @@ static bool ipc_send_half(
 		}
 
 		/* receiver's IPC return */
-		dest->ipc_from = self_id;
+		if(propagated && vs->space == dest->space) {
+			dest->ipc_from = get_local_id(vs);
+		} else {
+			dest->ipc_from = self_id;
+		}
+
 		/* wake the receiver up, joining with the overridden status. this
 		 * satisfies thread_wake()'s precondition both in ordinary and
 		 * kernel-originated IPC.
@@ -1425,11 +1444,13 @@ static bool ipc_send_half(
 			TID_THREADNUM(dest->id), TID_VERSION(dest->id),
 			TID_THREADNUM(self_id.raw), TID_VERSION(self_id.raw),
 			TID_THREADNUM(self->id), TID_VERSION(self->id));
-		struct ipc_wait *w = kmem_cache_alloc(ipc_wait_slab);
-		w->dest_tid = self->ipc_to;
-		w->send_tid = self_id;
-		w->thread = self;
 
+		struct ipc_wait *w = kmem_cache_alloc(ipc_wait_slab);
+		*w = (struct ipc_wait){
+			.dest_tid = { .raw = dest->id },
+			.send_tid = self_id,
+			.thread = self,
+		};
 		htable_add(&sendwait_hash, int_hash(w->dest_tid.raw), w);
 
 		self->status = TS_SEND_WAIT;
@@ -1461,8 +1482,11 @@ void ipc_user(
 	struct thread *to,
 	uint64_t xferto_at)
 {
-	from->ipc_to.raw = to->id;
-	from->ipc_from.raw = to->id;
+	L4_ThreadId_t peer_tid;
+	if(from->space == to->space) peer_tid = get_local_id(to);
+	else peer_tid.raw = to->id;
+	from->ipc_to = peer_tid;
+	from->ipc_from = peer_tid;
 	from->send_timeout = L4_Never;
 	from->recv_timeout = L4_Never;
 
@@ -1525,6 +1549,7 @@ static struct thread *find_local_sender(
 
 	struct ipc_wait *w;
 	struct htable_iter it;
+	size_t hash = int_hash(self->id);
 	*valid_p = true;
 	if(self->ipc_from.raw != L4_anylocalthread.raw) {
 		/* a particular LTID either exists, or doesn't. */
@@ -1535,53 +1560,33 @@ static struct thread *find_local_sender(
 			return NULL;
 		}
 
-		/* ... still need to remove the ipc_wait, though.
-		 * (FIXME: this is horribly inelegant. fix it.)
+		/* ... still need to find & remove the ipc_wait, though.
+		 * (FIXME: this is inelegant. fix it by finding the right thread using
+		 * a per-space thing.)
 		 */
-		size_t hash = int_hash(loc->ipc_to.raw);
 		for(w = htable_firstval(&sendwait_hash, &it, hash);
 			w != NULL;
 			w = htable_nextval(&sendwait_hash, &it, hash))
 		{
-			if(w->thread == loc) {
-				assert(w->dest_tid.raw == loc->ipc_to.raw);
+			if(w->thread == loc && w->dest_tid.raw == self->id) {
 				break;
 			}
 		}
 	} else {
-		/* TODO: use a per-space list of IPC senders, or something, and change
-		 * ipc_to so that it's always a local TID.
-		 *
-		 * in the meantime, we'll just search the global sender list for the
-		 * local ID, then the global ID, while ignoring threads that aren't in
-		 * the same address space.
-		 */
-		L4_ThreadId_t ltid = get_local_id(self);
-		size_t hash = int_hash(ltid.raw);
+		/* anylocalthread side. */
+		/* (TODO: use a per-space list of IPC senders, or something.) */
 		for(w = htable_firstval(&sendwait_hash, &it, hash);
 			w != NULL;
 			w = htable_nextval(&sendwait_hash, &it, hash))
 		{
-			if(w->dest_tid.raw == ltid.raw) {
-				assert(w->thread->space == self->space);
+			if(w->dest_tid.raw == self->id
+				&& w->thread->space == self->space)
+			{
 				break;
 			}
 		}
-		if(w == NULL) {
-			/* another round, with the global ID this time. */
-			hash = int_hash(self->id);
-			for(w = htable_firstval(&sendwait_hash, &it, hash);
-				w != NULL;
-				w = htable_nextval(&sendwait_hash, &it, hash))
-			{
-				if(w->dest_tid.raw == self->id
-					&& w->thread->space == self->space)
-				{
-					break;
-				}
-			}
-		}
 	}
+
 	if(w == NULL) return NULL;
 	else {
 		struct thread *from = w->thread;
@@ -1736,6 +1741,7 @@ bool ipc_recv_half(
 			sq_update_thread(self);
 		}
 
+		/* whodunnit */
 		self->ipc_from.raw = from_tid.raw;
 		if(from_tid.raw != from->id) {
 			/* propagation parameter delivery */
