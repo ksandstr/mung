@@ -57,9 +57,6 @@ static void stop_local_thread(L4_ThreadId_t tid, void *ptr)
 		if(tid.raw == skip[i].raw) return;
 	}
 
-	/* what this does to pending string transfers, I don't know. probably
-	 * doesn't matter.
-	 */
 	L4_Stop(tid);
 }
 
@@ -104,7 +101,7 @@ static bool handle_int(
 		ct_stack_size = 16 * 1024;
 	void *ct_stack = malloc(ct_stack_size);
 	struct child_param *param = ct_stack + ct_stack_size - param_size - 32;
-	param->parent_tid = L4_Myself();
+	param->parent_tid = L4_MyGlobalId();
 	param->fork_tid = L4_GlobalIdOf(from);
 	param->stk_top = ct_stack;
 	param->exn_size = num_exn_regs + 1;
@@ -115,7 +112,9 @@ static bool handle_int(
 	*(--stk_pos) = 0xbadc0d3;		/* returning would be bad indeed. */
 
 	/* stop all local threads, except this one and the caller. */
-	L4_ThreadId_t non[3] = { L4_Myself(), from, L4_nilthread };
+	L4_ThreadId_t non[3] = {
+		param->parent_tid, param->fork_tid, L4_nilthread
+	};
 	for_each_thread(&stop_local_thread, non);
 
 	/* call fork. */
@@ -295,7 +294,7 @@ fail:
 
 int fork(void)
 {
-	if(unlikely(L4_IsNilThread(mgr_tid))) {
+	if(L4_IsNilThread(mgr_tid)) {
 		mgr_tid = start_thread(&proc_mgr_fn, NULL);
 	}
 

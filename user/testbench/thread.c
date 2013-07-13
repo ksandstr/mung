@@ -81,17 +81,17 @@ int thread_on_fork(
 	struct thread copy = threads[caller];
 	base_tnum = new_base_tnum;
 	for(int i=0; i < MAX_THREADS; i++) {
-		if(!threads[i].alive || i == caller) continue;
+		if(!threads[i].alive) continue;
 
 		if(i != caller) {
 			free(threads[i].stack);
-		}
-		threads[i].stack = NULL;
-		threads[i].alive = false;
-		threads[i].version = -abs(threads[i].version);
-		threads[i].retval = NULL;
+			threads[i].stack = NULL;
+			threads[i].alive = false;
+			threads[i].version = -abs(threads[i].version);
+			threads[i].retval = NULL;
 
-		/* TODO: destroy TSD bits for threads[i] */
+			/* TODO: destroy TSD bits for threads[i] */
+		}
 	}
 
 	/* set up thread context for the child starter thread */
@@ -115,7 +115,8 @@ int thread_on_fork(
 	}
 	int new_caller = L4_ThreadNo(L4_GlobalIdOf(*caller_tid)) - base_tnum;
 	assert(new_caller == caller);	/* avoids cleaning threads[caller] */
-	threads[new_caller] = copy;
+	threads[caller] = copy;
+	threads[caller].version = L4_Version(*caller_tid);
 
 	return 0;
 }
@@ -305,6 +306,7 @@ L4_ThreadId_t start_thread_long(
 void *join_thread_long(L4_ThreadId_t tid, L4_Time_t timeout, L4_Word_t *ec_p)
 {
 	if(L4_IsNilThread(tid)) return NULL;
+	tid = L4_GlobalIdOf(tid);
 
 	int t = L4_ThreadNo(tid) - base_tnum;
 	assert(t < MAX_THREADS);
