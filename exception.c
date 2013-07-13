@@ -609,8 +609,8 @@ void isr_exn_pf_bottom(struct x86_exregs *regs)
 	static uintptr_t last_fault = ~0;
 	static int repeat_count = 0;
 	if(last_fault == fault_addr && ++repeat_count == 10) {
-		printf("WARNING: faulted many times on the same address %#lx\n",
-			fault_addr);
+		printf("WARNING: faulted many times on faddr=%#lx, fip=%#lx\n",
+			fault_addr, regs->eip);
 		thread_save_ctx(current, regs);
 		thread_halt(current);
 		assert(current->status == TS_STOPPED);

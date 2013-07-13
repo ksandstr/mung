@@ -261,8 +261,6 @@ static struct thread *schedule_next_thread(
 	struct thread *pick = NULL;
 	bool saw_zero = false;
 	int last_pri = 255;
-	TRACE("%s: called in %lu:%lu at %#llx\n", __func__,
-		TID_THREADNUM(current->id), TID_VERSION(current->id), now);
 	for(struct rb_node *cur = rb_first(&sched_tree), *next;
 		cur != NULL;
 		cur = next)
@@ -271,11 +269,6 @@ static struct thread *schedule_next_thread(
 
 		struct thread *cand = rb_entry(cur, struct thread, sched_rb);
 		if(cand == current) continue;
-
-		TRACE("%s: cand %lu:%lu (st %s, wk@ %#llx, pri %d, q %u µs)\n",
-			__func__, TID_THREADNUM(cand->id), TID_VERSION(cand->id),
-			sched_status_str(cand), cand->wakeup_time, (int)cand->pri,
-			cand->quantum);
 
 		assert(cand->status != TS_DEAD);
 		assert(cand->status != TS_STOPPED);
