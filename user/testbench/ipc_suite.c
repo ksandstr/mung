@@ -821,6 +821,107 @@ START_LOOP_TEST(tid_spec_from_ok, iter, 0, MUTATE_NUM_WAYS * 4 - 1)
 END_TEST
 
 
+struct prop_param {
+	L4_ThreadId_t dest;
+	bool p_bit, use_ltid;
+};
+
+
+static void prop_peer_fn(void *param)
+{
+	struct prop_param *p = param;
+	L4_ThreadId_t orig = start_thread(&exit_thread, NULL);
+	fail_if(L4_IsNilThread(orig));
+	if(p->use_ltid) orig = L4_LocalIdOf(orig);
+	else orig = L4_GlobalIdOf(orig);
+
+	L4_MsgTag_t tag = { .X.u = 1, .X.label = 0x1234 };
+	if(p->p_bit) {
+		L4_Set_Propagation(&tag);
+		L4_Set_VirtualSender(orig);
+	} else {
+		L4_Set_VirtualSender(L4_nilthread);
+	}
+	L4_LoadMR(0, tag.raw);
+	L4_LoadMR(1, orig.raw);
+	tag = L4_Call(p->dest);
+	p->dest.raw = L4_IpcFailed(tag) ? L4_ErrorCode() : 0;
+
+	join_thread(orig);
+}
+
+
+START_LOOP_TEST(propagation, iter, 0, 15)
+{
+	plan_tests(7);
+	const bool same_as = CHECK_FLAG(iter, 1), p_bit = CHECK_FLAG(iter, 2),
+		use_ltid = CHECK_FLAG(iter, 4), passive = CHECK_FLAG(iter, 8);
+	diag("same_as=%s, p_bit=%s, use_ltid=%s, passive=%s",
+		btos(same_as), btos(p_bit), btos(use_ltid), btos(passive));
+
+	/* start peer. */
+	struct prop_param *param = malloc(sizeof(*param));
+	param->p_bit = p_bit;
+	param->use_ltid = use_ltid;
+	param->dest = L4_MyGlobalId();
+	int child = -1;
+	L4_ThreadId_t peer_tid;
+	if(same_as) {
+		peer_tid = start_thread(&prop_peer_fn, param);
+	} else {
+		child = fork_tid(&peer_tid);
+		if(child == 0) {
+			prop_peer_fn(param);
+			exit(0);
+		}
+	}
+	if(!passive) {
+		/* hackiest thing ever.
+		 * TODO: come up with a better way to force active/passive receive.
+		 */
+		L4_Sleep(L4_TimePeriod(2 * 1000));
+	}
+
+	/* receive and examine the entrails. */
+	L4_ThreadId_t sender;
+	L4_MsgTag_t tag = L4_Wait_Timeout(TEST_IPC_DELAY, &sender);
+	fail_unless(L4_IpcSucceeded(tag), "ec=%#lx", L4_ErrorCode());
+	L4_ThreadId_t orig_tid; L4_StoreMR(1, &orig_tid.raw);
+	L4_ThreadId_t as_tid = L4_ActualSender();
+	diag("sender=%lu:%lu, orig_tid=%lu:%lu, as_tid=%lu:%lu",
+		L4_ThreadNo(sender), L4_Version(sender),
+		L4_ThreadNo(orig_tid), L4_Version(orig_tid),
+		L4_ThreadNo(as_tid), L4_Version(as_tid));
+	fail_unless(use_ltid == L4_IsLocalId(orig_tid));
+
+	iff_ok1(p_bit, L4_IpcPropagated(tag));
+	imply_ok1(L4_SameThreads(sender, orig_tid), p_bit);
+	imply_ok1(p_bit, L4_SameThreads(as_tid, peer_tid));
+	imply_ok1(p_bit && same_as, L4_IsLocalId(as_tid));
+	imply_ok1(p_bit && !same_as, L4_IsGlobalId(as_tid));
+
+	iff_ok1(!p_bit, L4_SameThreads(sender, peer_tid));
+	iff_ok1(same_as, L4_IsLocalId(sender));
+
+	/* cleanup. */
+	L4_LoadMR(0, 0);
+	tag = L4_Reply(peer_tid);
+	if(L4_IpcFailed(tag)) {
+		diag("peer reply failed, ec=%#lx", L4_ErrorCode());
+	}
+
+	if(same_as) {
+		join_thread(peer_tid);
+	} else {
+		assert(child >= 0);
+		int st, dead = wait(&st);
+		fail_unless(dead == child, "dead=%d, child=%d", dead, child);
+	}
+	free(param);
+}
+END_TEST
+
+
 Suite *ipc_suite(void)
 {
 	Suite *s = suite_create("ipc");
@@ -831,6 +932,7 @@ Suite *ipc_suite(void)
 		tcase_add_test(tc, tid_spec_to_ok);
 		tcase_add_test(tc, tid_spec_from_fail);
 		tcase_add_test(tc, tid_spec_from_ok);
+		tcase_add_test(tc, propagation);
 		suite_add_tcase(s, tc);
 	}
 
