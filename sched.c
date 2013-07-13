@@ -352,6 +352,9 @@ NORETURN void switch_thread_u2u(struct thread *next)
 	assert(!IS_KERNEL_THREAD(get_current_thread()));
 	assert(!IS_KERNEL_THREAD(next));
 
+	space_switch(next->space);
+	cop_switch(next);
+
 	assert(next->utcb_ptr_seg != 0);
 	struct x86_exregs dummy;
 	swap_to_ring3(&dummy, &next->ctx, next->utcb_ptr_seg << 3 | 3);
@@ -596,6 +599,7 @@ void sys_threadswitch(struct x86_exregs *regs)
 		&& (other = resolve_tid_spec(current->space, target)) != NULL)
 	{
 		return_to_other(current, other);
+		/* on failure (i.e. other not TS_READY), return to caller. */
 	} else {
 		current->status = TS_READY;
 		/* the thread gets a new quantum once other threads have run. */
