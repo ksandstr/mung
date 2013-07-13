@@ -65,6 +65,11 @@ static inline L4_ThreadId_t L4_LocalIdOf(L4_ThreadId_t tid)
 }
 
 
+static inline bool L4_SameThreads(L4_ThreadId_t a, L4_ThreadId_t b) {
+	return L4_GlobalIdOf(a).raw == L4_GlobalIdOf(b).raw;
+}
+
+
 /* TCR-related functions */
 
 static inline L4_ThreadId_t L4_MyGlobalId(void) {
