@@ -272,6 +272,11 @@ extern struct thread *resolve_tid_spec(
 	struct space *ref_space,
 	L4_ThreadId_t tid);
 
+/* return @t->id when it's in a different space than @self; otherwise return
+ * @t's local ID.
+ */
+extern L4_ThreadId_t tid_return(struct thread *self, struct thread *t);
+
 static inline struct thread *get_tcr_thread(
 	struct thread *t,
 	void *utcb,
