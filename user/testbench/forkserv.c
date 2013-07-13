@@ -1114,9 +1114,11 @@ static L4_Word_t forward_new_thread(
 		do {
 			w->next = *(struct helper_work *volatile *)&helper_queue;
 		} while(!__sync_bool_compare_and_swap(&helper_queue, w->next, w));
+
 		L4_Time_t x, y;
 		L4_Word_t sr = L4_Timeslice(helper_tid, &x, &y);
-		printf("recursion recurs! sched result %lu\n", sr);
+		printf("forkserv: deferred call; helper=%lu:%lu, sr=%lu\n",
+			L4_ThreadNo(helper_tid), L4_Version(helper_tid), sr);
 	} else if(L4_IpcFailed(tag)) {
 		printf("helper_tid call failed: ec %#lx\n",
 			L4_ErrorCode());

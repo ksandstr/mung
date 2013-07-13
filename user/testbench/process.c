@@ -105,7 +105,7 @@ static bool handle_int(
 	void *ct_stack = malloc(ct_stack_size);
 	struct child_param *param = ct_stack + ct_stack_size - param_size - 32;
 	param->parent_tid = L4_Myself();
-	param->fork_tid = from;
+	param->fork_tid = L4_GlobalIdOf(from);
 	param->stk_top = ct_stack;
 	param->exn_size = num_exn_regs + 1;
 	memcpy(param->exn_frame, exn_regs, sizeof(L4_Word_t) * param->exn_size);

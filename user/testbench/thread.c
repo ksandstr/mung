@@ -75,8 +75,9 @@ int thread_on_fork(
 {
 	/* TODO: run atfork-style child-side hooks? */
 
+	assert(L4_IsGlobalId(*caller_tid));
 	int caller = L4_ThreadNo(*caller_tid) - base_tnum;
-	assert(caller < MAX_THREADS);
+	assert(caller >= 0 && caller < MAX_THREADS);
 	struct thread copy = threads[caller];
 	base_tnum = new_base_tnum;
 	for(int i=0; i < MAX_THREADS; i++) {
@@ -112,7 +113,7 @@ int thread_on_fork(
 		printf("%s: new_thread failed, n=%d\n", __func__, n);
 		abort();
 	}
-	int new_caller = L4_ThreadNo(*caller_tid) - base_tnum;
+	int new_caller = L4_ThreadNo(L4_GlobalIdOf(*caller_tid)) - base_tnum;
 	assert(new_caller == caller);	/* avoids cleaning threads[caller] */
 	threads[new_caller] = copy;
 
