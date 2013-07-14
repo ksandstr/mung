@@ -1249,6 +1249,17 @@ void abort_thread_ipc(struct thread *t)
 }
 
 
+/* this is sort of like resolve_tid_spec(), but in reverse. */
+static L4_ThreadId_t tid_return(struct thread *self, struct thread *t)
+{
+	if(self->space == t->space) {
+		return get_local_id(t);
+	} else {
+		return (L4_ThreadId_t){ .raw = t->id };
+	}
+}
+
+
 static inline bool is_interrupt(L4_ThreadId_t tid) {
 	return L4_Version(tid) == 1
 		&& L4_ThreadNo(tid) <= last_int_threadno();

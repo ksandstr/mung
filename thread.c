@@ -560,16 +560,6 @@ struct thread *resolve_tid_spec(
 }
 
 
-L4_ThreadId_t tid_return(struct thread *self, struct thread *t)
-{
-	if(self->space == t->space) {
-		return get_local_id(t);
-	} else {
-		return (L4_ThreadId_t){ .raw = t->id };
-	}
-}
-
-
 size_t hash_thread_by_id(const void *ptr, void *dataptr) {
 	const struct thread *t = ptr;
 	return int_hash(TID_THREADNUM(t->id));
