@@ -1298,9 +1298,10 @@ static bool ipc_send_half(
 	}
 
 	/* get matching variables, incl. propagation */
-	L4_ThreadId_t self_id, self_lid;
+	L4_ThreadId_t self_id = { .raw = self->id },
+		self_lid = tid_return(dest, self);
 	bool propagated = false;
-	struct thread *vs = NULL, *sender;
+	struct thread *vs = NULL, *sender = self;
 	L4_MsgTag_t *tag = (void *)&L4_VREG(self_utcb, L4_TCR_MR(0));
 	if(CHECK_FLAG(tag->X.flags, 0x1)) {
 		/* propagation (sender fakery). */
@@ -1309,6 +1310,15 @@ static bool ipc_send_half(
 		if(vs != NULL && (self->space == vs->space
 			|| self->space == dest->space))
 		{
+			/* redirect a closed IPC filter when applicable */
+			if((vs->status == TS_R_RECV || vs->status == TS_RECV_WAIT)
+				&& (vs->ipc_from.raw == self_id.raw
+					|| (vs->ipc_from.raw == self_lid.raw
+						&& vs->space == self->space)))
+			{
+				vs->ipc_from = tid_return(vs, dest);
+			}
+
 			sender = vs;
 			self_id.raw = vs->id;
 			self_lid = tid_return(dest, vs);
@@ -1318,11 +1328,6 @@ static bool ipc_send_half(
 		}
 	}
 	assert(!propagated || vs != NULL);
-	if(!propagated) {
-		self_id.raw = self->id;
-		self_lid = tid_return(dest, self);
-		sender = self;
-	}
 
 	uint64_t now_us = ksystemclock();
 	const bool active_cond = dest->ipc_from.raw == L4_anythread.raw
