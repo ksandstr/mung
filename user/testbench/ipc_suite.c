@@ -632,13 +632,13 @@ static L4_ThreadId_t mutate_tid(L4_ThreadId_t tid, int way)
 			case 0:
 				/* perturb the version somewhat. */
 				wrong_tid.global.X.version ^= 0x29;
-				wrong_tid.global.X.version |= 2;
 				break;
 			case 1:
 				/* WHEEEEEEE! */
 				wrong_tid.raw ^= 0xf4a28007;
 				break;
 		}
+		wrong_tid.global.X.version |= 2;
 		assert(L4_IsGlobalId(wrong_tid));
 	}
 	assert(wrong_tid.raw != tid.raw);
@@ -652,8 +652,7 @@ static L4_ThreadId_t mutate_tid(L4_ThreadId_t tid, int way)
 START_TEST(tid_spec_to_fail)
 {
 	L4_KernelInterfacePage_t *kip = L4_GetKernelInterface();
-	int // last_int = kip->ThreadInfo.X.SystemBase - 1,
-		last_kern = kip->ThreadInfo.X.UserBase - 1;
+	const int last_kern = kip->ThreadInfo.X.UserBase - 1;
 
 	const struct {
 		L4_ThreadId_t tid;
@@ -1023,39 +1022,50 @@ Suite *ipc_suite(void)
 {
 	Suite *s = suite_create("ipc");
 
+	/* tests written to hit a panic() in ipc.c, which haven't been sorted
+	 * elsewhere yet
+	 */
 	{
-		TCase *tc = tcase_create("api");
+		TCase *tc = tcase_create("panic");
+		tcase_add_test(tc, receive_from_anylocalthread);
+		suite_add_tcase(s, tc);
+	}
+
+	{
+		TCase *tc = tcase_create("tid");
 		tcase_add_test(tc, tid_spec_to_fail);
 		tcase_add_test(tc, tid_spec_to_ok);
 		tcase_add_test(tc, tid_spec_from_fail);
 		tcase_add_test(tc, tid_spec_from_ok);
+		suite_add_tcase(s, tc);
+	}
+
+	{
+		TCase *tc = tcase_create("propagate");
 		tcase_add_test(tc, propagation);
 		tcase_add_test(tc, propagation_alter_wait);
 		suite_add_tcase(s, tc);
 	}
 
-	/* tests written to hit a panic() in ipc.c, which haven't been sorted
-	 * elsewhere yet
-	 */
-	TCase *panic_case = tcase_create("panic");
-	tcase_add_test(panic_case, receive_from_anylocalthread);
-	suite_add_tcase(s, panic_case);
+	{
+		TCase *tc = tcase_create("preempt");
+		tcase_set_fork(tc, false);
+		tcase_add_test(tc, send_preempt);
+		/* TODO: also one for receive */
+		suite_add_tcase(s, tc);
+	}
 
-	TCase *preempt_case = tcase_create("preempt");
-	tcase_set_fork(preempt_case, false);
-	tcase_add_test(preempt_case, send_preempt);
-	/* TODO: also one for receive */
-	suite_add_tcase(s, preempt_case);
-
-	TCase *timeout_case = tcase_create("timeout");
-	tcase_set_fork(timeout_case, false);
-	ADD_IDL_FIXTURE_U(timeout_case, helper);
-	ADD_IDL_FIXTURE_U(timeout_case, other_helper);
-	tcase_add_test(timeout_case, recv_timeout_from_send);
-	tcase_add_test(timeout_case, recv_timeout_from_preempt);
-	tcase_add_test(timeout_case, point_ipc_timeouts);
-	tcase_add_test(timeout_case, point_xfer_timeouts);
-	suite_add_tcase(s, timeout_case);
+	{
+		TCase *tc = tcase_create("timeout");
+		tcase_set_fork(tc, false);
+		ADD_IDL_FIXTURE_U(tc, helper);
+		ADD_IDL_FIXTURE_U(tc, other_helper);
+		tcase_add_test(tc, recv_timeout_from_send);
+		tcase_add_test(tc, recv_timeout_from_preempt);
+		tcase_add_test(tc, point_ipc_timeouts);
+		tcase_add_test(tc, point_xfer_timeouts);
+		suite_add_tcase(s, tc);
+	}
 
 	return s;
 }
