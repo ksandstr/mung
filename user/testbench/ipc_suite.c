@@ -125,6 +125,19 @@ static void helper_handle_fault_impl(
 }
 
 
+static int32_t helper_ipc_ping_impl(
+	int32_t echoval,
+	L4_Word_t *tag_ptr,
+	L4_Word_t *sender_ptr,
+	L4_Word_t *as_ptr)
+{
+	*tag_ptr = muidl_get_tag().raw;
+	*sender_ptr = muidl_get_sender().raw;
+	*as_ptr = L4_ActualSender().raw;
+	return echoval;
+}
+
+
 static void munge_string_local(
 	const char *input,
 	char *output,
@@ -147,6 +160,7 @@ static const struct ipc_helper_vtable helper_vtab = {
 	.sleep = &helper_sleep_impl,
 	.handle_fault = &helper_handle_fault_impl,
 	.munge_string = &munge_string_local,
+	.ipc_ping = &helper_ipc_ping_impl,
 };
 
 IDL_FIXTURE(helper, ipc_helper, &helper_vtab, !helper_ctx()->running);
@@ -1018,6 +1032,311 @@ START_LOOP_TEST(propagation_alter_wait, iter, 0, 1)
 END_TEST
 
 
+static void redir_tester(
+	L4_ThreadId_t serv_tid,
+	L4_ThreadId_t parent_tid,
+	L4_Word_t magic)
+{
+	int32_t rv;
+	L4_MsgTag_t tag;
+	L4_ThreadId_t s, as;
+	int n = __ipchelper_ipc_ping_timeout(serv_tid, &rv, magic, &tag.raw,
+		&s.raw, &as.raw, TEST_IPC_DELAY);
+	diag("%s: n=%d, rv=%#x", __func__, n, (unsigned)rv);
+
+	L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 5 }.raw);
+	L4_LoadMR(1, rv);
+	L4_LoadMR(2, tag.raw);
+	L4_LoadMR(3, s.raw);
+	L4_LoadMR(4, as.raw);
+	L4_LoadMR(5, n);
+	tag = L4_Send_Timeout(parent_tid, TEST_IPC_DELAY);
+	if(L4_IpcFailed(tag)) {
+		diag("%s: reply failed, ec=%#lx", __func__, L4_ErrorCode());
+	}
+}
+
+
+static void redir_asst_fn(void *param)
+{
+	L4_Word_t val_to_set = (L4_Word_t)param;
+
+	L4_ThreadId_t sender;
+	/* (anylocalthread won't do, because under propagation the sender is no
+	 * longer in the same space.)
+	 */
+	L4_MsgTag_t tag = L4_Wait(&sender);
+	if(L4_IpcFailed(tag)) {
+		diag("%s: ipc failed, ec=%#lx", __func__, L4_ErrorCode());
+		return;
+	} else if(!L4_IpcPropagated(tag)) {
+		diag("%s: no propagation?", __func__);
+		return;
+	}
+	L4_ThreadId_t as = L4_ActualSender();
+
+	L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 4 }.raw);
+	L4_LoadMR(1, val_to_set);
+	L4_LoadMR(2, 0);
+	L4_LoadMR(3, sender.raw);
+	L4_LoadMR(4, as.raw);
+	tag = L4_Reply(sender);
+	if(L4_IpcFailed(tag)) {
+		diag("%s: reply failed, ec=%#lx", __func__, L4_ErrorCode());
+	}
+}
+
+
+#define HOLD_LABEL 0x4096		/* eat mah BCD! */
+#define FAKE_LABEL 0x4f7a
+#define OTHER_LABEL 0xa420		/* rehhhh */
+#define REPLY_LABEL 0x2008		/* iä iä */
+
+#define OTHER_VALUE 0xbadface0
+#define REPLY_VALUE 0xcafeb00b
+
+static void redir_do(
+	L4_MsgTag_t tag,
+	L4_ThreadId_t sender,
+	L4_Word_t xor_value,
+	L4_Word_t fuck_label)
+{
+	L4_ThreadId_t ir = L4_IntendedReceiver();
+	diag("redir label=%#x, ir=%lu:%lu, sender=%lu:%lu",
+		tag.X.label, L4_ThreadNo(ir), L4_Version(ir),
+		L4_ThreadNo(sender), L4_Version(sender));
+
+	assert(tag.X.t == 0);
+	tag.X.flags = 0;
+	L4_Set_Propagation(&tag);
+	L4_Set_VirtualSender(sender);
+
+	if(tag.X.label == 0x1236 && fuck_label == HOLD_LABEL) {
+		/* hold retransmission back for TEST_IPC_DELAY + 1 ms, to time it
+		 * out
+		 */
+		L4_Word_t v; L4_StoreMR(1, &v);
+		diag("HOLDING TEH GOBLINS");
+		L4_Sleep(L4_TimePeriod(L4_PeriodUs_NP(TEST_IPC_DELAY) + 2000));
+
+		L4_LoadMR(0, tag.raw);
+		L4_LoadMR(1, v);
+		tag = L4_Send_Timeout(ir, TEST_IPC_DELAY);
+	} else if(tag.X.label == 0x1236 && fuck_label == FAKE_LABEL) {
+		/* faking shit is hard!
+		 *   -- IPC barbie
+		 */
+		diag("FAKING IT LIEK AN CHAMP");
+		L4_Word_t v; L4_StoreMR(1, &v);
+		v ^= xor_value;		/* munge the ping question. */
+
+		L4_LoadMR(0, tag.raw);
+		L4_LoadMR(1, v);
+		tag = L4_Send_Timeout(ir, TEST_IPC_DELAY);
+	} else if(tag.X.label == 0x1236 && fuck_label == REPLY_LABEL) {
+		/* falsify results to IpcHelper::ipc_ping.
+		 *
+		 * note that this doesn't use propagation: that already happened as
+		 * part of IPC redirection.
+		 */
+		L4_Word_t v; L4_StoreMR(1, &v);
+		diag("IMMEDIATE SHOWDOWN");
+		tag = (L4_MsgTag_t){ .X.u = 4 };
+		L4_LoadMR(0, tag.raw);
+		L4_LoadMR(1, REPLY_VALUE);
+		L4_LoadMR(2, 0);
+		L4_LoadMR(3, sender.raw);
+		L4_LoadMR(4, L4_MyGlobalId().raw);
+		tag = L4_Reply(sender);
+	} else if(tag.X.label == 0x1236 && fuck_label == OTHER_LABEL) {
+		/* delegate the IPC to a different thread from the one given in
+		 * IntendedReceiver.
+		 */
+		L4_Word_t v; L4_StoreMR(1, &v);
+		L4_ThreadId_t asst = start_thread(&redir_asst_fn,
+			(void *)OTHER_VALUE);
+		fail_if(L4_IsNilThread(asst));
+		diag("ASSISTANT %lu:%lu EES ZE VERY BOTHERED YOU SEE",
+			L4_ThreadNo(asst), L4_Version(asst));
+
+		L4_LoadMR(0, tag.raw);
+		L4_LoadMR(1, v);
+		tag = L4_Send(asst);
+
+		join_thread(asst);
+	} else {
+		/* a plain redirection. */
+		L4_LoadMR(0, tag.raw);
+		tag = L4_Send_Timeout(ir, TEST_IPC_DELAY);
+	}
+
+	if(L4_IpcFailed(tag)) {
+		diag("redir failed, ec=%#lx", L4_ErrorCode());
+	}
+}
+
+
+static void redir_alter_echo(L4_Word_t xor_value)
+{
+	bool running = true;
+	L4_Word_t fuck_label = 0;
+	while(running) {
+		L4_ThreadId_t sender;
+		L4_MsgTag_t tag = L4_Wait(&sender);
+		
+		for(;;) {
+			if(L4_IpcFailed(tag)) {
+				diag("%s: failed IPC; ec=%#lx", __func__, L4_ErrorCode());
+				break;
+			} else if(L4_IpcRedirected(tag)) {
+				redir_do(tag, sender, xor_value, fuck_label);
+				if(tag.X.label == 0x1236) fuck_label = 0;
+				break;
+			}
+
+			switch(tag.X.label) {
+				case QUIT_LABEL: running = false; break;
+				case HOLD_LABEL:
+				case FAKE_LABEL:
+				case OTHER_LABEL:
+				case REPLY_LABEL:
+					diag("setting fuck_label=%#lx", tag.X.label);
+					fuck_label = tag.X.label;
+					L4_LoadMR(0, 0);
+					break;
+
+				default:
+					diag("%s: unknown label %#lx", __func__, tag.X.label);
+					tag = L4_Wait(&sender);
+					continue;
+			}
+			if(!running) break;
+
+			tag = L4_ReplyWait(sender, &sender);
+		}
+	}
+}
+
+
+/* tests the following properties of redirectors:
+ *
+ * - they receive IPCs addressed to spaces other than that of the sender's,
+ *   and the redirector's.
+ * - that a redirector may force a timeout on IPC it doesn't like (the hold
+ *   fuck),
+ * - ... or reply to it directly by using propagation (reply),
+ * - ... or pass it on to a different receiver (other),
+ * - ... or pass it unaltered to where it was intended (none).
+ *
+ * variables:
+ * - whether the redirector was set, or not.
+ * - whether a fuckery mode (none, hold, fake, reply, or other) is to be
+ *   applied
+ *
+ * TODO: !r_bit disables the effect of whichever fuckmode is being applied. so
+ * change that to the 0 iter, and add PASS_LABEL separately to remove 4
+ * redundant iterations.
+ */
+START_LOOP_TEST(basic_redir, iter, 0, 9)
+{
+	plan_tests(8);
+	assert(getpid() == 1);
+	const int32_t magic = 0xb0a7cafe, xor_val = 0x12345678;
+	const bool r_bit = CHECK_FLAG(iter, 1);
+	L4_Word_t fuck_mode;
+	switch(iter >> 1) {
+		case 0: fuck_mode = 0; break;
+		case 1: fuck_mode = HOLD_LABEL; break;
+		case 2: fuck_mode = FAKE_LABEL; break;
+		case 3: fuck_mode = OTHER_LABEL; break;
+		case 4: fuck_mode = REPLY_LABEL; break;
+		default:
+			fail_if(true, "iter=%d, which is bad", iter);
+			return;
+	}
+	diag("r_bit=%s, fuck_mode=%#lx", btos(r_bit), fuck_mode);
+
+	L4_ThreadId_t c_tid, parent_tid = L4_Myself();
+	int child = fork_tid(&c_tid);
+	if(child == 0) {
+		/* sync before proceeding, so that the redirector and other modes will
+		 * have been set
+		 */
+		L4_MsgTag_t tag = L4_Receive_Timeout(parent_tid, TEST_IPC_DELAY);
+		fail_if(L4_IpcFailed(tag), "ec=%#lx", L4_ErrorCode());
+		redir_tester(helper_tid, parent_tid, magic);
+		exit(0);
+	}
+	L4_ThreadId_t r_tid;
+	int redir = fork_tid(&r_tid);
+	if(redir == 0) {
+		redir_alter_echo(xor_val);
+		exit(0);
+	}
+
+	/* set redirector (or not) */
+	L4_Word_t dummy, res = L4_SpaceControl(c_tid, 0,
+		L4_Nilpage, L4_Nilpage, r_bit ? r_tid : L4_anythread, &dummy);
+	fail_unless(res == 1, "SpaceControl failed, ec=%#lx",
+		L4_ErrorCode());
+
+	if(fuck_mode != 0) {
+		L4_LoadMR(0, (L4_MsgTag_t){ .X.label = fuck_mode }.raw);
+		L4_MsgTag_t tag = L4_Call(r_tid);
+		fail_if(L4_IpcFailed(tag), "ec=%#lx", L4_ErrorCode());
+	}
+
+	const bool fuck = fuck_mode != 0,
+		fake = fuck_mode == FAKE_LABEL,
+		hold = fuck_mode == HOLD_LABEL,
+		reply = fuck_mode == REPLY_LABEL,
+		other = fuck_mode == OTHER_LABEL;
+
+	L4_LoadMR(0, 0);
+	L4_MsgTag_t tag = L4_Call(c_tid);
+	fail_if(L4_IpcFailed(tag), "ec=%#lx", L4_ErrorCode());
+
+	L4_Word_t rv = 0, ec = ~0ul;
+	L4_ThreadId_t s, as;
+	L4_StoreMR(1, &rv);			/* ping reply value */
+	L4_StoreMR(2, &tag.raw);	/* ipc_ping tag */
+	L4_StoreMR(3, &s.raw);		/* ipc_ping sender */
+	L4_StoreMR(4, &as.raw);		/* ipc_ping actualsender */
+	L4_StoreMR(5, &ec);			/* ec from ipc_ping call */
+	diag("rv=%#lx, tag=%#lx, s=%lu:%lu, as=%lu:%lu, ec=%#lx",
+		rv, tag.raw, L4_ThreadNo(s), L4_Version(s),
+		L4_ThreadNo(as), L4_Version(as), ec);
+
+	imply_ok1(ec == 0, L4_SameThreads(s, c_tid));
+
+	/* base case: no redirection, or simple pass to intended receiver. */
+	imply_ok1(!r_bit || !fuck, rv == magic);
+	imply_ok(!hold, ec == 0, "ok when not held");
+
+	/* part 1: redirected but OK, and not sent by way of another thread: the
+	 * helper should observe the redirector as propagator.
+	 */
+	imply_ok1(r_bit && !other && ec == 0, L4_SameThreads(as, r_tid));
+
+	/* part 2 */
+	imply_ok(r_bit && hold, ec == 3, "times out when held");
+
+	/* the other fuck modes */
+	iff_ok1(r_bit && fake, rv == (magic ^ xor_val));
+	iff_ok1(r_bit && reply, rv == REPLY_VALUE);
+	iff_ok1(r_bit && other, rv == OTHER_VALUE);
+
+	/* cleanup */
+	int st, dead = wait(&st);
+	fail_if(dead != child, "failed to wait for %d (dead=%d)", child, dead);
+
+	send_quit(r_tid);
+	dead = wait(&st);
+	fail_if(dead != redir, "failed to wait for %d (dead=%d)", redir, dead);
+}
+END_TEST
+
+
 Suite *ipc_suite(void)
 {
 	Suite *s = suite_create("ipc");
@@ -1044,6 +1363,14 @@ Suite *ipc_suite(void)
 		TCase *tc = tcase_create("propagate");
 		tcase_add_test(tc, propagation);
 		tcase_add_test(tc, propagation_alter_wait);
+		suite_add_tcase(s, tc);
+	}
+
+	{
+		TCase *tc = tcase_create("redir");
+		tcase_set_fork(tc, false);	/* involves SpaceControl */
+		ADD_IDL_FIXTURE_F(tc, helper);
+		tcase_add_test(tc, basic_redir);
 		suite_add_tcase(s, tc);
 	}
 

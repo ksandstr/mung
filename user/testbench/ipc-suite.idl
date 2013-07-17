@@ -38,4 +38,14 @@ interface IpcHelper: L4X2::FaultHandler
 		in munge_str input,
 		out munge_str output,
 		in long rnd_seed);
+
+	/* redirection test function. returns the input value like it was
+	 * provided, and the tag/sender/actualsender values.
+	 */
+	[Label(0x1236), StubRecvTimeout]
+	long ipc_ping(
+		in long echo_value,
+		out L4X2::word tag,
+		out L4X2::word sender,
+		out L4X2::word actualsender);
 };
