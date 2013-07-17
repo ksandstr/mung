@@ -43,6 +43,7 @@
  */
 #define IDL_FIXTURE(fixture_name, iface_name, vtable, quit_cond) \
 static L4_ThreadId_t fixture_name ## _tid; \
+static int fixture_name ## _pid = -1; \
 static void fixture_name ## _thread_fn(void *param UNUSED) { \
 	while(!(quit_cond)) { \
 		L4_Word_t status = _muidl_ ## iface_name ## _dispatch((vtable)); \
@@ -58,19 +59,35 @@ static void fixture_name ## _thread_fn(void *param UNUSED) { \
 		} \
 	} \
 } \
-static void fixture_name ## _setup(void) { \
+static inline void fixture_name ## _setup(void) { \
 	assert(L4_IsNilThread(fixture_name ## _tid)); \
 	fixture_name ## _tid = start_thread(&fixture_name ## _thread_fn, NULL); \
 	assert(!L4_IsNilThread(fixture_name ## _tid)); \
 } \
-static void fixture_name ## _teardown(void) { \
+static inline void fixture_name ## _teardown(void) { \
 	idl_fixture_teardown(fixture_name ## _tid); \
 	fixture_name ## _tid = L4_nilthread; \
+} \
+static inline void fixture_name ## _fork_setup(void) { \
+	assert(fixture_name ## _pid == -1); \
+	assert(L4_IsNilThread(fixture_name ## _tid)); \
+	fixture_name ## _pid = fork_tid(&fixture_name ## _tid); \
+	fail_if(fixture_name ## _pid < 0, \
+		"failed setup for `%s'", #fixture_name); \
+	if(fixture_name ## _pid == 0) { \
+		fixture_name ## _thread_fn(NULL); \
+		exit(0); \
+	} \
+} \
+static inline void fixture_name ## _fork_teardown(void) { \
+	idl_fixture_teardown_fork(fixture_name ## _pid, fixture_name ## _tid); \
+	fixture_name ## _tid = L4_nilthread; \
+	fixture_name ## _pid = -1; \
 }
 
 /* regular fixtures are run _within_ the forked test process.
  * _U fixtures are run in the pre-test process, which may be an unprivileged
- * process.
+ * process. _F fixtures are forked from the pre-test process.
  *
  * (_P fixtures will be run in the privileged roottask process,
  * TODO: and should be added for completeness' sake at some point.)
@@ -81,8 +98,12 @@ static void fixture_name ## _teardown(void) { \
 #define ADD_IDL_FIXTURE_U(tcase, fixture_name) \
 	tcase_add_unchecked_fixture((tcase), &fixture_name ## _setup, \
 		&fixture_name ## _teardown)
+#define ADD_IDL_FIXTURE_F(tcase, fixture_name) \
+	tcase_add_unchecked_fixture((tcase), &fixture_name ## _fork_setup, \
+		&fixture_name ## _fork_teardown)
 
 extern void idl_fixture_teardown(L4_ThreadId_t tid);
+extern void idl_fixture_teardown_fork(int pid, L4_ThreadId_t tid);
 
 
 

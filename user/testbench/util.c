@@ -41,7 +41,7 @@ bool send_delay(
 }
 
 
-void idl_fixture_teardown(L4_ThreadId_t tid)
+static void fixture_teardown_common(int pid, L4_ThreadId_t tid)
 {
 	if(!send_quit(tid)) {
 		printf("send_quit() failed, ec %#lx\n", L4_ErrorCode());
@@ -58,7 +58,25 @@ void idl_fixture_teardown(L4_ThreadId_t tid)
 		abort();
 	}
 
-	join_thread(tid);
+	if(pid > 0) {
+		int st, dead = wait(&st);
+		if(dead != pid) {
+			printf("%s: failed to wait on p%d (dead=%d)\n",
+				__func__, pid, dead);
+		}
+	} else {
+		join_thread(tid);
+	}
+}
+
+
+void idl_fixture_teardown(L4_ThreadId_t tid) {
+	fixture_teardown_common(-1, tid);
+}
+
+
+void idl_fixture_teardown_fork(int pid, L4_ThreadId_t tid) {
+	fixture_teardown_common(pid, tid);
 }
 
 
