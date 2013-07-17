@@ -260,10 +260,12 @@ static inline L4_Word_t L4_SpaceControl(
 {
 	extern _C_ void __L4_SpaceControl(void);
 	L4_Word_t result, dummy;
+#ifndef __pic__
+	/* the register saving is to preserve %ebp, which cannot be clobbered. */
 	__asm__ __volatile__ (
-		__L4_SAVE_REGS
 		"\tmovl %%edi, %%ebx\n"
 		"\tmovl %[redir], %%edi\n"
+		__L4_SAVE_REGS
 		"\tcall *%%ebx\n"
 		__L4_RESTORE_REGS
 		: "=a" (result), "=d" (dummy), "=c" (*ctl_out),
@@ -272,6 +274,9 @@ static inline L4_Word_t L4_SpaceControl(
 		  "S" (utcb_area.raw), [redir] "m" (redirector.raw),
 		  "D" (__L4_SpaceControl)
 		: __L4_CLOBBER_REGS);
+#else
+#error "PIC support not here"
+#endif
 	return result;
 }
 
