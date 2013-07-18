@@ -1623,9 +1623,10 @@ static struct thread *find_local_sender(
 			w != NULL;
 			w = htable_nextval(&sendwait_hash, &it, hash))
 		{
-			if(w->dest_tid.raw == self->id
-				&& w->thread->space == self->space)
-			{
+			/* it only has to look like a local sender. propagation is
+			 * fine, too.
+			 */
+			if(w->dest_tid.raw == self->id && L4_IsLocalId(w->send_tid)) {
 				break;
 			}
 		}
