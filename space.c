@@ -267,7 +267,7 @@ struct space *space_new(void)
 	sp->tss_len = 0;
 	sp->tss_seg = 0;
 	sp->flags = 0;
-	sp->redirector = L4_nilthread.raw;
+	sp->redirector = L4_anythread;
 
 	return sp;
 }
@@ -748,6 +748,20 @@ L4_Word_t sys_spacecontrol(
 		goto end;
 	}
 
+	struct thread *new_red = NULL;
+	if(L4_IsGlobalId(redirector)
+		&& redirector.raw != L4_anythread.raw
+		&& L4_ThreadNo(redirector) >= first_user_threadno())
+	{
+		new_red = thread_find(redirector.raw);
+		if(new_red == NULL || new_red->id != redirector.raw) {
+			/* NOTE: this isn't in the L4.X2 spec. */
+			*ec_p = 2;	/* invalid thread */
+			result = 0;
+			goto end;
+		}
+	}
+
 	/* is there at least one active thread in this space? */
 	bool t_active = false;
 	struct thread *t;
@@ -793,12 +807,9 @@ L4_Word_t sys_spacecontrol(
 		assert(sp->utcb_area.raw == utcb_area.raw);
 	}
 
-	if(redirector.raw == L4_anythread.raw) {
-		sp->redirector = L4_anythread.raw;
-	} else if(!L4_IsNilThread(redirector)
-		&& redirector.raw != L4_anylocalthread.raw)
-	{
-		sp->redirector = redirector.raw;
+	if(new_red != NULL || redirector.raw == L4_anythread.raw) {
+		assert(new_red == NULL || new_red->id == redirector.raw);
+		sp->redirector = redirector;
 	}
 
 	result = 1;

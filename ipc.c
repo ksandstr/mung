@@ -38,6 +38,7 @@ struct ipc_wait
 	L4_ThreadId_t dest_tid;		/* global ID. key, ptr in sendwait_hash */
 	L4_ThreadId_t send_tid;		/* thread->id or vs, may be local */
 	struct thread *thread;		/* (actual) sender thread */
+	L4_ThreadId_t ir_tid;		/* IntendedReceiver, or nil when not */
 };
 
 
@@ -1266,6 +1267,20 @@ static inline bool is_interrupt(L4_ThreadId_t tid) {
 }
 
 
+/* whether "tip" ends up redirecting for "base". */
+static bool has_redir_chain(struct thread *base, struct thread *tip)
+{
+	do {
+		L4_ThreadId_t r = base->space->redirector;
+		if(r.raw == L4_anythread.raw) return false;
+		if(r.raw == tip->id) return true;
+		base = thread_find(r.raw);
+		if(base == NULL || base->id != r.raw) return false;
+	} while(base != NULL);
+	return false;
+}
+
+
 /* postcond: !@retval || @self->status \in {READY, R_RECV, STOPPED} */
 static bool ipc_send_half(
 	struct thread *self,
@@ -1286,10 +1301,13 @@ static bool ipc_send_half(
 		&& self->ipc_to.raw != L4_anythread.raw);
 
 	int err_code = 0;
+	L4_MsgTag_t *tag = (void *)&L4_VREG(self_utcb, L4_TCR_MR(0));
 
-	if(CHECK_FLAG(self->flags, TF_INTR)
+	if(tag->raw == 0
+		&& CHECK_FLAG(self->flags, TF_INTR)
 		&& is_interrupt(self->ipc_to)
-		&& L4_VREG(self_utcb, L4_TCR_MR(0)) == 0)
+		/* redirected tasks can never reply to interrupts. */
+		&& self->space->redirector.raw == L4_anythread.raw)
 	{
 		/* eat an interrupt reply. */
 		err_code = int_clear(L4_ThreadNo(self->ipc_to), self);
@@ -1308,18 +1326,64 @@ static bool ipc_send_half(
 		goto no_partner;
 	}
 
+	bool redirected = false;
+	struct thread *saved_dest = NULL;
+	tag->X.flags &= 0x1;	/* keep the propagate flag */
+	if(self->space != dest->space
+		&& self->space->redirector.raw != L4_anythread.raw)
+	{
+		assert(L4_IsGlobalId(self->space->redirector));
+		/* TODO: this entails a thread lookup every time that a redirected
+		 * task needs to do IPC with a non-local thread. that's sort of bad.
+		 * instead there should be a redir_thread pointer, and the thread
+		 * marked with TF_REDIR; the pointer is reset when that thread is
+		 * deleted. (this scales linearly wrt all threads in the system.)
+		 */
+		struct thread *red = thread_find(self->space->redirector.raw);
+		if(red == NULL || red->id != self->space->redirector.raw) {
+			/* FIXME: this should put the sender into TF_HALT | TF_RWAIT,
+			 * which should be resumed from in sys_spacecontrol() when a valid
+			 * redirector is reinstated.
+			 */
+			panic("invalid redirector!");
+		}
+
+		if(dest->space != red->space) {
+			tag->X.flags |= 0x2;		/* set redirect bit */
+			redirected = true;
+			saved_dest = dest;
+			dest = red;
+			/* redirect a closed IPC's receive phase. this'll be re-redirected
+			 * to saved_dest if the redirector passes the IPC as-is, or
+			 * replied to if the redirector returns a rejection.
+			 *
+			 * NOTE: this is not explicitly specified by L4.X2, but the
+			 * wording also doesn't forbid it; and this seems like the most
+			 * reasonable approach in any case. (it also fits the "redirector
+			 * chain" pattern; if not, those'd only work for chaining
+			 * pass/don't policies together -- and that's bizarre.)
+			 *
+			 * rerererere.
+			 */
+			if(self->ipc_from.raw == saved_dest->id) {
+				self->ipc_from.raw = red->id;
+			}
+		}
+	}
+	assert(!redirected || saved_dest != NULL);
+
 	/* get matching variables, incl. propagation */
 	L4_ThreadId_t self_id = { .raw = self->id },
 		self_lid = tid_return(dest, self);
 	bool propagated = false;
 	struct thread *vs = NULL, *sender = self;
-	L4_MsgTag_t *tag = (void *)&L4_VREG(self_utcb, L4_TCR_MR(0));
 	if(CHECK_FLAG(tag->X.flags, 0x1)) {
 		/* propagation (sender fakery). */
 		vs = get_tcr_thread(self, self_utcb, L4_TCR_VA_SENDER);
-		/* FIXME: also check interrupt propagation, redirector chain */
+		/* FIXME: also check interrupt propagation */
 		if(vs != NULL && (self->space == vs->space
-			|| self->space == dest->space))
+			|| self->space == dest->space
+			|| has_redir_chain(vs, self)))
 		{
 			/* redirect a closed IPC filter when applicable */
 			if((vs->status == TS_R_RECV || vs->status == TS_RECV_WAIT)
@@ -1335,7 +1399,7 @@ static bool ipc_send_half(
 			self_lid = tid_return(dest, vs);
 			propagated = true;
 		} else {
-			tag->X.flags &= ~0x1ul;		/* no propagation for you. */
+			tag->X.flags &= ~0x1;		/* no propagation for you. */
 		}
 	}
 	assert(!propagated || vs != NULL);
@@ -1419,8 +1483,14 @@ static bool ipc_send_half(
 			 * from Ipc.
 			 */
 			if(propagated) {
+				assert(L4_IpcPropagated(*tag));
 				L4_VREG(dest_utcb, L4_TCR_VA_SENDER) = tid_return(dest,
 					self).raw;
+			}
+			if(redirected) {
+				assert(L4_IpcRedirected(*tag));
+				L4_VREG(dest_utcb, L4_TCR_INTENDEDRECEIVER) = tid_return(
+					dest, saved_dest).raw;
 			}
 			dest->ipc_from = tid_return(dest, sender);
 			if(likely(!IS_KERNEL_THREAD(dest))) {
@@ -1469,6 +1539,9 @@ static bool ipc_send_half(
 			.dest_tid = { .raw = dest->id },
 			.send_tid = tid_return(dest, propagated ? vs : self),
 			.thread = self,
+			.ir_tid = redirected
+				? tid_return(dest, saved_dest)
+				: L4_nilthread,
 		};
 		htable_add(&sendwait_hash, int_hash(w->dest_tid.raw), w);
 
@@ -1529,10 +1602,7 @@ void ipc_user(
 }
 
 
-static struct thread *find_global_sender(
-	L4_ThreadId_t *from_tid_p,
-	bool *valid_p,
-	struct thread *self)
+static struct ipc_wait *find_global_sender(bool *valid_p, struct thread *self)
 {
 	assert(L4_IsGlobalId(self->ipc_from));
 
@@ -1569,24 +1639,16 @@ static struct thread *find_global_sender(
 			if(w->dest_tid.raw == self->id) break;
 		}
 	}
-	if(w == NULL) return NULL;
-	else {
-		struct thread *from = w->thread;
-		*from_tid_p = w->send_tid;
-		htable_delval(&sendwait_hash, &it);
-		kmem_cache_free(ipc_wait_slab, w);
-		return from;
-	}
+
+	if(w != NULL) htable_delval(&sendwait_hash, &it);
+	return w;
 }
 
 
 /* always sets *from_tid_p to a local TID. on propagation, ActualSender will
  * be set from retval->id.
  */
-static struct thread *find_local_sender(
-	L4_ThreadId_t *from_tid_p,
-	bool *valid_p,
-	struct thread *self)
+static struct ipc_wait *find_local_sender(bool *valid_p, struct thread *self)
 {
 	assert(!L4_IsNilThread(self->ipc_from));
 	assert(L4_IsLocalId(self->ipc_from));
@@ -1632,16 +1694,9 @@ static struct thread *find_local_sender(
 		}
 	}
 
-	if(w == NULL) return NULL;
-	else {
-		assert(L4_IsLocalId(w->send_tid));
-
-		struct thread *from = w->thread;
-		*from_tid_p = w->send_tid;
-		htable_delval(&sendwait_hash, &it);
-		kmem_cache_free(ipc_wait_slab, w);
-		return from;
-	}
+	if(w != NULL) htable_delval(&sendwait_hash, &it);
+	assert(w == NULL || L4_IsLocalId(w->send_tid));
+	return w;
 }
 
 
@@ -1676,19 +1731,17 @@ bool ipc_recv_half(
 		}
 	}
 
-	/* find sender. */
-	struct thread *from;
-	L4_ThreadId_t from_tid = L4_nilthread;
+	/* find waiting IPC. */
+	struct ipc_wait *w;
 	if(L4_IsLocalId(self->ipc_from)) {
 		assert(self->ipc_from.raw != L4_anythread.raw);
 		bool valid;
-		from = find_local_sender(&from_tid, &valid, self);
+		w = find_local_sender(&valid, self);
 		if(!valid) goto err_no_partner;
-		assert(L4_IsLocalId(from_tid));
 	} else {
 		assert(self->ipc_from.raw != L4_anylocalthread.raw);
 		bool valid;
-		from = find_global_sender(&from_tid, &valid, self);
+		w = find_global_sender(&valid, self);
 		if(!valid && !is_interrupt(self->ipc_from)) {
 			/* some things IPC can't relay. for everything else, there's
 			 * passive receive.
@@ -1698,7 +1751,7 @@ bool ipc_recv_half(
 		}
 	}
 
-	if(from == NULL) {
+	if(w == NULL) {
 		TRACE("%s: passive receive to %lu:%lu (waiting on %lu:%lu)\n", __func__,
 			TID_THREADNUM(self->id), TID_VERSION(self->id),
 			TID_THREADNUM(self->ipc_from.raw), TID_VERSION(self->ipc_from.raw));
@@ -1744,9 +1797,11 @@ bool ipc_recv_half(
 		return false;
 	} else {
 		/* active receive */
+		struct thread *from = w->thread;
+
 		TRACE("%s: active receive from %lu:%lu actual %lu:%lu (to %lu:%lu)\n",
 			__func__,
-			TID_THREADNUM(from_tid.raw), TID_VERSION(from_tid.raw),
+			TID_THREADNUM(w->send_tid.raw), TID_VERSION(w->send_tid.raw),
 			TID_THREADNUM(from->id), TID_VERSION(from->id),
 			TID_THREADNUM(self->id), TID_VERSION(self->id));
 		assert(from->status == TS_SEND_WAIT || from->status == TS_XFER);
@@ -1784,11 +1839,15 @@ bool ipc_recv_half(
 		}
 
 		/* whodunnit */
-		self->ipc_from = from_tid;
+		self->ipc_from = w->send_tid;
 		L4_MsgTag_t tag = { .raw = L4_VREG(self_utcb, L4_TCR_MR(0)) };
 		if(L4_IpcPropagated(tag)) {
 			L4_VREG(self_utcb, L4_TCR_VA_SENDER) = tid_return(self, from).raw;
 		}
+		if(L4_IpcRedirected(tag)) {
+			L4_VREG(self_utcb, L4_TCR_INTENDEDRECEIVER) = w->ir_tid.raw;
+		}
+		kmem_cache_free(ipc_wait_slab, w);
 
 		if(unlikely(IS_KERNEL_THREAD(from))) {
 			/* kernel threads do the send/receive phases as control flow. */

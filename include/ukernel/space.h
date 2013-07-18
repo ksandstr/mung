@@ -32,7 +32,7 @@ struct space
 	L4_Fpage_t utcb_area;
 	L4_Fpage_t kip_area;
 
-	thread_id redirector;
+	L4_ThreadId_t redirector;
 
 	struct htable ptab_pages;	/* <struct page *>, by page.id */
 	struct map_db mapdb;
