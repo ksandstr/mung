@@ -2,9 +2,6 @@
 /* tests of L4.X2 string transfer features.
  *
  * TODO: tests on the following:
- *   - message overflow condition, when
- *     1) there are more string items than string buffer items, and
- *     2) a string item won't fit in the current string buffer.
  *   - offset field in L4_ErrorCode() in message overflow
  *   - same in xfer timeout
  *   - and in xfer abort
@@ -956,17 +953,187 @@ static void drop_teardown(void)
 }
 
 
+/* receives a string item of at most 64 bytes, then returns. signals parent
+ * before exit.
+ */
+static void str_receiver_fn(void *param)
+{
+	L4_ThreadId_t parent = { .raw = (L4_Word_t)param };
+
+	char buffer[64];
+	L4_StringItem_t buf = L4_StringItem(sizeof(buffer), buffer);
+	L4_LoadBR(0, 1);
+	buf.raw[0] &= ~1ul;		/* last string buffer */
+	L4_LoadBR(1, buf.raw[0]);
+	L4_LoadBR(2, buf.raw[1]);
+
+	L4_ThreadId_t sender;
+	memset(buffer, 0, sizeof(buffer));
+	L4_MsgTag_t tag = L4_WaitLocal_Timeout(TEST_IPC_DELAY, &sender);
+	L4_Word_t ec = L4_ErrorCode();
+	L4_LoadBR(0, 0);
+	if(L4_IpcSucceeded(tag) && tag.X.t > 0) {
+		buffer[sizeof(buffer) - 1] = '\0';
+		diag("received `%s'", buffer);
+	}
+
+	L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 1 }.raw);
+	L4_LoadMR(1, ec);
+	tag = L4_Send_Timeout(parent, TEST_IPC_DELAY);
+	if(L4_IpcFailed(tag)) {
+		diag("%s: reply to parent failed, ec=%#lx", __func__, L4_ErrorCode());
+	}
+}
+
+
+/* TODO: move this into an util.c */
+static L4_ThreadId_t xstart_thread(void (*fn)(void *), void *param)
+{
+	L4_ThreadId_t tid = start_thread(fn, param);
+	fail_if(L4_IsNilThread(tid), "ec=%#lx", L4_ErrorCode());
+	return tid;
+}
+
+
+static void xjoin_thread(L4_ThreadId_t other)
+{
+	L4_Word_t ec = 0;
+	void *ptr = join_thread_long(other, L4_TimePeriod(1000 * 1000), &ec);
+	if(ptr == NULL && ec != 0) {
+		L4_ThreadId_t g = L4_GlobalIdOf(other);
+		diag("join_thread of %lu:%lu failed after 1s",
+			L4_ThreadNo(g), L4_Version(g));
+	}
+}
+
+
+/* check that str_receiver_fn() delivers timeouts and success correctly. */
+START_TEST(str_receiver_test)
+{
+	plan_tests(2);
+
+	/* the timeout case. */
+	L4_ThreadId_t rec = xstart_thread(&str_receiver_fn,
+		(void *)L4_Myself().raw);
+	L4_MsgTag_t tag = L4_Receive_Timeout(rec,
+		L4_TimePeriod(L4_PeriodUs_NP(TEST_IPC_DELAY) * 2));
+	L4_Word_t remote_ec = ~0ul; L4_StoreMR(1, &remote_ec);
+	L4_Word_t ec = L4_ErrorCode();
+	if(!ok(L4_IpcSucceeded(tag) && remote_ec == 3, "timed out")) {
+		diag("parent tag=%#lx, ec=%#lx, remote_ec=%#lx", tag.raw,
+			ec, remote_ec);
+	}
+	xjoin_thread(rec);
+
+	/* the OK case, with no string items. */
+	rec = xstart_thread(&str_receiver_fn, (void *)L4_Myself().raw);
+
+	L4_LoadMR(0, 0);
+	tag = L4_Send_Timeout(rec, TEST_IPC_DELAY);
+	if(L4_IpcFailed(tag)) diag("send failed, ec=%#lx", L4_ErrorCode());
+
+	tag = L4_Receive_Timeout(rec,
+		L4_TimePeriod(L4_PeriodUs_NP(TEST_IPC_DELAY) * 2));
+	remote_ec = ~0ul; L4_StoreMR(1, &remote_ec);
+	ec = L4_ErrorCode();
+	if(!ok(L4_IpcSucceeded(tag) && remote_ec == 0, "IPC ok")) {
+		diag("parent tag=%#lx, ec=%#lx, remote_ec=%#lx", tag.raw,
+			ec, remote_ec);
+	}
+	xjoin_thread(rec);
+}
+END_TEST
+
+
+/* test for message overflow error when there are more string items given by
+ * the sender, than string buffer items in the receiver.
+ */
+START_TEST(too_many_items)
+{
+	plan_tests(2);
+
+	L4_ThreadId_t rec = xstart_thread(&str_receiver_fn,
+		(void *)L4_Myself().raw);
+
+	const char *thing = "of late, i've mostly been eating old doorknobs";
+	L4_StringItem_t str = L4_StringItem(strlen(thing) + 1, (void *)thing),
+		another = L4_StringItem(8, (void *)thing + 16);
+	assert(str.X.string_length <= 64);
+	L4_LoadMR(0, (L4_MsgTag_t){ .X.t = 4 }.raw);
+	L4_LoadMRs(1, 2, str.raw);
+	L4_LoadMRs(3, 2, another.raw);
+	L4_MsgTag_t tag = L4_Send_Timeout(rec, TEST_IPC_DELAY);
+	L4_Word_t ec = L4_ErrorCode();
+	if(!ok1(L4_IpcFailed(tag) && (ec & 0xf) == 8)) {
+		diag("tag=%#lx, ec=%#lx", tag.raw, ec);
+	}
+
+	tag = L4_Receive_Timeout(rec,
+		L4_TimePeriod(L4_PeriodUs_NP(TEST_IPC_DELAY) * 2));
+	fail_if(L4_IpcFailed(tag), "ec=%#lx", L4_ErrorCode());
+	L4_Word_t remote_ec = ~0ul; L4_StoreMR(1, &remote_ec);
+	ec = L4_ErrorCode();
+	if(!ok1((remote_ec & 0xf) == 9)) diag("remote_ec=%#lx", remote_ec);
+	xjoin_thread(rec);
+}
+END_TEST
+
+
+/* message overflow when a string item in the sender is longer than the
+ * corresponding buffer in the receiver.
+ */
+START_TEST(item_too_long)
+{
+	plan_tests(2);
+
+	L4_ThreadId_t rec = xstart_thread(&str_receiver_fn,
+		(void *)L4_Myself().raw);
+
+	const char *thing = "though there are times when i ask"
+		" whether it is i who eats the doorknob, or do the"
+		" doorknobs actually eat me? a most vexing conundrum.";
+	L4_StringItem_t str = L4_StringItem(strlen(thing) + 1, (void *)thing);
+	assert(str.X.string_length > 64);
+	L4_LoadMR(0, (L4_MsgTag_t){ .X.t = 4 }.raw);
+	L4_LoadMRs(1, 2, str.raw);
+	L4_MsgTag_t tag = L4_Send_Timeout(rec, TEST_IPC_DELAY);
+	L4_Word_t ec = L4_ErrorCode();
+	if(!ok1(L4_IpcFailed(tag) && (ec & 0xf) == 8)) {
+		diag("tag=%#lx, ec=%#lx", tag.raw, ec);
+	}
+
+	tag = L4_Receive_Timeout(rec,
+		L4_TimePeriod(L4_PeriodUs_NP(TEST_IPC_DELAY) * 2));
+	fail_if(L4_IpcFailed(tag), "ec=%#lx", L4_ErrorCode());
+	L4_Word_t remote_ec = ~0ul; L4_StoreMR(1, &remote_ec);
+	ec = L4_ErrorCode();
+	if(!ok1((remote_ec & 0xf) == 9)) diag("remote_ec=%#lx", remote_ec);
+	xjoin_thread(rec);
+}
+END_TEST
+
+
 Suite *string_suite(void)
 {
 	Suite *s = suite_create("string");
 
-	TCase *meta = tcase_create("meta");
-	tcase_add_checked_fixture(meta, &stt_setup, &stt_teardown);
-	tcase_add_checked_fixture(meta, &stats_setup, &stats_teardown);
-	tcase_add_test(meta, delay_test);
-	tcase_add_test(meta, faulting_echo_test);
-	tcase_add_test(meta, delayed_faulting_echo_test);
-	suite_add_tcase(s, meta);
+	{
+		TCase *tc = tcase_create("meta");
+		tcase_add_checked_fixture(tc, &stt_setup, &stt_teardown);
+		tcase_add_checked_fixture(tc, &stats_setup, &stats_teardown);
+		tcase_add_test(tc, delay_test);
+		tcase_add_test(tc, faulting_echo_test);
+		tcase_add_test(tc, delayed_faulting_echo_test);
+		tcase_add_test(tc, str_receiver_test);
+		suite_add_tcase(s, tc);
+	}
+
+	{
+		TCase *tc = tcase_create("error");
+		tcase_add_test(tc, too_many_items);
+		tcase_add_test(tc, item_too_long);
+		suite_add_tcase(s, tc);
+	}
 
 	TCase *basic = tcase_create("basic");
 	tcase_add_checked_fixture(basic, &stt_setup, &stt_teardown);
