@@ -409,11 +409,12 @@ static void handle_pf(
 	L4_MsgTag_t tag = muidl_get_tag();
 	L4_Word_t fault_access = tag.X.label & 0xf;
 #if 0
-	printf("forkserv: pf [%c%c%c] in %d:%d (ip %#lx, addr %#lx)\n",
+	L4_ThreadId_t sender = muidl_get_sender();
+	printf("forkserv: pf [%c%c%c] in %lu:%lu (ip %#lx, addr %#lx)\n",
 		CHECK_FLAG(fault_access, L4_Readable) ? 'r' : '-',
 		CHECK_FLAG(fault_access, L4_Writable) ? 'w' : '-',
 		CHECK_FLAG(fault_access, L4_eXecutable) ? 'x' : '-',
-		from.global.X.thread_no, from.global.X.version,
+		L4_ThreadNo(sender), L4_Version(sender),
 		ip, addr);
 #endif
 
