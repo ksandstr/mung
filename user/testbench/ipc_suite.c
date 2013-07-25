@@ -389,7 +389,7 @@ static int munge_case(
 	flush_byte_range((uintptr_t)munge_in, munge_size, L4_FullyAccessible);
 	flush_byte_range((uintptr_t)munge_out, munge_size, L4_FullyAccessible);
 
-	int n = __ipchelper_munge_string(other_helper_tid,
+	int n = __ipchelper_munge_string(partner_tid,
 		munge_in, munge_out, munge_seed);
 	if(n != 0) goto end;
 	uint32_t remote_crc = crc32c(0, munge_out, munge_size);
