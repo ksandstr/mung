@@ -4,6 +4,11 @@ include $(CFGDIR)/config.mk
 
 LDFLAGS=-e_start -N -nostdlib
 
+TEST_IDL:=$(wildcard idl/*-suite.idl)
+TEST_IDL_OBJS:=$(patsubst idl/%.idl,%-service.o,$(TEST_IDL)) \
+	$(patsubst idl/%.idl,%-client.o,$(TEST_IDL)) \
+	$(patsubst idl/%.idl,%-common.o,$(TEST_IDL))
+
 
 all: testbench forkserv
 
@@ -32,8 +37,7 @@ testbench: testbench.ld crt0.o testbench.o dlmalloc.o heap.o thread.o tsd.o \
 		x86_suite.o interrupt_suite.o \
 		legacy.o thread_test.o \
 		syscalls.o ccan-list.o ccan-htable.o ccan-hash.o ccan-crc.o \
-		ipc-suite-service.o ipc-suite-client.o ipc-suite-common.o \
-		x86-suite-service.o x86-suite-client.o x86-suite-common.o \
+		$(TEST_IDL_OBJS) \
 		forkserv-common.o forkserv-client.o
 	@echo "  LD $@"
 	@$(LD) $(LDFLAGS) -T testbench.ld $(filter %.o,$^) $(LIBS) -o $@ \
@@ -61,6 +65,12 @@ forkserv: forkserv.ld crt0.o forkserv.o syscalls.o heap.o dlmalloc.o \
 %.o: ../../%.c
 	@echo "  CC $@ <toplevel>"
 	@$(CC) -c -o $@ $< $(CFLAGS) -DUSE_LOCKS=1 -Wno-unused
+
+
+# muidl outputs
+%-service.s %-client.s %-common.s %-defs.h: idl/%.idl
+	@echo "  IDL $<"
+	@$(MUIDL) $(MUIDLFLAGS) --service --client --common --defs $<
 
 
 include $(wildcard .deps/*.d)

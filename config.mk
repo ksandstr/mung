@@ -28,12 +28,6 @@ ccan-%.o ::
 	@$(CC) -c -o $@ $(CCAN_DIR)/ccan/$*/$*.c $(CFLAGS) -nostartfiles -nodefaultlibs
 
 
-# muidl outputs
-%-service.s %-client.s %-common.s %-defs.h: %.idl
-	@echo "  IDL $<"
-	@$(MUIDL) $(MUIDLFLAGS) --service --client --common --defs $<
-
-
 %.o: %-32.S
 	@echo "  AS $@"
 	@gcc -c -o $@ $< $(CFLAGS) -DIN_ASM_SOURCE
