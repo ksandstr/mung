@@ -440,10 +440,12 @@ START_TEST(point_xfer_timeouts)
 
 	base = L4_SystemClock();
 	to_pt = L4_TimePoint2_NP(base, (L4_Clock_t){ .raw = base.raw + to_us });
-	diag("base=%#lx, to_pt={e=%d, m=%#x, c=%d} -> @%#lx",
-		(L4_Word_t)base.raw, to_pt.point.e, to_pt.point.m, to_pt.point.c,
-		(L4_Word_t)L4_PointClock_NP(base, to_pt).raw);
 	L4_Sleep(L4_TimePeriod(to_us - pg_delay_us));
+	if(!pt_is_valid(L4_SystemClock(), to_pt)) {
+		diag("base=%#lx, to_pt={e=%d, m=%#x, c=%d} -> @%#lx",
+			(L4_Word_t)base.raw, to_pt.point.e, to_pt.point.m, to_pt.point.c,
+			(L4_Word_t)L4_PointClock_NP(base, to_pt).raw);
+	}
 	fail_unless(pt_is_valid(L4_SystemClock(), to_pt));
 
 	L4_Set_XferTimeouts(L4_Timeouts(to_pt, to_pt));
