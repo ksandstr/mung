@@ -1,14 +1,12 @@
 /* interface for a helper used by ipc_suite.c . */
 
 #include "l4x2.idl"
+#include "common.idl"
 
 
 [StubPrefix(__ipchelper)]
-interface IpcHelper: L4X2::FaultHandler
+interface IpcHelper: L4X2::FaultHandler, Quittable
 {
-	[Label(0xdead)]
-	oneway void quit();
-
 	/* causes the helper thread to get another scheduling quantum before
 	 * returning to play.
 	 */

@@ -13,6 +13,8 @@
 #include <l4/types.h>
 #include <muidl.h>
 
+#include "common-defs.h"
+
 
 /* TODO: fetch from KIP at init */
 #define PAGE_BITS 12
@@ -254,7 +256,6 @@ extern bool is_privileged(void);
 
 /* from util.c */
 
-extern bool send_quit(L4_ThreadId_t thread);
 extern bool send_reset(L4_ThreadId_t thread);
 extern bool send_delay(
 	L4_ThreadId_t thread,
@@ -266,6 +267,11 @@ extern void random_string(char *buf, size_t size, uint32_t *seed_p);
 
 /* (actually in sched_suite.c) */
 extern int find_own_priority(void);
+
+/* (not in util.c anymore.) */
+static inline bool send_quit(L4_ThreadId_t serv) {
+	return __common_quit_timeout((serv), TEST_IPC_DELAY) == 0;
+}
 
 
 /* from log.c */

@@ -4,7 +4,7 @@ include $(CFGDIR)/config.mk
 
 LDFLAGS=-e_start -N -nostdlib
 
-TEST_IDL:=$(wildcard idl/*-suite.idl)
+TEST_IDL:=idl/common.idl $(wildcard idl/*-suite.idl)
 TEST_IDL_OBJS:=$(patsubst idl/%.idl,%-service.o,$(TEST_IDL)) \
 	$(patsubst idl/%.idl,%-client.o,$(TEST_IDL)) \
 	$(patsubst idl/%.idl,%-common.o,$(TEST_IDL))
@@ -48,7 +48,7 @@ ipc_suite.o: ipc_suite.c ipc-suite-defs.h
 x86_suite.o: x86_suite.c x86-suite-defs.h
 # (common dependency between forkserv and testbench, so it takes care of
 # forkserv-defs.h for both in the proper order.)
-heap.o: heap.c forkserv-defs.h
+heap.o: heap.c forkserv-defs.h common-defs.h
 
 
 # NOTE: use of the same heap.o as in testbench

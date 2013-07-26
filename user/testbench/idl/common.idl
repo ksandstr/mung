@@ -1,0 +1,13 @@
+
+/* common IDL things. the quit receiver, pagers, and so forth. */
+
+#include <muidl.idl>
+#include "l4x2.idl"
+
+
+[StubPrefix(__common)]
+interface Quittable
+{
+	[Label(0xdead), StubSendTimeout]
+	oneway void quit();
+};
