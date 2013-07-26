@@ -32,7 +32,7 @@
 #define RESET_LABEL 0xf579
 #define DELAY_LABEL	0x7a5a		/* "zZ" */
 
-#define LOG_SIZE 64			/* size of pager stats log */
+#define LOG_SIZE DROP_PAGER_LOG_SIZE
 
 
 #define btos(x) (!!(x) ? "true" : "false")
@@ -42,6 +42,11 @@
  * idl_fixture_teardown() is defined in util.c . setting quit_cond to false
  * makes it perpetual, which is usually not how test fixtures are supposed to
  * behave.
+ *
+ * externally defined IDL dispatchers would typically say FIX_QUIT_COND, which
+ * tests a TSD key; correspondingly, IDL dispatchers that implement Quittable
+ * will point the vtable's .quit to idl_fixture_quit which is a function that
+ * sets that same key.
  */
 #define IDL_FIXTURE(fixture_name, iface_name, vtable, quit_cond) \
 static L4_ThreadId_t fixture_name ## _tid; \
@@ -107,6 +112,12 @@ static inline void fixture_name ## _fork_teardown(void) { \
 extern void idl_fixture_teardown(L4_ThreadId_t tid);
 extern void idl_fixture_teardown_fork(int pid, L4_ThreadId_t tid);
 
+/* Quittable protocol as it ties into IDL fixtures */
+extern bool idl_fixture_running(void);
+extern void idl_fixture_quit(void);
+
+#define FIX_QUIT_COND (!idl_fixture_running())
+
 
 
 struct Suite;
@@ -116,14 +127,6 @@ struct pager_stats
 {
 	int n_faults, n_read, n_write, n_exec, n_fail;
 	int log_top;	/* [0 .. LOG_SIZE) */
-	L4_Fpage_t log[LOG_SIZE];
-};
-
-
-struct drop_param
-{
-	int keep;
-	int log_top;
 	L4_Fpage_t log[LOG_SIZE];
 };
 
@@ -301,9 +304,7 @@ extern L4_Fpage_t get_fault(struct pager_stats *stats, L4_Word_t addr);
 
 
 /* from pg_drop.c */
-
-extern L4_ThreadId_t start_drop_pager(struct drop_param *param);
-extern L4_Word_t stop_drop_pager(L4_ThreadId_t tid);
-
+struct drop_pager_vtable;
+extern struct drop_pager_vtable pg_drop_vtab;
 
 #endif

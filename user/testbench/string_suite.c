@@ -7,6 +7,8 @@
  *   - and in xfer abort
  */
 
+#define DROPPAGER_IMPL_SOURCE 1
+
 #include <stdlib.h>
 #include <string.h>
 #include <ccan/compiler/compiler.h>
@@ -30,7 +32,6 @@
 
 static L4_ThreadId_t test_tid, stats_tid, drop_tid;
 static struct pager_stats *stats;
-static struct drop_param *drop_param;
 
 
 static const uint32_t seed_bins[4] = {
@@ -320,6 +321,8 @@ START_LOOP_TEST(echo_long_xferfault, test_iter, 0, 0xf)
 	plan_tests(2);
 
 	L4_ThreadId_t old_pager = L4_Pager();
+	int n = __drop_pager_set_params(drop_tid, 2);
+	fail_if(n != 0, "n=%d", n);
 	L4_Set_Pager(drop_tid);
 
 	/* provoke send-side faults also */
@@ -934,25 +937,6 @@ static void stats_teardown(void)
 }
 
 
-/* fixture for the page-dropping pager thread. set to keep at most two
- * previous maps around.
- */
-static void drop_setup(void)
-{
-	drop_param = malloc(sizeof(*drop_param));
-	drop_param->keep = 2;
-	fail_unless(drop_param != NULL);
-	drop_tid = start_drop_pager(drop_param);
-}
-
-
-static void drop_teardown(void)
-{
-	L4_Word_t ec = stop_drop_pager(drop_tid);
-	fail_if(ec != 0, "stop_drop_pager() failed, ec %#lx", ec);
-}
-
-
 /* receives a string item of at most 64 bytes, then returns. signals parent
  * before exit.
  */
@@ -1113,6 +1097,8 @@ START_TEST(item_too_long)
 END_TEST
 
 
+IDL_FIXTURE(drop, drop_pager, &pg_drop_vtab, FIX_QUIT_COND);
+
 Suite *string_suite(void)
 {
 	Suite *s = suite_create("string");
@@ -1138,7 +1124,7 @@ Suite *string_suite(void)
 	TCase *basic = tcase_create("basic");
 	tcase_add_checked_fixture(basic, &stt_setup, &stt_teardown);
 	tcase_add_checked_fixture(basic, &stats_setup, &stats_teardown);
-	tcase_add_checked_fixture(basic, &drop_setup, &drop_teardown);
+	ADD_IDL_FIXTURE(basic, drop);
 	tcase_add_test(basic, echo_simple);
 	tcase_add_test(basic, echo_long);
 	tcase_add_test(basic, echo_long_xferfault);
@@ -1150,7 +1136,7 @@ Suite *string_suite(void)
 	TCase *space = tcase_create("space");
 	tcase_add_checked_fixture(space, &fork_stt_setup, &fork_stt_teardown);
 	tcase_add_checked_fixture(space, &stats_setup, &stats_teardown);
-	tcase_add_checked_fixture(space, &drop_setup, &drop_teardown);
+	ADD_IDL_FIXTURE(space, drop);
 	tcase_add_test(space, echo_simple);
 	tcase_add_test(space, echo_long);
 	tcase_add_test(space, echo_long_xferfault);

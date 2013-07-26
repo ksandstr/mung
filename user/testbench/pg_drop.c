@@ -1,8 +1,5 @@
-/* pager that flushes pages that were mapped a set number of faults ago. used
- * to confirm that string transfers and/or transfer timeouts work properly in
- * the face of in-transfer pagefaults, which this produces when combined with
- * pre-transfer faults.
- */
+
+#define DROPPAGER_IMPL_SOURCE 1
 
 #include <stdint.h>
 #include <stdbool.h>
@@ -16,100 +13,117 @@
 #include "test.h"
 
 
-static void drop_pager_fn(void *param_ptr)
+#ifndef LOG_SIZE
+#define LOG_SIZE DROP_PAGER_LOG_SIZE
+#endif
+
+
+struct drop_param
 {
-	struct drop_param *param = param_ptr;
-	for(int i=0; i < LOG_SIZE; i++) param->log[i] = L4_Nilpage;
-	param->log_top = LOG_SIZE - 1;		/* start at 0 */
+	int keep;
+	int log_top;
+	L4_Fpage_t log[LOG_SIZE];
+};
 
-	bool run = true;
-	while(run) {
-		L4_ThreadId_t from;
-		L4_MsgTag_t tag = L4_Wait(&from);
 
-		for(;;) {
-			if(L4_IpcFailed(tag)) {
-				diag("%s: reply/wait failed, ec %#lx", __func__,
-					L4_ErrorCode());
-				break;
-			}
+static int ctx_key(void) {
+	static int key = 0;
+	if(key == 0) tsd_key_create(&key, &free);
+	return key;
+}
 
-			if(tag.X.label == QUIT_LABEL) {
-				run = false;
-				break;
-			} else if(tag.X.label >> 4 == 0xffe
-				&& tag.X.u == 2 && tag.X.t == 0)
-			{
-				L4_Word_t faddr, fip;
-				L4_StoreMR(1, &faddr);
-				L4_StoreMR(2, &fip);
-				int rwx = tag.X.label & 0x000f;
-#if 0
-				diag("%s: pf in %lu:%lu at %#lx, ip %#lx", __func__,
-					L4_ThreadNo(from), L4_Version(from), faddr, fip);
-#endif
-				param->log_top = (param->log_top + 1) % LOG_SIZE;
-				param->log[param->log_top] = L4_FpageLog2(faddr, 12);
-				L4_Set_Rights(&param->log[param->log_top], rwx);
 
-				int dpos = param->log_top - param->keep;
-				if(dpos < 0) dpos += LOG_SIZE;
-				assert(dpos >= 0 && dpos < LOG_SIZE);
-				L4_Fpage_t drop = param->log[dpos];
-				if(!L4_IsNilFpage(drop)
-					&& L4_Address(drop) != (faddr & ~PAGE_MASK))
-				{
-#if 0
-					diag("flushing %#lx:%#lx (dpos %d)",
-						L4_Address(drop), L4_Size(drop), dpos);
-#endif
-					L4_Set_Rights(&drop, L4_FullyAccessible);
-					L4_FlushFpage(drop);
-				}
+static struct drop_param *get_ctx(void) {
+	struct drop_param *ptr = tsd_get(ctx_key());
+	if(ptr == NULL) {
+		ptr = calloc(1, sizeof(*ptr));
+		for(int i=0; i < LOG_SIZE; i++) ptr->log[i] = L4_Nilpage;
+		ptr->log_top = LOG_SIZE - 1;		/* start at 0 */
+		tsd_set(ctx_key(), ptr);
+	}
+	return ptr;
+}
 
-				/* pass it on. */
-				L4_LoadBR(0, L4_CompleteAddressSpace.raw);
-				L4_LoadMR(0, (L4_MsgTag_t){ .X.label = 0xffe0 | rwx,
-					.X.u = 2 }.raw);
-				L4_LoadMR(1, faddr);
-				L4_LoadMR(2, fip);
-				tag = L4_Call(L4_Pager());
-				if(L4_IpcFailed(tag)) {
-					diag("drop-to-pager IPC failed, ec %lu",
-						L4_ErrorCode());
-					break;
-				} else if(tag.X.t != 2 || tag.X.u != 0) {
-					diag("drop-to-pager IPC returned weird tag %#lx",
-						tag.raw);
-					break;
-				} else {
-					/* reply. */
-					L4_LoadMR(0, 0);
-					tag = L4_ReplyWait(from, &from);
-				}
-			} else {
-				diag("drop pager got weird IPC from %#lx (label %#lx)",
-					from.raw, tag.X.label);
-				break;
-			}
+
+static void set_params(int32_t n_keep)
+{
+	struct drop_param *p = get_ctx();
+	p->keep = n_keep;
+}
+
+
+static void get_fault_log(L4_Fpage_t *faults_buf, unsigned *faults_len_p)
+{
+	struct drop_param *ctx = get_ctx();
+	int o = 0;
+	for(int i = 0, p = ctx->log_top;
+		i < LOG_SIZE;
+		i++, p = (p + 1) % LOG_SIZE)
+	{
+		assert(p > 0 && p < LOG_SIZE);
+		assert(o < LOG_SIZE);
+		if(!L4_IsNilFpage(ctx->log[p])) {
+			faults_buf[o++] = ctx->log[p];
 		}
+	}
+	*faults_len_p = o;
+}
+
+
+static void handle_fault(L4_Word_t faddr, L4_Word_t fip, L4_MapItem_t *map)
+{
+	struct drop_param *param = get_ctx();
+	L4_MsgTag_t tag = muidl_get_tag();
+	int rwx = tag.X.label & 0x000f;
+#if 0
+	L4_ThreadId_t from = muidl_get_sender();
+	diag("drop_pager: pf in %lu:%lu at %#lx, ip %#lx",
+		L4_ThreadNo(from), L4_Version(from), faddr, fip);
+#endif
+	param->log_top = (param->log_top + 1) % LOG_SIZE;
+	param->log[param->log_top] = L4_FpageLog2(faddr, 12);
+	L4_Set_Rights(&param->log[param->log_top], rwx);
+
+	int dpos = param->log_top - param->keep;
+	if(dpos < 0) dpos += LOG_SIZE;
+	assert(dpos >= 0 && dpos < LOG_SIZE);
+	L4_Fpage_t drop = param->log[dpos];
+	if(!L4_IsNilFpage(drop)
+		&& L4_Address(drop) != (faddr & ~PAGE_MASK))
+	{
+#if 0
+		diag("flushing %#lx:%#lx (dpos %d)",
+			L4_Address(drop), L4_Size(drop), dpos);
+#endif
+		L4_Set_Rights(&drop, L4_FullyAccessible);
+		L4_FlushFpage(drop);
+	}
+
+	/* pass it on. */
+	L4_LoadBR(0, L4_CompleteAddressSpace.raw);
+	L4_LoadMR(0, (L4_MsgTag_t){ .X.label = 0xffe0 | rwx,
+		.X.u = 2 }.raw);
+	L4_LoadMR(1, faddr);
+	L4_LoadMR(2, fip);
+	tag = L4_Call(L4_Pager());
+	if(L4_IpcFailed(tag)) {
+		diag("drop-to-pager IPC failed, ec %lu",
+			L4_ErrorCode());
+		muidl_raise_no_reply();
+	} else if(tag.X.t != 2 || tag.X.u != 0) {
+		diag("drop-to-pager IPC returned weird tag %#lx", tag.raw);
+		map->raw[0] = 0;
+		map->raw[1] = 0;
+	} else {
+		/* AOK! */
+		L4_StoreMRs(1, 2, map->raw);
 	}
 }
 
 
-L4_ThreadId_t start_drop_pager(struct drop_param *param)
-{
-	param->log_top = 0;
-	L4_ThreadId_t pg_tid = start_thread(&drop_pager_fn, param);
-	fail_if(L4_IsNilThread(pg_tid), "can't start drop pager");
-	for(int i=0; i < 10; i++) L4_ThreadSwitch(pg_tid);
-	fail_if(param->log_top == 0, "drop pager acting weird");
-
-	return pg_tid;
-}
-
-
-L4_Word_t stop_drop_pager(L4_ThreadId_t tid) {
-	/* and roll! */
-	return stop_stats_pager(tid);
-}
+struct drop_pager_vtable pg_drop_vtab = {
+	.quit = &idl_fixture_quit,
+	.handle_fault = &handle_fault,
+	.set_params = &set_params,
+	.get_fault_log = &get_fault_log,
+};

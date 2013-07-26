@@ -73,6 +73,32 @@ void idl_fixture_teardown_fork(int pid, L4_ThreadId_t tid) {
 }
 
 
+static int fixture_key(void)
+{
+	static int key = -1;
+	if(key == -1) tsd_key_create(&key, &free);
+	return key;
+}
+
+
+bool idl_fixture_running(void)
+{
+	bool *ptr = tsd_get(fixture_key());
+	return ptr == NULL || *ptr;
+}
+
+
+void idl_fixture_quit(void)
+{
+	bool *ptr = tsd_get(fixture_key());
+	if(ptr == NULL) {
+		ptr = malloc(sizeof(*ptr));
+		tsd_set(fixture_key(), ptr);
+	}
+	*ptr = false;
+}
+
+
 /* via ccan/bdelta/test/common.h; used because there is no system RNG, and to
  * have consistent output.
  */

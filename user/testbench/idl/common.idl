@@ -11,3 +11,32 @@ interface Quittable
 	[Label(0xdead), StubSendTimeout]
 	oneway void quit();
 };
+
+
+/* custom pagers for e.g. string_suite.c */
+[StubPrefix(__cpg)]
+interface CustomPager: L4X2::FaultHandler, Quittable
+{
+	/* no methods. */
+};
+
+
+/* pager that flushes pages that were mapped a set number of faults ago. used
+ * to confirm that string transfers and/or transfer timeouts work properly in
+ * the face of in-transfer pagefaults, which this produces when combined with
+ * pre-transfer faults.
+ */
+[StubPrefix(__drop_pager)]
+interface DropPager: CustomPager
+{
+	const long LOG_SIZE = 64;
+
+	/* configuration */
+	void set_params(in long n_keep);
+
+	/* analysis */
+	typedef sequence<L4X2::Fpage, LOG_SIZE> fault_seq;
+
+	/* retrieve faults in order of occurrence. unaffected by @n_keep. */
+	void get_fault_log(out fault_seq faults);
+};
