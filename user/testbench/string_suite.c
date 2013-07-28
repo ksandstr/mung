@@ -11,6 +11,7 @@
 
 #include <stdlib.h>
 #include <string.h>
+#include <alloca.h>
 #include <ccan/compiler/compiler.h>
 #include <ccan/str/str.h>
 
@@ -88,12 +89,28 @@ void flush_byte_range(
 }
 
 
+/* FIXME: copypasta'd from ipc.c! */
+static size_t stritemlen(L4_StringItem_t *si)
+{
+	size_t len = 0;
+	L4_StringItem_t *prev;
+	do {
+		prev = si;
+		len += si->X.string_length * L4_Substrings(si);
+		L4_Word_t *wp = (L4_Word_t *)si;
+		si = (L4_StringItem_t *)&wp[L4_Substrings(si) + 1];
+	} while(L4_CompoundString(prev));
+	return len;
+}
+
+
 static void string_test_thread(void *param UNUSED)
 {
 	const int rbuf_len = 64 * 1024;
 	char *recvbuf = valloc(rbuf_len);
 	memset(recvbuf, 0, rbuf_len);
-	L4_StringItem_t recv_si = L4_StringItem(rbuf_len, recvbuf);
+	L4_StringItem_t recv_si = L4_StringItem(rbuf_len, recvbuf),
+		*got_si = alloca(sizeof(L4_Word_t) * 64);
 
 #if 0
 	diag("%s running as %lu:%lu", __func__,
@@ -106,7 +123,8 @@ static void string_test_thread(void *param UNUSED)
 	while(running) {
 		L4_ThreadId_t from;
 		/* simple acceptor over the entire recvbuf. */
-		L4_LoadBR(0, 1);		/* only stringitems */
+		L4_Accept(L4_StringItemsAcceptor);
+		recv_si.X.C = 0;
 		L4_LoadBRs(1, 2, recv_si.raw);
 		L4_MsgTag_t tag = L4_Wait(&from);
 
@@ -119,19 +137,19 @@ static void string_test_thread(void *param UNUSED)
 			switch(tag.X.label) {
 				case QUIT_LABEL: running = false; break;
 				case ECHO_LABEL: {
-					if(tag.X.t != 2 || tag.X.u != 0) {
+					if(tag.X.t == 0 || tag.X.u != 0) {
 						diag("invalid echo message");
 						L4_LoadMR(0, 0);
 						break;
 					}
-					L4_StringItem_t si;
-					L4_StoreMRs(1, 2, si.raw);
-					if(!L4_IsStringItem(&si)) {
+					L4_StoreMRs(1, L4_TypedWords(tag), got_si->raw);
+					if(!L4_IsStringItem(got_si)) {
 						diag("is not a string item");
 						L4_LoadMR(0, 0);
 						break;
 					}
-					recvbuf[MIN(int, rbuf_len - 1, si.X.string_length)] = '\0';
+					int si_len = stritemlen(got_si);
+					recvbuf[MIN(int, rbuf_len - 1, si_len)] = '\0';
 					int rec_len = strlen(recvbuf), tmplen = rec_len + 64;
 					char *tmp = malloc(tmplen);
 					if(tmp == NULL) {
@@ -141,9 +159,9 @@ static void string_test_thread(void *param UNUSED)
 						strlcpy(recvbuf, tmp, tmplen);
 						free(tmp);
 					}
-					si = L4_StringItem(strlen(recvbuf) + 1, recvbuf);
+					*got_si = L4_StringItem(strlen(recvbuf) + 1, recvbuf);
 					L4_LoadMR(0, (L4_MsgTag_t){ .X.t = 2 }.raw);
-					L4_LoadMRs(1, 2, si.raw);
+					L4_LoadMRs(1, 2, got_si->raw);
 					break;
 				}
 
@@ -179,7 +197,7 @@ static void string_test_thread(void *param UNUSED)
 
 			if(running) {
 				/* simple acceptor over the entire recvbuf. */
-				L4_LoadBR(0, 1);		/* only stringitems */
+				L4_Accept(L4_StringItemsAcceptor);
 				L4_LoadBRs(1, 2, recv_si.raw);
 				if(delay.raw == L4_ZeroTime.raw) {
 					assert(delay_repeat == 0);
@@ -230,7 +248,7 @@ static void echo(
 	size_t echo_len)
 {
 	L4_StringItem_t rep_si = L4_StringItem(reply_size, replybuf);
-	L4_LoadBR(0, 1);
+	L4_Accept(L4_StringItemsAcceptor);
 	L4_LoadBRs(1, 2, rep_si.raw);
 	if(echo_len == 0) echo_len = strlen(echostr);
 	L4_StringItem_t si = L4_StringItem(echo_len + 1, (void *)echostr);
@@ -270,12 +288,136 @@ START_TEST(echo_simple)
 END_TEST
 
 
-/* iter should be 0..15. it'll be used to select a seed value for the string
- * parameter.
+/* cuts a test string into three smaller sections and sends that as a compound
+ * string item.
  */
-START_LOOP_TEST(echo_long, test_iter, 0, 0xf)
+START_TEST(echo_simple_compound_send)
 {
-	uint32_t seed = seed_bins[test_iter & 0x3] ^ seed_bins[test_iter >> 2];
+	plan_tests(3);
+	char *echo_str = "John Stalvern waited. The lights above him "
+		" blinked and sparked out of the air. There were demons in the base.";
+	const size_t echo_len = strlen(echo_str);
+
+	char *replybuf = malloc(2048);
+	L4_StringItem_t rep_si = L4_StringItem(2048, replybuf);
+	rep_si.X.C = 0;
+
+	L4_StringItem_t *send_si = alloca(sizeof(L4_Word_t) * 64),
+		*got_si = alloca(sizeof(L4_Word_t) * 64);
+
+	memset(replybuf, 0, 2048);
+	L4_Accept(L4_StringItemsAcceptor);
+	L4_LoadBRs(1, 2, rep_si.raw);
+
+	/* build a one-header compound string with three pointers, each 37 bytes
+	 * long.
+	 */
+	assert(37 * 3 == echo_len + 1);
+	*send_si = L4_StringItem(37, echo_str);
+	L4_AddSubstringAddressTo(send_si, &echo_str[37]);
+	L4_AddSubstringAddressTo(send_si, &echo_str[74]);
+
+	L4_Word_t ec = 0;
+	L4_LoadMR(0, (L4_MsgTag_t){
+		.X.label = ECHO_LABEL,
+		.X.t = L4_Substrings(send_si) + 1,
+	}.raw);
+	L4_LoadMRs(1, 4, send_si->raw);
+
+	L4_MsgTag_t tag = L4_Call(test_tid);
+	if(L4_IpcSucceeded(tag)) L4_StoreMRs(1, tag.X.t, got_si->raw);
+	else ec = L4_ErrorCode();
+	if(!ok(L4_IpcSucceeded(tag), "ipc ok")) diag("ec=%#lx", ec);
+
+	fail_unless(L4_IsStringItem(got_si) || !L4_CompoundString(got_si));
+	replybuf[MIN(int, 2047, stritemlen(got_si))] = '\0';
+	size_t reply_len = strlen(replybuf);
+	if(!ok1(reply_len >= echo_len)) {
+		diag("reply_len=%d, echo_len=%d", reply_len, echo_len);
+	}
+	ok(streq(&replybuf[reply_len - echo_len], echo_str),
+		"echo output ends with input");
+
+	free(replybuf);
+}
+END_TEST
+
+
+/* like echo_simple_compound_send, but with a multi-header compound string
+ * item.
+ */
+START_TEST(echo_multi_compound_send)
+{
+	plan_tests(3);
+	char *echo_str = "John Stalvern waited. The lights above him "
+		" blinked and sparked out of the air. There were demons in the base.";
+	const size_t echo_len = strlen(echo_str);
+
+	char *replybuf = malloc(2048);
+	L4_StringItem_t rep_si = L4_StringItem(2048, replybuf);
+	rep_si.X.C = 0;
+
+	L4_StringItem_t *send_si = alloca(sizeof(L4_Word_t) * 64),
+		*got_si = alloca(sizeof(L4_Word_t) * 64);
+	memset(replybuf, 0, 2048);
+	L4_Accept(L4_StringItemsAcceptor);
+	L4_LoadBRs(1, 2, rep_si.raw);
+
+	/* build a multi-header compound string.
+	 * lengths = 40, 2*7, 3*11, 3*6, 1*6
+	 */
+	memset(replybuf, 0, 2048);
+	L4_Accept(L4_StringItemsAcceptor);
+	L4_LoadBRs(1, 2, rep_si.raw);
+	int p;
+	*send_si = L4_StringItem(p = 40, echo_str);
+	L4_StringItem_t hdr = L4_StringItem(7, &echo_str[p]);
+	L4_AddSubstringTo(send_si, &hdr);
+	L4_AddSubstringAddressTo(send_si, &echo_str[p + 7]);
+	p += 2 * 7;
+	hdr = L4_StringItem(11, &echo_str[p]);
+	L4_AddSubstringTo(send_si, &hdr);
+	L4_AddSubstringAddressTo(send_si, &echo_str[p + 11]);
+	L4_AddSubstringAddressTo(send_si, &echo_str[p + 22]);
+	p += 3 * 11;
+	hdr = L4_StringItem(6, &echo_str[p]);
+	L4_AddSubstringTo(send_si, &hdr);
+	L4_AddSubstringAddressTo(send_si, &echo_str[p + 6]);
+	L4_AddSubstringAddressTo(send_si, &echo_str[p + 12]);
+	p += 3 * 6;
+	hdr = L4_StringItem(6, &echo_str[p]);
+	L4_AddSubstringTo(send_si, &hdr);
+	p += 6;
+	assert(p == stritemlen(send_si));
+	assert(p == echo_len + 1);
+
+	int n_words = (L4_Word_t *)__L4_EndOfString(send_si, NULL) - send_si->raw;
+	diag("n_words=%d", n_words);
+	L4_Word_t ec = 0;
+	L4_LoadMR(0, (L4_MsgTag_t){ .X.label = ECHO_LABEL, .X.t = n_words }.raw);
+	L4_LoadMRs(1, n_words, send_si->raw);
+	L4_MsgTag_t tag = L4_Call(test_tid);
+	if(L4_IpcSucceeded(tag)) L4_StoreMRs(1, tag.X.t, got_si->raw);
+	else ec = L4_ErrorCode();
+	if(!ok(L4_IpcSucceeded(tag), "ipc ok")) diag("ec=%#lx", ec);
+
+	fail_unless(L4_IsStringItem(got_si) || !L4_CompoundString(got_si));
+	replybuf[MIN(int, 2047, stritemlen(got_si))] = '\0';
+	size_t reply_len = strlen(replybuf);
+	if(!ok1(reply_len >= echo_len)) {
+		diag("reply_len=%d, echo_len=%d", reply_len, echo_len);
+	}
+	ok(streq(&replybuf[reply_len - echo_len], echo_str),
+		"echo output ends with input");
+
+	free(replybuf);
+}
+END_TEST
+
+
+START_TEST(echo_long)
+{
+	uint32_t seed = seed_bins[1];
 
 	const size_t test_len = 24 * 1024 + 1;
 	char *echostr = malloc(test_len);
@@ -308,9 +450,9 @@ END_TEST
  *
  * TODO: use the stats pager, too
  */
-START_LOOP_TEST(echo_long_xferfault, test_iter, 0, 0xf)
+START_TEST(echo_long_xferfault)
 {
-	uint32_t seed = seed_bins[test_iter & 0x3] ^ seed_bins[test_iter >> 2];
+	uint32_t seed = seed_bins[2];
 
 	const size_t test_len = 24 * 1024 + 1;
 	char *echostr = valloc(test_len);
@@ -537,7 +679,7 @@ static L4_Word_t faulting_echo(
 	L4_Clock_t before = L4_SystemClock();
 	L4_StringItem_t got_si;
 	L4_StringItem_t rep_si = L4_StringItem(test_len * 2, replybuf);
-	L4_LoadBR(0, 1);
+	L4_Accept(L4_StringItemsAcceptor);
 	L4_LoadBRs(1, 2, rep_si.raw);
 	L4_StringItem_t si = L4_StringItem(echo_len + 1, (void *)echostr);
 	L4_LoadMR(0, (L4_MsgTag_t){ .X.label = ECHO_LABEL, .X.t = 2 }.raw);
@@ -946,7 +1088,7 @@ static void str_receiver_fn(void *param)
 
 	char buffer[64];
 	L4_StringItem_t buf = L4_StringItem(sizeof(buffer), buffer);
-	L4_LoadBR(0, 1);
+	L4_Accept(L4_StringItemsAcceptor);
 	buf.raw[0] &= ~1ul;		/* last string buffer */
 	L4_LoadBR(1, buf.raw[0]);
 	L4_LoadBR(2, buf.raw[1]);
@@ -1097,6 +1239,18 @@ START_TEST(item_too_long)
 END_TEST
 
 
+static void add_echo_tests(TCase *tc)
+{
+	tcase_add_test(tc, echo_simple);
+	tcase_add_test(tc, echo_simple_compound_send);
+	tcase_add_test(tc, echo_multi_compound_send);
+	tcase_add_test(tc, echo_long);
+	tcase_add_test(tc, echo_long_xferfault);
+	tcase_add_test(tc, echo_with_hole);
+	tcase_add_test(tc, echo_with_long_hole);
+}
+
+
 IDL_FIXTURE(drop, drop_pager, &pg_drop_vtab, FIX_QUIT_COND);
 
 Suite *string_suite(void)
@@ -1125,11 +1279,7 @@ Suite *string_suite(void)
 	tcase_add_checked_fixture(basic, &stt_setup, &stt_teardown);
 	tcase_add_checked_fixture(basic, &stats_setup, &stats_teardown);
 	ADD_IDL_FIXTURE(basic, drop);
-	tcase_add_test(basic, echo_simple);
-	tcase_add_test(basic, echo_long);
-	tcase_add_test(basic, echo_long_xferfault);
-	tcase_add_test(basic, echo_with_hole);
-	tcase_add_test(basic, echo_with_long_hole);
+	add_echo_tests(basic);
 	suite_add_tcase(s, basic);
 
 	/* inter-space cases, i.e. mapdb interactions and so forth. */
@@ -1137,11 +1287,7 @@ Suite *string_suite(void)
 	tcase_add_checked_fixture(space, &fork_stt_setup, &fork_stt_teardown);
 	tcase_add_checked_fixture(space, &stats_setup, &stats_teardown);
 	ADD_IDL_FIXTURE(space, drop);
-	tcase_add_test(space, echo_simple);
-	tcase_add_test(space, echo_long);
-	tcase_add_test(space, echo_long_xferfault);
-	tcase_add_test(space, echo_with_hole);
-	tcase_add_test(space, echo_with_long_hole);
+	add_echo_tests(space);
 	suite_add_tcase(s, space);
 
 	/* transfer timeout tests */
