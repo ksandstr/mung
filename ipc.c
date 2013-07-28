@@ -102,6 +102,7 @@ struct ipc_state
 		struct stritem_iter it[2];	/* from, to */
 		struct fault_peer fault[2];	/* same */
 	} xfer;
+	int s_off, d_off;		/* per-segment offsets */
 
 	/* implied member. allocated after the structure. accessed with get_rsi()
 	 * or get_pre_faults(). length is max_brs words.
@@ -411,6 +412,7 @@ static int apply_mapitem(
 }
 
 
+/* FIXME: move this into something under lib/ ! */
 static size_t stritemlen(L4_StringItem_t *si)
 {
 	size_t len = 0;
@@ -797,13 +799,14 @@ static int copy_interspace_stritem(L4_Fpage_t *fault_p, struct ipc_state *st)
 	int rc;
 	uintptr_t copy_dst = reserve_heap_page();
 	uint32_t copy_page = 0;
-	int off = st->str_off;
+	int s_off = st->s_off, d_off = st->d_off;
 	struct stritem_iter *src_iter = &st->xfer.it[0],
 		*dst_iter = &st->xfer.it[1];
 	struct space *dest_space = st->to->space, *src_space = st->from->space;
 	do {
 #if 0
-		printf("start of loop; off %d\n", off);
+		printf("start of loop; str_off=%d, s_off=%d, d_off=%d\n",
+			st->str_off, s_off, d_off);
 		printf("  src len %d, ptr %#lx\n", (int)src_iter->len,
 			(L4_Word_t)src_iter->ptr);
 		printf("  dst len %d, ptr %#lx\n", (int)dst_iter->len,
@@ -811,7 +814,7 @@ static int copy_interspace_stritem(L4_Fpage_t *fault_p, struct ipc_state *st)
 #endif
 
 		/* TODO: avoid repeated probe */
-		uintptr_t dest_page = (dst_iter->ptr + off) & ~PAGE_MASK;
+		uintptr_t dest_page = (dst_iter->ptr + d_off) & ~PAGE_MASK;
 		struct map_entry *e = mapdb_probe(&dest_space->mapdb, dest_page);
 		if(e == NULL || !CHECK_FLAG(L4_Rights(e->range), L4_Writable)) {
 			/* pop a write fault */
@@ -828,33 +831,39 @@ static int copy_interspace_stritem(L4_Fpage_t *fault_p, struct ipc_state *st)
 			x86_flush_tlbs();		/* FIXME: just invalidate copy_dst */
 		}
 
-		int seg = MIN(int, PAGE_SIZE - ((dst_iter->ptr + off) & PAGE_MASK),
-				MIN(int, src_iter->len - off, dst_iter->len - off));
+		int seg = MIN(int, PAGE_SIZE - ((dst_iter->ptr + d_off) & PAGE_MASK),
+				MIN(int, src_iter->len - s_off, dst_iter->len - d_off));
 
-		int d_pos = ((dst_iter->ptr & PAGE_MASK) + off) & PAGE_MASK;
+		int d_pos = ((dst_iter->ptr & PAGE_MASK) + d_off) & PAGE_MASK;
 		assert(d_pos >= 0 && seg > 0);
 		assert(d_pos + seg <= PAGE_SIZE);
 
 		size_t n = space_memcpy_from(src_space, (void *)(copy_dst + d_pos),
-			src_iter->ptr + off, seg);
+			src_iter->ptr + s_off, seg);
 		if(n < seg) {
 			/* pop a read fault */
 			TRACE("ipc: read fault after %u bytes (seg %d)\n",
 				(unsigned)n, seg);
-			off += n;
-			*fault_p = L4_FpageLog2((src_iter->ptr + off) & ~PAGE_MASK,
+			s_off += n;
+			d_off += n;
+			st->str_off += n;
+			*fault_p = L4_FpageLog2((src_iter->ptr + s_off) & ~PAGE_MASK,
 				PAGE_BITS);
 			L4_Set_Rights(fault_p, L4_Readable);
 			goto fault;
-		}
+		} else {
+			s_off += n;
+			d_off += n;
+			st->str_off += n;
 
-		off += seg;
-		if(off == dst_iter->len) {
-			bool ok UNNEEDED = stritem_next(dst_iter);
-			assert(ok);
-			off = 0;
+			assert(d_off <= dst_iter->len);
+			if(d_off == dst_iter->len) {
+				bool ok UNNEEDED = stritem_next(dst_iter);
+				assert(ok);
+				d_off = 0;
+			}
 		}
-	} while(off < src_iter->len || (off = 0, stritem_next(src_iter)));
+	} while(s_off < src_iter->len || (s_off = 0, stritem_next(src_iter)));
 
 	rc = 0;
 
@@ -865,7 +874,8 @@ end:
 	return rc;
 
 fault:
-	st->str_off = off;
+	st->s_off = s_off;
+	st->d_off = d_off;
 	rc = -EFAULT;
 	goto end;
 }
@@ -909,6 +919,7 @@ static bool next_src_string(
 	memcpy(&L4_VREG(d_base, L4_TCR_MR(meta->first_reg)),
 		&L4_VREG(s_base, L4_TCR_MR(meta->first_reg)),
 		meta->n_words * sizeof(L4_Word_t));
+	/* FIXME: set the C bit in the first header properly! */
 
 	/* set up us the bomb. */
 	st->str_off = 0;
@@ -916,6 +927,7 @@ static bool next_src_string(
 		L4_TCR_MR(meta->first_reg));
 	if(unlikely(!L4_IsStringItem(si))) return false;
 	stritem_first(&st->xfer.it[0], si, meta->n_words - 1);
+	st->s_off = 0;
 #ifndef NDEBUG
 	st->xfer.it[1].words = (void *)0xfaceb00b;	/* mm hmm. */
 #endif
@@ -955,6 +967,7 @@ static bool next_dst_strbuf(struct ipc_state *st, void *d_base, size_t *len_p)
 	*len_p = stritemlen(rsi);
 
 	stritem_first(&st->xfer.it[1], get_rsi(st), meta->n_words - 1);
+	st->d_off = 0;
 	st->str_pos++;
 	return true;
 }
