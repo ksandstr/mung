@@ -439,7 +439,8 @@ static void scan_typed_items(
 	L4_MsgTag_t tag)
 {
 	size_t n_maps = 0, n_strs = 0;
-	int pos = tag.X.u + 1, last = pos + tag.X.t;
+	/* note: "last" is inclusive, i.e. the MR# of the last register. */
+	int pos = tag.X.u + 1, last = pos + tag.X.t - 1;
 
 	while(pos + 1 <= last) {
 		L4_Word_t w0 = L4_VREG(utcb, L4_TCR_MR(pos));
@@ -451,8 +452,8 @@ static void scan_typed_items(
 				continue;
 
 			default:
-				if((w0 & 0x3f8) == 0) {
-					/* bits {9..3} are clear; looks like a string item */
+				if((w0 & 0x8) == 0) {
+					/* bit 3 is clear; looks like a string item */
 					break;
 				}
 
@@ -461,17 +462,18 @@ static void scan_typed_items(
 				goto end;
 		}
 
-		/* string items. */
+		/* StringItem */
 		int n_words = 0;
 		L4_StringItem_t *si = (void *)&L4_VREG(utcb, L4_TCR_MR(pos)), *prev;
 		assert(L4_IsStringItem(si));
 		do {
 			prev = si;
-			n_words += 1 + L4_Substrings(si);
-			if(pos + n_words > last) goto end;
+			int hdr_len = 1 + L4_Substrings(si);
+			if(unlikely(pos + n_words + hdr_len > last + 1)) goto end;
+			n_words += hdr_len;
 			si = (void *)&L4_VREG(utcb, L4_TCR_MR(pos + n_words));
 		} while(L4_CompoundString(prev));
-		assert(pos + n_words <= last);
+		assert(pos + n_words <= last + 1);
 		str_buf[n_strs++] = (struct str_meta){
 			.first_reg = pos, .n_words = n_words,
 		};
@@ -501,7 +503,7 @@ static size_t scan_buffer_regs(
 	L4_Word_t w0 = L4_VREG(utcb, L4_TCR_BR(0));	/* BR0 or previous head */
 	while(CHECK_FLAG(w0, 1) && pos < 63 && count < max_scan) {
 		w0 = L4_VREG(utcb, L4_TCR_BR(pos));
-		if((w0 & 0x3f8) != 0) goto end;	/* not a string item */
+		if((w0 & 0x8) != 0) goto end;	/* not a string item */
 
 		L4_StringItem_t si = { .raw[0] = w0 };
 		size_t n_words;
