@@ -53,7 +53,7 @@ struct stritem_iter
 
 	/* state */
 	L4_Word_t *words;
-	int8_t hdr, sub;
+	uint8_t hdr, sub;
 	uint8_t max;
 };
 
@@ -258,7 +258,7 @@ static void stritem_first(
 
 static bool stritem_next(struct stritem_iter *it)
 {
-	if(unlikely(it->hdr + it->sub + 1 > it->max)) {
+	if(unlikely(it->hdr + it->sub > it->max)) {
 		/* out of range */
 		return false;
 	}
@@ -273,10 +273,10 @@ static bool stritem_next(struct stritem_iter *it)
 		assert(it->len == si->X.string_length);
 		return true;
 	} else if(L4_CompoundString(si)) {
-		L4_Word_t *next = (L4_Word_t *)&si->X.str.substring_ptr[it->sub + 1];
-		assert(L4_IsStringItem((L4_StringItem_t *)next));
-		it->hdr = next - it->words;
-		it->sub = -1;
+		L4_StringItem_t *next = (void *)&si->X.str.substring_ptr[it->sub];
+		it->hdr = next->raw - it->words;
+		it->sub = 0;
+		it->len = next->X.string_length;
 		return stritem_next(it);
 	} else {
 		/* end of compound string. */
