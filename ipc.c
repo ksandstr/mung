@@ -509,8 +509,9 @@ static size_t scan_buffer_regs(
 
 		L4_StringItem_t si = { .raw[0] = w0 };
 		size_t n_words;
-		if(!L4_CompoundString(&si)) n_words = 2;
-		else {
+		if(!L4_CompoundString(&si)) {
+			n_words = MIN(int, 64 - pos, L4_Substrings(&si) + 1);
+		} else {
 			L4_StringItem_t prev;
 			n_words = 0;
 			do {
