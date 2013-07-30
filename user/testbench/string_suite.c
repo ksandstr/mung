@@ -415,6 +415,124 @@ START_TEST(echo_multi_compound_send)
 END_TEST
 
 
+/* similar to the send-side tests, this loads a single-header compound string
+ * item as receive buffers.
+ */
+START_TEST(echo_simple_compound_recv)
+{
+	plan_tests(3);
+	char *echo_str = "John Stalvern waited. The lights above him "
+		" blinked and sparked out of the air. There were demons in the base.";
+	const size_t echo_len = strlen(echo_str);
+
+	L4_StringItem_t *got_si = alloca(sizeof(L4_Word_t) * 64),
+		*rep_si = alloca(sizeof(L4_Word_t) * 64);
+
+	char *replybuf = calloc(1, 2048);
+	*rep_si = L4_StringItem(63, replybuf);
+	for(int i=1; i < 32; i++) {
+		L4_AddSubstringAddressTo(rep_si, &replybuf[i * 63]);
+	}
+	rep_si->X.C = 0;
+	int rep_len = (L4_Word_t *)__L4_EndOfString(rep_si, NULL) - rep_si->raw;
+	diag("subs=%d, rep_len=%d, itemlen=%d",
+		L4_Substrings(rep_si), rep_len, stritemlen(rep_si));
+	assert(rep_len == L4_Substrings(rep_si) + 1);
+
+	L4_Accept(L4_StringItemsAcceptor);
+	L4_LoadBRs(1, rep_len, rep_si->raw);
+
+	/* now a basic echo thing. */
+	L4_StringItem_t send_si = L4_StringItem(111, echo_str);
+	L4_Word_t ec = 0;
+	L4_LoadMR(0, (L4_MsgTag_t){ .X.label = ECHO_LABEL, .X.t = 2, }.raw);
+	L4_LoadMRs(1, 2, send_si.raw);
+
+	L4_MsgTag_t tag = L4_Call(test_tid);
+	if(L4_IpcSucceeded(tag)) L4_StoreMRs(1, tag.X.t, got_si->raw);
+	else ec = L4_ErrorCode();
+	if(!ok(L4_IpcSucceeded(tag), "ipc ok")) diag("ec=%#lx", ec);
+
+	fail_unless(L4_IsStringItem(got_si) || !L4_CompoundString(got_si));
+	replybuf[MIN(int, 2047, stritemlen(got_si))] = '\0';
+	size_t reply_len = strlen(replybuf);
+	if(!ok1(reply_len >= echo_len)) {
+		diag("reply_len=%d, echo_len=%d", reply_len, echo_len);
+	}
+	ok(streq(&replybuf[reply_len - echo_len], echo_str),
+		"echo output ends with input");
+
+	free(replybuf);
+}
+END_TEST
+
+
+START_TEST(echo_multi_compound_recv)
+{
+	plan_tests(3);
+	char *echo_str = "John Stalvern waited. The lights above him "
+		" blinked and sparked out of the air. There were demons in the base.";
+	const size_t echo_len = strlen(echo_str);
+
+	L4_StringItem_t *got_si = alloca(sizeof(L4_Word_t) * 64),
+		*rep_si = alloca(sizeof(L4_Word_t) * 64);
+
+	char *replybuf = calloc(1, 2048);
+	/* 9*3 + 3*11 + 19*78 = 1542 bytes */
+	*rep_si = L4_StringItem(3, replybuf);
+	int p = 0;
+	for(int i=1; i < 9; i++) {
+		L4_AddSubstringAddressTo(rep_si,
+			&replybuf[p += rep_si->X.string_length]);
+	}
+	L4_StringItem_t t_si = L4_StringItem(11,
+		&replybuf[p += rep_si->X.string_length]);
+	L4_AddSubstringTo(rep_si, &t_si);
+	for(int i=1; i < 3; i++) {
+		L4_AddSubstringAddressTo(rep_si,
+			&replybuf[p += t_si.X.string_length]);
+	}
+	t_si = L4_StringItem(78, &replybuf[p += t_si.X.string_length]);
+	L4_AddSubstringTo(rep_si, &t_si);
+	for(int i=1; i < 19; i++) {
+		L4_AddSubstringAddressTo(rep_si,
+			&replybuf[p += t_si.X.string_length]);
+	}
+
+	rep_si->X.C = 0;
+	int rep_len = (L4_Word_t *)__L4_EndOfString(rep_si, NULL) - rep_si->raw;
+	diag("rep_len=%d, itemlen=%d", rep_len, stritemlen(rep_si));
+	assert(rep_len < 63);
+	assert(stritemlen(rep_si) == 1542);
+
+	L4_Accept(L4_StringItemsAcceptor);
+	L4_LoadBRs(1, rep_len, rep_si->raw);
+
+	/* now a basic echo thing. */
+	L4_StringItem_t send_si = L4_StringItem(111, echo_str);
+	L4_Word_t ec = 0;
+	L4_LoadMR(0, (L4_MsgTag_t){ .X.label = ECHO_LABEL, .X.t = 2, }.raw);
+	L4_LoadMRs(1, 2, send_si.raw);
+
+	L4_MsgTag_t tag = L4_Call(test_tid);
+	if(L4_IpcSucceeded(tag)) L4_StoreMRs(1, tag.X.t, got_si->raw);
+	else ec = L4_ErrorCode();
+	if(!ok(L4_IpcSucceeded(tag), "ipc ok")) diag("ec=%#lx", ec);
+
+	fail_unless(L4_IsStringItem(got_si) || !L4_CompoundString(got_si));
+	replybuf[MIN(int, 2047, stritemlen(got_si))] = '\0';
+	size_t reply_len = strlen(replybuf);
+	if(!ok1(reply_len >= echo_len)) {
+		diag("reply_len=%d, echo_len=%d", reply_len, echo_len);
+	}
+	ok(streq(&replybuf[reply_len - echo_len], echo_str),
+		"echo output ends with input");
+
+	free(replybuf);
+}
+END_TEST
+
+
 START_TEST(echo_long)
 {
 	uint32_t seed = seed_bins[1];
@@ -1244,6 +1362,8 @@ static void add_echo_tests(TCase *tc)
 	tcase_add_test(tc, echo_simple);
 	tcase_add_test(tc, echo_simple_compound_send);
 	tcase_add_test(tc, echo_multi_compound_send);
+	tcase_add_test(tc, echo_simple_compound_recv);
+	tcase_add_test(tc, echo_multi_compound_recv);
 	tcase_add_test(tc, echo_long);
 	tcase_add_test(tc, echo_long_xferfault);
 	tcase_add_test(tc, echo_with_hole);
