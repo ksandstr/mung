@@ -293,55 +293,34 @@ END_TEST
  *
  * some are only valid for the "repercussions of evil" copypasta.
  */
+struct piece {
+	size_t n, sz;
+};
 
 
-/* build a one-header compound string with three pointers, each 37 bytes
- * long.
- */
-static int simple_compound_string(L4_StringItem_t *send_si, char *echo_str)
+static size_t build_stritem(
+	L4_StringItem_t *out_si,
+	char *buf,
+	const struct piece *pieces,
+	size_t n_pieces)
 {
-	const int echo_len = strlen(echo_str);
-	assert(37 * 3 == echo_len + 1);
-	*send_si = L4_StringItem(37, echo_str);
-	L4_AddSubstringAddressTo(send_si, &echo_str[37]);
-	L4_AddSubstringAddressTo(send_si, &echo_str[74]);
-	send_si->X.C = 0;
+	for(int i=0, p=0; i < n_pieces; i++) {
+		if(i == 0) {
+			*out_si = L4_StringItem(pieces[0].sz, buf);
+			p = pieces[0].sz;
+		} else {
+			L4_StringItem_t t_si = L4_StringItem(pieces[i].sz, &buf[p]);
+			p += pieces[i].sz;
+			L4_AddSubstringTo(out_si, &t_si);
+		}
+		for(int j=1; j < pieces[i].n; j++) {
+			L4_AddSubstringAddressTo(out_si, &buf[p]);
+			p += pieces[i].sz;
+		}
+	}
 
-	return __L4_EndOfString(send_si, NULL)->raw - send_si->raw;
-}
-
-
-/* build a multi-header compound string of both single- and multi-pointer
- * items.
- */
-static int multi_compound_string(L4_StringItem_t *send_si, char *echo_str)
-{
-	const int echo_len = strlen(echo_str);
-
-	int p;
-	*send_si = L4_StringItem(p = 40, echo_str);
-	L4_StringItem_t hdr = L4_StringItem(7, &echo_str[p]);
-	L4_AddSubstringTo(send_si, &hdr);
-	L4_AddSubstringAddressTo(send_si, &echo_str[p + 7]);
-	p += 2 * 7;
-	hdr = L4_StringItem(11, &echo_str[p]);
-	L4_AddSubstringTo(send_si, &hdr);
-	L4_AddSubstringAddressTo(send_si, &echo_str[p + 11]);
-	L4_AddSubstringAddressTo(send_si, &echo_str[p + 22]);
-	p += 3 * 11;
-	hdr = L4_StringItem(6, &echo_str[p]);
-	L4_AddSubstringTo(send_si, &hdr);
-	L4_AddSubstringAddressTo(send_si, &echo_str[p + 6]);
-	L4_AddSubstringAddressTo(send_si, &echo_str[p + 12]);
-	p += 3 * 6;
-	hdr = L4_StringItem(6, &echo_str[p]);
-	L4_AddSubstringTo(send_si, &hdr);
-	p += 6;
-	assert(p == stritemlen(send_si));
-	assert(p == echo_len + 1);
-	send_si->X.C = 0;
-
-	return __L4_EndOfString(send_si, NULL)->raw - send_si->raw;
+	out_si->X.C = 0;
+	return __L4_EndOfString(out_si, NULL)->raw - out_si->raw;
 }
 
 
@@ -369,11 +348,24 @@ START_LOOP_TEST(echo_compound_send, iter, 0, 1)
 	L4_LoadBRs(1, 2, rep_si.raw);
 
 	int n_words;
-	if(multi) n_words = multi_compound_string(send_si, echo_str);
-	else {
-		n_words = simple_compound_string(send_si, echo_str);
+	if(multi) {
+		/* build a multi-header compound string of both single- and
+		 * multi-pointer items.
+		 */
+		static const struct piece pieces[] = {
+			{ 1, 40 }, { 2, 7 }, { 3, 11 }, { 3, 6 }, { 1, 6 },
+		};
+		n_words = build_stritem(send_si, echo_str,
+			pieces, NUM_ELEMENTS(pieces));
+	} else {
+		/* build a one-header compound string with three pointers, each 37
+		 * bytes long.
+		 */
+		static const struct piece pc = { 3, 37 };
+		n_words = build_stritem(send_si, echo_str, &pc, 1);
 		assert(n_words == L4_Substrings(send_si) + 1);
 	}
+	assert(stritemlen(send_si) == echo_len + 1);
 
 	L4_Word_t ec = 0;
 	L4_LoadMR(0, (L4_MsgTag_t){ .X.label = ECHO_LABEL, .X.t = n_words }.raw);
@@ -397,60 +389,6 @@ START_LOOP_TEST(echo_compound_send, iter, 0, 1)
 END_TEST
 
 
-static int simple_compound_rsi(
-	L4_StringItem_t *rep_si,
-	char *replybuf,
-	size_t rbuf_size)
-{
-	*rep_si = L4_StringItem(63, replybuf);
-	for(int i=1; i < 32; i++) {
-		L4_AddSubstringAddressTo(rep_si, &replybuf[i * 63]);
-	}
-	rep_si->X.C = 0;
-	int rep_len = __L4_EndOfString(rep_si, NULL)->raw - rep_si->raw;
-	assert(rep_len == L4_Substrings(rep_si) + 1);
-	assert(stritemlen(rep_si) <= rbuf_size);
-
-	return rep_len;
-}
-
-
-static int multi_compound_rsi(
-	L4_StringItem_t *rep_si,
-	char *replybuf,
-	size_t rbuf_size)
-{
-	/* 9*3 + 3*11 + 19*78 = 1542 bytes */
-	*rep_si = L4_StringItem(3, replybuf);
-	int p = 0;
-	for(int i=1; i < 9; i++) {
-		L4_AddSubstringAddressTo(rep_si,
-			&replybuf[p += rep_si->X.string_length]);
-	}
-	L4_StringItem_t t_si = L4_StringItem(11,
-		&replybuf[p += rep_si->X.string_length]);
-	L4_AddSubstringTo(rep_si, &t_si);
-	for(int i=1; i < 3; i++) {
-		L4_AddSubstringAddressTo(rep_si,
-			&replybuf[p += t_si.X.string_length]);
-	}
-	t_si = L4_StringItem(78, &replybuf[p += t_si.X.string_length]);
-	L4_AddSubstringTo(rep_si, &t_si);
-	for(int i=1; i < 19; i++) {
-		L4_AddSubstringAddressTo(rep_si,
-			&replybuf[p += t_si.X.string_length]);
-	}
-
-	rep_si->X.C = 0;
-	int rep_len = __L4_EndOfString(rep_si, NULL)->raw - rep_si->raw;
-	diag("rep_len=%d, itemlen=%d", rep_len, stritemlen(rep_si));
-	assert(rep_len < 63);
-	assert(stritemlen(rep_si) == 1542);
-
-	return rep_len;
-}
-
-
 /* similar to the send-side tests, this loads a single-header compound string
  * item as receive buffers.
  */
@@ -467,10 +405,23 @@ START_LOOP_TEST(echo_compound_recv, iter, 0, 1)
 
 	char *replybuf = calloc(1, 2048);
 	int n_words;
-	if(multi) n_words = multi_compound_rsi(rep_si, replybuf, 2048);
-	else n_words = simple_compound_rsi(rep_si, replybuf, 2048);
+	if(multi) {
+		/* 9*3 + 3*11 + 19*78 = 1542 bytes */
+		static const struct piece pieces[] = {
+			{ 9, 3 }, { 3, 11 }, { 19, 78 },
+		};
+		n_words = build_stritem(rep_si, replybuf,
+			pieces, NUM_ELEMENTS(pieces));
+		assert(n_words < 63);
+	} else {
+		static const struct piece pc = { 32, 63 };
+		n_words = build_stritem(rep_si, replybuf, &pc, 1);
+		assert(n_words == L4_Substrings(rep_si) + 1);
+	}
 	diag("subs=%d, n_words=%d, itemlen=%d",
 		L4_Substrings(rep_si), n_words, stritemlen(rep_si));
+	assert(stritemlen(rep_si) > 200);
+	assert(stritemlen(rep_si) <= 2048);
 
 	L4_Accept(L4_StringItemsAcceptor);
 	L4_LoadBRs(1, n_words, rep_si->raw);
