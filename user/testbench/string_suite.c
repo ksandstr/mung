@@ -288,87 +288,36 @@ START_TEST(echo_simple)
 END_TEST
 
 
-/* cuts a test string into three smaller sections and sends that as a compound
- * string item.
+/* functions to build various kinds of compound string item. returns the
+ * number of words used.
+ *
+ * some are only valid for the "repercussions of evil" copypasta.
  */
-START_TEST(echo_simple_compound_send)
+
+
+/* build a one-header compound string with three pointers, each 37 bytes
+ * long.
+ */
+static int simple_compound_string(L4_StringItem_t *send_si, char *echo_str)
 {
-	plan_tests(3);
-	char *echo_str = "John Stalvern waited. The lights above him "
-		" blinked and sparked out of the air. There were demons in the base.";
-	const size_t echo_len = strlen(echo_str);
-
-	char *replybuf = malloc(2048);
-	L4_StringItem_t rep_si = L4_StringItem(2048, replybuf);
-	rep_si.X.C = 0;
-
-	L4_StringItem_t *send_si = alloca(sizeof(L4_Word_t) * 64),
-		*got_si = alloca(sizeof(L4_Word_t) * 64);
-
-	memset(replybuf, 0, 2048);
-	L4_Accept(L4_StringItemsAcceptor);
-	L4_LoadBRs(1, 2, rep_si.raw);
-
-	/* build a one-header compound string with three pointers, each 37 bytes
-	 * long.
-	 */
+	const int echo_len = strlen(echo_str);
 	assert(37 * 3 == echo_len + 1);
 	*send_si = L4_StringItem(37, echo_str);
 	L4_AddSubstringAddressTo(send_si, &echo_str[37]);
 	L4_AddSubstringAddressTo(send_si, &echo_str[74]);
+	send_si->X.C = 0;
 
-	L4_Word_t ec = 0;
-	L4_LoadMR(0, (L4_MsgTag_t){
-		.X.label = ECHO_LABEL,
-		.X.t = L4_Substrings(send_si) + 1,
-	}.raw);
-	L4_LoadMRs(1, 4, send_si->raw);
-
-	L4_MsgTag_t tag = L4_Call(test_tid);
-	if(L4_IpcSucceeded(tag)) L4_StoreMRs(1, tag.X.t, got_si->raw);
-	else ec = L4_ErrorCode();
-	if(!ok(L4_IpcSucceeded(tag), "ipc ok")) diag("ec=%#lx", ec);
-
-	fail_unless(L4_IsStringItem(got_si) || !L4_CompoundString(got_si));
-	replybuf[MIN(int, 2047, stritemlen(got_si))] = '\0';
-	size_t reply_len = strlen(replybuf);
-	if(!ok1(reply_len >= echo_len)) {
-		diag("reply_len=%d, echo_len=%d", reply_len, echo_len);
-	}
-	ok(streq(&replybuf[reply_len - echo_len], echo_str),
-		"echo output ends with input");
-
-	free(replybuf);
+	return __L4_EndOfString(send_si, NULL)->raw - send_si->raw;
 }
-END_TEST
 
 
-/* like echo_simple_compound_send, but with a multi-header compound string
- * item.
+/* build a multi-header compound string of both single- and multi-pointer
+ * items.
  */
-START_TEST(echo_multi_compound_send)
+static int multi_compound_string(L4_StringItem_t *send_si, char *echo_str)
 {
-	plan_tests(3);
-	char *echo_str = "John Stalvern waited. The lights above him "
-		" blinked and sparked out of the air. There were demons in the base.";
-	const size_t echo_len = strlen(echo_str);
+	const int echo_len = strlen(echo_str);
 
-	char *replybuf = malloc(2048);
-	L4_StringItem_t rep_si = L4_StringItem(2048, replybuf);
-	rep_si.X.C = 0;
-
-	L4_StringItem_t *send_si = alloca(sizeof(L4_Word_t) * 64),
-		*got_si = alloca(sizeof(L4_Word_t) * 64);
-	memset(replybuf, 0, 2048);
-	L4_Accept(L4_StringItemsAcceptor);
-	L4_LoadBRs(1, 2, rep_si.raw);
-
-	/* build a multi-header compound string.
-	 * lengths = 40, 2*7, 3*11, 3*6, 1*6
-	 */
-	memset(replybuf, 0, 2048);
-	L4_Accept(L4_StringItemsAcceptor);
-	L4_LoadBRs(1, 2, rep_si.raw);
 	int p;
 	*send_si = L4_StringItem(p = 40, echo_str);
 	L4_StringItem_t hdr = L4_StringItem(7, &echo_str[p]);
@@ -390,9 +339,42 @@ START_TEST(echo_multi_compound_send)
 	p += 6;
 	assert(p == stritemlen(send_si));
 	assert(p == echo_len + 1);
+	send_si->X.C = 0;
 
-	int n_words = (L4_Word_t *)__L4_EndOfString(send_si, NULL) - send_si->raw;
-	diag("n_words=%d", n_words);
+	return __L4_EndOfString(send_si, NULL)->raw - send_si->raw;
+}
+
+
+/* cuts a test string into smaller sections and sends that as a compound
+ * string item.
+ */
+START_LOOP_TEST(echo_compound_send, iter, 0, 1)
+{
+	plan_tests(3);
+	const bool multi = CHECK_FLAG(iter, 1);
+	char *echo_str = "John Stalvern waited. The lights above him "
+		" blinked and sparked out of the air. There were demons in the base.";
+	const size_t echo_len = strlen(echo_str);
+	diag("echo_len=%d, multi=%s", echo_len, btos(multi));
+
+	char *replybuf = malloc(2048);
+	L4_StringItem_t rep_si = L4_StringItem(2048, replybuf);
+	rep_si.X.C = 0;
+
+	L4_StringItem_t *send_si = alloca(sizeof(L4_Word_t) * 64),
+		*got_si = alloca(sizeof(L4_Word_t) * 64);
+
+	memset(replybuf, 0, 2048);
+	L4_Accept(L4_StringItemsAcceptor);
+	L4_LoadBRs(1, 2, rep_si.raw);
+
+	int n_words;
+	if(multi) n_words = multi_compound_string(send_si, echo_str);
+	else {
+		n_words = simple_compound_string(send_si, echo_str);
+		assert(n_words == L4_Substrings(send_si) + 1);
+	}
+
 	L4_Word_t ec = 0;
 	L4_LoadMR(0, (L4_MsgTag_t){ .X.label = ECHO_LABEL, .X.t = n_words }.raw);
 	L4_LoadMRs(1, n_words, send_si->raw);
@@ -415,69 +397,29 @@ START_TEST(echo_multi_compound_send)
 END_TEST
 
 
-/* similar to the send-side tests, this loads a single-header compound string
- * item as receive buffers.
- */
-START_TEST(echo_simple_compound_recv)
+static int simple_compound_rsi(
+	L4_StringItem_t *rep_si,
+	char *replybuf,
+	size_t rbuf_size)
 {
-	plan_tests(3);
-	char *echo_str = "John Stalvern waited. The lights above him "
-		" blinked and sparked out of the air. There were demons in the base.";
-	const size_t echo_len = strlen(echo_str);
-
-	L4_StringItem_t *got_si = alloca(sizeof(L4_Word_t) * 64),
-		*rep_si = alloca(sizeof(L4_Word_t) * 64);
-
-	char *replybuf = calloc(1, 2048);
 	*rep_si = L4_StringItem(63, replybuf);
 	for(int i=1; i < 32; i++) {
 		L4_AddSubstringAddressTo(rep_si, &replybuf[i * 63]);
 	}
 	rep_si->X.C = 0;
-	int rep_len = (L4_Word_t *)__L4_EndOfString(rep_si, NULL) - rep_si->raw;
-	diag("subs=%d, rep_len=%d, itemlen=%d",
-		L4_Substrings(rep_si), rep_len, stritemlen(rep_si));
+	int rep_len = __L4_EndOfString(rep_si, NULL)->raw - rep_si->raw;
 	assert(rep_len == L4_Substrings(rep_si) + 1);
+	assert(stritemlen(rep_si) <= rbuf_size);
 
-	L4_Accept(L4_StringItemsAcceptor);
-	L4_LoadBRs(1, rep_len, rep_si->raw);
-
-	/* now a basic echo thing. */
-	L4_StringItem_t send_si = L4_StringItem(111, echo_str);
-	L4_Word_t ec = 0;
-	L4_LoadMR(0, (L4_MsgTag_t){ .X.label = ECHO_LABEL, .X.t = 2, }.raw);
-	L4_LoadMRs(1, 2, send_si.raw);
-
-	L4_MsgTag_t tag = L4_Call(test_tid);
-	if(L4_IpcSucceeded(tag)) L4_StoreMRs(1, tag.X.t, got_si->raw);
-	else ec = L4_ErrorCode();
-	if(!ok(L4_IpcSucceeded(tag), "ipc ok")) diag("ec=%#lx", ec);
-
-	fail_unless(L4_IsStringItem(got_si) || !L4_CompoundString(got_si));
-	replybuf[MIN(int, 2047, stritemlen(got_si))] = '\0';
-	size_t reply_len = strlen(replybuf);
-	if(!ok1(reply_len >= echo_len)) {
-		diag("reply_len=%d, echo_len=%d", reply_len, echo_len);
-	}
-	ok(streq(&replybuf[reply_len - echo_len], echo_str),
-		"echo output ends with input");
-
-	free(replybuf);
+	return rep_len;
 }
-END_TEST
 
 
-START_TEST(echo_multi_compound_recv)
+static int multi_compound_rsi(
+	L4_StringItem_t *rep_si,
+	char *replybuf,
+	size_t rbuf_size)
 {
-	plan_tests(3);
-	char *echo_str = "John Stalvern waited. The lights above him "
-		" blinked and sparked out of the air. There were demons in the base.";
-	const size_t echo_len = strlen(echo_str);
-
-	L4_StringItem_t *got_si = alloca(sizeof(L4_Word_t) * 64),
-		*rep_si = alloca(sizeof(L4_Word_t) * 64);
-
-	char *replybuf = calloc(1, 2048);
 	/* 9*3 + 3*11 + 19*78 = 1542 bytes */
 	*rep_si = L4_StringItem(3, replybuf);
 	int p = 0;
@@ -500,13 +442,38 @@ START_TEST(echo_multi_compound_recv)
 	}
 
 	rep_si->X.C = 0;
-	int rep_len = (L4_Word_t *)__L4_EndOfString(rep_si, NULL) - rep_si->raw;
+	int rep_len = __L4_EndOfString(rep_si, NULL)->raw - rep_si->raw;
 	diag("rep_len=%d, itemlen=%d", rep_len, stritemlen(rep_si));
 	assert(rep_len < 63);
 	assert(stritemlen(rep_si) == 1542);
 
+	return rep_len;
+}
+
+
+/* similar to the send-side tests, this loads a single-header compound string
+ * item as receive buffers.
+ */
+START_LOOP_TEST(echo_compound_recv, iter, 0, 1)
+{
+	plan_tests(3);
+	const bool multi = CHECK_FLAG(iter, 1);
+	char *echo_str = "John Stalvern waited. The lights above him "
+		" blinked and sparked out of the air. There were demons in the base.";
+	const size_t echo_len = strlen(echo_str);
+
+	L4_StringItem_t *got_si = alloca(sizeof(L4_Word_t) * 64),
+		*rep_si = alloca(sizeof(L4_Word_t) * 64);
+
+	char *replybuf = calloc(1, 2048);
+	int n_words;
+	if(multi) n_words = multi_compound_rsi(rep_si, replybuf, 2048);
+	else n_words = simple_compound_rsi(rep_si, replybuf, 2048);
+	diag("subs=%d, n_words=%d, itemlen=%d",
+		L4_Substrings(rep_si), n_words, stritemlen(rep_si));
+
 	L4_Accept(L4_StringItemsAcceptor);
-	L4_LoadBRs(1, rep_len, rep_si->raw);
+	L4_LoadBRs(1, n_words, rep_si->raw);
 
 	/* now a basic echo thing. */
 	L4_StringItem_t send_si = L4_StringItem(111, echo_str);
@@ -1360,10 +1327,8 @@ END_TEST
 static void add_echo_tests(TCase *tc)
 {
 	tcase_add_test(tc, echo_simple);
-	tcase_add_test(tc, echo_simple_compound_send);
-	tcase_add_test(tc, echo_multi_compound_send);
-	tcase_add_test(tc, echo_simple_compound_recv);
-	tcase_add_test(tc, echo_multi_compound_recv);
+	tcase_add_test(tc, echo_compound_send);
+	tcase_add_test(tc, echo_compound_recv);
 	tcase_add_test(tc, echo_long);
 	tcase_add_test(tc, echo_long_xferfault);
 	tcase_add_test(tc, echo_with_hole);
