@@ -1008,7 +1008,9 @@ int mapdb_map_pages(
 		struct map_entry *ent = first;
 		L4_Word_t pos = MAX(L4_Word_t, L4_Address(ent->range), first_addr),
 			limit = last_addr + 1;
+		int given = L4_Rights(map_page);
 		while(pos < limit && ent != NULL && L4_Address(ent->range) < limit) {
+			given &= L4_Rights(ent->range);
 			L4_Word_t start = MAX(L4_Word_t, pos, L4_Address(ent->range)),
 				end = MIN(L4_Word_t, limit,
 					L4_Address(ent->range) + L4_Size(ent->range));
@@ -1056,9 +1058,9 @@ int mapdb_map_pages(
 
 			pos = end;
 		}
-	}
 
-	return 0;
+		return given;
+	}
 }
 
 
