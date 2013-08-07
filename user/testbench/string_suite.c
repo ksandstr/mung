@@ -1326,27 +1326,6 @@ static void str_receiver_fn(void *param)
 }
 
 
-/* TODO: move this into an util.c */
-static L4_ThreadId_t xstart_thread(void (*fn)(void *), void *param)
-{
-	L4_ThreadId_t tid = start_thread(fn, param);
-	fail_if(L4_IsNilThread(tid), "ec=%#lx", L4_ErrorCode());
-	return tid;
-}
-
-
-static void xjoin_thread(L4_ThreadId_t other)
-{
-	L4_Word_t ec = 0;
-	void *ptr = join_thread_long(other, L4_TimePeriod(1000 * 1000), &ec);
-	if(ptr == NULL && ec != 0) {
-		L4_ThreadId_t g = L4_GlobalIdOf(other);
-		diag("join_thread of %lu:%lu failed after 1s",
-			L4_ThreadNo(g), L4_Version(g));
-	}
-}
-
-
 /* check that str_receiver_fn() delivers timeouts and success correctly. */
 START_TEST(str_receiver_test)
 {

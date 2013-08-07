@@ -268,6 +268,10 @@ extern bool send_delay(
 extern uint32_t rand32(uint32_t *state_p);
 extern void random_string(char *buf, size_t size, uint32_t *seed_p);
 
+extern L4_ThreadId_t xstart_thread(void (*fn)(void *), void *param);
+extern void xjoin_thread(L4_ThreadId_t other);
+
+
 /* (actually in sched_suite.c) */
 extern int find_own_priority(void);
 

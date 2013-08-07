@@ -133,3 +133,26 @@ void random_string(char *buf, size_t size, uint32_t *seed_p)
 	}
 	buf[size - 1] = '\0';
 }
+
+
+L4_ThreadId_t xstart_thread(void (*fn)(void *), void *param)
+{
+	L4_ThreadId_t tid = start_thread(fn, param);
+	if(L4_IsNilThread(tid)) {
+		printf("%s: ec=%#lx\n", __func__, L4_ErrorCode());
+		abort();
+	}
+	return tid;
+}
+
+
+void xjoin_thread(L4_ThreadId_t other)
+{
+	L4_Word_t ec = 0;
+	void *ptr = join_thread_long(other, L4_TimePeriod(1000 * 1000), &ec);
+	if(ptr == NULL && ec != 0) {
+		L4_ThreadId_t g = L4_GlobalIdOf(other);
+		printf("xjoin_thread of %lu:%lu failed after 1s\n",
+			L4_ThreadNo(g), L4_Version(g));
+	}
+}
