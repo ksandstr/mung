@@ -387,28 +387,49 @@ static int apply_mapitem(
 	}
 
 	bool is_cas = wnd.raw == L4_CompleteAddressSpace.raw;
+	const L4_Word_t snd_base = L4_MapItemSndBase(m);
 	TRACE("mapping 0x%lx:0x%lx, sndbase 0x%lx, rcvwindow %#lx:%#lx (%s)\n",
 		L4_Address(map_page), L4_Size(map_page),
-		L4_MapItemSndBase(m), is_cas ? 0 : L4_Address(wnd),
+		snd_base, is_cas ? 0 : L4_Address(wnd),
 		is_cas ? ~0ul : L4_Size(wnd),
 		is_cas ? "CompleteAddressSpace" : "<- that");
 
-	if(is_cas || L4_Size(wnd) >= L4_MapItemSndBase(m) + L4_Size(map_page)) {
-		const L4_Word_t wnd_base = is_cas ? 0 : L4_Address(wnd);
-		int given = mapdb_map_pages(&source->space->mapdb,
-			&dest->space->mapdb, map_page,
-			wnd_base + L4_MapItemSndBase(m));
-		if(is_grant && given != 0) {
-			L4_Set_Rights(&map_page, given);
-			mapdb_unmap_fpage(&source->space->mapdb, map_page, true, false,
-				false);
+	if(is_cas || L4_Size(map_page) < L4_Size(wnd)) {
+		/* make the receive region smaller. */
+		L4_Word_t mask = L4_Size(map_page) - 1,
+			wnd_base = is_cas ? 0 : L4_Address(wnd);
+		if(!is_cas && unlikely(snd_base >= L4_Size(wnd))) {
+			TRACE("sndbase %#lx too big (wnd size %#lx)\n",
+				snd_base, L4_Size(wnd));
+			return 0;
 		}
-		return given;
-	} else {
-		/* TODO */
-		panic("apply_mapitem() can't handle trunc rcvwindow cases");
-		return 0;
+		wnd = L4_FpageLog2(wnd_base + (snd_base & ~mask),
+			L4_SizeLog2(map_page));
+	} else if(L4_Size(map_page) > L4_Size(wnd)) {
+		/* make the send page smaller. */
+		L4_Word_t mask = L4_Size(wnd) - 1;
+		if(unlikely(snd_base >= L4_Size(map_page))) {
+			TRACE("sndbase %#lx too big (map size %#lx)\n",
+				snd_base, L4_Size(map_page));
+			return 0;
+		}
+		map_page = L4_FpageLog2(L4_Address(map_page) + (snd_base & ~mask),
+			L4_SizeLog2(wnd));
+		L4_Set_Rights(&map_page, L4_Rights(L4_MapItemSndFpage(m)));
 	}
+	TRACE("map_page=%#lx:%#lx, sndbase=%#lx, map_page'=%#lx:%#lx\n",
+		L4_Address(L4_MapItemSndFpage(m)), L4_Size(L4_MapItemSndFpage(m)),
+		snd_base, L4_Address(map_page), L4_Size(map_page));
+	assert(L4_SizeLog2(map_page) == L4_SizeLog2(wnd));
+
+	int given = mapdb_map_pages(&source->space->mapdb,
+		&dest->space->mapdb, map_page, L4_Address(wnd));
+	if(is_grant && given != 0) {
+		L4_Set_Rights(&map_page, given);
+		mapdb_unmap_fpage(&source->space->mapdb, map_page, true, false,
+			false);
+	}
+	return given;
 }
 
 
