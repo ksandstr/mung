@@ -334,6 +334,233 @@ START_TEST(receive_from_anylocalthread)
 END_TEST
 
 
+struct map_receiver_param {
+	L4_ThreadId_t parent;
+	size_t range_shift;
+};
+
+
+static void map_receiver_thread(void *param_ptr)
+{
+	const struct map_receiver_param *param = param_ptr;
+	size_t acc_size = 1 << param->range_shift;
+	void *acc_mem = malloc(acc_size * 2);
+	fail_if(acc_mem == NULL);
+	L4_Fpage_t acc_page = L4_FpageLog2(
+		((L4_Word_t)acc_mem + acc_size - 1) & ~(acc_size - 1),
+		param->range_shift);
+	diag("acc_page %#lx:%#lx", L4_Address(acc_page), L4_Size(acc_page));
+	L4_Acceptor_t acc = L4_MapGrantItems(acc_page);
+
+	bool running = true;
+	while(running) {
+		L4_FlushFpage(acc_page);
+		L4_Accept(acc);
+		L4_MsgTag_t tag = L4_Receive(param->parent);
+		if(L4_IpcFailed(tag)) {
+			diag("%s: ipc fail, ec=%#lx", __func__, L4_ErrorCode());
+			continue;
+		} else if(L4_Label(tag) == QUIT_LABEL) {
+			running = false;
+		} else {
+			L4_MapItem_t maps[32];
+			L4_StoreMRs(L4_UntypedWords(tag) + 1, L4_TypedWords(tag),
+				maps[0].raw);
+			for(int i=0; i < L4_TypedWords(tag) / 2; i++) {
+				L4_Fpage_t fp = L4_MapItemSndFpage(maps[i]);
+				L4_Word_t offset = L4_SizeLog2(fp) < L4_SizeLog2(acc_page)
+					? L4_MapItemSndBase(maps[i]) & ~(L4_Size(fp) - 1)
+					: 0;
+				diag("got map %d = %#lx:%#lx +%#lx (%#lx) -> %#lx", i,
+					L4_Address(fp), L4_Size(fp),
+					L4_MapItemSndBase(maps[i]), L4_Rights(fp),
+					L4_Address(acc_page) + offset);
+				if(CHECK_FLAG(L4_Rights(fp), L4_Writable)) {
+					char *ptr = (char *)(L4_Address(acc_page) + offset);
+					diag("ptr=%p", ptr);
+					assert(ptr > (char *)acc_mem);
+					if(ptr < (char *)acc_mem + acc_size * 2) *ptr = 123;
+				}
+			}
+		}
+
+		L4_LoadMR(0, 0);
+		L4_Reply(param->parent);
+	}
+
+	L4_FlushFpage(acc_page);
+	free(acc_mem);
+}
+
+
+static L4_MapItem_t mapgrantitem(
+	L4_Fpage_t fp,
+	int rights,
+	L4_Word_t sendbase,
+	bool is_grant)
+{
+	L4_Set_Rights(&fp, rights & L4_FullyAccessible);
+	union {
+		L4_MapItem_t mi;
+		L4_GrantItem_t gi;
+	} item;
+	if(!is_grant) item.mi = L4_MapItem(fp, sendbase);
+	else item.gi = L4_GrantItem(fp, sendbase);
+
+	return item.mi;
+}
+
+
+/* sending MapItems and GrantItems into a sufficiently large acceptor */
+START_LOOP_TEST(map_into_large_acceptor, iter, 0, 1)
+{
+	plan_tests(6);
+	const bool is_grant = CHECK_FLAG(iter, 1);
+	diag("is_grant=%s", btos(is_grant));
+
+	struct map_receiver_param *param = malloc(sizeof(*param));
+	*param = (struct map_receiver_param){
+		.parent = L4_Myself(),
+		.range_shift = 15,
+	};
+	L4_ThreadId_t other_tid;
+	int child = fork_tid(&other_tid);
+	if(child == 0) {
+		map_receiver_thread(param);
+		exit(0);
+	}
+
+	/* base case: SndBase 0. */
+	const size_t two_pages = 0x2000;
+	void *mem_base = malloc(two_pages * 2);
+	diag("mem_base=%p", mem_base);
+	char *mem = (char *)(((L4_Word_t)mem_base + two_pages - 1) & ~(two_pages - 1));
+	diag("mem=%p", mem);
+	memset(mem, 0, two_pages);
+	L4_Fpage_t fp = L4_Fpage((L4_Word_t)mem, two_pages);
+	L4_Set_Rights(&fp, L4_FullyAccessible);
+	diag("fp=%#lx:%#lx", L4_Address(fp), L4_Size(fp));
+	L4_MapItem_t mi = mapgrantitem(fp, L4_FullyAccessible, 0, is_grant);
+	L4_LoadMR(0, (L4_MsgTag_t){ .X.t = 2 }.raw);
+	L4_LoadMRs(1, 2, mi.raw);
+	L4_MsgTag_t tag = L4_Call(other_tid);
+	ok(L4_IpcSucceeded(tag), "base ipc ok");
+	ok(mem[0] != 0, "mem was modified");
+
+	/* experiment 1: set SndBase to two_pages * 1. */
+	memset(mem, 0, two_pages);
+	mi = mapgrantitem(fp, L4_FullyAccessible, two_pages, is_grant);
+	L4_LoadMR(0, (L4_MsgTag_t){ .X.t = 2 }.raw);
+	L4_LoadMRs(1, 2, mi.raw);
+	tag = L4_Call(other_tid);
+	ok(L4_IpcSucceeded(tag), "offset ipc ok");
+	ok(mem[0] != 0, "mem was modified despite offset");
+
+	/* experiment 2: set SndBase to a spot that's outside the receive
+	 * window.
+	 */
+	memset(mem, 0, two_pages);
+	mi = mapgrantitem(fp, L4_FullyAccessible,
+		(1 << param->range_shift) + two_pages, is_grant);
+	L4_LoadMR(0, (L4_MsgTag_t){ .X.t = 2 }.raw);
+	L4_LoadMRs(1, 2, mi.raw);
+	tag = L4_Call(other_tid);
+	ok(L4_IpcSucceeded(tag), "out-of-window ipc ok");
+	bool all_zero = true;
+	for(int i=0; i < two_pages; i++) {
+		if(mem[i] != 0) {
+			all_zero = false;
+			break;
+		}
+	}
+	ok(all_zero, "no change to sent page");
+
+	send_quit(other_tid);
+	int st = -1, dead = wait(&st);
+	if(dead != child) {
+		diag("odd wait result: st=%d, dead=%d (child=%d)", st, dead, child);
+	}
+
+	free(param);
+	free(mem_base);
+}
+END_TEST
+
+
+/* sending MapItems and GrantItems into a smaller acceptor */
+START_LOOP_TEST(map_into_small_acceptor, iter, 0, 1)
+{
+	plan_tests(6);
+	const bool is_grant = CHECK_FLAG(iter, 1);
+	diag("is_grant=%s", btos(is_grant));
+
+	struct map_receiver_param *param = malloc(sizeof(*param));
+	*param = (struct map_receiver_param){
+		.parent = L4_Myself(),
+		.range_shift = 13,		/* a paltry 8k. */
+	};
+	L4_ThreadId_t other_tid;
+	int child = fork_tid(&other_tid);
+	if(child == 0) {
+		map_receiver_thread(param);
+		exit(0);
+	}
+
+	/* base case: SndBase 0. */
+	const size_t big = (1 << param->range_shift) * 4;
+	char *mem_base = malloc(big * 2),
+		*mem = (char *)(((L4_Word_t)mem_base + big - 1) & ~(big - 1));
+	memset(mem, 0, big);
+	L4_Fpage_t fp = L4_Fpage((L4_Word_t)mem, big);
+	L4_Set_Rights(&fp, L4_FullyAccessible);
+	diag("fp=%#lx:%#lx", L4_Address(fp), L4_Size(fp));
+	L4_MapItem_t mi = mapgrantitem(fp, L4_FullyAccessible, 0, is_grant);
+	L4_LoadMR(0, (L4_MsgTag_t){ .X.t = 2 }.raw);
+	L4_LoadMRs(1, 2, mi.raw);
+	L4_MsgTag_t tag = L4_Call(other_tid);
+	ok(L4_IpcSucceeded(tag), "base ipc ok");
+	ok(mem[0] != 0, "mem was modified");
+
+	/* experiment 1: set SndBase to (1 << range_shift) * 2. */
+	const size_t offset = (1 << param->range_shift) * 2;
+	diag("offset=%#lx", (unsigned long)offset);
+	assert(offset < big);
+	memset(mem, 0, big);
+	mi = mapgrantitem(fp, L4_FullyAccessible, offset, is_grant);
+	L4_LoadMR(0, (L4_MsgTag_t){ .X.t = 2 }.raw);
+	L4_LoadMRs(1, 2, mi.raw);
+	tag = L4_Call(other_tid);
+	ok(L4_IpcSucceeded(tag), "offset ipc ok");
+	ok(mem[offset] != 0, "mem was modified at offset");
+
+	/* experiment 2: set SndBase to big * 2. */
+	memset(mem, 0, big);
+	mi = mapgrantitem(fp, L4_FullyAccessible, big * 2, is_grant);
+	L4_LoadMR(0, (L4_MsgTag_t){ .X.t = 2 }.raw);
+	L4_LoadMRs(1, 2, mi.raw);
+	tag = L4_Call(other_tid);
+	ok(L4_IpcSucceeded(tag), "too-big sndbase ok");
+	bool all_zero = true;
+	for(int i=0; i < big; i++) {
+		if(mem[i] != 0) {
+			all_zero = false;
+			break;
+		}
+	}
+	ok(all_zero, "no change to sent page");
+
+	send_quit(other_tid);
+	int st = -1, dead = wait(&st);
+	if(dead != child) {
+		diag("odd wait result: st=%d, dead=%d (child=%d)", st, dead, child);
+	}
+
+	free(param);
+	free(mem_base);
+}
+END_TEST
+
+
 /* IPC sleep with a TimePoint value. passes when it not only doesn't panic the
  * microkernel, but also when it drops out of the sleep at the correct time.
  */
@@ -1349,6 +1576,8 @@ Suite *ipc_suite(void)
 	{
 		TCase *tc = tcase_create("panic");
 		tcase_add_test(tc, receive_from_anylocalthread);
+		tcase_add_test(tc, map_into_large_acceptor);
+		tcase_add_test(tc, map_into_small_acceptor);
 		suite_add_tcase(s, tc);
 	}
 
