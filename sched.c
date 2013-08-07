@@ -607,6 +607,12 @@ static bool sched_valid_time(L4_Time_t t) {
 }
 
 
+static int ipc_xfer_schedstate(struct thread *t) {
+	assert(t->ipc != NULL);
+	return t->ipc->to == t ? L4_SCHEDRESULT_RECEIVING : L4_SCHEDRESULT_SENDING;
+}
+
+
 void sys_schedule(struct x86_exregs *regs)
 {
 	struct thread *current = get_current_thread();
@@ -691,7 +697,7 @@ void sys_schedule(struct x86_exregs *regs)
 			[TS_XFER] = 0,		/* signals a thing */
 		};
 		int s = dest->status;
-		if(s == TS_XFER) result = ipc_tstate(dest);
+		if(s == TS_XFER) result = ipc_xfer_schedstate(dest);
 		else {
 			assert(s >= 0 && s < NUM_ELEMENTS(status_to_schedresult));
 			result = status_to_schedresult[s];

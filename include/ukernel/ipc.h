@@ -76,11 +76,6 @@ extern bool ipc_resume(struct thread *peer, bool *preempt_p);
 /* partner thread of a thread in TS_XFER. accessor of struct ipc_state. */
 extern struct thread *ipc_partner(struct thread *t);
 
-/* tstate as returned by Schedule.
- * precond: @t->ipc != NULL
- */
-extern int ipc_tstate(struct thread *t);
-
 /* used by the scheduler */
 extern void set_ipc_error_thread(struct thread *t, L4_Word_t ec);
 

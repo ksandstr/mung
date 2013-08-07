@@ -1,5 +1,7 @@
 
-/* the L4.X2 IPC state machine and untyped transfers. */
+/* the L4.X2 IPC state machine, the Ipc system call, untyped transfers, and
+ * kernel-to-user IPC operation.
+ */
 
 #include <stdbool.h>
 #include <stdlib.h>
@@ -246,12 +248,6 @@ struct thread *ipc_partner(struct thread *t)
 	assert(IS_IPC(partner->status));
 	assert(partner->ipc == t->ipc);
 	return partner;
-}
-
-
-int ipc_tstate(struct thread *t) {
-	assert(t->ipc != NULL);
-	return t->ipc->to == t ? L4_SCHEDRESULT_RECEIVING : L4_SCHEDRESULT_SENDING;
 }
 
 
