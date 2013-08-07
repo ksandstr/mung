@@ -50,7 +50,7 @@ tags: $(shell find . -iname "*.[ch]" -or -iname "*.p[lm]")
 
 
 ia32-kernel: linker.ld loader.o kmain.o kip.o cpu.o heap.o thread.o kth.o \
-		trace.o sched.o exception.o space.o ipc.o mapdb.o \
+		trace.o sched.o exception.o space.o ipc.o ipc_typed.o mapdb.o \
 		acpi.o gdt.o idt.o irq.o pic.o apic.o isr.o timer.o context.o \
 		dlmalloc.o ccan-htable.o ccan-list.o
 	@echo "  LD $@"

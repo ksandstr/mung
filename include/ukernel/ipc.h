@@ -12,7 +12,6 @@
 struct thread;
 struct ipc_state;
 
-
 extern void init_ipc(void);
 
 /* no timeouts, always call-and-wait. puts @from in sendwait, recvwait, or
@@ -100,5 +99,103 @@ extern void set_pf_msg(
 	L4_Word_t ip,
 	int fault_access);
 
+
+/* from ipc_typed.c */
+
+struct stritem_iter
+{
+	/* outputs */
+	L4_Word_t ptr, len;
+
+	/* state */
+	L4_Word_t *words;
+	uint8_t hdr, sub;
+	uint8_t max;
+};
+
+
+struct fault_peer {
+	L4_Fpage_t *faults;
+	uint16_t num, pos;	/* at most 4M per strxfer = 1024 pages /peer */
+};
+
+
+struct str_meta {
+	uint8_t first_reg;
+	uint8_t n_words;
+};
+
+
+/* in-progress string transfer. at most one per two threads.
+ *
+ * alloca()ted on the stack when no transfer faults have occurred.
+ */
+struct ipc_state
+{
+	uint64_t xferto_at;		/* µs, 0 when not applicable */
+	L4_Word_t tot_offset;	/* total # of bytes transferred */
+
+	struct thread *from, *to;
+
+	uint8_t num_strings;	/* # of string transfers */
+	uint8_t num_rsis;		/* # of receive buffers */
+	uint8_t max_brs;		/* length of longest receiver buffer in words */
+	uint8_t str_pos;		/* pos'n of current transfer (<= num_strings) */
+
+	/* first the sender's items, then the receiver's.
+	 *
+	 * inl[0..1], inl[2..3] when num_strings <= 2; otherwise ptr[0], ptr[1].
+	 * (*ptr[] is allocated at end of struct, and has num_strings*2 members.)
+	 */
+	union {
+		struct str_meta inl[4];
+		struct str_meta *ptr[2];	/* [0] = from, [1] = to */
+	} meta;
+
+	int str_off;			/* byte position in transfer (< 10^22) */
+	/* it[] when str_off >= 0, otherwise fault[] */
+	union {
+		struct stritem_iter it[2];	/* from, to */
+		struct fault_peer fault[2];	/* same */
+	} xfer;
+	int s_off, d_off;		/* per-segment offsets */
+
+	/* implied member. allocated after the structure. accessed with get_rsi()
+	 * or get_pre_faults(). length is max_brs words.
+	 *
+	 * rsi when str_off >= 0, otherwise pre_faults.
+	 */
+#ifdef NEVER_DEFINED__x
+	union {
+		L4_StringItem_t rsi;	/* "receiver string item" */
+		/* first xfer.fault[0].num are for the source thread, next
+		 * xfer.fault[1].num are for dest.
+		 *
+		 * sizelog2 = PAGE_BITS, access = ro/rw
+		 */
+		L4_Fpage_t pre_faults[];
+	} buf;
+#endif
+};
+
+
+static inline L4_StringItem_t *get_rsi(struct ipc_state *st) {
+	assert(st->str_off >= 0);
+	return (void *)st + sizeof(struct ipc_state);
+}
+
+
+static inline L4_Fpage_t *get_pre_faults(struct ipc_state *st) {
+	assert(st->str_off < 0);
+	return (void *)st + sizeof(struct ipc_state);
+}
+
+
+extern int do_typed_transfer(
+	struct thread *source,
+	void *s_base,
+	struct thread *dest,
+	void *d_base,
+	L4_MsgTag_t tag);
 
 #endif
