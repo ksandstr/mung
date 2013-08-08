@@ -10,6 +10,7 @@
 #include <stdlib.h>
 #include <stdbool.h>
 #include <assert.h>
+#include <ccan/likely/likely.h>
 
 #include <ukernel/tss.h>
 #include <ukernel/ioport.h>
@@ -119,22 +120,22 @@ static inline void x86_flush_tlbs(void) {
 }
 
 
-/* invalidates a page in the LINEAR ADDRESS SPACE.
+/* invalidates a page in the LINEAR (pre-segmentation) ADDRESS SPACE. thus
+ * once the kernel is in its own segment, a wrap should be applied to
+ * translate from pre-seg to post-seg addresses.
  *
- * valid since the 80486, and this microkernel won't support the 386, so no
- * specialcasing.
+ * (INVLPG is valid since the 80486, and this microkernel won't support the
+ * 386, so no specialcasing.)
  */
 static inline void x86_invalidate_page(uintptr_t address)
 {
-	/* FIXME: somehow this doesn't work at all; a page table modified right
-	 * before doesn't even budge. so instead we'll flush the entire TLB like
-	 * it's 1987.
-	 */
-#if 0
-	__asm__ __volatile__ ("invlpg (%0)" :: "r" (address): "memory");
-#else
-	x86_flush_tlbs();
-#endif
+	if(likely(is_kernel_high)) {
+		__asm__ __volatile__ ("invlpg (%0)"
+			:: "r" (address - KERNEL_SEG_START)
+			: "memory");
+	} else {
+		x86_flush_tlbs();
+	}
 }
 
 
