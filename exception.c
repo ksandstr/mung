@@ -328,7 +328,6 @@ static void handle_kdb_enter(struct thread *current, struct x86_exregs *regs)
 		goto msgfail;
 	}
 	put_supervisor_page(heap_addr, mapdb_page_id_in_entry(e, strptr));
-	x86_flush_tlbs();
 	assert((heap_addr & PAGE_MASK) == 0);
 	const char *str = (void *)(heap_addr | (strptr & PAGE_MASK));
 	char buf[257];

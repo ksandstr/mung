@@ -640,7 +640,6 @@ static int copy_interspace_stritem(L4_Fpage_t *fault_p, struct ipc_state *st)
 		if(d_page != copy_page) {
 			put_supervisor_page(copy_dst, d_page);
 			copy_page = d_page;
-			x86_flush_tlbs();		/* FIXME: just invalidate copy_dst */
 		}
 
 		int seg = MIN(int, PAGE_SIZE - ((dst_iter->ptr + d_off) & PAGE_MASK),
@@ -681,7 +680,6 @@ static int copy_interspace_stritem(L4_Fpage_t *fault_p, struct ipc_state *st)
 
 end:
 	put_supervisor_page(copy_dst, 0);
-	x86_flush_tlbs();
 	free_heap_page(copy_dst);
 	return rc;
 

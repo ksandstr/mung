@@ -555,9 +555,6 @@ size_t space_memcpy_from(
 			address & ~PAGE_MASK);
 		if(e == NULL) break;
 		put_supervisor_page(heap_addr, mapdb_page_id_in_entry(e, address));
-		/* FIXME: fix put_supervisor_page() somehow */
-		x86_flush_tlbs();
-
 		memcpy(dest + pos, (void *)(heap_addr | (address & PAGE_MASK)), seg);
 
 		address += seg;
