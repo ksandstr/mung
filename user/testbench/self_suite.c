@@ -225,6 +225,66 @@ START_TEST(deep_fork)
 END_TEST
 
 
+/* yo dawg! */
+START_TEST(deeper_fork)
+{
+	plan_tests(2);
+	const int depth = 5;
+	const int test_pid = getpid();
+
+	/* warning: this control flow will do your head in. */
+	int my_depth = -1, children[depth], not_ok = 0, nok_child = 0;
+	for(int i=0; i < depth; i++) {
+		children[i] = fork();
+		if(children[i] == 0) my_depth = i;
+		else if(children[i] == -1) {
+			diag("d%d p%d: fork() failed (i=%d)",
+				my_depth, (int)getpid(), i);
+		}
+	}
+	for(int i = my_depth + 1; i < depth; i++) {
+		int st, dead = wait(&st);
+		if(dead <= 0) {
+			diag("d%d p%d: wait() failed, dead=%d",
+				my_depth, (int)getpid(), dead);
+			continue;
+		}
+		bool found = false, waited = false;
+		for(int j = my_depth + 1; j < depth; j++) {
+			if(children[j] == -dead) {
+				waited = true;
+				break;
+			} else if(children[j] == dead) {
+				children[j] = -dead;
+				found = true;
+				break;
+			}
+		}
+		if(!found) {
+			diag("d%d p%d waited on %s pid=%d, st=%d",
+				my_depth, (int)getpid(),
+				waited ? "previously-waited" : "non-child", dead, st);
+			not_ok++;
+			continue;
+		}
+		if(st > 0) nok_child += st;
+	}
+	if(my_depth >= 0) {
+#if 0
+		if(my_depth == depth - 1) {
+			diag("d%d p%d exiting!", my_depth, (int)getpid());
+		}
+#endif
+		exit(nok_child + not_ok);
+	}
+
+	fail_unless(getpid() == test_pid);
+	ok1(not_ok == 0);
+	ok1(nok_child == 0);
+}
+END_TEST
+
+
 L4_Word_t __attribute__((noinline)) get_utcb_noinline(void) {
 	return (L4_Word_t)__L4_Get_UtcbAddress();
 }
@@ -372,6 +432,7 @@ Suite *self_suite(void)
 	tcase_add_test(fork_case, ipc_with_child);
 	tcase_add_test(fork_case, deep_fork);
 	tcase_add_test(fork_case, multi_fork_and_wait);
+	tcase_add_test(fork_case, deeper_fork);
 	suite_add_tcase(s, fork_case);
 
 	TCase *pagers = tcase_create("pg");
