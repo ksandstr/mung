@@ -300,6 +300,8 @@ void isr_exn_memctl_sc_bottom(struct x86_exregs *regs)
 
 static void handle_kdb_enter(struct thread *current, struct x86_exregs *regs)
 {
+	uintptr_t heap_addr = 0;
+
 	/* int3, i.e. KDB enter. there's a message we should decode. */
 	const struct map_entry *e = mapdb_probe(&current->space->mapdb,
 		regs->eip & ~PAGE_MASK);
@@ -309,7 +311,7 @@ static void handle_kdb_enter(struct thread *current, struct x86_exregs *regs)
 	}
 
 	/* get string address from succeeding "MOV EAX, imm32" instruction. */
-	uintptr_t heap_addr = reserve_heap_page();
+	heap_addr = reserve_heap_page();
 	put_supervisor_page(heap_addr, mapdb_page_id_in_entry(e, regs->eip));
 	int offset = regs->eip & PAGE_MASK;
 	if(((const uint8_t *)heap_addr)[offset + 3] != 0xb8) {
@@ -336,6 +338,7 @@ static void handle_kdb_enter(struct thread *current, struct x86_exregs *regs)
 	printf("#KDB (eip %#lx): [%#lx] %s\n", regs->eip, strptr, buf);
 
 msgfail:
+	if(heap_addr != 0) free_heap_page(heap_addr);
 	thread_halt(current);
 	assert(current->status == TS_STOPPED);
 	return_to_scheduler();
