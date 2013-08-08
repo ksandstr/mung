@@ -476,9 +476,7 @@ void space_put_page(
 	}
 
 end:
-	/* TODO: skip this if _sp_'s page table is not currently loaded */
-	x86_invalidate_page(addr & ~PAGE_MASK);
-
+	if(current_space == sp) x86_invalidate_page(addr);
 	assert(check_space(NO_PTAB_TO_MAPDB, sp));
 }
 
