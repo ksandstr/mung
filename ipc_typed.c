@@ -651,22 +651,18 @@ static int copy_interspace_stritem(L4_Fpage_t *fault_p, struct ipc_state *st)
 
 		size_t n = space_memcpy_from(src_space, (void *)(copy_dst + d_pos),
 			src_iter->ptr + s_off, seg);
+		s_off += n;
+		d_off += n;
+		st->str_off += n;
 		if(n < seg) {
 			/* pop a read fault */
 			TRACE("ipc: read fault after %u bytes (seg %d)\n",
 				(unsigned)n, seg);
-			s_off += n;
-			d_off += n;
-			st->str_off += n;
 			*fault_p = L4_FpageLog2((src_iter->ptr + s_off) & ~PAGE_MASK,
 				PAGE_BITS);
 			L4_Set_Rights(fault_p, L4_Readable);
 			goto fault;
 		} else {
-			s_off += n;
-			d_off += n;
-			st->str_off += n;
-
 			assert(d_off <= dst_iter->len);
 			if(d_off == dst_iter->len) {
 				bool ok UNNEEDED = stritem_next(dst_iter);
