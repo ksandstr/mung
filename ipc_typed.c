@@ -23,6 +23,7 @@
 #include <l4/types.h>
 
 #include <ukernel/util.h>
+#include <ukernel/misc.h>
 #include <ukernel/trace.h>
 #include <ukernel/bug.h>
 #include <ukernel/thread.h>
@@ -181,21 +182,11 @@ static int apply_io_mapitem(
 }
 
 
-/* FIXME: this function should indicate to the caller that active TLBs for the
- * destination space may need to be flushed, or at least invalidated in the
- * regions given in a buffer of some kind (if provided by the caller; it may
- * flip into "all-flushing" mode at some point).
+/* returns the return value of mapdb_map_pages(), i.e. a mask of rights that
+ * were given across the entire segment that was mapped. so if the MapItem's
+ * page is RWX, but the sender's mapdb has only RX, the return value is RX.
  *
- * the fourth bit in the return value, perhaps? and a size_t * & a L4_Fpage_t
- * buffer for 10 items (up to a megabyte). the fifth bit as a "better off
- * flushing it all" hint.
- *
- * fuck, this interface is getting complicated just because of the snd_base
- * and rcvwindow computation. maybe it'd be better off in a function of its
- * own.
- *
- *
- * anyway, on failure this returns negative errno.
+ * on failure, returns negative errno.
  */
 static int apply_mapitem(
 	struct thread *source,
@@ -205,6 +196,14 @@ static int apply_mapitem(
 	L4_MapItem_t m)
 {
 	L4_Fpage_t map_page = L4_MapItemSndFpage(m);
+
+	/* no-ops */
+	if(source->space == dest->space) return 0;
+	if(L4_IsNilFpage(map_page)) return 0;
+
+	L4_Fpage_t wnd = { .raw = L4_VREG(d_base, L4_TCR_BR(0)) & ~0xfUL };
+	if(L4_IsNilFpage(wnd)) return 0;	/* no ReceiveWindow */
+
 	bool is_grant;
 	switch(m.X.__type) {
 		case 0x5: is_grant = true; break;
@@ -214,21 +213,10 @@ static int apply_mapitem(
 			return 0;
 	}
 
-	/* no-ops */
-	if(source->space == dest->space) return 0;
-	if(L4_IsNilFpage(map_page)) return 0;
-
-	L4_Fpage_t wnd = { .raw = L4_VREG(d_base, L4_TCR_BR(0)) };
-	if(unlikely(L4_IsNilFpage(wnd))) {
-		/* TODO: isn't this an error condition? */
-		return 0;
-	}
-
 	if(unlikely(L4_IsIoFpage(map_page))) {
-		/* FIXME: the correct acceptor has s' == 16, p == 0. reject others
-		 * quietly.
-		 */
-		if(!L4_IsIoFpage(wnd)) return 0;	/* again, error? */
+		if(!L4_IsIoFpage(wnd)) return 0;	/* no I/O ReceiveWindow */
+		else if(L4_IoFpageSizeLog2(wnd) != 16) return 0;	/* wrong size */
+		else if(L4_IoFpagePort(wnd) != 0) return 0;		/* wrong offset */
 		else return apply_io_mapitem(source, s_base, dest, d_base, m, wnd);
 	}
 
