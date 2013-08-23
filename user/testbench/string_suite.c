@@ -94,21 +94,6 @@ void flush_byte_range(
 }
 
 
-/* FIXME: copypasta'd from ipc.c! */
-static size_t stritemlen(L4_StringItem_t *si)
-{
-	size_t len = 0;
-	L4_StringItem_t *prev;
-	do {
-		prev = si;
-		len += si->X.string_length * L4_Substrings(si);
-		L4_Word_t *wp = (L4_Word_t *)si;
-		si = (L4_StringItem_t *)&wp[L4_Substrings(si) + 1];
-	} while(L4_CompoundString(prev));
-	return len;
-}
-
-
 static void stt_echo_impl(
 	const L4_MsgTag_t tag,
 	char *recvbuf,

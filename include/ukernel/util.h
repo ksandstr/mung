@@ -8,6 +8,7 @@
 #include <string.h>
 
 #include <l4/types.h>
+#include <l4/message.h>
 
 
 #define NUM_ELEMENTS(array) (sizeof((array)) / sizeof((array)[0]))
@@ -95,5 +96,10 @@ static inline bool pt_is_valid(L4_Clock_t base, L4_Time_t t)
 /* from hash.c */
 extern uint32_t int_hash(uint32_t key);
 extern uint32_t ptr_hash(const void *ptr);
+
+
+/* from l4util.c */
+extern size_t stritemlen(L4_StringItem_t *si);
+
 
 #endif

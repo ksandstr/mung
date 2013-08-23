@@ -267,21 +267,6 @@ static int apply_mapitem(
 }
 
 
-/* FIXME: move this into something under lib/ ! */
-static size_t stritemlen(L4_StringItem_t *si)
-{
-	size_t len = 0;
-	L4_StringItem_t *prev;
-	do {
-		prev = si;
-		len += si->X.string_length * L4_Substrings(si);
-		L4_Word_t *wp = (L4_Word_t *)si;
-		si = (L4_StringItem_t *)&wp[L4_Substrings(si) + 1];
-	} while(L4_CompoundString(prev));
-	return len;
-}
-
-
 /* scan the sender's typed items. produce at most t / 2 map/grant offsets (1
  * byte each, being the MR of the first word), and t / 2 struct str_meta.
  *
