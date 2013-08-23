@@ -47,11 +47,6 @@ static void send_xfer_fault(
 	uint64_t xfto_abs);
 
 
-/* functions dealing with string transfers.
- *
- * TODO: typed transfers could be moved into ipc_typed.c or some such, leaving
- * ipc.c to deal with the system call and state machine.
- */
 static size_t ipc_state_size(int num_strings, int max_brs)
 {
 	assert(num_strings > 0 && num_strings < 32);
@@ -87,6 +82,10 @@ static struct ipc_state *dup_state(struct ipc_state *old_st, size_t st_size)
 }
 
 
+/* string item iterators.
+ *
+ * TODO: these should be moved into the library for separate unit testing.
+ */
 static void stritem_first(
 	struct stritem_iter *it,
 	L4_StringItem_t *si,
