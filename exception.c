@@ -462,6 +462,8 @@ static void receive_exn_reply(struct hook *hook, uintptr_t code, void *priv)
 	};
 	int num_vars = sizeof(exvarptrs) / sizeof(exvarptrs[0]);
 	assert(num_vars == 12);
+	L4_MsgTag_t tag = { .raw = L4_VREG(utcb, L4_TCR_MR(0)) };
+	num_vars = MIN(int, num_vars, L4_UntypedWords(tag));
 	for(int i=0; i < num_vars; i++) {
 		*(exvarptrs[i]) = L4_VREG(utcb, L4_TCR_MR(i + 1));
 	}
@@ -640,9 +642,6 @@ void isr_exn_pf_bottom(struct x86_exregs *regs)
 		void *utcb = thread_get_utcb(current);
 		struct thread *pager = thread_get_pager(current, utcb);
 		if(unlikely(pager == NULL)) {
-			printf("thread %lu:%lu has no pager, stopping it\n",
-				TID_THREADNUM(current->id), TID_VERSION(current->id));
-			printf("  (fault was at %#lx, ip %#lx)\n", fault_addr, regs->eip);
 			thread_halt(current);
 			assert(current->status == TS_STOPPED);
 			return_to_scheduler();
