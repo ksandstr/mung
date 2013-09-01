@@ -303,6 +303,34 @@ L4_ThreadId_t start_thread_long(
 }
 
 
+static void *destroy_thread(L4_ThreadId_t tid, struct thread *th)
+{
+	if(is_privileged()) {
+		L4_Word_t res = L4_ThreadControl(tid, L4_nilthread,
+			L4_nilthread, L4_nilthread, (void *)-1);
+		if(res == 0) {
+			printf("%s: deleting ThreadControl failed, ec %#lx\n", __func__,
+				L4_ErrorCode());
+			return NULL;
+		}
+	} else {
+		int n = forkserv_exit_thread(L4_Pager(), tid.raw);
+		if(n != 0) {
+			printf("%s: forkserv_exit_thread failed, n=%d\n", __func__, n);
+			/* FIXME: ... and then what? */
+		}
+	}
+
+	th->alive = false;
+	th->version = -abs(th->version);
+	free(th->stack);
+	th->stack = NULL;
+	void *rv = th->retval;
+	th->retval = NULL;
+	return rv;
+}
+
+
 void *join_thread_long(L4_ThreadId_t tid, L4_Time_t timeout, L4_Word_t *ec_p)
 {
 	if(L4_IsNilThread(tid)) return NULL;
@@ -330,36 +358,24 @@ void *join_thread_long(L4_ThreadId_t tid, L4_Time_t timeout, L4_Word_t *ec_p)
 	}
 	/* TODO: verify the exception message (label, GP#) */
 
-	/* destroy the thread. */
-	if(is_privileged()) {
-		L4_Word_t res = L4_ThreadControl(tid_of(t), L4_nilthread,
-			L4_nilthread, L4_nilthread, (void *)-1);
-		if(res == 0) {
-			printf("%s: deleting ThreadControl failed, ec %#lx\n", __func__,
-				L4_ErrorCode());
-			return NULL;
-		}
-	} else {
-		int n = forkserv_exit_thread(L4_Pager(), tid.raw);
-		if(n != 0) {
-			printf("%s: forkserv_exit_thread failed, n=%d\n", __func__, n);
-			/* FIXME: ... and then what? */
-		}
-	}
-
-	threads[t].alive = false;
-	threads[t].version = -abs(threads[t].version);
-	free(threads[t].stack);
-	threads[t].stack = NULL;
-	void *rv = threads[t].retval;
-	threads[t].retval = NULL;
-	return rv;
+	return destroy_thread(tid, &threads[t]);
 }
 
 
 void *join_thread(L4_ThreadId_t tid) {
 	L4_Word_t dummy = 0;
 	return join_thread_long(tid, L4_Never, &dummy);
+}
+
+
+void kill_thread(L4_ThreadId_t tid)
+{
+	int t  = L4_ThreadNo(tid) - base_tnum;
+	assert(t < MAX_THREADS);
+	assert(abs(threads[t].version) == L4_Version(tid));
+
+	destroy_thread(tid, &threads[t]);
+	/* TODO: call Schedule to ensure that "tid" is truly gone */
 }
 
 

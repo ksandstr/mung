@@ -154,5 +154,6 @@ void xjoin_thread(L4_ThreadId_t other)
 		L4_ThreadId_t g = L4_GlobalIdOf(other);
 		printf("xjoin_thread of %lu:%lu failed after 1s\n",
 			L4_ThreadNo(g), L4_Version(g));
+		kill_thread(other);
 	}
 }
