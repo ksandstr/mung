@@ -12,6 +12,8 @@
 #include <l4/types.h>
 #include <l4/kip.h>
 #include <l4/ipc.h>
+#include <l4/space.h>
+#include <l4/schedule.h>
 #include <l4/syscall.h>
 
 #include <ukernel/util.h>
@@ -667,6 +669,181 @@ START_TEST(deletion)
 END_TEST
 
 
+/* actually tests whether a thread is dead, or inactive. these states are
+ * entered when e.g. a thread raises an exception but the exception handler
+ * thread is either not set or cannot be found.
+ */
+static bool is_halted(L4_ThreadId_t tid)
+{
+	L4_Word_t dummy, res = L4_Schedule(tid, ~0ul, ~0, ~0, ~0, &dummy);
+	fail_if(res == L4_SCHEDRESULT_ERROR,
+		"Schedule failed: ec=%#lx", L4_ErrorCode());
+	return res == L4_SCHEDRESULT_DEAD || res == L4_SCHEDRESULT_INACTIVE;
+}
+
+
+static void receive_and_die_fn(void *param UNUSED)
+{
+	L4_ThreadId_t tid;
+	L4_MsgTag_t tag = L4_Wait(&tid);
+	fail_if(L4_IpcFailed(tag), "%s: ec=%#lx", __func__, L4_ErrorCode());
+	L4_ThreadId_t exh_tid = L4_nilthread;
+	if(L4_UntypedWords(tag) > 0) L4_StoreMR(1, &exh_tid.raw);
+
+	L4_LoadMR(0, 0);
+	L4_Reply(tid);
+
+	diag("popping exception to %lu:%lu",
+		L4_ThreadNo(exh_tid), L4_Version(exh_tid));
+	L4_Set_ExceptionHandler(exh_tid);
+	asm volatile ("int $1");
+
+	diag("exh helper thread exiting");
+}
+
+
+/* self-test on is_halted(). */
+START_TEST(halt_pred_test)
+{
+	plan_tests(2);
+
+	L4_ThreadId_t oth = xstart_thread(&receive_and_die_fn, NULL);
+	L4_ThreadSwitch(oth);
+	ok1(!is_halted(oth));
+
+	L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 1 }.raw);
+	L4_LoadMR(1, L4_nilthread.raw);
+	L4_MsgTag_t tag = L4_Call(oth);
+	fail_if(L4_IpcFailed(tag));
+	L4_ThreadSwitch(oth);
+	ok1(is_halted(oth));
+
+	kill_thread(oth);
+}
+END_TEST
+
+
+static void fault_to_given_pager_fn(void *param UNUSED)
+{
+	const size_t mem_size = 8192;
+	uint8_t *memory = valloc(mem_size);
+	memset(memory, 0, mem_size);
+	diag("test memory is at %p", memory);
+
+	L4_ThreadId_t sender;
+	L4_MsgTag_t tag = L4_Wait(&sender);
+	fail_if(L4_IpcFailed(tag), "ec=%#lx", L4_ErrorCode());
+	fail_if(L4_UntypedWords(tag) < 1);
+	L4_ThreadId_t pg;
+	L4_StoreMR(1, &pg.raw);
+	L4_LoadMR(0, 0);
+	L4_Reply(sender);
+	diag("faulting to pager %lu:%lu", L4_ThreadNo(pg), L4_Version(pg));
+
+	L4_Fpage_t page = L4_FpageLog2((L4_Word_t)memory, 12);
+	L4_Set_Rights(&page, L4_FullyAccessible);
+	diag("flushing %#lx:%#lx", L4_Address(page), L4_Size(page));
+	L4_FlushFpage(page);
+	L4_ThreadId_t old_pager = L4_Pager();
+	L4_Set_Pager(pg);
+	memset(memory, 1, mem_size);
+	L4_Set_Pager(old_pager);
+
+	diag("fault test thread exiting");
+	free(memory);
+}
+
+
+START_TEST(halt_on_missing_pager)
+{
+	plan_tests(3);
+
+	/* base case: fault to this thread. */
+	L4_ThreadId_t oth = xstart_thread(&fault_to_given_pager_fn, NULL);
+	L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 1 }.raw);
+	L4_LoadMR(1, L4_Myself().raw);
+	L4_MsgTag_t tag = L4_Call(oth);
+	fail_if(L4_IpcFailed(tag));
+	tag = L4_Receive_Timeout(oth, TEST_IPC_DELAY);
+	fail_if(L4_IpcFailed(tag), "ec=%#lx", L4_ErrorCode());
+	L4_Word_t faddr, fip;
+	L4_StoreMR(1, &faddr);
+	L4_StoreMR(2, &fip);
+	ok(tag.X.label >> 4 == 0xffe, "got test fault");
+	diag("got test fault: ip=%#lx, addr=%#lx", fip, faddr);
+	/* forward it to our own pager. */
+	L4_LoadMR(0, tag.raw);
+	L4_LoadMR(1, faddr);
+	L4_LoadMR(2, fip);
+	tag = L4_Call(L4_Pager());
+	fail_if(L4_IpcFailed(tag));
+	L4_MapItem_t mi;
+	L4_StoreMRs(1, 2, mi.raw);
+	L4_Set_PagerOf(oth, L4_Pager());
+	L4_LoadMR(0, (L4_MsgTag_t){ .X.t = 2 }.raw);
+	L4_LoadMRs(1, 2, mi.raw);
+	tag = L4_Reply(oth);
+	fail_if(L4_IpcFailed(tag), "ec=%#lx", L4_ErrorCode());
+	xjoin_thread(oth);
+
+	/* test case: generate a fault while pager is L4_nilthread. this should
+	 * halt the helper thread.
+	 */
+	oth = xstart_thread(&fault_to_given_pager_fn, NULL);
+	L4_ThreadSwitch(oth);
+	ok1(!is_halted(oth));
+	L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 1 }.raw);
+	L4_LoadMR(1, L4_nilthread.raw);
+	tag = L4_Call(oth);
+	fail_if(L4_IpcFailed(tag));
+	L4_ThreadSwitch(oth);
+	ok1(is_halted(oth));
+	kill_thread(oth);
+}
+END_TEST
+
+
+START_TEST(halt_on_missing_exh)
+{
+	plan_tests(3);
+
+	/* base case: pop an exception to this thread. */
+	L4_ThreadId_t oth = xstart_thread(&receive_and_die_fn, NULL);
+	L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 1 }.raw);
+	L4_LoadMR(1, L4_Myself().raw);
+	L4_MsgTag_t tag = L4_Call(oth);
+	fail_if(L4_IpcFailed(tag));
+	tag = L4_Receive(oth);
+	L4_Word_t words[64];
+	L4_StoreMRs(1, L4_UntypedWords(tag) + L4_TypedWords(tag), words);
+	ok(tag.X.label >> 4 == 0xffb, "got test exception");
+	diag("test exn has u=%lu, t=%lu",
+		L4_UntypedWords(tag), L4_TypedWords(tag));
+	/* reply as-is, bumping past INT $n (2 bytes) */
+	words[0] += 2;
+	L4_LoadMR(0, (L4_MsgTag_t){ .X.u = L4_UntypedWords(tag) }.raw);
+	L4_LoadMRs(1, L4_UntypedWords(tag), words);
+	tag = L4_Reply(oth);
+	fail_if(L4_IpcFailed(tag), "ec=%#lx", L4_ErrorCode());
+	xjoin_thread(oth);
+
+	/* test case: generate an exception while handler is L4_nilthread. this
+	 * should halt the helper thread.
+	 */
+	oth = xstart_thread(&receive_and_die_fn, NULL);
+	L4_ThreadSwitch(oth);
+	ok1(!is_halted(oth));
+	L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 1 }.raw);
+	L4_LoadMR(1, L4_nilthread.raw);
+	tag = L4_Call(oth);
+	fail_if(L4_IpcFailed(tag));
+	L4_ThreadSwitch(oth);
+	ok1(is_halted(oth));
+	kill_thread(oth);
+}
+END_TEST
+
+
 /* create a non-activated thread and overwrite its version bits.
  *
  * (the real API test would start an actual thread, overwrite version, restart
@@ -701,6 +878,7 @@ Suite *thread_suite(void)
 		tcase_set_fork(tc, false);	/* for consistency */
 		tcase_add_test(tc, test_thr_exists);
 		tcase_add_test(tc, test_as_exists);
+		tcase_add_test(tc, halt_pred_test);
 		suite_add_tcase(s, tc);
 	}
 
@@ -714,6 +892,15 @@ Suite *thread_suite(void)
 		tcase_add_test(tc, spacespec_validity);
 		tcase_add_test(tc, relocate_utcb);
 		tcase_add_test(tc, deletion);
+		suite_add_tcase(s, tc);
+	}
+
+	/* tests on threads changing state. */
+	{
+		TCase *tc = tcase_create("state");
+		tcase_set_fork(tc, false);	/* should be able to call schedule */
+		tcase_add_test(tc, halt_on_missing_pager);
+		tcase_add_test(tc, halt_on_missing_exh);
 		suite_add_tcase(s, tc);
 	}
 
