@@ -129,6 +129,7 @@ struct ipc_state
 {
 	uint64_t xferto_at;		/* µs, 0 when not applicable */
 	L4_Word_t tot_offset;	/* total # of bytes transferred */
+	L4_MsgTag_t tag;		/* saved tag of the entire IPC */
 
 	struct thread *from, *to;
 

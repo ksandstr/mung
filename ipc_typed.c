@@ -693,11 +693,13 @@ static bool next_src_string(
 		? &st->meta.inl[0] : st->meta.ptr[0];
 	meta += st->str_pos;
 
-	/* copy to receiver. */
+	/* copy to receiver, set C bit as appropriate */
 	memcpy(&L4_VREG(d_base, L4_TCR_MR(meta->first_reg)),
 		&L4_VREG(s_base, L4_TCR_MR(meta->first_reg)),
 		meta->n_words * sizeof(L4_Word_t));
-	/* FIXME: set the C bit in the first header properly! */
+	L4_StringItem_t *rcv_si = (L4_StringItem_t *)&L4_VREG(d_base,
+		L4_TCR_MR(meta->first_reg));
+	rcv_si->X.C = meta->first_reg + meta->n_words < L4_TypedWords(st->tag);
 
 	/* set up us the bomb. */
 	st->str_off = 0;
@@ -1079,7 +1081,7 @@ int do_typed_transfer(
 		size_t st_size = ipc_state_size(n_strs, max_rsi);
 		st = alloca(st_size);
 		*st = (struct ipc_state){
-			.from = source, .to = dest,
+			.from = source, .to = dest, .tag = tag,
 			.num_strings = n_strs, .num_rsis = n_rsis,
 			.max_brs = max_rsi,
 		};
