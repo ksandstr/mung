@@ -27,6 +27,9 @@
  */
 #define TEST_IPC_DELAY L4_TimePeriod(100 * 1000)
 
+/* repeated across too many tests already. */
+#define IPC_FAIL(tag) fail_if(L4_IpcFailed(tag), "ec=%#lx", L4_ErrorCode())
+
 /* common IPC labels */
 #define QUIT_LABEL 0xdead
 #define RESET_LABEL 0xf579

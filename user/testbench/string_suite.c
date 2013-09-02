@@ -1112,8 +1112,9 @@ START_TEST(delay_test)
 	L4_LoadMR(1, ECHO_LABEL ^ DELAY_LABEL);
 	L4_MsgTag_t tag = L4_Call_Timeouts(test_tid, L4_ZeroTime, L4_Never);
 	L4_Clock_t after = L4_SystemClock();
-	if(L4_IpcFailed(tag)) diag("error code %#lx", L4_ErrorCode());
-	ok(L4_IpcSucceeded(tag), "immediate call succeeded");
+	if(!ok(L4_IpcSucceeded(tag), "immediate call succeeded")) {
+		diag("ec=%#lx", L4_ErrorCode());
+	}
 	uint64_t diff_us = after.raw - before.raw;
 	diag("ipc took %lu µs", (unsigned long)diff_us);
 	ok(diff_us < 1000 * 10, "immediate call was immediate");
@@ -1142,8 +1143,9 @@ START_TEST(delay_test)
 	L4_LoadMR(0, (L4_MsgTag_t){ .X.label = PING_LABEL, .X.u = 1 }.raw);
 	L4_LoadMR(1, ECHO_LABEL ^ DELAY_LABEL);
 	tag = L4_Call_Timeouts(test_tid, TEST_IPC_DELAY, TEST_IPC_DELAY);
-	if(L4_IpcFailed(tag)) diag("after ec %#lx", L4_ErrorCode());
-	ok(L4_IpcSucceeded(tag), "after ipc ok");
+	if(!ok(L4_IpcSucceeded(tag), "after ipc ok")) {
+		diag("ec=%#lx", L4_ErrorCode());
+	}
 }
 END_TEST
 
@@ -1242,7 +1244,7 @@ static void fork_stt_setup(void)
 	L4_Word_t got_ctid;
 	do {
 		L4_MsgTag_t tag = L4_Wait_Timeout(TEST_IPC_DELAY, &test_tid);
-		fail_if(L4_IpcFailed(tag));
+		IPC_FAIL(tag);
 		L4_StoreMR(1, &got_ctid);
 	} while(test_tid.raw != got_ctid);
 	fail_unless(!L4_IsNilThread(test_tid));

@@ -308,8 +308,7 @@ static L4_Word_t r_recv_timeout_case(int priority, bool spin, bool send)
 
 	/* get sync */
 	tag = L4_Receive_Timeout(helper, L4_TimePeriod(150 * 1000));
-	fail_if(L4_IpcFailed(tag), "helper sync failed, ec=%#lx",
-		L4_ErrorCode());
+	IPC_FAIL(tag);
 
 	join_thread(helper);
 	L4_Word_t ret = param[0];
@@ -516,8 +515,7 @@ static void preempt_exn_case(
 			L4_LoadMR(0, tag.raw);
 			L4_LoadMRs(1, num_words, words);
 			tag = L4_Reply(spinner);
-			fail_if(L4_IpcFailed(tag), "spinner preempt reply failed: ec %#lx",
-				L4_ErrorCode());
+			IPC_FAIL(tag);
 			if(r->num_exn == 0) r->first_preempt = L4_SystemClock();
 			r->num_exn++;
 		} else if(tag.X.u == 0) {
