@@ -1566,6 +1566,121 @@ START_LOOP_TEST(basic_redir, iter, 0, 9)
 END_TEST
 
 
+/* this runs in a separate process, so that map and grant items may be
+ * tested.
+ */
+static void send_typed_items(void)
+{
+	const size_t mem_size = 4096;
+	const char *test_string = "if you dont repost this comment on 10 other "
+		"pages i will fly into your kitchen tonight and make a mess of "
+		"your pots and pans";
+
+	L4_ThreadId_t sender;
+	L4_MsgTag_t tag = L4_Wait(&sender);
+	IPC_FAIL(tag);
+
+	void *memory = valloc(mem_size);
+	memset(memory, 1, mem_size);
+	diag("sender's memory is at %p", memory);
+
+	L4_StringItem_t si = L4_StringItem(strlen(test_string) + 1,
+		(char *)test_string);
+	L4_Fpage_t map_page = L4_FpageLog2((L4_Word_t)memory, 12);
+	L4_Set_Rights(&map_page, L4_Readable);
+	L4_MapItem_t mi = L4_MapItem(map_page, 0);
+	L4_LoadMR(0, (L4_MsgTag_t){ .X.t = 4 }.raw);
+	L4_LoadMRs(1, 2, si.raw);
+	L4_LoadMRs(3, 2, mi.raw);
+	tag = L4_Reply(sender);
+	IPC_FAIL(tag);
+
+	diag("replied to sender.");
+
+	/* get an additional sync before exiting the address space. */
+	tag = L4_Receive(sender);
+	IPC_FAIL(tag);
+	L4_LoadMR(0, 0);
+	tag = L4_Reply(sender);
+	IPC_FAIL(tag);
+
+	free(memory);
+}
+
+
+/* TODO: this test should be much more comprehensive:
+ *   - the ordering of string and map items should vary
+ *   - the number of string and map items should vary (0, 1, 2)
+ *   - whether string and map items appear consecutively
+ *
+ * per the spec, the final typed item should have C == 0, and the ones before
+ * should have C == 1.
+ */
+START_TEST(c_bit_in_typed_words)
+{
+	plan_tests(6);
+
+	L4_ThreadId_t oth;
+	int oth_pid = fork_tid(&oth);
+	if(oth_pid == 0) {
+		send_typed_items();
+		exit(0);
+	}
+
+	const size_t wnd_size = 4096;
+	uint8_t *memory = valloc(wnd_size),
+		*buffer = malloc(16 * 1024);
+	memset(memory, 0, wnd_size);
+	memset(buffer, 0, 16 * 1024);
+	L4_StringItem_t buf_si = L4_StringItem(16 * 1024, buffer);
+	buf_si.X.C = 0;
+	L4_Accept(L4_AddAcceptor(L4_StringItemsAcceptor,
+		L4_MapGrantItems(L4_FpageLog2((L4_Word_t)memory, 12))));
+	L4_LoadBRs(1, 2, buf_si.raw);
+
+	L4_LoadMR(0, 0);
+	L4_MsgTag_t tag = L4_Call(oth);
+	IPC_FAIL(tag);
+	L4_Word_t words[64];
+	int u = L4_UntypedWords(tag), t = L4_TypedWords(tag);
+	L4_StoreMRs(1, u + t, words);
+
+	/* examine the contents of the typed transfer. */
+	if(!ok(memory[0] != 0, "received map")) {
+		diag("memory[0] = %#x", memory[0]);
+	}
+	buffer[1024] = '\0';
+	ok(strstr((char *)buffer, "repost this") != NULL,
+		"received string");
+
+	/* and its form. */
+	L4_StringItem_t si;
+	memcpy(si.raw, &words[0], sizeof(L4_Word_t) * 2);
+	ok1(L4_IsStringItem(&si));
+	if(!ok1(si.X.C == 1)) {
+		diag("string words: 0=%#lx, 1=%#lx", si.raw[0], si.raw[1]);
+	}
+	L4_MapItem_t mi;
+	memcpy(mi.raw, &words[2], sizeof(L4_Word_t) * 2);
+	ok1(L4_IsMapItem(mi));
+	if(!ok1(mi.X.C == 0)) {
+		diag("map words: 0=%#lx, 1=%#lx", mi.raw[0], mi.raw[1]);
+	}
+
+	/* kick the helper. */
+	L4_Accept(L4_UntypedWordsAcceptor);
+	L4_LoadMR(0, 0);
+	tag = L4_Call(oth);
+	IPC_FAIL(tag);
+	int st, dead = wait(&st);
+	fail_if(dead != oth_pid, "dead=%d, st=%d", dead, st);
+
+	free(memory);
+	free(buffer);
+}
+END_TEST
+
+
 Suite *ipc_suite(void)
 {
 	Suite *s = suite_create("ipc");
@@ -1622,6 +1737,12 @@ Suite *ipc_suite(void)
 		tcase_add_test(tc, recv_timeout_from_preempt);
 		tcase_add_test(tc, point_ipc_timeouts);
 		tcase_add_test(tc, point_xfer_timeouts);
+		suite_add_tcase(s, tc);
+	}
+
+	{
+		TCase *tc = tcase_create("typed");
+		tcase_add_test(tc, c_bit_in_typed_words);
 		suite_add_tcase(s, tc);
 	}
 
