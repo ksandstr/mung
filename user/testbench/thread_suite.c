@@ -678,6 +678,7 @@ static bool is_halted(L4_ThreadId_t tid)
 	L4_Word_t dummy, res = L4_Schedule(tid, ~0ul, ~0, ~0, ~0, &dummy);
 	fail_if(res == L4_SCHEDRESULT_ERROR,
 		"Schedule failed: ec=%#lx", L4_ErrorCode());
+	// diag("%s: res=%lu", __func__, res);
 	return res == L4_SCHEDRESULT_DEAD || res == L4_SCHEDRESULT_INACTIVE;
 }
 
@@ -843,6 +844,72 @@ START_TEST(halt_on_missing_exh)
 END_TEST
 
 
+/* receives one IPC from anywhere, then exits. */
+static void receive_and_exit(void *param UNUSED)
+{
+	L4_ThreadId_t sender;
+	L4_MsgTag_t tag = L4_Wait(&sender);
+	IPC_FAIL(tag);
+	sender = L4_GlobalIdOf(sender);
+	diag("%s: got IPC from %lu:%lu (u=%lu, t=%lu)", __func__,
+		L4_ThreadNo(sender), L4_Version(sender),
+		L4_UntypedWords(tag), L4_TypedWords(tag));
+
+	exit_thread("ok!");
+}
+
+
+START_TEST(halt_on_lost_pager)
+{
+	plan_tests(1);
+	todo_start("fooooo");
+
+	L4_ThreadId_t oth = xstart_thread(&fault_to_given_pager_fn, NULL),
+		fake_pager = xstart_thread(&receive_and_exit, NULL);
+	L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 1 }.raw);
+	L4_LoadMR(1, fake_pager.raw);
+	L4_MsgTag_t tag = L4_Call(oth);
+	IPC_FAIL(tag);
+	L4_Word_t ec;
+	void *res = join_thread_long(fake_pager, TEST_IPC_DELAY, &ec);
+	fail_if(res == NULL || !streq(res, "ok!"),
+		"join of fake pager failed, ec=%#lx", ec);
+	fail_if(thr_exists(fake_pager));
+	ok1(is_halted(oth));
+
+	kill_thread(oth);
+
+	todo_end();
+}
+END_TEST
+
+
+/* TODO: add case where the exception handler disappears before the exception
+ * message is delivered. (and same for the lost_pager test, too.)
+ */
+START_TEST(halt_on_lost_exh)
+{
+	plan_tests(1);
+
+	L4_ThreadId_t oth = xstart_thread(&receive_and_die_fn, NULL),
+		fake_exh = xstart_thread(&receive_and_exit, NULL);
+	L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 1 }.raw);
+	L4_LoadMR(1, fake_exh.raw);
+	L4_MsgTag_t tag = L4_Call(oth);
+	IPC_FAIL(tag);
+	L4_Word_t ec;
+	void *res = join_thread_long(fake_exh, TEST_IPC_DELAY, &ec);
+	fail_if(res == NULL || !streq(res, "ok!"),
+		"join of fake exceptionhandler failed, ec=%#lx", ec);
+	fail_if(thr_exists(fake_exh));
+
+	ok1(is_halted(oth));
+
+	kill_thread(oth);
+}
+END_TEST
+
+
 /* create a non-activated thread and overwrite its version bits.
  *
  * (the real API test would start an actual thread, overwrite version, restart
@@ -900,6 +967,8 @@ Suite *thread_suite(void)
 		tcase_set_fork(tc, false);	/* should be able to call schedule */
 		tcase_add_test(tc, halt_on_missing_pager);
 		tcase_add_test(tc, halt_on_missing_exh);
+		tcase_add_test(tc, halt_on_lost_pager);
+		tcase_add_test(tc, halt_on_lost_exh);
 		suite_add_tcase(s, tc);
 	}
 
