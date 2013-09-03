@@ -708,14 +708,13 @@ START_TEST(halt_pred_test)
 	plan_tests(2);
 
 	L4_ThreadId_t oth = xstart_thread(&receive_and_die_fn, NULL);
-	L4_ThreadSwitch(oth);
 	ok1(!is_halted(oth));
 
 	L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 1 }.raw);
 	L4_LoadMR(1, L4_nilthread.raw);
 	L4_MsgTag_t tag = L4_Call(oth);
-	fail_if(L4_IpcFailed(tag));
-	L4_ThreadSwitch(oth);
+	IPC_FAIL(tag);
+	L4_Sleep(L4_TimePeriod(100));
 	ok1(is_halted(oth));
 
 	kill_thread(oth);
