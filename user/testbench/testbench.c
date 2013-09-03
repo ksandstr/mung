@@ -24,10 +24,6 @@
 #include "elf.h"
 
 
-/* from CCAN */
-#define streq(a,b) (strcmp((a),(b)) == 0)
-
-
 /* pages tracked by the forkserv pager. mappings are granted to forkserv as
  * faults occur. presence of a forkserv_page means that a page was already
  * received from sigma0.

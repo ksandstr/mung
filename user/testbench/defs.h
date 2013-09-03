@@ -40,6 +40,9 @@
 
 #define btos(x) (!!(x) ? "true" : "false")
 
+/* from CCAN */
+#define streq(a,b) (strcmp((a),(b)) == 0)
+
 
 /* declare and use an IDL dispatcher fixture. symbols static by default.
  * idl_fixture_teardown() is defined in util.c . setting quit_cond to false
