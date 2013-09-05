@@ -862,7 +862,6 @@ static void receive_and_exit(void *param UNUSED)
 START_TEST(halt_on_lost_pager)
 {
 	plan_tests(1);
-	todo_start("fooooo");
 
 	L4_ThreadId_t oth = xstart_thread(&fault_to_given_pager_fn, NULL),
 		fake_pager = xstart_thread(&receive_and_exit, NULL);
@@ -878,8 +877,6 @@ START_TEST(halt_on_lost_pager)
 	ok1(is_halted(oth));
 
 	kill_thread(oth);
-
-	todo_end();
 }
 END_TEST
 

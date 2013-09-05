@@ -439,9 +439,24 @@ fail:
 static void receive_exn_reply(struct hook *hook, uintptr_t code, void *priv)
 {
 	hook_detach(hook);
-	if(code != 0) return;
-
 	struct thread *t = container_of(hook, struct thread, post_exn_call);
+
+	if(code != 0) {
+		/* failed exception IPC happens under two conditions: either the
+		 * thread was deleted, or the exception handler was deleted. in the
+		 * former case TF_HALT will be set already; in the latter, the thread
+		 * should be halted.
+		 */
+		if(!CHECK_FLAG(t->flags, TF_HALT)) {
+			/* thread_halt(), on the other hand, doesn't transition RECV_WAIT
+			 * threads to STOPPED. so we'll have to force the issue a bit.
+			 */
+			t->status = TS_R_RECV;
+			thread_halt(t);
+			assert(t->status == TS_STOPPED);
+		}
+		return;
+	}
 
 	void *utcb = thread_get_utcb(t);
 	struct x86_exregs *regs = &t->ctx;
@@ -516,9 +531,22 @@ void build_exn_ipc(
 static void receive_pf_reply(struct hook *hook, uintptr_t code, void *priv)
 {
 	hook_detach(hook);
+	struct thread *t = container_of(hook, struct thread, post_exn_call);
 	if(likely(code == 0)) {
-		struct thread *t = container_of(hook, struct thread, post_exn_call);
 		thread_wake(t);
+	} else {
+		/* failed pager IPC. there are two cases: either the thread itself was
+		 * deleted, or the peer disappeared. in the former case the thread is
+		 * already halted; in the latter, we should do it here.
+		 */
+		if(!CHECK_FLAG(t->flags, TF_HALT)) {
+			/* (this is required to force a transition to STOPPED. see
+			 * receive_exn_reply() for the ugly details.)
+			 */
+			t->status = TS_R_RECV;
+			thread_halt(t);
+			assert(t->status == TS_STOPPED);
+		}
 	}
 }
 
