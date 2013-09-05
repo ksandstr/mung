@@ -84,4 +84,8 @@ interface ForkServ: L4X2::FaultHandler
 
 	[Label(0x6750)]		/* "gP" */
 	long getpid();
+
+	/* used by certain unit tests that overwrite a thread's version field. */
+	[Label(0xd00d)]		/* dude! */
+	void send_bol(in L4X2::word dest, in L4X2::word ip, in L4X2::word sp);
 };

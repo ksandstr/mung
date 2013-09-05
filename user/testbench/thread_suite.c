@@ -18,6 +18,7 @@
 
 #include <ukernel/util.h>
 
+#include "forkserv-defs.h"
 #include "defs.h"
 #include "test.h"
 
@@ -959,6 +960,219 @@ START_TEST(halt_on_lost_exh)
 END_TEST
 
 
+enum ipc_mode {
+	SEND_ONLY = 0,
+	RECV_ONLY = 1,
+	CALL = 2,
+};
+
+
+static void ipc_sender_fn(void)
+{
+	L4_ThreadId_t caller, target;
+	L4_MsgTag_t tag = L4_Wait_Timeout(TEST_IPC_DELAY, &caller);
+	if(L4_IpcFailed(tag)) {
+		diag("%s: initial wait failed, ec=%#lx", __func__, L4_ErrorCode());
+		return;
+	}
+	assert(L4_UntypedWords(tag) >= 2);
+	L4_StoreMR(1, &target.raw);
+	L4_Word_t raw_mode; L4_StoreMR(2, &raw_mode);
+	enum ipc_mode mode = raw_mode;
+	L4_Word_t ec;
+	switch(mode) {
+		case SEND_ONLY:
+			L4_LoadMR(0, 0);
+			tag = L4_Send(target);
+			break;
+		case RECV_ONLY:
+			tag = L4_Receive(target);
+			break;
+		case CALL:
+			L4_LoadMR(0, 0);
+			tag = L4_Call(target);
+			break;
+		default:
+			diag("%s: invalid mode %d", __func__, (int)mode);
+			return;
+	}
+	if(L4_IpcFailed(tag)) ec = L4_ErrorCode(); else ec = 0;
+	L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 2 }.raw);
+	L4_LoadMR(1, tag.raw);
+	L4_LoadMR(2, ec);
+	tag = L4_Send_Timeout(caller, TEST_IPC_DELAY);
+	if(L4_IpcFailed(tag)) {
+		diag("%s: reply failed, ec=%#lx", __func__, L4_ErrorCode());
+	}
+}
+
+
+static void ipc_peer_fn(bool succeed, enum ipc_mode mode, L4_ThreadId_t oth)
+{
+	L4_ThreadId_t sender;
+	L4_MsgTag_t tag;
+	switch(mode) {
+		case CALL:
+			tag = L4_Wait_Timeout(TEST_IPC_DELAY, &sender);
+			IPC_FAIL(tag);
+			if(succeed) {
+				L4_LoadMR(0, 0);
+				L4_Reply(sender);
+			}
+			break;
+		case SEND_ONLY:
+			if(succeed) {
+				tag = L4_Receive_Timeout(oth, TEST_IPC_DELAY);
+				IPC_FAIL(tag);
+			}
+			break;
+		case RECV_ONLY:
+			if(succeed) {
+				L4_LoadMR(0, 0);
+				tag = L4_Send_Timeout(oth, TEST_IPC_DELAY);
+				IPC_FAIL(tag);
+			}
+			break;
+	}
+	if(!succeed) {
+		/* ensure measurement before process exit */
+		L4_Sleep(A_SHORT_NAP);
+	}
+}
+
+
+/* there are two kinds of peer loss: outright deletion and modification of the
+ * version field. both should pop an error in the helper thread, and their
+ * absence should return successfully.
+ *
+ * this test goes over three paths to the error condition: first, from the
+ * send-wait status; second, from the recv-wait status, and third, from a
+ * recv-wait (or r_recv) status that was transitioned into from a send-wait.
+ *
+ * so there are nine iterations: {none, deletion, modification} * {send, recv,
+ * call}.
+ */
+START_LOOP_TEST(err_on_lost_peer, iter, 0, 8)
+{
+	const int loss_mode = iter % 3;
+	const enum ipc_mode ipc_mode = iter / 3;
+
+	const char *im_str = NULL;
+	switch(ipc_mode) {
+		case SEND_ONLY: im_str = "send_only"; break;
+		case RECV_ONLY: im_str = "recv_only"; break;
+		case CALL: im_str = "call"; break;
+		default: fail_if(true, "oooooh!");
+	}
+	diag("loss_mode=%d, ipc_mode=%s", loss_mode, im_str);
+
+	plan_tests(3);
+
+	L4_ThreadId_t oth;
+	int oth_pid = fork_tid(&oth);
+	if(oth_pid == 0) {
+		ipc_sender_fn();
+		diag("client exiting");
+		exit(0);
+	}
+
+	L4_ThreadId_t peer_tid;
+	int peer_pid = fork_tid(&peer_tid);
+	if(peer_pid == 0) {
+		ipc_peer_fn(loss_mode == 0, ipc_mode, oth);
+		diag("peer exiting");
+		exit(0);
+	}
+	diag("oth_pid=%d, peer_pid=%d", oth_pid, peer_pid);
+	const L4_ThreadId_t old_peer_tid = peer_tid;
+	diag("oth=%lu:%lu, peer_tid=%lu:%lu",
+		L4_ThreadNo(oth), L4_Version(oth),
+		L4_ThreadNo(peer_tid), L4_Version(peer_tid));
+
+	L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 2 }.raw);
+	L4_LoadMR(1, peer_tid.raw);
+	L4_LoadMR(2, ipc_mode);
+	L4_MsgTag_t tag = L4_Send(oth);
+	IPC_FAIL(tag);
+	switch(loss_mode) {
+		case 2: {
+			if(ipc_mode == CALL) {
+				/* ensure that sender's call gets to the receive phase */
+				L4_Sleep(A_SHORT_NAP);
+			}
+			/* swap out its version bits. this kills the cat. */
+			L4_ThreadId_t new_tid = L4_GlobalId(L4_ThreadNo(peer_tid),
+				(L4_Version(peer_tid) + 123) | 13);
+			assert(new_tid.raw != peer_tid.raw);
+			L4_Word_t res = L4_ThreadControl(new_tid, peer_tid,
+				L4_nilthread, L4_nilthread, (void *)-1);
+			fail_unless(res == 1,
+				"threadcontrol failed, res=%lu, ec=%#lx",
+				res, L4_ErrorCode());
+			fail_if(thr_exists(peer_tid));
+			peer_tid = new_tid;
+			break;
+		}
+
+		case 1: {
+			/* deletion. accomplished by an ordinary wait() on the peer
+			 * process.
+			 */
+			int st, dead = wait(&st);
+			if(dead != peer_pid) {
+				diag("lm1: dead=%d, peer_pid=%d", dead, peer_pid);
+			}
+			fail_if(thr_exists(peer_tid));
+			break;
+		}
+
+		case 0:
+			/* nothing happens. */
+			break;
+
+		default:
+			fail_if(true, "invalid loss_mode=%d", loss_mode);
+	}
+
+	tag = L4_Receive(oth);
+	IPC_FAIL(tag);
+	assert(L4_UntypedWords(tag) >= 2);
+	L4_MsgTag_t oth_tag;
+	L4_Word_t oth_ec;
+	L4_StoreMR(1, &oth_tag.raw);
+	L4_StoreMR(2, &oth_ec);
+	diag("oth_tag.succeeded=%s, oth_ec=%#lx",
+		btos(L4_IpcSucceeded(oth_tag)), oth_ec);
+
+	iff_ok1(L4_IpcSucceeded(oth_tag), loss_mode == 0);
+	iff_ok1((oth_ec & 1) == 1, ipc_mode != SEND_ONLY && loss_mode > 0);
+	imply_ok1(loss_mode > 0, (oth_ec >> 1) == 2);
+
+	if(loss_mode == 2) {
+		/* reinstate the peer, and cause it to exit immediately. */
+		diag("reinstating v%lu (new was v%lu)",
+			L4_Version(old_peer_tid), L4_Version(peer_tid));
+		L4_Word_t res = L4_ThreadControl(old_peer_tid, peer_tid,
+			L4_nilthread, L4_nilthread, (void *)-1);
+		fail_if(res != 1, "reinstating tc failed, res=%lu, ec=%#lx",
+			res, L4_ErrorCode());
+		peer_tid = old_peer_tid;
+		int n = forkserv_send_bol(L4_Pager(), peer_tid.raw,
+			(L4_Word_t)&exit, (L4_Word_t)&tag);
+		fail_if(n != 0, "send_bol: n=%d", n);
+	}
+
+	/* TODO: add a wait_all() utility somewhere */
+	for(int i=0; i < (loss_mode != 1 ? 2 : 1); i++) {
+		int st, dead = wait(&st);
+		if(dead != oth_pid && dead != peer_pid) {
+			diag("dead=%d, oth_pid=%d (?)", dead, oth_pid);
+		}
+	}
+}
+END_TEST
+
+
 /* create a non-activated thread and overwrite its version bits.
  *
  * (the real API test would start an actual thread, overwrite version, restart
@@ -1014,11 +1228,12 @@ Suite *thread_suite(void)
 	/* tests on threads changing state. */
 	{
 		TCase *tc = tcase_create("state");
-		tcase_set_fork(tc, false);	/* should be able to call schedule */
+		tcase_set_fork(tc, false);	/* needs Schedule, ThreadControl */
 		tcase_add_test(tc, halt_on_missing_pager);
 		tcase_add_test(tc, halt_on_missing_exh);
 		tcase_add_test(tc, halt_on_lost_pager);
 		tcase_add_test(tc, halt_on_lost_exh);
+		tcase_add_test(tc, err_on_lost_peer);
 		suite_add_tcase(s, tc);
 	}
 

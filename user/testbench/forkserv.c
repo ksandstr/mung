@@ -1264,6 +1264,40 @@ static L4_Word_t forward_new_thread(
 }
 
 
+static void handle_send_bol(
+	L4_Word_t dest_raw,
+	L4_Word_t ip,
+	L4_Word_t sp)
+{
+	L4_ThreadId_t dest = { .raw = dest_raw };
+#if 0
+	printf("forkserv: %s: dest=%lu:%lu, ip=%#lx, sp=%#lx\n", __func__,
+		L4_ThreadNo(dest), L4_Version(dest), ip, sp);
+#endif
+	if(L4_IsLocalId(dest)) {
+		printf("forkserv: %s: can't handle a local TID\n", __func__);
+		return;
+	}
+
+	struct fs_thread *t = get_thread(dest);
+	if(t == NULL) {
+		printf("forkserv: %s: unknown TID %lu:%lu\n", __func__,
+			L4_ThreadNo(dest), L4_Version(dest));
+		return;
+	}
+
+	L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 2 }.raw);
+	L4_LoadMR(1, ip);
+	L4_LoadMR(2, sp);
+	L4_MsgTag_t tag = L4_Send(dest);
+	if(L4_IpcFailed(tag)) {
+		printf("forkserv: %s: BOL failed, ec=%#lx\n", __func__,
+			L4_ErrorCode());
+		return;
+	}
+}
+
+
 /* (not quite certain if this'll work with just a single thread. more RAM can
  * be had from sigma0, though, so there's no dependency there.)
  */
@@ -1283,6 +1317,7 @@ static void forkserv_dispatch_loop(void)
 		.unmap = &handle_unmap,
 		.getpid = &handle_getpid,
 		.new_thread = &forward_new_thread,	/* this one is a bit special. */
+		.send_bol = &handle_send_bol,
 	};
 
 	for(;;) {
