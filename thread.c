@@ -1146,13 +1146,14 @@ void sys_threadcontrol(struct x86_exregs *regs)
 		}
 		if(!CHECK_FLAG(dest->flags, TF_HALT)) thread_halt(dest);
 		if(CHECK_FLAG(dest->flags, TF_INTR)) int_kick(dest);
-		abort_waiting_ipc(dest, 2 << 1);	/* "lost partner" */
 		post_exn_fail(dest);
 		if(dest->status != TS_STOPPED) {
 			dest->status = TS_STOPPED;
 			sq_remove_thread(dest);
 		}
+		L4_ThreadId_t dead_tid = { .raw = dest->id };
 		thread_destroy(dest);
+		abort_waiting_ipc(dead_tid, 2 << 1);	/* "lost partner" */
 		goto dead;
 	} else if(!L4_IsNilThread(spacespec) && dest != NULL) {
 		/* modification only. (rest shared with creation.) */
@@ -1161,11 +1162,12 @@ void sys_threadcontrol(struct x86_exregs *regs)
 			assert(L4_ThreadNo(dest_tid) == TID_THREADNUM(dest->id));
 			assert(L4_Version(dest_tid) != TID_VERSION(dest->id));
 			if(IS_IPC(dest->status)) abort_thread_ipc(dest);	/* "from" IPC */
+			L4_ThreadId_t stale_tid = { .raw = dest->id };
+			dest->id = dest_tid.raw;
 			/* cancel sends to the now-stale TID.
 			 * TODO: this should handle preemption vs. current_thread
 			 */
-			abort_waiting_ipc(dest, 3 << 1);
-			dest->id = dest_tid.raw;
+			abort_waiting_ipc(stale_tid, 3 << 1);
 		}
 
 		if(spacespec.raw != dest_tid.raw) {

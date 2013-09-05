@@ -280,30 +280,32 @@ static inline int do_ipc_transfer(
  * TODO: this should signal preemption when it occurs: one of the aborted
  * senders may have priority.
  */
-void abort_waiting_ipc(struct thread *t, L4_Word_t errcode)
+void abort_waiting_ipc(L4_ThreadId_t with_tid, L4_Word_t errcode)
 {
 	/* fail those IPC operations that're waiting to send to this one. */
+	assert(L4_IsGlobalId(with_tid));
+
 	struct htable_iter it;
-	size_t hash = int_hash(t->id);
+	size_t hash = int_hash(with_tid.raw);
 	errcode &= ~(L4_Word_t)1;		/* send-phase errors. */
 	for(void *ptr = htable_firstval(&sendwait_hash, &it, hash);
 		ptr != NULL;
 		ptr = htable_nextval(&sendwait_hash, &it, hash))
 	{
 		struct ipc_wait *w = container_of(ptr, struct ipc_wait, dest_tid);
-		if(w->dest_tid.raw != t->id) continue;
+		if(w->dest_tid.raw != with_tid.raw) continue;
 
-		struct thread *peer UNUSED = w->thread;
-		assert(peer->ipc_to.raw == t->id);
+		struct thread *peer = w->thread;
+		assert(peer->ipc_to.raw == with_tid.raw);
 		assert(peer->status == TS_SEND_WAIT || peer->status == TS_XFER
 			|| peer->status == TS_STOPPED);
-		if(!post_exn_fail(w->thread)) {
+		if(!post_exn_fail(peer)) {
 			/* ordinary non-exception IPC. for exceptions, a silent return via
 			 * the callback
 			 */
-			set_ipc_error_thread(w->thread, errcode);
+			set_ipc_error_thread(peer, errcode);
+			thread_wake(peer);
 		}
-		thread_wake(w->thread);
 
 		htable_delval(&sendwait_hash, &it);
 		kmem_cache_free(ipc_wait_slab, w);
@@ -319,14 +321,16 @@ void abort_waiting_ipc(struct thread *t, L4_Word_t errcode)
 		other != NULL;
 		other = htable_next(&thread_hash, &it))
 	{
-		if(other->status != TS_RECV_WAIT || other->ipc_from.raw != t->id) {
+		if((other->status != TS_RECV_WAIT && other->status != TS_R_RECV)
+			|| other->ipc_from.raw != with_tid.raw)
+		{
 			continue;
 		}
 
 		if(!post_exn_fail(other)) {
 			set_ipc_error_thread(other, errcode);
+			thread_wake(other);
 		}
-		thread_wake(other);
 	}
 }
 
@@ -690,11 +694,11 @@ void ipc_user(
 	struct thread *to,
 	uint64_t xferto_at)
 {
-	L4_ThreadId_t peer_tid;
-	if(from->space == to->space) peer_tid = get_local_id(to);
-	else peer_tid.raw = to->id;
-	from->ipc_to = peer_tid;
-	from->ipc_from = peer_tid;
+	/* this must be a global ID so that abort_waiting_ipc()'s receiver search
+	 * will find it.
+	 */
+	from->ipc_to.raw = to->id;
+	from->ipc_from.raw = to->id;
 	from->send_timeout = L4_Never;
 	from->recv_timeout = L4_Never;
 

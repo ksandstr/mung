@@ -30,13 +30,13 @@ extern void ipc_user(
 extern void ipc_xfer_timeout(struct ipc_state *st);
 
 /* one thing that thread_ipc_fail() doesn't do. used by the deleting mode of
- * ThreadControl to abort waiting IPCs that depend on a moribund thread's
- * rendezvous.
+ * ThreadControl to abort waiting IPCs that depend on a freshly-deleted
+ * thread's rendezvous.
  *
  * this function also does the other thing, i.e. aborting threads waiting for
- * IPC from @t specifically.
+ * IPC from @with_tid specifically.
  */
-extern void abort_waiting_ipc(struct thread *t, L4_Word_t errorcode);
+extern void abort_waiting_ipc(L4_ThreadId_t with_tid, L4_Word_t errorcode);
 
 /* removes the ipc_wait structure associated with the passive send in @t. */
 extern void abort_thread_ipc(struct thread *t);
