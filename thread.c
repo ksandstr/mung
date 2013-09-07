@@ -1186,20 +1186,30 @@ void sys_threadcontrol(struct x86_exregs *regs)
 		goto dead;
 	} else if(!L4_IsNilThread(spacespec) && dest != NULL) {
 		/* modification only. (rest shared with creation.) */
+		L4_ThreadId_t old_tid = { .raw = dest->id };
 		if(dest->id != dest_tid.raw) {
 			/* version field and IPC stomp */
 			assert(L4_ThreadNo(dest_tid) == TID_THREADNUM(dest->id));
 			assert(L4_Version(dest_tid) != TID_VERSION(dest->id));
-			if(IS_IPC(dest->status)) abort_thread_ipc(dest);	/* "from" IPC */
+			if(dest->status == TS_SEND_WAIT) {
+				/* send-side waiter */
+				abort_thread_ipc(dest);
+			}
 			L4_ThreadId_t stale_tid = { .raw = dest->id };
 			dest->id = dest_tid.raw;
-			/* cancel sends to the now-stale TID.
-			 * TODO: this should handle preemption vs. current_thread
-			 */
-			abort_waiting_ipc(stale_tid, 3 << 1);
+			/* fail sends to the now-stale TID. */
+			abort_waiting_ipc(stale_tid, 2 << 1);
+
+			if(CHECK_FLAG(dest->flags, TF_INTR)) int_kick(dest);
+
+			if(dest->status > 1) sq_remove_thread(dest);
+			dest->status = TS_STOPPED;
+			dest->flags = 0;
 		}
 
-		if(spacespec.raw != dest_tid.raw) {
+		if(spacespec.raw != dest_tid.raw
+			&& spacespec.raw != old_tid.raw)
+		{
 			struct space *to_sp = space_find(spacespec.raw);
 			if(unlikely(to_sp == NULL)) goto invd_space;
 			else if(to_sp != dest->space) {

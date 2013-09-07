@@ -276,7 +276,6 @@ static inline int do_ipc_transfer(
 
 /* used by the deleting and overwriting modes of ThreadControl.
  *
- * FIXME: untested!
  * TODO: this should signal preemption when it occurs: one of the aborted
  * senders may have priority.
  */
@@ -339,8 +338,9 @@ void abort_waiting_ipc(L4_ThreadId_t with_tid, L4_Word_t errcode)
  * care of the sendwait_hash entry. leaves errorcode setting to caller's
  * caller.
  *
- * TODO: this should be renamed to indicate its function. there's already
- * abort_waiting_ipc(), which should be renamed as well.
+ * TODO: this should be renamed to indicate its function; e.g. something like
+ * "cancel_ipc_from()". there's already abort_waiting_ipc(), which should be
+ * renamed to "cancel_ipc_to()".
  */
 void abort_thread_ipc(struct thread *t)
 {
