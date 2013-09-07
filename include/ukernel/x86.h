@@ -189,15 +189,40 @@ static inline void x86_irq_enable(void) {
 	do { if(__saved_i) x86_irq_enable(); } while(0)
 
 
-static inline void x86_alter_cr0(uint32_t and, uint32_t or)
-{
+static inline void x86_set_cr0(uint32_t or_mask) {
+	asm volatile (
+		"movl %%cr0, %%edx\n"
+		"orl %0, %%edx\n"
+		"movl %%edx, %%cr0\n"
+		:: "g" (or_mask)
+		: "edx");
+}
+
+
+static inline void x86_clear_cr0(uint32_t clear_mask) {
 	asm volatile (
 		"movl %%cr0, %%edx\n"
 		"andl %0, %%edx\n"
-		"orl %1, %%edx\n"
 		"movl %%edx, %%cr0\n"
-		:: "g" (and), "g" (or)
+		:: "g" (~clear_mask)
 		: "edx");
+}
+
+
+static inline void x86_alter_cr0(uint32_t and, uint32_t or)
+{
+	if(and != ~0u && or != 0) {
+		asm volatile (
+			"movl %%cr0, %%edx\n"
+			"andl %0, %%edx\n"
+			"orl %1, %%edx\n"
+			"movl %%edx, %%cr0\n"
+			:: "g" (and), "g" (or)
+			: "edx");
+	} else {
+		if(and != ~0u) x86_clear_cr0(~and);
+		if(or != 0) x86_set_cr0(or);
+	}
 }
 
 
