@@ -11,6 +11,7 @@
 #include <ccan/compiler/compiler.h>
 #include <ccan/hash/hash.h>
 #include <ccan/crc/crc.h>
+#include <ccan/endian/endian.h>
 
 #include <l4/types.h>
 #include <l4/ipc.h>
@@ -2481,6 +2482,153 @@ START_TEST(c_bit_in_typed_words)
 END_TEST
 
 
+/* tcase "lipc" */
+static const L4_Word_t lipc_inputs[] = {
+	0xdeadbeef, 0xcafebabe, 0xdb00b1e5, 0xd00dc0de,
+};
+
+
+static void lipc_receiver_fn(void *param UNUSED)
+{
+	void *arena = valloc(1 << 12);
+	L4_Fpage_t a_page = L4_FpageLog2((L4_Word_t)arena, 12);
+	L4_Set_Rights(&a_page, L4_FullyAccessible);
+	L4_Accept(L4_MapGrantItems(a_page));
+
+	L4_ThreadId_t sender;
+	L4_MsgTag_t tag = L4_Wait_Timeout(TEST_IPC_DELAY, &sender);
+	IPC_FAIL(tag);
+	const int n_words = L4_UntypedWords(tag) + L4_TypedWords(tag);
+
+	L4_Word_t words[64];
+	L4_StoreMRs(1, n_words, words);
+	diag("%s: got u=%lu, t=%lu, label=%#lx; from=%#lx", __func__,
+		L4_UntypedWords(tag), L4_TypedWords(tag), L4_Label(tag), sender.raw);
+	/* byteswap the untyped words at this point to show that we were here. */
+	for(int i=0; i < n_words; i++) {
+		// diag("%s: mr%d=%#lx", __func__, i + 1, words[i]);
+		words[i] = bswap_32(words[i]);
+	}
+	L4_LoadMR(0, (L4_MsgTag_t){ .X.label = tag.X.label,
+		.X.u = n_words }.raw);
+	L4_LoadMRs(1, n_words, words);
+	tag = L4_Reply(sender);
+	IPC_FAIL(tag);
+
+	L4_FlushFpage(a_page);
+	free(arena);
+}
+
+
+static bool verify_lipc_output(L4_MsgTag_t tag, const L4_Word_t *mr)
+{
+	const int n_inputs = MIN(int, L4_UntypedWords(tag),
+		NUM_ELEMENTS(lipc_inputs));
+	for(int i=0; i < n_inputs; i++) {
+		L4_Word_t inp = lipc_inputs[i];
+		if(mr[i] != bswap_32(inp)) {
+			diag("MR%d=%#lx, expected %#lx", i + 1, mr[i], bswap_32(inp));
+			return false;
+		}
+	}
+	return true;
+}
+
+
+/* TODO: add "has no receive phase" test based on this, somehow
+ * (lipc_receiver_fn() needs some way to not IPC_FAIL() on the reply tag.)
+ */
+START_LOOP_TEST(basic_lipc, iter, 0, 1)
+{
+	plan_tests(2);
+	const bool low_inputs = CHECK_FLAG(iter, 1);
+	const int n_inputs = low_inputs ? 2 : NUM_ELEMENTS(lipc_inputs);
+	diag("low_inputs=%s, n_inputs=%d", btos(low_inputs), n_inputs);
+
+	L4_ThreadId_t oth = xstart_thread(&lipc_receiver_fn, NULL);
+	L4_Sleep(L4_TimePeriod(5 * 1000));
+	diag("doing Lcall from %lu:%lu (lid=%#lx)",
+		L4_ThreadNo(L4_Myself()), L4_Version(L4_Myself()),
+		L4_MyLocalId().raw);
+
+	L4_Word_t mr[64];
+	memset(mr, 0, sizeof(mr));
+	L4_LoadMR(0, (L4_MsgTag_t){ .X.label = 0xbeef, .X.u = n_inputs }.raw);
+	L4_LoadMRs(1, n_inputs, lipc_inputs);
+	L4_MsgTag_t tag = L4_Lcall(L4_LocalIdOf(oth));
+	IPC_FAIL(tag);
+	L4_StoreMRs(1, L4_UntypedWords(tag) + L4_TypedWords(tag), mr);
+	if(!ok(tag.X.u == n_inputs && tag.X.t == 0, "tag OK")) {
+		diag("tag=%#lx", tag.raw);
+	}
+	ok(verify_lipc_output(tag, mr), "got correct output");
+
+	xjoin_thread(oth);
+}
+END_TEST
+
+
+/* tries out the various Lipc fallback cases:
+ *   - non-local destination TID
+ *   - non-Never receive timeout
+ *   - typed words (MapItem)
+ *
+ * TODO:
+ *   - different hw thread [v2, needs SMP support]
+ *   - dest doesn't exist (needs post-fault recovery)
+ *   - has no receive phase (incompatible with not_never)
+ */
+START_LOOP_TEST(basic_invalid_lipc, iter, 0, 7)
+{
+	plan_tests(2);
+	const int n_inputs = NUM_ELEMENTS(lipc_inputs);
+	const bool not_ltid = CHECK_FLAG(iter, 1),
+		not_never = CHECK_FLAG(iter, 2),
+		has_typed = CHECK_FLAG(iter, 4);
+	diag("n_inputs=%d, not_ltid=%s, not_never=%s, has_typed=%s",
+		n_inputs, btos(not_ltid), btos(not_never), btos(has_typed));
+
+	void *memory = valloc(1 << 12);
+	L4_ThreadId_t oth = xstart_thread(&lipc_receiver_fn, NULL),
+		dest_tid = not_ltid ? L4_GlobalIdOf(oth) : L4_LocalIdOf(oth);
+	L4_Sleep(L4_TimePeriod(5 * 1000));
+	diag("doing Lipc from %lu:%lu", L4_ThreadNo(L4_Myself()),
+		L4_Version(L4_Myself()));
+
+	L4_MapItem_t mi;
+	L4_Word_t mr[64];
+	memset(mr, 0, sizeof(mr));
+	if(has_typed) {
+		memset(memory, 1, 1 << 12);
+		L4_Fpage_t p = L4_FpageLog2((L4_Word_t)memory, 12);
+		L4_Set_Rights(&p, L4_ReadWriteOnly);
+		mi = L4_MapItem(p, 0);
+	}
+	L4_LoadMR(0, (L4_MsgTag_t){ .X.label = 0xbeef,
+		.X.u = n_inputs, .X.t = has_typed ? 2 : 0 }.raw);
+	L4_LoadMRs(1, n_inputs, lipc_inputs);
+	if(has_typed) L4_LoadMRs(n_inputs + 1, 2, mi.raw);
+	L4_MsgTag_t tag;
+	if(not_never) {
+		L4_ThreadId_t dummy;
+		tag = L4_Lipc(dest_tid, dest_tid,
+			L4_Timeouts(L4_Never, TEST_IPC_DELAY), &dummy);
+	} else {
+		tag = L4_Lcall(dest_tid);
+	}
+	IPC_FAIL(tag);
+	L4_StoreMRs(1, L4_UntypedWords(tag) + L4_TypedWords(tag), mr);
+	if(!ok(tag.X.u == n_inputs + (has_typed ? 2 : 0) && tag.X.t == 0, "tag OK")) {
+		diag("tag=%#lx", tag.raw);
+	}
+	ok(verify_lipc_output(tag, mr), "got correct output");
+
+	xjoin_thread(oth);
+	free(memory);
+}
+END_TEST
+
+
 /* verify that when map/grant items are transferred, the SndPage field's
  * address part is rewritten to match the position in RcvWindow.
  *
@@ -3312,6 +3460,13 @@ Suite *ipc_suite(void)
 		TCase *tc = tcase_create("panic");
 		tcase_add_test(tc, map_into_large_acceptor);
 		tcase_add_test(tc, map_into_small_acceptor);
+		suite_add_tcase(s, tc);
+	}
+
+	{
+		TCase *tc = tcase_create("lipc");
+		tcase_add_test(tc, basic_lipc);
+		tcase_add_test(tc, basic_invalid_lipc);
 		suite_add_tcase(s, tc);
 	}
 
