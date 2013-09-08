@@ -156,7 +156,8 @@ static inline L4_MsgTag_t L4_Lipc(
 		  "=b" (L4_VREG(utcb, L4_TCR_MR(1))),
 		  "=c" (L4_VREG(utcb, L4_TCR_MR(2)))
 		: "a" (to.raw), "c" (timeouts), "d" (fromspec.raw),
-		  "S" (L4_VREG(utcb, L4_TCR_MR(0))), "D" (utcb));
+		  "S" (L4_VREG(utcb, L4_TCR_MR(0))), "D" (utcb)
+		: "memory", "cc");
 #endif
 	return tag;
 }

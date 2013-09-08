@@ -126,14 +126,14 @@ static inline L4_MsgTag_t L4_ReplyWait(
 
 static inline L4_MsgTag_t L4_Lcall(L4_ThreadId_t to) {
 	L4_ThreadId_t dummy;
-	return L4_Ipc(to, to, L4_Timeouts(L4_Never, L4_Never), &dummy);
+	return L4_Lipc(to, to, L4_Timeouts(L4_Never, L4_Never), &dummy);
 }
 
 static inline L4_MsgTag_t L4_LreplyWait(
 	L4_ThreadId_t to,
 	L4_ThreadId_t *from_p)
 {
-	return L4_Ipc(to, L4_anylocalthread, L4_Timeouts(L4_ZeroTime, L4_Never),
+	return L4_Lipc(to, L4_anylocalthread, L4_Timeouts(L4_ZeroTime, L4_Never),
 		from_p);
 }
 
