@@ -18,6 +18,7 @@
 #include <l4/schedule.h>
 #include <l4/ipc.h>
 
+#include <ukernel/config.h>
 #include <ukernel/misc.h>
 #include <ukernel/trace.h>
 #include <ukernel/slab.h>
@@ -108,6 +109,19 @@ void set_ipc_error_thread(struct thread *t, L4_Word_t ec)
 	void *utcb = thread_get_utcb(t);
 	set_ipc_error(utcb, ec);
 	set_ipc_return_thread(t, utcb);
+}
+
+
+static inline bool active_send_test(
+	struct thread *dest,
+	struct thread *sender,
+	L4_ThreadId_t sender_ltid)
+{
+	return dest->ipc_from.raw == L4_anythread.raw
+		|| dest->ipc_from.raw == sender->id
+		|| dest->ipc_from.raw == sender_ltid.raw
+		|| (dest->ipc_from.raw == L4_anylocalthread.raw
+			&& dest->space == sender->space);
 }
 
 
@@ -572,11 +586,7 @@ static bool ipc_send_half(
 	assert(!propagated || vs != NULL);
 
 	uint64_t now_us = ksystemclock();
-	const bool match_cond = dest->ipc_from.raw == L4_anythread.raw
-		|| dest->ipc_from.raw == self_id.raw
-		|| dest->ipc_from.raw == self_lid.raw
-		|| (dest->ipc_from.raw == L4_anylocalthread.raw
-			&& dest->space == sender->space);
+	const bool match_cond = active_send_test(dest, self, self_lid);
 
 	/* override TS_R_RECV? */
 	int status = dest->status;
@@ -1572,4 +1582,77 @@ err_exit:
 	assert(L4_VREG(utcb, L4_TCR_ERRORCODE) != 0);
 	current->status = TS_RUNNING;
 	return L4_nilthread.raw;
+}
+
+
+SYSCALL L4_Word_t sys_lipc(
+	L4_ThreadId_t to,
+	L4_ThreadId_t fromspec,
+	L4_Word_t timeouts,
+	void *utcb_ptr,
+	L4_Word_t mr0, L4_Word_t mr1, L4_Word_t mr2)
+{
+	L4_MsgTag_t tag = { .raw = mr0 };
+
+	struct thread *sender = get_current_thread(), *dest = NULL;
+	L4_ThreadId_t sender_ltid = get_local_id(sender);
+	L4_Word_t kip_base = L4_Address(sender->space->kip_area);
+
+	if(USE_SYSENTER) {
+		/* set up delayed return into the Ipc epilog. this happens on
+		 * fallback-to-Ipc and reply-via-Ipc; reply-via-Lipc will replace it
+		 * anyway.
+		 */
+		sender->ctx.eip = kip_base + sysexit_epilogs.fast;
+		/* pop mr1, mr2 pushed in the syscall stub */
+		sender->ctx.esp += 8;
+	}
+
+	/* TODO: the l4.x2 spec seems to imply that Lipc might do propagation.
+	 * this tests to exclude that. same for string transfers; this chucks
+	 * typed transfers in general.
+	 */
+	L4_Word_t failmask = (to.raw & 0x3f)	/* local ID bits */
+		| (tag.raw & 0xffc0)				/* flags, t */
+		| (timeouts & 0xffff);				/* rcvtimeout */
+	bool pass = failmask == 0
+		&& (dest = space_find_local_thread(sender->space, to.local),
+			dest != NULL)
+		&& (dest->status == TS_RECV_WAIT || dest->status == TS_R_RECV)
+		&& dest->space == sender->space
+		&& active_send_test(dest, sender, sender_ltid);
+	if(unlikely(!pass)) {
+		/* fall back to regular ipc. */
+		L4_VREG(utcb_ptr, L4_TCR_MR(1)) = mr1;
+		L4_VREG(utcb_ptr, L4_TCR_MR(2)) = mr2;
+		return sys_ipc(to, fromspec, timeouts, utcb_ptr, mr0);
+	}
+
+	/* switch to the other thread without the return_*() family. */
+	sender->status = TS_R_RECV;
+	sender->wakeup_time = ~(uint64_t)0;
+	sender->recv_timeout = L4_Never;
+	sender->ipc_from = fromspec;
+	leaving_thread(sender);
+	sq_update_thread(sender);	/* TODO: shouldn't be scheduled at all */
+	entering_thread(dest);
+	dest->status = TS_RUNNING;
+	dest->wakeup_time = 0;
+	sq_update_thread(dest);
+	/* set the receiver's epilogue frame up. */
+	dest->ctx.edi = to.raw;
+	dest->ctx.eax = sender_ltid.raw;
+	tag.X.flags = 0;
+	dest->ctx.esi = tag.raw;
+	dest->ctx.ebx = mr1;
+	dest->ctx.ebp = mr2;
+	dest->ctx.eip = kip_base + lipc_epilog_offset;
+	return_from_exn();
+
+	/* TODO: this calls space_switch(), which is pointless. do a cop_switch()
+	 * instead and the sysexit-or-swap thing that _u2u() has.
+	 */
+	switch_thread_u2u(dest);
+	assert(false);
+	for(;;) panic("the loop eternal");
 }

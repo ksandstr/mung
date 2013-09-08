@@ -125,6 +125,7 @@ isr_exn_\name\()_top:
 	ISR_EXN 14, pf		# pagefault
 	ISR_EXN 16, mf, 0	# x87 floating point thing
 	ISR_EXN 19, xm, 0	# SIMD floating point thing
+	ISR_EXN 0x8c, lipc_sc, 0	# Lipc
 	ISR_EXN 0x8d, exregs_sc, 0	# ExchangeRegisters
 	ISR_EXN 0x8e, memctl_sc, 0	# MemoryControl
 	ISR_EXN 0x8f, basic_sc, 0	# basic syscall
@@ -189,6 +190,9 @@ _sysenter_top:
 	# the spec has a 1:1 mapping between GCC regparms and the
 	# to/fromspec/timeouts parameters to Ipc and Lipc. so that's quite
 	# convenient.
+	cmpl $SC_LIPC, %ebx
+	je _sysenter_lipc_fast
+
 	pushl %esi	# arg: mr0
 	leal 0x10000000(%edi), %esi
 	pushl %esi	# arg: user UTCB in kernel segment
@@ -241,7 +245,7 @@ _sysenter_top:
 	pushl 4(%esi)		# MR1 (stashed)
 	movl 8(%esi), %ebp	# OUT MR2
 	movl (%esi), %esi	# OUT MR0
-	movl $USER_DATA_SEL, %ebx
+13:	movl $USER_DATA_SEL, %ebx
 	movl %ebx, %ds
 	movl %ebx, %es
 	movl %ebx, %fs
@@ -309,5 +313,62 @@ _sysenter_top:
 
 4:	.ascii "utcb=%#lx wasn't valid at all (to=%#lx, from=%#lx, timeouts=%#lx)"
 	.byte 10, 0
+
+	.align 16, 0
+_sysenter_lipc_fast:
+	# input registers:
+	#   %ebp = caller %esp, %eax = to, %ecx = timeouts,
+	#   %edx = fromspec, %esi = mr0, %edi = caller UTCB
+	#   ... also, (%ebp) and 4(%ebp) are MR1 and MR2 resp.
+	#
+	# stash pass-through %esp, %edi regs first.
+	movl current_thread, %ebx
+	movl %edi, THREAD_CTX_OFF+12(%ebx)
+	movl %ebp, THREAD_CTX_OFF+60(%ebx)
+	# call sys_lipc().
+	#
+	# (the user-to-kernel transfer, here, is as valid as the sysenter stub
+	# can guarantee. however, if the caller's stack broke in between, we're
+	# screwed. TODO: set a catch_pf()-alike flag to indicate that a fault
+	# in ring 0 isn't the kernel breaking, just userspace behaving badly.)
+	leal 0x10000000(%ebp), %ebp	# transfer to kernel segment
+	pushl 4(%ebp)		# MR2
+	pushl (%ebp)		# MR1
+	pushl %esi		# MR0 (the message tag)
+	leal 0x10000000(%edi), %esi
+	pushl %esi		# caller UTCB in kernel space
+	# pass to, fromspec, timeouts as-is
+	orb $0x10, THREAD_FLAGS_OFF(%ebx)	# set TF_SYSCALL
+	call sys_lipc		# OUT %eax=from (retval)
+
+	# we get here because either Lipc's fallback to Ipc returned
+	# immediately, or if Lipc's send-half failed or timed out immediately.
+	# otherwise sys_lipc() switches to a different thread or enters the
+	# scheduler.
+	andb $0xef, THREAD_FLAGS_OFF(%ebx)	# clear TF_SYSCALL
+
+	# check for and process interrupts that occurred while IRQ processing
+	# was soft disabled.
+10:	movzbl kernel_irq_deferred, %ecx
+	test %cl, %cl
+	jz 11f
+	call int_latent
+	jmp 10b
+
+	# now test for a pending preemption & handle it like the C part would.
+11:	movzbl kernel_preempt_pending, %ecx
+	test %cl, %cl
+	jnz 12f		# return_from_exn() path
+	# TODO: check latent interrupts, preemption, etc.
+	sti
+	movl %ebp, %ecx		# OUT caller %esp
+	movl THREAD_CTX_OFF+48(%ebx), %edx	# OUT caller %eip
+	# load MR0, MR1, MR2 from visible UTCB
+	movl 8(%esi), %ebp	# OUT MR2
+	movl 4(%esi), %ebx	# OUT MR1
+	movl (%esi), %esi	# OUT MR0
+	jmp 13b			# sysexit from the Ipc fastpath
+
+12:	jmp return_from_exn
 
 #endif

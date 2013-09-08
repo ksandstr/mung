@@ -87,11 +87,12 @@ void setup_idt(int code_seg, int max_irq)
 	 */
 	if(!USE_SYSENTER) {
 		/* syscall ISRs; 0x80 .. 0x8f */
+		EXN_GATE(ints, code_sel, 0x8c, lipc_sc);	/* Lipc */
 		EXN_GATE(ints, code_sel, 0x8d, exregs_sc);	/* ExchangeRegisters */
 		EXN_GATE(ints, code_sel, 0x8e, memctl_sc);	/* MemoryControl */
 		EXN_GATE(ints, code_sel, 0x8f, basic_sc);	/* basic syscall */
 		/* (permit access to defined syscall interrupts for user code.) */
-		for(int i=0x8d; i <= 0x8f; i++) ints[i].type_attr |= 3 << 5;
+		for(int i=0x8c; i <= 0x8f; i++) ints[i].type_attr |= 3 << 5;
 	}
 
 	struct {

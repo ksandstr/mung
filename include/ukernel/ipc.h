@@ -62,8 +62,23 @@ extern SYSCALL L4_Word_t sys_ipc(
 	L4_ThreadId_t to,
 	L4_ThreadId_t fromspec,
 	L4_Word_t timeouts,
-	void *utcb,
+	void *utcb,		/* caller's UTCB in kernel space */
 	L4_Word_t mr0);
+
+/* glueless sys_lipc(). called either from _sysenter_top directly, or from a
+ * glue routine. the entry contract is rather complicated; see glue_lipc() for
+ * details.
+ *
+ * returns whatever goes in the platform return value register if Lipc's
+ * conditions aren't met and the wrap-around Ipc operation returns to caller
+ * immediately; or if Lipc's send-half times out or errors immediately.
+ */
+extern SYSCALL L4_Word_t sys_lipc(
+	L4_ThreadId_t to,
+	L4_ThreadId_t fromspec,
+	L4_Word_t timeouts,
+	void *utcb,		/* caller's UTCB in kernel space (unverified) */
+	L4_Word_t mr0, L4_Word_t mr1, L4_Word_t mr2);
 
 /* perform active IPC receive, or put @t into passive receive.
  *

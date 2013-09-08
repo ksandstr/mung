@@ -81,6 +81,10 @@ static inline struct thread *get_current_thread(void) {
  */
 extern NORETURN void switch_thread_u2u(struct thread *next);
 
+/* exported for task switching in sys_lipc(). */
+extern void leaving_thread(struct thread *from);
+extern void entering_thread(struct thread *next);
+
 /* returns clock value that fits thread->wakeup_time */
 extern uint64_t wakeup_at(L4_Time_t period);
 

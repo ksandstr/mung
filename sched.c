@@ -268,7 +268,7 @@ static uint64_t next_preempt_at(
 
 
 /* dock a thread's quantum. not called for context switch on self-deletion. */
-static void leaving_thread(struct thread *self)
+void leaving_thread(struct thread *self)
 {
 	assert(self->status != TS_RUNNING);
 
@@ -279,7 +279,7 @@ static void leaving_thread(struct thread *self)
 
 
 /* set preemption parameters, current_thread */
-static void entering_thread(struct thread *next)
+void entering_thread(struct thread *next)
 {
 	assert(hook_empty(&next->post_exn_call));
 

@@ -12,11 +12,13 @@
 #include <ukernel/syscall.h>
 #include <ukernel/thread.h>
 #include <ukernel/cpu.h>
+#include <ukernel/util.h>
 #include <ukernel/kip.h>
 #include <ukernel/config.h>
 
 
 void *kip_mem = NULL;
+size_t lipc_epilog_offset;
 
 #ifdef CONFIG_X86_SYSENTER
 struct sysexit_offs sysexit_epilogs;
@@ -157,6 +159,108 @@ static int make_systemclock_stub(void *start)
 }
 
 
+static void make_lipc_stub(
+	void *start, int *len_p, int ipc_offset, bool use_sysenter)
+{
+	int p = 0;
+
+	void *kip_start = (void *)((L4_Word_t)start & ~0xffful);
+	uint8_t *mem = start;
+	/* prelude: combine masks into %ebp to check if Lipc is applicable. */
+	static const uint8_t prelude[] = {
+		0x89, 0xc5,			/* movl %eax, %ebp */
+		0x83, 0xe5, 0x3f,	/* andl $0x3f, %ebp */
+		0x31, 0xdb,			/* xorl %ebx, %ebx */
+		0x85, 0xd2,			/* test %edx, %edx */
+		0x0f, 0x94, 0xc3,	/* sete %bl */
+		0x09, 0xdd,			/* orl %ebx, %ebp */
+		0x89, 0xf3,			/* movl %esi, %ebx */
+		0x81, 0xe3, 0xc0, 0xff, 0x00, 0x00,		/* andl $0xffc0, %ebx */
+		0x09, 0xdd,			/* orl %ebx, %ebp */
+		0x89, 0xcb,			/* movl %ecx, %ebx */
+		0x81, 0xe3, 0xff, 0xff, 0x00, 0x00,		/* andl $0xffff, %ebx */
+		0x09, 0xdd,			/* orl %ebx, %ebp */
+		0x85, 0xed,			/* test %ebp, %ebp */
+	};
+	for(int i=0; i < NUM_ELEMENTS(prelude); i++) mem[p++] = prelude[i];
+
+	int pos = (void *)&mem[p] - kip_start;
+	mem[p++] = 0x0f;		/* jne rel32 (the Ipc stub) */
+	mem[p++] = 0x85;
+	/* as for me, I hate the Intel manuals' explanation of what the offset is
+	 * relative to. apparently the "current value of EIP" is "address of jump
+	 * insn + its length".
+	 */
+	*(int32_t *)&mem[p] = ipc_offset - pos - 6;
+	p += 4;
+	mem[p++] = 0x8b;		/* movl -0x38(%eax), %ebx */
+	mem[p++] = 0x58;
+	mem[p++] = 0xc8;
+	mem[p++] = 0x3b;		/* cmpl -0x38(%edi), %ebx */
+	mem[p++] = 0x5f;
+	mem[p++] = 0xc8;
+	pos = (void *)&mem[p] - kip_start;
+	mem[p++] = 0x0f;		/* jne rel32 (the Ipc stub) */
+	mem[p++] = 0x85;
+	*(int32_t *)&mem[p] = ipc_offset - pos - 6;
+	p += 4;
+
+	if(USE_SYSENTER && use_sysenter) {
+		/* the SYSENTER path. the kernel synthesizes an %eip for us (into one
+		 * of the sysexit epilogs for Ipc/Lipc), but %esp must be passed in a
+		 * register; this'll be %ebp. further, %ebx carries the syscall
+		 * number. so the simpler things the INT option does aren't applicable
+		 * verbatim.
+		 *
+		 * instead we'll push MR1 and MR2 into the stack. _sysenter_top will
+		 * grab them using kernel segment games, and something will pop them
+		 * before kernel exit.
+		 */
+		static const uint8_t sysenter_lipc_tail[] = {
+			0xb3, 0x02,			/* movb $0x2, %bl */
+			0xff, 0x77, 0x08,	/* pushl 0x8(%edi) */
+			0xff, 0x77, 0x04,	/* pushl 0x4(%edi) */
+			0x89, 0xe5,			/* movl %esp, %ebp */
+			0x0f, 0x34,			/* sysenter */
+		};
+		memcpy(mem + p, sysenter_lipc_tail, NUM_ELEMENTS(sysenter_lipc_tail));
+		p += NUM_ELEMENTS(sysenter_lipc_tail);
+	} else {
+		/* the int $0x8c path. pass MR1, MR2 in %ebx, %ebp resp. */
+		static const uint8_t rest[] = {
+			0x8b, 0x5f, 0x04,	/* movl 0x4(%edi), %ebx */
+			0x8b, 0x6f, 0x08,	/* movl 0x8(%edi), %ebp */
+			0xcd, 0x8c,			/* int $0x8c	[Lipc] */
+		};
+		memcpy(mem + p, rest, NUM_ELEMENTS(rest));
+		p += NUM_ELEMENTS(rest);
+	}
+
+	*len_p = p;
+}
+
+
+static int make_lipc_epilog(uint8_t *mem)
+{
+	static const uint8_t code[] = {
+		0x66, 0x83, 0xfe, 0x02,	/* cmp $0x2, %esi */
+		0x7e, 0x17,				/* jle [ret position] */
+		0x56,					/* pushl %esi */
+		0x83, 0xe6, 0x3f,		/* andl $0x3f, %esi */
+		0xba, 0x02, 0x00, 0x00, 0x00,	/* movl $0x2, %edx */
+		0x8b, 0x4c, 0x90, 0x04,	/* movl 4(%eax, %edx, 4), %ecx */
+		0x89, 0x4c, 0x97, 0x04,	/* movl %ecx, 4(%edi, %edx, 4) */
+		0x42,					/* inc %edx */
+		0x39, 0xd6,				/* cmp %edx, %esi */
+		0x75, 0xf3,				/* jne [load-ecx mov] */
+		0x5e,					/* popl %esi */
+		0xc3,					/* ret */
+	};
+	memcpy(mem, code, NUM_ELEMENTS(code));
+	return NUM_ELEMENTS(code);
+}
+
+
 /* compose a 32-bit little-endian kernel interface page. */
 void make_kip(
 	void *mem,
@@ -255,12 +359,12 @@ void make_kip(
 	} syscalls[] = {
 		/* not included:
 		 * SC_SYSTEMCLOCK, implemented as a soft syscall.
+		 * SC_LIPC, gets a special stub.
 		 *
 		 * also, in non-sysenter mode SC_EXREGS and SC_MEMCTL have dedicated
 		 * interrupt vectors.
 		 */
 		{ SC_IPC, 0xe0 },
-		{ SC_LIPC, 0xe4 },
 		{ SC_UNMAP, 0xe8 },
 		{ SC_THREADSWITCH, 0xf4, true },
 		{ SC_EXREGS, 0xec, true },
@@ -271,7 +375,7 @@ void make_kip(
 		{ SC_PROCESSORCONTROL, 0xd8 },
 	};
 	const int num_syscalls = sizeof(syscalls) / sizeof(syscalls[0]);
-	int kip_pos = 0x100;
+	int kip_pos = 0x100, ipc_pos = kip_pos;
 	if(USE_SYSENTER && cpu_has_sysenter()) {
 		printf("using SYSENTER/SYSEXIT for syscalls\n");
 		/* FIXME: move this into cpu.c or somewhere; it should run for each
@@ -312,8 +416,14 @@ void make_kip(
 					break;
 			}
 
-			kip_pos += (len + 15) & ~15;
+			kip_pos = (kip_pos + len + 15) & ~15;
 		}
+		/* Lipc */
+		kip_pos = (kip_pos + 63) & ~63;
+		int len = 0;
+		make_lipc_stub(mem + kip_pos, &len, ipc_pos, true);
+		*(L4_Word_t *)(mem + 0xe4) = kip_pos;
+		kip_pos += len;
 	} else {
 		/* syscalls via software interrupt, like it's still 1994 */
 		for(int i=0; i < num_syscalls; i++) {
@@ -330,11 +440,20 @@ void make_kip(
 		/* MemoryControl */
 		len = make_int_sc_stub(mem + kip_pos, 0x8e);
 		*(L4_Word_t *)(mem + 0xdc) = kip_pos;
-		kip_pos += (len + 15) & ~15;
+		kip_pos = (kip_pos + len + 63) & ~63;
+		/* Lipc */
+		make_lipc_stub(mem + kip_pos, &len, ipc_pos, false);
+		*(L4_Word_t *)(mem + 0xe4) = kip_pos;
+		kip_pos += len;
 	}
+	/* Lipc epilogue (same regardless of SYSEXIT usage; no bump for
+	 * cacheline!)
+	 */
+	int len = make_lipc_epilog(mem + kip_pos);
+	lipc_epilog_offset = kip_pos;
+	kip_pos = (kip_pos + len + 63) & ~63;
 	/* SystemClock (pure vsyscall) */
-	kip_pos += 63; kip_pos &= ~63;
-	int len = make_systemclock_stub(mem + kip_pos);
+	len = make_systemclock_stub(mem + kip_pos);
 	*(L4_Word_t *)(mem + 0xf0) = kip_pos;
 	kip_pos += (len + 63) & ~63;
 

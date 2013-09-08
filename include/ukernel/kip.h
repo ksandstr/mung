@@ -13,6 +13,7 @@ struct sysexit_offs {
 
 
 extern void *kip_mem;
+extern size_t lipc_epilog_offset;	/* offset for return-through-Lipc in KIP */
 extern struct sysexit_offs sysexit_epilogs;
 
 

@@ -406,6 +406,15 @@ void isr_exn_memctl_sc_bottom(struct x86_exregs *regs)
 }
 
 
+void isr_exn_lipc_sc_bottom(struct x86_exregs *regs)
+{
+	assert(x86_irq_is_enabled());
+	/* FIXME: use glue_lipc() instead */
+	glue_ipc(regs);
+	return_from_exn();
+}
+
+
 #ifdef CONFIG_X86_SYSENTER
 /* NOTE: the sysenter top half is a good candidate for a rewrite in assembly.
  * it'd combine the functions of both with sys_*() functions that take the
