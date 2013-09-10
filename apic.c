@@ -140,14 +140,27 @@ static void ioapic_mask_irq(int irq)
 }
 
 
-static void ioapic_unmask_irq(int irq)
+static void ioapic_unmask_irq(int irq, bool act_high, bool level_trig)
 {
 	struct ioapic_info *ioa = &global_ioapics[irq / 24];
 	int vec = irq % 24;
 
 	uint32_t ctl = ioapic_read(ioa, IOREDTBL(vec) + 0);
-	ctl &= ~((1 << 16) | 0xff);
-	ctl |= 0x20 + irq;
+	printf("old ctl for irq%d = %#x\n", irq, ctl);
+
+	int trig = level_trig ? 1 : 0, pol = act_high ? 0 : 1;
+
+	/* bit 16 = interrupt mask bit.
+	 *     15 = trigger mode (0 = edge, 1 = level)
+	 *     13 = pin polarity (0 = active high, 1 = active low)
+	 *     7..0 = interrupt vector (0x10..0xff)
+	 *
+	 * other fields select fixed (regular) delivery to a physical LAPIC (CPU
+	 * 0, since mung is still not a SMP kernel).
+	 */
+	ctl &= ~((1 << 16) | (!pol << 13) | (!trig << 15) | 0xff);
+	ctl |= (pol << 13) | (trig << 15) | (0x20 + irq);
+	printf("ctl' for irq%d = %#x\n", irq, ctl);
 	ioapic_write(ioa, IOREDTBL(vec) + 0, ctl);
 }
 
@@ -334,7 +347,23 @@ static COLD void lapic_init(void)
 	printf("LAPIC_id=%u, LAPIC_ver=%#08x\n", lapic_id, lapic_ver);
 
 	uint32_t tpr = mm_inl(apic->base_addr + APIC_TPR);
-	printf("  TPR=%#08x\n", tpr);
+	printf("  TPR=%#08x", tpr);
+
+	uint32_t sivr = mm_inl(apic->base_addr + APIC_SIVR);
+	printf("  SIVR=%#08x\n", sivr);
+
+#if 0
+	printf("  LVT: timer=%#08x, therm=%#08x, perf=%#08x, l0=%#08x, l1=%#08x\n",
+		mm_inl(apic->base_addr + APIC_LVT_TIMER),
+		mm_inl(apic->base_addr + APIC_LVT_THERM),
+		mm_inl(apic->base_addr + APIC_LVT_PERF),
+		mm_inl(apic->base_addr + APIC_LVT_LINT0),
+		mm_inl(apic->base_addr + APIC_LVT_LINT1));
+	printf("       error=%#08x\n", mm_inl(apic->base_addr + APIC_LVT_ERROR));
+#endif
+
+	/* enable local APIC. */
+	mm_orl(apic->base_addr + APIC_SIVR, 1 << 8);
 }
 
 

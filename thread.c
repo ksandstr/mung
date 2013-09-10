@@ -811,7 +811,11 @@ fail:
 
 
 #define int_disable(irq) (*global_pic.mask_irq)((irq))
-#define int_enable(irq) (*global_pic.unmask_irq)((irq))
+/* NOTE: "active high", "edge sensitive" is the default. there should be some
+ * ACPI shenanigans for recognizing legacy devices that instead do active-low
+ * signaling.
+ */
+#define int_enable(irq) (*global_pic.unmask_irq)((irq), true, false)
 
 
 static L4_Word_t interrupt_ctl(

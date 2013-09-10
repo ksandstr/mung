@@ -21,7 +21,7 @@ struct pic_ops
 {
 	void (*send_eoi)(int irq);
 	void (*mask_irq)(int irq);
-	void (*unmask_irq)(int irq);
+	void (*unmask_irq)(int irq, bool act_high, bool level_trig);
 };
 
 

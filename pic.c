@@ -81,8 +81,14 @@ void pic_mask_irq(int irq)
 }
 
 
-void pic_unmask_irq(int irq)
+/* NOTE: this completely ignores polarity. */
+void pic_unmask_irq(int irq, bool act_high, bool level_trig)
 {
+	if(!level_trig) {
+		printf("%s: ignoring request for edge-triggered irq%d\n",
+			__func__, irq);
+	}
+
 	if(irq >= 8) {
 		irq -= 8;
 		outb(IO_PIC2_DATA, inb(IO_PIC2_DATA) & ~(1 << irq));

@@ -559,7 +559,7 @@ void kmain(void *bigp, unsigned int magic)
 	x86_irq_disable();
 	setup_timer_ch0();
 	if(apic_enabled) ioapic_route_legacy_irq(0, 0x20);
-	(*global_pic.unmask_irq)(0);
+	else (*global_pic.unmask_irq)(0, false, false);	/* act-low, edge */
 	x86_irq_enable();
 
 	printf("entering kernel scheduler\n");
