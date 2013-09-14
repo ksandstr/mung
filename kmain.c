@@ -479,7 +479,8 @@ void kmain(void *bigp, unsigned int magic)
 	/* initialize KIP & vaguely related bits */
 	kip_mem = kcp_base;
 	assert(kcp_base == (void *)&kcp_copy[0]);
-	make_kip(kip_mem, resv_start & ~PAGE_MASK, resv_end | PAGE_MASK, max_irq);
+	make_kip(kip_mem, resv_start & ~PAGE_MASK, resv_end | PAGE_MASK, max_irq,
+		L4_TimePeriod(1000));
 	systemclock_p = kip_mem + PAGE_SIZE - sizeof(uint64_t);
 	*systemclock_p = 0;
 	global_timer_count = 0;

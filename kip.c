@@ -87,7 +87,12 @@ static void make_systemclock_stub(void *start, int *len_p)
 
 
 /* compose a 32-bit little-endian kernel interface page. */
-void make_kip(void *mem, L4_Word_t kern_start, L4_Word_t kern_end, int max_irq)
+void make_kip(
+	void *mem,
+	L4_Word_t kern_start,
+	L4_Word_t kern_end,
+	int max_irq,
+	L4_Time_t sched_prec)
 {
 	/* preserve memorydescs from the KCP, while adding two entries at the
 	 * front: the virtual address space, and the kernel's reserved slice
@@ -143,9 +148,11 @@ void make_kip(void *mem, L4_Word_t kern_start, L4_Word_t kern_end, int max_irq)
 	*(L4_Word_t *)(mem + 0xac) = 12; /* kipareainfo (one page) */
 	/* BootInfo (0xb8) is left unaltered, per spec */
 
-	/* ClockInfo: 1 ms clock resolution, 1 ms scheduler resolution */
+	/* ClockInfo: 1 ms clock resolution, scheduler resolution as given by
+	 * caller
+	 */
 	*(L4_Word_t *)(mem + 0xc0) =
-		(L4_Word_t)L4_TimePeriod(1000).raw << 16
+		(L4_Word_t)sched_prec.raw << 16
 		| (L4_Word_t)L4_TimePeriod(1000).raw;
 	/* ThreadInfo: UserBase 128, SystemBase max_irq + 1, full bits in
 	 * threadno
