@@ -153,9 +153,8 @@ static inline uint32_t x86_get_eflags(void) {
 	uint32_t output;
 	__asm__ __volatile__ (
 		"\tpushf\n"
-		"\tmovl (%%esp), %0\n"
-		"\taddl $4, %%esp\n"
-		: "=r" (output));
+		"\tpopl %0\n"
+		: "=g" (output));
 	return output;
 }
 
