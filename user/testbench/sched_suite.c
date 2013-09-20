@@ -5,6 +5,7 @@
 #include <assert.h>
 #include <ccan/list/list.h>
 #include <ccan/compiler/compiler.h>
+#include <ccan/darray/darray.h>
 
 #include <ukernel/util.h>
 
@@ -182,6 +183,120 @@ START_TEST(range_errors)
 		L4_Word_t ec = L4_ErrorCode();
 		if(!ok(ec == 2, "code is ``invalid thread''")) diag("ec=%#lx", ec);
 	skip_end;
+}
+END_TEST
+
+
+/* simple ReadPrecision (SystemClock latency) test. */
+START_TEST(kip_sysclock_latency)
+{
+	plan_tests(1);
+
+	const int n_samples = 64;
+	L4_KernelInterfacePage_t *kip = L4_GetKernelInterface();
+	const L4_Time_t readprec = { .raw = kip->ClockInfo.X.ReadPrecision };
+	unsigned readprec_us = L4_PeriodUs_NP(readprec);
+	diag("readprec=%u µs", readprec_us);
+
+	L4_Clock_t samples[n_samples], first = L4_SystemClock();
+	for(int i=0; i < n_samples; i++) {
+		samples[i] = L4_SystemClock();
+	}
+
+	int64_t max_us = 0;
+	L4_Clock_t prev = first;
+	for(int i=0; i < n_samples; i++) {
+		int64_t lat = samples[i].raw - prev.raw;
+		if(lat < 0 || lat > readprec_us) {
+			diag("sample %d: lat=%u µs", i, (unsigned)lat);
+		}
+		max_us = MAX(int64_t, max_us, lat);
+		prev = samples[i];
+	}
+	if(!ok1(max_us <= readprec_us)) {
+		diag("max_us=%u µs", (unsigned)max_us);
+	}
+}
+END_TEST
+
+
+/* ReadPrecision is the _minimal_ difference that SystemClock can indicate.
+ * ensure that this is the case.
+ */
+START_TEST(kip_sysclock_step)
+{
+	plan_tests(1);
+
+	const int test_ms = 5;		/* spins for this long. */
+	L4_KernelInterfacePage_t *kip = L4_GetKernelInterface();
+	const L4_Time_t readprec = { .raw = kip->ClockInfo.X.ReadPrecision };
+	unsigned readprec_us = L4_PeriodUs_NP(readprec);
+	diag("readprec=%u µs", readprec_us);
+
+	/* save suspiciously low differences in "diffs" for reporting. */
+	darray(int64_t) diffs = darray_new();
+	darray_make_room(diffs, 256);
+	L4_Clock_t prev = L4_SystemClock(), start = prev;
+	do {
+		L4_Clock_t sample = L4_SystemClock();
+		int64_t d = sample.raw - prev.raw;
+		if(d > 0) {
+			if(d < readprec_us) darray_push(diffs, d);
+			prev = sample;
+		}
+	} while(prev.raw - start.raw < test_ms * 1000);
+
+	int64_t min_diff = L4_SystemClock().raw - start.raw + 1, *d;
+	darray_foreach(d, diffs) {
+		assert(*d < readprec_us);
+		diag("d=%u µs < readprec", (unsigned)*d);
+		min_diff = MIN(int64_t, *d, min_diff);
+	}
+	if(!ok1(min_diff >= readprec_us)) {
+		diag("min_diff=%u µs", (unsigned)min_diff);
+	}
+
+	darray_free(diffs);
+}
+END_TEST
+
+
+/* test that returning from a L4_Sleep() (i.e. no send phase, receive from
+ * self with timeout) happens within +-SchedulePrecision of the specified
+ * time.
+ */
+START_LOOP_TEST(kip_schedprec_wait, iter, 0, 1)
+{
+	plan_tests(1);
+	const bool use_timept = CHECK_FLAG(iter, 1);
+	diag("use_timept=%s", btos(use_timept));
+
+	L4_KernelInterfacePage_t *kip = L4_GetKernelInterface();
+	const L4_Time_t schedprec = { .raw = kip->ClockInfo.X.SchedulePrecision };
+	unsigned schedprec_us = L4_PeriodUs_NP(schedprec);
+	diag("schedprec=%u µs", schedprec_us);
+
+	L4_Clock_t start = L4_SystemClock();
+	unsigned delay_us = schedprec_us * 3;
+	L4_Time_t timeout;
+	if(use_timept) {
+		L4_Clock_t to_at = { .raw = start.raw + delay_us };
+		timeout = L4_TimePoint2_NP(start, to_at);
+	} else {
+		timeout = L4_TimePeriod(delay_us);
+	}
+	L4_Sleep(timeout);
+	L4_Clock_t end = L4_SystemClock();
+
+	int64_t diff = end.raw - start.raw;
+	if(diff < 0) diff = -diff;
+	fail_if(diff <= delay_us - schedprec_us,
+		"didn't sleep for at least %u µs", delay_us - schedprec_us);
+	int64_t jitter = diff - delay_us;
+	if(jitter < 0) jitter = -jitter;
+	if(!ok1(jitter <= schedprec_us)) {
+		diag("jitter=%u µs", (unsigned)jitter);
+	}
 }
 END_TEST
 
@@ -923,6 +1038,18 @@ Suite *sched_suite(void)
 	tcase_add_test(api_case, syscall_access);
 	tcase_add_test(api_case, range_errors);
 	suite_add_tcase(s, api_case);
+
+	{
+		TCase *tc = tcase_create("kip");
+		tcase_add_test(tc, kip_sysclock_latency);
+		tcase_add_test(tc, kip_sysclock_step);
+		/* TODO: add more schedprec tests:
+		 *   - one for preemption by a higher-priority thread's wait ending
+		 *   - another for timeslice exhaustion
+		 */
+		tcase_add_test(tc, kip_schedprec_wait);
+		suite_add_tcase(s, tc);
+	}
 
 	TCase *ipc_case = tcase_create("ipc");
 	tcase_set_fork(ipc_case, false);
