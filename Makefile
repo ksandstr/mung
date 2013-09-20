@@ -54,7 +54,7 @@ ia32-kernel: linker.ld loader.o kmain.o kip.o cpu.o heap.o thread.o kth.o \
 		acpi.o gdt.o idt.o irq.o pic.o apic.o isr.o timer.o context.o \
 		dlmalloc.o ccan-htable.o ccan-list.o
 	@echo "  LD $@"
-	@ld -T linker.ld -o $@ $(filter %.o,$^) \
+	@$(LD) -T linker.ld -o $@ $(filter %.o,$^) \
 		-L lib -lukernel_util \
 		$(shell gcc $(CFLAGS) -print-libgcc-file-name)
 
