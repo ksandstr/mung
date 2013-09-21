@@ -261,41 +261,84 @@ START_TEST(kip_sysclock_step)
 END_TEST
 
 
+static void next_tick(void)
+{
+	L4_Clock_t start = L4_SystemClock();
+	do {
+		/* sit & spin */
+	} while(start.raw == L4_SystemClock().raw);
+}
+
+
 /* test that returning from a L4_Sleep() (i.e. no send phase, receive from
  * self with timeout) happens within +-SchedulePrecision of the specified
- * time.
+ * time, regardless of where the sleep starts.
+ *
+ * TODO: there should be another loop in this test besides the one that sleeps
+ * for a constant time; that loop should vary the length of the sleep period.
+ * TODO: should also measure where between end..end+readprecision the wait
+ * ended using usleep(). (that mechanism seems broken right now though.)
+ *
+ * the loop's time step is 1/60th of SchedPrecision, or 1 µs if it's less than
+ * 60 µs.
  */
 START_LOOP_TEST(kip_schedprec_wait, iter, 0, 1)
 {
 	plan_tests(1);
+	const int n_slices = 60;
 	const bool use_timept = CHECK_FLAG(iter, 1);
-	diag("use_timept=%s", btos(use_timept));
+	diag("n_slices=%d, use_timept=%s", n_slices, btos(use_timept));
 
 	L4_KernelInterfacePage_t *kip = L4_GetKernelInterface();
 	const L4_Time_t schedprec = { .raw = kip->ClockInfo.X.SchedulePrecision };
-	unsigned schedprec_us = L4_PeriodUs_NP(schedprec);
-	diag("schedprec=%u µs", schedprec_us);
+	unsigned schedprec_us = L4_PeriodUs_NP(schedprec),
+		slice_us = schedprec_us >= n_slices ? schedprec_us / n_slices : 1;
+	diag("schedprec=%u µs, slice=%u µs", schedprec_us, slice_us);
 
-	L4_Clock_t start = L4_SystemClock();
-	unsigned delay_us = schedprec_us * 3;
-	L4_Time_t timeout;
-	if(use_timept) {
-		L4_Clock_t to_at = { .raw = start.raw + delay_us };
-		timeout = L4_TimePoint2_NP(start, to_at);
-	} else {
-		timeout = L4_TimePeriod(delay_us);
+	/* part 1: varying the point where the sleep starts, with respect to
+	 * start-of-tick, where available, or just any random spot if it's not a
+	 * ticky clock.
+	 */
+	int64_t jitters[n_slices];
+	for(int s=0; s < n_slices; s++) {
+		next_tick();
+		usleep(s * slice_us);
+
+		/* measure */
+		L4_Clock_t start = L4_SystemClock();
+		unsigned delay_us = schedprec_us * 3;
+		L4_Time_t timeout;
+		if(use_timept) {
+			L4_Clock_t to_at = { .raw = start.raw + delay_us };
+			timeout = L4_TimePoint2_NP(start, to_at);
+		} else {
+			timeout = L4_TimePeriod(delay_us);
+		}
+		L4_Sleep(timeout);
+		L4_Clock_t end = L4_SystemClock();
+
+		/* store result */
+		int64_t diff = end.raw - start.raw;
+		if(diff < 0) diff = -diff;
+		fail_if(diff <= delay_us - schedprec_us,
+			"didn't sleep for at least %u µs", delay_us - schedprec_us);
+		int64_t jitter = diff - delay_us;
+		if(jitter < 0) jitter = -jitter;
+
+		jitters[s] = jitter;
 	}
-	L4_Sleep(timeout);
-	L4_Clock_t end = L4_SystemClock();
 
-	int64_t diff = end.raw - start.raw;
-	if(diff < 0) diff = -diff;
-	fail_if(diff <= delay_us - schedprec_us,
-		"didn't sleep for at least %u µs", delay_us - schedprec_us);
-	int64_t jitter = diff - delay_us;
-	if(jitter < 0) jitter = -jitter;
-	if(!ok1(jitter <= schedprec_us)) {
-		diag("jitter=%u µs", (unsigned)jitter);
+	/* result */
+	int64_t max_jitter_us = 0;
+	for(int i=0; i < n_slices; i++) {
+		int64_t jitter = jitters[i];
+		max_jitter_us = MAX(int64_t, jitter, max_jitter_us);
+		if(jitter > schedprec_us && jitter < max_jitter_us) {
+			diag("loop %d: jitter=%u µs", i, (unsigned)jitter);
+		}
+	}
+	if(!ok1(max_jitter_us <= schedprec_us)) {
+		diag("max_jitter=%u µs", (unsigned)max_jitter_us);
 	}
 }
 END_TEST
