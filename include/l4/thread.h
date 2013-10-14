@@ -74,7 +74,7 @@ static inline bool L4_SameThreads(L4_ThreadId_t a, L4_ThreadId_t b) {
 
 static inline L4_ThreadId_t L4_MyGlobalId(void) {
 	void *utcb = __L4_Get_UtcbAddress();
-	return (L4_ThreadId_t){ .raw = L4_VREG(utcb, L4_TCR_MYGLOBALID) };
+	return (L4_ThreadId_t){ .raw = L4_VREG_VOLATILE(utcb, L4_TCR_MYGLOBALID) };
 }
 
 
@@ -98,66 +98,66 @@ static inline L4_ThreadId_t L4_MyLocalId(void) {
 
 static inline L4_Word_t L4_UserDefinedHandle(void) {
 	void *utcb = __L4_Get_UtcbAddress();
-	return L4_VREG(utcb, L4_TCR_USERDEFINEDHANDLE);
+	return L4_VREG_VOLATILE(utcb, L4_TCR_USERDEFINEDHANDLE);
 }
 
 
 static inline void L4_Set_UserDefinedHandle(L4_Word_t value) {
 	void *utcb = __L4_Get_UtcbAddress();
-	L4_VREG(utcb, L4_TCR_USERDEFINEDHANDLE) = value;
+	L4_VREG_VOLATILE(utcb, L4_TCR_USERDEFINEDHANDLE) = value;
 }
 
 
 static inline L4_ThreadId_t L4_Pager(void) {
 	void *utcb = __L4_Get_UtcbAddress();
-	return (L4_ThreadId_t){ .raw = L4_VREG(utcb, L4_TCR_PAGER) };
+	return (L4_ThreadId_t){ .raw = L4_VREG_VOLATILE(utcb, L4_TCR_PAGER) };
 }
 
 static inline void L4_Set_Pager(L4_ThreadId_t pg) {
 	void *utcb = __L4_Get_UtcbAddress();
-	L4_VREG(utcb, L4_TCR_PAGER) = pg.raw;
+	L4_VREG_VOLATILE(utcb, L4_TCR_PAGER) = pg.raw;
 }
 
 static inline L4_Word_t L4_XferTimeouts(void) {
 	void *utcb = __L4_Get_UtcbAddress();
-	return L4_VREG(utcb, L4_TCR_XFERTIMEOUTS);
+	return L4_VREG_VOLATILE(utcb, L4_TCR_XFERTIMEOUTS);
 }
 
 static inline void L4_Set_XferTimeouts(L4_Word_t newval) {
 	void *utcb = __L4_Get_UtcbAddress();
-	L4_VREG(utcb, L4_TCR_XFERTIMEOUTS) = newval;
+	L4_VREG_VOLATILE(utcb, L4_TCR_XFERTIMEOUTS) = newval;
 }
 
 static inline void L4_Set_VirtualSender(L4_ThreadId_t id) {
 	void *utcb = __L4_Get_UtcbAddress();
-	L4_VREG(utcb, L4_TCR_VA_SENDER) = id.raw;
+	L4_VREG_VOLATILE(utcb, L4_TCR_VA_SENDER) = id.raw;
 }
 
 static inline L4_ThreadId_t L4_ActualSender(void) {
 	void *utcb = __L4_Get_UtcbAddress();
-	return (L4_ThreadId_t){ .raw = L4_VREG(utcb, L4_TCR_VA_SENDER) };
+	return (L4_ThreadId_t){ .raw = L4_VREG_VOLATILE(utcb, L4_TCR_VA_SENDER) };
 }
 
 static inline L4_ThreadId_t L4_IntendedReceiver(void) {
 	void *utcb = __L4_Get_UtcbAddress();
-	return (L4_ThreadId_t){ .raw = L4_VREG(utcb, L4_TCR_INTENDEDRECEIVER) };
+	return (L4_ThreadId_t){ .raw = L4_VREG_VOLATILE(utcb, L4_TCR_INTENDEDRECEIVER) };
 }
 
 
 static inline L4_ThreadId_t L4_ExceptionHandler(void) {
 	void *utcb = __L4_Get_UtcbAddress();
-	return (L4_ThreadId_t){ .raw = L4_VREG(utcb, L4_TCR_EXCEPTIONHANDLER) };
+	return (L4_ThreadId_t){ .raw = L4_VREG_VOLATILE(utcb, L4_TCR_EXCEPTIONHANDLER) };
 }
 
 static inline void L4_Set_ExceptionHandler(L4_ThreadId_t pg) {
 	void *utcb = __L4_Get_UtcbAddress();
-	L4_VREG(utcb, L4_TCR_EXCEPTIONHANDLER) = pg.raw;
+	L4_VREG_VOLATILE(utcb, L4_TCR_EXCEPTIONHANDLER) = pg.raw;
 }
 
 
 static inline L4_Word_t L4_ErrorCode(void) {
 	void *utcb = __L4_Get_UtcbAddress();
-	return L4_VREG(utcb, L4_TCR_ERRORCODE);
+	return L4_VREG_VOLATILE(utcb, L4_TCR_ERRORCODE);
 }
 
 

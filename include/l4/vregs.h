@@ -25,6 +25,9 @@ static inline CONST_FUNCTION void *__L4_Get_UtcbAddress(void) {
  */
 #define L4_VREG(base, pos) (((L4_Word_t *)(base))[(pos)])
 
+/* userspace needs this to defeat the compiler. */
+#define L4_VREG_VOLATILE(base, pos) (((volatile L4_Word_t *)(base))[(pos)])
+
 
 /* names of TCRs and VRs in an UTCB segment, tied to word offsets. */
 
