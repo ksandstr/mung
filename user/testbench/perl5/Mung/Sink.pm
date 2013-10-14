@@ -2,6 +2,7 @@ package Mung::Sink;
 use Moose;
 use TryCatch;
 use List::Util qw/sum/;
+use List::MoreUtils qw/any/;
 
 use Mung::TestSuite;
 use Mung::TestCase;
@@ -213,13 +214,20 @@ sub close_tcase {
 }
 
 
+sub in_strs {
+	my ($haystack, $needle) = @_;
+	return any { $needle eq $_ } @$haystack;
+}
+
+
 sub bracket_line {
 	my $self = shift;
 	my $side = shift;	# begin | end
 	my $what = shift;	# suite | tcase | test
 
 	die "invalid bracket for ${side}_${what}"
-		unless $side ~~ [qw/begin end/] && $what ~~ [qw/suite tcase test/];
+		unless in_strs([qw/begin end/], $side)
+			&& in_strs([qw/suite tcase test/], $what);
 	my $method = "_${side}_${what}";
 	$self->$method(@_) if $self->can($method);
 }
