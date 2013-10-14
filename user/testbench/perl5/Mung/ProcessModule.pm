@@ -11,12 +11,15 @@ Mung::ProcessModule - module interface for receiving stdout from a shell command
 =head1 DESCRIPTION
 
 This implementation of Mung::Module launches a program, specified with the
-C<command> constructor parameter.
+C<command> constructor parameter. Environment variables can be given in
+C<env>.
 
 =cut
 
 
 has 'command' => ( is => 'ro', isa => 'Str', required => 1 );
+has 'env' => ( is => 'ro', isa => 'HashRef[Str]', required => 0,
+	default => sub { {} } );
 
 
 # private state
@@ -40,6 +43,10 @@ sub start_test {
 	} else {
 		delete $ENV{TESTBENCH_OPTS};
 	}
+
+	my $env = $self->env;
+	$ENV{$_} = $env->{$_} for keys %$env;
+
 	my $file = IO::File->new($self->command . " 2>/dev/null |");
 	$self->file($file);
 }
@@ -53,17 +60,22 @@ sub next_line {
 }
 
 
-# FIXME: this whacks all other subprocesses, too. probably not what we
-# actually want, but so far doesn't break shit too wildly either.
 sub close {
 	my $self = shift;
+	my %args = @_;
 
 	my $file = $self->file;
 	if($file) {
-		{
-			# don't drown yourself in the bathwater
-			local $SIG{INT} = 'IGNORE';
-			kill "INT", -getpgrp(0);
+		if($args{force}) {
+			# FIXME: this seems to whack other process group members too.
+			# probably not what we actually want, but so far doesn't break
+			# shit too wildly either (unless invoked from a test script, where
+			# it kills the make).
+			{
+				# don't drown yourself in the bathwater
+				local $SIG{INT} = 'IGNORE';
+				kill "INT", -getpgrp(0);
+			}
 		}
 		$file->close;
 		$self->file(undef);

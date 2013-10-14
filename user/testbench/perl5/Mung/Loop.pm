@@ -128,7 +128,7 @@ sub run {
 				. $exn->to_string . "\n");
 		}
 
-		$module->close;
+		$module->close(force => 1);
 	}
 	$sink->done;
 }
