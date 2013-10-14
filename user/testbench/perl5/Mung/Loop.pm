@@ -26,6 +26,8 @@ has 'module' => ( is => 'ro', does => 'Mung::Module', required => 1 );
 has 'sink' => ( is => 'ro', isa => 'Mung::Sink', required => 1 );
 has 'ctrl' => ( is => 'ro', isa => 'Mung::Ctrl', required => 1 );
 
+has 'test_args' => ( is => 'ro', isa => 'Maybe[ArrayRef]' );
+
 
 sub run {
 	my $self = shift;
@@ -38,17 +40,19 @@ sub run {
 	my $panic_restart_id;
 	for(;;) {
 		my $test_ids = $ctrl->next_tests || last;
+		my $test_args = $self->test_args || [];
 		if($test_ids eq 'ALL') {
 			# initial run, without restart. toss old plan.
 			$sink->reset;
-			$module->start_test(describe => 1);
+			$module->start_test(describe => 1, @$test_args);
 		} elsif($test_ids eq 'NEED_PLAN') {
 			# initial run, controller wants to run specific tests but has no plan.
 			# gather it and try again.
-			$module->start_test(describe => 1, run_only => ['@']);
+			$module->start_test(describe => 1, run_only => ['@'],
+				@$test_args);
 		} else {
 			die "expected arrayref" unless ref($test_ids) eq 'ARRAY';
-			$module->start_test(run_only => $test_ids);
+			$module->start_test(run_only => $test_ids, @$test_args);
 		}
 
 		my $ctl_seen = 0;
@@ -128,7 +132,7 @@ sub run {
 				. $exn->to_string . "\n");
 		}
 
-		$module->close(force => 1);
+		$module->close;
 	}
 	$sink->done;
 }
