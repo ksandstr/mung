@@ -740,9 +740,12 @@ static void fault_to_given_pager_fn(void *param UNUSED)
 	L4_Reply(sender);
 	diag("faulting to pager %lu:%lu", L4_ThreadNo(pg), L4_Version(pg));
 
-	L4_Fpage_t page = L4_FpageLog2((L4_Word_t)memory, 12);
+	L4_Fpage_t page = L4_Fpage((L4_Word_t)memory, mem_size);
 	L4_Set_Rights(&page, L4_FullyAccessible);
-	diag("flushing %#lx:%#lx", L4_Address(page), L4_Size(page));
+#if 0
+	diag("flushing %#lx:%#lx (fpage=%#lx)",
+		L4_Address(page), L4_Size(page), page.raw);
+#endif
 	L4_FlushFpage(page);
 	L4_ThreadId_t old_pager = L4_Pager();
 	L4_Set_Pager(pg);
@@ -757,15 +760,17 @@ static void fault_to_given_pager_fn(void *param UNUSED)
 START_TEST(halt_on_missing_pager)
 {
 	plan_tests(3);
+	L4_ThreadId_t self = L4_Myself();
+	diag("self=%lu:%lu", L4_ThreadNo(self), L4_Version(self));
 
 	/* base case: fault to this thread. */
 	L4_ThreadId_t oth = xstart_thread(&fault_to_given_pager_fn, NULL);
 	L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 1 }.raw);
-	L4_LoadMR(1, L4_Myself().raw);
+	L4_LoadMR(1, self.raw);
 	L4_MsgTag_t tag = L4_Call(oth);
 	fail_if(L4_IpcFailed(tag));
 	tag = L4_Receive_Timeout(oth, TEST_IPC_DELAY);
-	fail_if(L4_IpcFailed(tag), "ec=%#lx", L4_ErrorCode());
+	fail_if(L4_IpcFailed(tag), "didn't receive fault, ec=%#lx", L4_ErrorCode());
 	L4_Word_t faddr, fip;
 	L4_StoreMR(1, &faddr);
 	L4_StoreMR(2, &fip);
@@ -797,6 +802,7 @@ START_TEST(halt_on_missing_pager)
 	tag = L4_Call(oth);
 	fail_if(L4_IpcFailed(tag));
 	L4_ThreadSwitch(oth);
+	L4_Sleep(L4_TimePeriod(1000));
 	ok1(is_halted(oth));
 	kill_thread(oth);
 }
