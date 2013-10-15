@@ -40,6 +40,9 @@ struct cmd_opt {
 };
 
 
+typedef Suite *(*suite_ctor)(void);
+
+
 static size_t hash_forkserv_page(const void *key, void *priv);
 
 
@@ -622,22 +625,38 @@ int main(void)
 	L4_Set_PagerOf(get_mgr_tid(), forkserv_tid);
 	L4_Start(get_mgr_tid());
 
-	/* proper test suite */
-	static Suite *(* const suites[])(void) = {
-		&self_suite,	/* selftests */
+	const suite_ctor *suites;
+	int n_suites;
+	/* choose between the actual test suites, or the meta suite, which
+	 * produces various results to test both generation thereof and their
+	 * capture by the reporting script.
+	 */
+	if(cmd_opt(&opts, "meta") != NULL) {
+		static const suite_ctor meta_plan[] = {
+			&meta_suite,
+		};
+		suites = meta_plan;
+		n_suites = NUM_ELEMENTS(meta_plan);
+	} else {
+		/* actual microkernel test suite */
+		static const suite_ctor real_plan[] = {
+			&self_suite,	/* selftests */
 
-		/* microkernel tests */
-		&type_suite,
-		&thread_suite,
-		&x86_suite,
-		&interrupt_suite,
-		&space_suite,
-		&sched_suite,
-		&ipc_suite,
-		&string_suite,
-	};
+			/* microkernel tests */
+			&type_suite,
+			&thread_suite,
+			&x86_suite,
+			&interrupt_suite,
+			&space_suite,
+			&sched_suite,
+			&ipc_suite,
+			&string_suite,
+		};
+		suites = real_plan;
+		n_suites = NUM_ELEMENTS(real_plan);
+	}
 	SRunner *run = srunner_create(NULL);
-	for(int i=0; i < sizeof(suites) / sizeof(suites[0]); i++) {
+	for(int i=0; i < n_suites; i++) {
 		Suite *s = (*suites[i])();
 		srunner_add_suite(run, s);
 	}

@@ -152,6 +152,9 @@ extern struct Suite *type_suite(void);
 extern struct Suite *x86_suite(void);
 extern struct Suite *interrupt_suite(void);
 
+/* invoked specially. not included in the microkernel tests. */
+extern struct Suite *meta_suite(void);
+
 
 /* pre-formal tests */
 extern void threadctl_test(void);

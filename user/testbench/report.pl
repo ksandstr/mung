@@ -31,6 +31,7 @@ if($ENV{TEST_SLOWER}) {
 } elsif($ENV{TEST_SLOW}) {
 	push @roles, 'Mung::Restarting';
 }
+my $do_meta = $ENV{META} || 0;
 
 
 my $module = Mung::ProcessModule->new(command => './run.sh -display none');
@@ -39,7 +40,8 @@ my $ctrl = Mung::Ctrl->new(@ctrl_param, sink => $sink);
 $sink->on_complete_fn(sub { $ctrl->completed($_[0], $_[1]->iter); });
 
 apply_all_roles($sink, @roles) if @roles;
-my $loop = Mung::Loop->new(module => $module, sink => $sink, ctrl => $ctrl);
+my $loop = Mung::Loop->new(module => $module, sink => $sink, ctrl => $ctrl,
+	$do_meta ? (test_args => [ meta => 1 ]) : ());
 $loop->run;
 
 my $rept = Mung::TextReport->new;
