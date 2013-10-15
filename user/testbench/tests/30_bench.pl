@@ -65,20 +65,25 @@ sub parse_meta_suite {
 
 
 sub parse_point {
-	my $desc = lc(shift);
+	my $cap_desc = shift;
 
-	if($desc eq 'ok' || $desc eq 'not ok') {
-		# simple ok/notok.
-		return { ok => $desc ne 'not ok' };
-	} elsif($desc =~ /^\[/) {
+	if($cap_desc =~ /^\[/) {
 		# iterations, separated
 		my @iters;
-		while($desc =~ /\[(\d+):\s*([^\]]+)\]/g) {
+		while($cap_desc =~ /\[(\d+):\s*([^\]]+)\]/g) {
 			$iters[$1] = parse_point($2);
 		}
 		return \@iters;
+	}
+
+	my $orig = $cap_desc;
+	my $todo = ($cap_desc =~ s/\s+T//);	# sign of Todo-ness
+	my $desc = lc($cap_desc);
+	if($desc eq 'ok' || $desc eq 'not ok') {
+		# simple ok/notok.
+		return { ok => $desc ne 'not ok', todo => $todo };
 	} else {
-		print STDERR "warning: unrecognized point `$desc'\n";
+		print STDERR "warning: unrecognized point `$orig'\n";
 	}
 
 	return $desc;
@@ -139,11 +144,16 @@ subtest "test OKs" => sub {
 				my $n = $pt->number;
 				my $expect = $ann->{points}->[$n] // next;
 				$expect = ($expect->[$iter] // next) if ref($expect) eq 'ARRAY';
-				$expect = $expect->{ok} // next;
-				if($expect xor $pt->is_ok) {
-					my $e = btos($expect);
-					diag("test `" . $test->name . "' iter " . $iter
-						. " pt $n: expected $e, got " . btos($pt->is_ok));
+				my $ok = $expect->{ok};
+				if($expect->{todo} && ($ok xor $pt->is_actual_ok)
+					|| !$expect->{todo} && ($ok xor $pt->is_ok))
+				{
+					my $e = btos($ok);
+					my $todo = $expect->{todo} ? "TODO " : "";
+					diag("${todo}test `" . $test->name . "' iter $iter: "
+						. "expected " . btos($e)
+						. ", got " . btos($pt->is_actual_ok));
+					diag($pt->as_string);
 				} else {
 					$passed++;
 				}
@@ -155,5 +165,5 @@ subtest "test OKs" => sub {
 	}
 };
 
-# TODO: test for bailouts, TODOs, skips, assert failures, segfaults, and tests
+# TODO: test for bailouts, skips, assert failures, segfaults, and tests
 # taking too long.
