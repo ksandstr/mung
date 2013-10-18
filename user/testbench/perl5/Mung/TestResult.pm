@@ -31,7 +31,7 @@ has 'parser' => (
 	required => 1,
 	handles => [qw/passed failed actual_passed actual_ok actual_failed/,
 		qw/todo todo_passed todo_failed skipped tests_planned tests_run/,
-		qw/skip_all has_problems/]);
+		qw/skip_all has_problems is_good_plan/]);
 has 'test_log' => (is => 'ro', isa => 'ArrayRef[Str]');
 
 # FIXME: this is a nasty overload of ->results across the related Mung::Test

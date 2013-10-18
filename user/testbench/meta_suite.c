@@ -59,6 +59,34 @@ START_LOOP_TEST(todo_iter_points, iter, 0, 1)
 END_TEST
 
 
+START_TEST(skip_plan)
+{
+	plan_skip_all("nothing useful can be determined here.");
+}
+END_TEST
+
+
+START_TEST(no_plan)
+{
+	plan_no_plan();
+	ok1(true);		/* POINT 1: ok */
+	ok1(false);		/* POINT 2: not ok */
+}
+END_TEST
+
+
+START_TEST(late_plan)
+{
+	ok1(true);		/* POINT 1: ok */
+	ok1(false);		/* POINT 2: not ok */
+
+
+	ok1(true);		/* POINT 3: ok */
+	plan_tests(3);
+}
+END_TEST
+
+
 Suite *meta_suite(void)
 {
 	Suite *s = suite_create("meta");
@@ -69,6 +97,14 @@ Suite *meta_suite(void)
 		tcase_add_test(tc, iterated_test_points);
 		tcase_add_test(tc, todo_test_points);
 		tcase_add_test(tc, todo_iter_points);
+		suite_add_tcase(s, tc);
+	}
+
+	{
+		TCase *tc = tcase_create("plan");
+		tcase_add_test(tc, skip_plan);
+		tcase_add_test(tc, no_plan);
+		tcase_add_test(tc, late_plan);
 		suite_add_tcase(s, tc);
 	}
 

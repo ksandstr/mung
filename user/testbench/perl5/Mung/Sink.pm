@@ -141,7 +141,7 @@ sub _end_test {
 		$self->failed($self->failed + 1);
 	} else {
 		$self->_completed($self->test, $res);
-		if($res->tests_planned > $res->tests_run) {
+		if(!$res->is_good_plan && defined($res->tests_planned)) {
 			$self->print("planned " . $res->tests_planned
 				. " test(s), but executed only " . $res->tests_run . "\n");
 			$self->incorrect($self->incorrect + 1);

@@ -12,7 +12,7 @@ use Mung::Loop;
 
 use BufferOutput;
 
-use Test::More tests => 3;
+use Test::More tests => 4;
 
 # tests testbench's functions for producing TAP output. this confirms that all
 # the TAP primitives that're claimed, are also correctly passed by Loop and
@@ -165,5 +165,33 @@ subtest "test OKs" => sub {
 	}
 };
 
-# TODO: test for bailouts, skips, assert failures, segfaults, and tests
-# taking too long.
+# part 3: check various kinds of test plan (none, skip, late)
+subtest "test plans" => sub {
+	plan tests => 7;
+
+	my $tests = $sink->test_by_path;
+
+	my $no = $tests->{"meta:plan:no_plan"}
+		|| die "no_plan wasn't run";
+	my $res = $no->results->[0];
+	ok(!$res->tests_planned, "no_plan had no test plan");
+	ok(!$res->is_good_plan, "no_plan wasn't good");
+
+	my $skip = $tests->{"meta:plan:skip_plan"}
+		|| die "skip_plan wasn't run";
+	$res = $skip->results->[0];
+	ok($res->skip_all, "skip_plan skipped all tests");
+	ok(!$res->tests_planned, "skip_plan had no test plan");
+	ok($res->is_good_plan, "skip_plan was good");
+
+	my $late = $tests->{"meta:plan:late_plan"}
+		|| die "late_plan wasn't run";
+	$res = $late->results->[0];
+	ok($res->tests_planned == 3, "late_plan had 3 test points");
+	if(!ok($res->is_good_plan, "late_plan was good")) {
+		diag("tests_run = " . $res->tests_run);
+	}
+};
+
+# TODO: test for bailouts, assert failures, segfaults, and tests taking too
+# long.
