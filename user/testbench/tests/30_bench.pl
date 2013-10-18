@@ -12,7 +12,7 @@ use Mung::Loop;
 
 use BufferOutput;
 
-use Test::More tests => 4;
+use Test::More tests => 5;
 
 # tests testbench's functions for producing TAP output. this confirms that all
 # the TAP primitives that're claimed, are also correctly passed by Loop and
@@ -193,5 +193,28 @@ subtest "test plans" => sub {
 	}
 };
 
-# TODO: test for bailouts, assert failures, segfaults, and tests taking too
-# long.
+# part 4: test failure (bailout, assert fail, segfault)
+subtest "test fails" => sub {
+	plan tests => 12;
+
+	foreach my $suffix ("", "nf") {
+		foreach my $kind (qw/basic assert segv/) {
+			my $path = "meta:fail${suffix}:fail_$kind";
+			my $test = $sink->test_by_path->{$path};
+			SKIP: {
+				skip "fail_$kind wasn't executed (suffix '$suffix')", 2
+					unless $test;
+				my $res = $test->results->[0];
+
+				my $wantstatus = $kind ne 'segv' ? 'FAIL' : 'SEGV';
+				if(!ok($res->status eq $wantstatus, "$path failed properly")) {
+					diag("status is " . ($res->status // "(false)"));
+					diag("  (wanted $wantstatus)");
+				}
+				ok($res->fail_msg, "... fail_msg was captured");
+			}
+		}
+	}
+};
+
+# TODO: test for tests taking too long.

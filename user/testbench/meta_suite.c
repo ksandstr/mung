@@ -87,6 +87,44 @@ START_TEST(late_plan)
 END_TEST
 
 
+START_TEST(fail_basic)
+{
+	plan_tests(1);
+	fail_if(true, "going down!");
+}
+END_TEST
+
+
+START_TEST(fail_assert)
+{
+	plan_tests(1);
+	assert("ghost blowjob! woohoo" == NULL);
+}
+END_TEST
+
+
+START_TEST(fail_segv)
+{
+	plan_tests(1);
+
+	void *ptr = malloc(8192);
+	volatile uint8_t *fault = ptr + 0x40000000;
+	diag("faulting at %p", fault);
+	for(int i=0; i < 256; i++) fault[i] = 123 ^ i;
+
+	fail("faulting failed.");
+}
+END_TEST
+
+
+static void add_fail_tests(TCase *tc)
+{
+	tcase_add_test(tc, fail_basic);
+	tcase_add_test(tc, fail_assert);
+	tcase_add_test(tc, fail_segv);
+}
+
+
 Suite *meta_suite(void)
 {
 	Suite *s = suite_create("meta");
@@ -105,6 +143,20 @@ Suite *meta_suite(void)
 		tcase_add_test(tc, skip_plan);
 		tcase_add_test(tc, no_plan);
 		tcase_add_test(tc, late_plan);
+		suite_add_tcase(s, tc);
+	}
+
+	{
+		TCase *tc = tcase_create("fail");
+		add_fail_tests(tc);
+		suite_add_tcase(s, tc);
+	}
+
+	/* same, but without forking. */
+	{
+		TCase *tc = tcase_create("failnf");
+		tcase_set_fork(tc, false);
+		add_fail_tests(tc);
 		suite_add_tcase(s, tc);
 	}
 
