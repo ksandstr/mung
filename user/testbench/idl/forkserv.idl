@@ -10,6 +10,7 @@ interface ForkServ: L4X2::FaultHandler
 	[Label(0x6143)]		/* "aC" */
 	void as_cfg(
 		in long roottask_id,
+		in L4X2::ThreadId roottask_mgr_tid,
 		in L4X2::Fpage kip_area,
 		in L4X2::Fpage utcb_area);
 

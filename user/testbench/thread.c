@@ -1,6 +1,8 @@
 
 /* simple threading for the purposes of the testbench personality. */
 
+#define THREADMGR_IMPL_SOURCE 1
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
@@ -8,6 +10,8 @@
 #include <assert.h>
 #include <ccan/likely/likely.h>
 #include <ccan/compiler/compiler.h>
+#include <ccan/htable/htable.h>
+#include <ccan/list/list.h>
 
 #include <l4/types.h>
 #include <l4/thread.h>
@@ -19,6 +23,7 @@
 
 #include "defs.h"
 #include "forkserv.h"
+#include "threadmgr-defs.h"
 
 
 #define THREAD_STACK_SIZE (32 * 1024)
@@ -35,8 +40,13 @@ struct thread
 
 
 static struct thread threads[MAX_THREADS];
-static int base_tnum;
+static int base_tnum = -1;		/* indicates "no init" */
 static L4_Word_t utcb_base;
+static L4_ThreadId_t mgr_tid;
+static uint8_t *mgr_stk_base;
+
+
+static void mgr_thread_fn(L4_ThreadId_t first_client);
 
 
 static L4_ThreadId_t tid_of(int t) {
@@ -60,6 +70,86 @@ static COLD void init_threading(void)
 }
 
 
+static COLD void start_mgr_thread(L4_ThreadId_t given_tid)
+{
+	assert(L4_IsNilThread(mgr_tid));
+
+	uint8_t *stk_base = malloc(THREAD_STACK_SIZE);
+	if(stk_base == NULL) {
+		printf("%s: can't allocate stack\n", __func__);
+		abort();
+	}
+	mgr_stk_base = stk_base;
+	uintptr_t stk_top = ((uintptr_t)stk_base + THREAD_STACK_SIZE - 16) & ~0xfu;
+#ifdef __SSE__
+	/* mystery alignment for SSE; see start_thread_long() for details */
+	stk_top += 4;
+#endif
+	L4_Word_t *sptr = (L4_Word_t *)stk_top;
+	*(--sptr) = L4_Myself().raw;	/* first managed thread */
+	*(--sptr) = 0xbeadf00d;			/* return address (grains of sand) */
+	stk_top = (L4_Word_t)sptr;
+
+	int my_pri = find_own_priority(), t;
+	if(!is_privileged()) {
+		int want_tno = -1;
+		if(!L4_IsNilThread(given_tid)) {
+			want_tno = L4_ThreadNo(given_tid) - base_tnum;
+		}
+		int n = forkserv_new_thread(L4_Pager(), &mgr_tid.raw, ~0ul,
+			(L4_Word_t)&mgr_thread_fn, stk_top, want_tno, L4_TimePeriod(50 * 1000),
+			L4_Never, my_pri, my_pri, 2000);
+		if(n != 0) {
+			printf("%s: forkserv_new_thread() failed; n=%d\n", __func__, n);
+			abort();
+		}
+
+		t = L4_ThreadNo(mgr_tid) - base_tnum;
+		if(t < 0 || t >= MAX_THREADS) {
+			printf("%s: invalid t=%d from forkserv\n", __func__, t);
+			abort();
+		}
+		assert(want_tno == -1 || t == want_tno);
+	} else {
+		/* this is called before forkserv is up & running. so the manager
+		 * thread will end up being paged by sigma0. its pager should be reset
+		 * once the forkserv transfer is complete.
+		 */
+		assert(L4_IsNilThread(given_tid));
+		t = L4_ThreadNo(L4_MyGlobalId()) - base_tnum + 1;
+		assert(t > 0 && t < MAX_THREADS);
+		mgr_tid = L4_GlobalId(base_tnum + t, L4_Version(L4_MyGlobalId()));
+		printf("mgr t=%d, tid=%lu:%lu\n", t,
+			L4_ThreadNo(mgr_tid), L4_Version(mgr_tid));
+		L4_Word_t r = L4_ThreadControl(mgr_tid, L4_Myself(), L4_Myself(),
+			L4_Pager(), (void *)(utcb_base + t * 512));
+		if(r == 0) {
+			printf("%s: ThreadControl failed, ec=%#lx\n", __func__,
+				L4_ErrorCode());
+			abort();
+		}
+
+		L4_Set_Priority(mgr_tid, my_pri);
+		L4_Start_SpIp(mgr_tid, stk_top, (L4_Word_t)&mgr_thread_fn);
+	}
+	threads[t].version = L4_Version(mgr_tid);
+	threads[t].alive = true;
+}
+
+
+L4_ThreadId_t get_mgr_tid(void)
+{
+	assert(base_tnum > 0);
+
+	if(L4_IsNilThread(mgr_tid)) {
+		start_mgr_thread(L4_nilthread);
+		assert(!L4_IsNilThread(mgr_tid));
+	}
+
+	return mgr_tid;
+}
+
+
 int thread_self(void) {
 	return L4_ThreadNo(L4_Myself()) - base_tnum;
 }
@@ -74,7 +164,8 @@ int thread_on_fork(
 	/* TODO: run atfork-style child-side hooks? */
 
 	assert(L4_IsGlobalId(*caller_tid));
-	int caller = L4_ThreadNo(*caller_tid) - base_tnum;
+	int caller = L4_ThreadNo(*caller_tid) - base_tnum,
+		old_mgr = L4_ThreadNo(mgr_tid) - base_tnum;
 	assert(caller >= 0 && caller < MAX_THREADS);
 	struct thread copy = threads[caller];
 	base_tnum = new_base_tnum;
@@ -102,6 +193,13 @@ int thread_on_fork(
 		 */
 	};
 
+	/* restart the manager thread. */
+	L4_ThreadId_t new_mgr_tid = L4_GlobalId(old_mgr + base_tnum,
+		L4_Version(mgr_tid));
+	free(mgr_stk_base);
+	mgr_tid = L4_nilthread;
+	start_mgr_thread(new_mgr_tid);
+
 	/* TODO: instead figure out the caller's priority. */
 	int pri = find_own_priority();
 	int n = forkserv_new_thread(L4_Pager(), &caller_tid->raw, ~0ul,
@@ -115,6 +213,12 @@ int thread_on_fork(
 	assert(new_caller == caller);	/* avoids cleaning threads[caller] */
 	threads[caller] = copy;
 	threads[caller].version = L4_Version(*caller_tid);
+
+	n = __tmgr_add_thread(mgr_tid, caller_tid->raw);
+	if(n != 0) {
+		printf("%s: add_thread failed, n=%d\n", __func__, n);
+		abort();
+	}
 
 	return 0;
 }
@@ -145,6 +249,7 @@ end:
 
 void exit_thread(void *return_value)
 {
+	/* FIXME: move these into the ThreadMgr impl. */
 	int tnum = L4_ThreadNo(L4_MyGlobalId()) - base_tnum;
 	assert(tnum < MAX_THREADS);
 	threads[tnum].retval = return_value;
@@ -152,28 +257,9 @@ void exit_thread(void *return_value)
 
 	tsd_clear();
 
-	/* wait for message from the join_thread() caller, which may be any local
-	 * thread.
-	 */
-	L4_MsgTag_t tag;
-	L4_ThreadId_t new_parent;
-	do {
-		tag = L4_WaitLocal_Timeout(L4_Never, &new_parent);
-		if(L4_IpcFailed(tag)) {
-			printf("%s: local receive failed, ec=%#lx\n", __func__,
-				L4_ErrorCode());
-		} else if(tag.X.label != PREJOIN_LABEL) {
-			printf("%s: weird IPC from %lu:%lu, tag=%#08lx\n", __func__,
-				L4_ThreadNo(new_parent), L4_Version(new_parent),
-				tag.raw);
-		}
-	} while(!L4_IpcSucceeded(tag) || tag.X.label != PREJOIN_LABEL);
-	assert(!L4_IsNilThread(new_parent));
-	L4_Set_ExceptionHandler(new_parent);
-
-	for(;;) {
-		asm volatile ("int $1");
-	}
+	int n = __tmgr_exit_thread(get_mgr_tid(), (L4_Word_t)return_value);
+	printf("%s: ThreadMgr::exit_thread() returned, n=%d\n", __func__, n);
+	abort();
 }
 
 
@@ -197,6 +283,7 @@ L4_ThreadId_t start_thread_long(
 		first = false;
 		init_threading();
 	}
+	L4_ThreadId_t mgr_tid = get_mgr_tid();
 
 	int t;
 	for(t = 0; t < MAX_THREADS; t++) {
@@ -285,6 +372,12 @@ L4_ThreadId_t start_thread_long(
 		L4_Start_SpIp(tid, stk_top, (L4_Word_t)&thread_wrapper);
 	}
 
+	int n = __tmgr_add_thread(mgr_tid, tid.raw);
+	if(n != 0) {
+		printf("%s: local tmgr call failed (n=%d)\n", __func__, n);
+		abort();
+	}
+
 	L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 3 }.raw);
 	L4_LoadMR(1, (L4_Word_t)fn);
 	L4_LoadMR(2, (L4_Word_t)param);
@@ -332,31 +425,23 @@ static void *destroy_thread(L4_ThreadId_t tid, struct thread *th)
 void *join_thread_long(L4_ThreadId_t tid, L4_Time_t timeout, L4_Word_t *ec_p)
 {
 	if(L4_IsNilThread(tid)) return NULL;
-	tid = L4_GlobalIdOf(tid);
 
+	tid = L4_GlobalIdOf(tid);
 	int t = L4_ThreadNo(tid) - base_tnum;
 	assert(t < MAX_THREADS);
 	assert(abs(threads[t].version) == L4_Version(tid));
 
-	L4_LoadMR(0, (L4_MsgTag_t){ .X.label = PREJOIN_LABEL }.raw);
-	L4_MsgTag_t tag = L4_Send_Timeout(tid_of(t), timeout);
-	if(L4_IpcFailed(tag)) {
-		*ec_p = L4_ErrorCode();
+	int32_t status;
+	L4_Word_t result;
+	int n = __tmgr_join_thread_timeout(get_mgr_tid(), tid.raw,
+		&status, &result, timeout);
+	if(n > 0) {
+		*ec_p = n;
 		return NULL;
 	}
 
-	tag = L4_Receive_Timeout(tid_of(t), timeout);
-	if(L4_IpcFailed(tag)) {
-		L4_Word_t ec = L4_ErrorCode();
-		if(ec != 3) {
-			printf("%s: receive from thread failed, ec %#lx\n", __func__, ec);
-		}
-		*ec_p = ec;
-		return NULL;
-	}
-	/* TODO: verify the exception message (label, GP#) */
-
-	return destroy_thread(tid, &threads[t]);
+	/* TODO: return "status" somewhere? */
+	return status == 0 ? (void *)result : NULL;
 }
 
 
@@ -368,9 +453,16 @@ void *join_thread(L4_ThreadId_t tid) {
 
 void kill_thread(L4_ThreadId_t tid)
 {
-	int t  = L4_ThreadNo(tid) - base_tnum;
+	tid = L4_GlobalIdOf(tid);
+	int t = L4_ThreadNo(tid) - base_tnum;
 	assert(t < MAX_THREADS);
 	assert(abs(threads[t].version) == L4_Version(tid));
+
+	int n = __tmgr_remove_thread(get_mgr_tid(), tid.raw);
+	if(n != 0) {
+		printf("%s: ipc fail, n=%d\n", __func__, n);
+		abort();
+	}
 
 	destroy_thread(tid, &threads[t]);
 	/* TODO: call Schedule to ensure that "tid" is truly gone */
@@ -384,4 +476,291 @@ void for_each_thread(void (*fn)(L4_ThreadId_t tid, void *ptr), void *ptr)
 		L4_ThreadId_t tid = L4_GlobalId(base_tnum + i, threads[i].version);
 		(*fn)(tid, ptr);
 	}
+}
+
+
+/* ThreadMgr instance. */
+
+struct mgrs {
+	/* sleeper. */
+	struct list_node link;
+	L4_ThreadId_t tid;		/* local TID */
+};
+
+struct mgrt {
+	L4_ThreadId_t tid;
+	bool alive, segfault;
+	L4_Word_t result;
+	struct list_head sleepers;
+};
+
+
+static size_t hash_mgrt_ptr(const void *ptr, void *priv) {
+	return int_hash(((const struct mgrt *)ptr)->tid.raw);
+}
+
+static bool mgrt_cmp(const void *cand, void *arg) {
+	L4_ThreadId_t tid = *(L4_ThreadId_t *)arg;
+	const struct mgrt *t = cand;
+	return t->tid.raw == tid.raw;
+}
+
+
+static struct htable mgr_threads = HTABLE_INITIALIZER(
+	mgr_threads, &hash_mgrt_ptr, NULL);
+static int mgrt_alive = 0;
+
+
+static void t_handle_exn(
+	L4_Word_t *eip_p,
+	L4_Word_t *eflags_p,
+	L4_Word_t *exception_no_p,
+	L4_Word_t *errorcode_p,
+	L4_Word_t *edi_p, L4_Word_t *esi_p, L4_Word_t *ebp_p, L4_Word_t *esp_p,
+	L4_Word_t *ebx_p, L4_Word_t *edx_p, L4_Word_t *ecx_p, L4_Word_t *eax_p)
+{
+	printf("%s: exception received\n", __func__);
+	muidl_raise_no_reply();
+}
+
+
+static void t_add_thread(L4_Word_t arg_tid)
+{
+	L4_ThreadId_t sender;
+	if(muidl_supp_get_context() != NULL		/* false iff called before dispatch */
+		&& (sender = muidl_get_sender(), !L4_IsLocalId(sender))
+		&& !L4_SameThreads(sender, L4_Pager()))
+	{
+		printf("%s: unknown sender %lu:%lu\n", __func__,
+			L4_ThreadNo(sender), L4_Version(sender));
+		return;
+	}
+
+	L4_ThreadId_t tid = { .raw = arg_tid };
+	tid = L4_GlobalIdOf(tid);
+#if 0
+	printf("%s: adding %lu:%lu\n", __func__,
+		L4_ThreadNo(tid), L4_Version(tid));
+#endif
+
+	struct mgrt *t = malloc(sizeof(*t));
+	if(t == NULL) {
+		printf("%s: malloc failed\n", __func__);
+		abort();
+	}
+	*t = (struct mgrt){ .tid = tid, .alive = true };
+	list_head_init(&t->sleepers);
+	htable_add(&mgr_threads, hash_mgrt_ptr(t, NULL), t);
+	mgrt_alive++;
+}
+
+
+/* not a service call despite naming. */
+static void t_end_thread(L4_ThreadId_t tid, int status, L4_Word_t result)
+{
+	tid = L4_GlobalIdOf(tid);
+	assert(L4_ThreadNo(tid) - base_tnum < MAX_THREADS);
+#if 0
+	printf("%s: for %lu:%lu\n", __func__,
+		L4_ThreadNo(tid), L4_Version(tid));
+#endif
+	size_t hash = int_hash(tid.raw);
+	struct mgrt *t = htable_get(&mgr_threads, hash, &mgrt_cmp, &tid);
+	if(t == NULL) {
+		printf("%s: tid %lu:%lu not found\n", __func__,
+			L4_ThreadNo(tid), L4_Version(tid));
+		return;
+	}
+
+	bool reply_ok = false;
+	if(!list_empty(&t->sleepers)) {
+		struct mgrs *s, *next;
+		list_for_each_safe(&t->sleepers, s, next, link) {
+			// printf("  sending wakeup to %lu:%lu\n",
+			//	L4_ThreadNo(s->tid), L4_Version(s->tid));
+			L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 2 }.raw);
+			L4_LoadMR(1, status);
+			L4_LoadMR(2, result);
+			L4_MsgTag_t tag = L4_Reply(s->tid);
+			if(L4_IpcSucceeded(tag)) reply_ok = true;
+
+			list_del_from(&t->sleepers, &s->link);
+			free(s);
+		}
+		assert(list_empty(&t->sleepers));
+	}
+	if(reply_ok) {
+		/* don't retain exit record on successful join */
+		// printf("  immediate deletion.\n");
+		htable_del(&mgr_threads, hash, t);
+		free(t);
+		destroy_thread(tid, &threads[L4_ThreadNo(tid) - base_tnum]);
+	} else {
+		// printf("  waiting until join.\n");
+		t->alive = false;
+		t->segfault = (status == 1);
+		t->result = result;
+	}
+
+	mgrt_alive--;
+	assert(mgrt_alive <= mgr_threads.elems);
+	if(mgrt_alive == 0) {
+		// printf("  process exit because last thread is gone.\n");
+		exit(status);
+	}
+}
+
+
+static void t_exit_thread(L4_Word_t result)
+{
+	L4_ThreadId_t sender = muidl_get_sender();
+	if(!L4_IsLocalId(sender)) {
+		printf("%s: non-local sender %lu:%lu ignored\n", __func__,
+			L4_ThreadNo(sender), L4_Version(sender));
+		return;
+	}
+
+	t_end_thread(sender, 0, result);
+
+	muidl_raise_no_reply();
+}
+
+
+static void t_segv(L4_Word_t a_dead_tid, L4_Word_t fault_addr)
+{
+	L4_ThreadId_t sender = muidl_get_sender();
+	if(!L4_IsLocalId(sender)) {
+		printf("%s: non-local sender %lu:%lu ignored\n", __func__,
+			L4_ThreadNo(sender), L4_Version(sender));
+		return;
+	}
+
+	L4_ThreadId_t dead_tid = { .raw = a_dead_tid };
+	printf("%s: dead_tid=%lu:%lu, fault_addr=%#lx\n", __func__,
+		L4_ThreadNo(dead_tid), L4_Version(dead_tid), fault_addr);
+
+	t_end_thread(dead_tid, 1, fault_addr);
+}
+
+
+static void t_rm_thread(L4_Word_t arg_tid)
+{
+	L4_ThreadId_t dead_tid = { .raw = arg_tid };
+
+	L4_ThreadId_t sender = muidl_get_sender();
+	if(!L4_IsLocalId(sender)) {
+		printf("%s: non-local sender %lu:%lu ignored\n", __func__,
+			L4_ThreadNo(sender), L4_Version(sender));
+		return;
+	}
+
+	dead_tid = L4_GlobalIdOf(dead_tid);
+	size_t hash = int_hash(dead_tid.raw);
+	struct mgrt *t = htable_get(&mgr_threads, hash, &mgrt_cmp, &dead_tid);
+	if(t != NULL) {
+		struct mgrs *s, *next;
+		list_for_each_safe(&t->sleepers, s, next, link) {
+			list_del_from(&t->sleepers, &s->link);
+			free(s);
+		}
+		htable_del(&mgr_threads, hash, t);
+		free(t);
+	}
+
+	mgrt_alive--;
+	assert(mgrt_alive > 0);
+	assert(mgrt_alive <= mgr_threads.elems);
+}
+
+
+static void t_join_thread(
+	L4_Word_t arg_join_tid,
+	int32_t *status_p,
+	L4_Word_t *result_p)
+{
+	L4_ThreadId_t join_tid = { .raw = arg_join_tid };
+
+	L4_ThreadId_t sender = muidl_get_sender();
+	if(!L4_IsLocalId(sender)) {
+		printf("%s: non-local sender %lu:%lu ignored\n", __func__,
+			L4_ThreadNo(sender), L4_Version(sender));
+		return;
+	}
+
+	join_tid = L4_GlobalIdOf(join_tid);
+	assert(L4_ThreadNo(join_tid) - base_tnum < MAX_THREADS);
+	// printf("join for %lu:%lu\n", L4_ThreadNo(join_tid), L4_Version(join_tid));
+	size_t hash = int_hash(join_tid.raw);
+	struct mgrt *t = htable_get(&mgr_threads, hash, &mgrt_cmp, &join_tid);
+	if(t == NULL) {
+		/* not found. */
+		*status_p = -1;
+		*result_p = 0;
+		// printf("... thread not found\n");
+	} else if(!t->alive) {
+		/* immediate join. */
+		assert(list_empty(&t->sleepers));
+		*status_p = t->segfault ? 1 : 0;
+		*result_p = t->result;
+		htable_del(&mgr_threads, hash, t);
+		free(t);
+		destroy_thread(join_tid,
+			&threads[L4_ThreadNo(join_tid) - base_tnum]);
+		// printf("... immediate success\n");
+	} else {
+		/* sleep. */
+		struct mgrs *s = malloc(sizeof(*s));
+		if(s == NULL) {
+			printf("%s: can't allocate mgrs\n", __func__);
+			abort();
+		}
+		s->tid = sender;
+		list_add(&t->sleepers, &s->link);
+		muidl_raise_no_reply();
+		// printf("... deferred\n");
+	}
+}
+
+
+static void mgr_thread_fn(L4_ThreadId_t first_client)
+{
+	static const struct thread_mgr_vtable vt = {
+		.sys_exception = &t_handle_exn,
+		.arch_exception = &t_handle_exn,
+		.add_thread = &t_add_thread,
+		.remove_thread = &t_rm_thread,
+		.exit_thread = &t_exit_thread,
+		.join_thread = &t_join_thread,
+		.segv = &t_segv,
+	};
+#if 0
+	printf("%s: entered! first_client %lu:%lu\n", __func__,
+		L4_ThreadNo(first_client), L4_Version(first_client));
+#endif
+
+	/* reset state (discard & release fork parent's things) */
+	htable_clear(&mgr_threads);
+	mgrt_alive = 0;
+	assert(muidl_supp_get_context() == NULL);
+	t_add_thread(first_client.raw);
+	assert(mgrt_alive == 1);
+	assert(mgr_threads.elems == 1);
+
+	/* this one has no exit condition; t_exit_thread() destroys the process or
+	 * leaves it hanging.
+	 */
+	for(;;) {
+		L4_Word_t status = _muidl_thread_mgr_dispatch(&vt);
+		if(status == MUIDL_UNKNOWN_LABEL) {
+			printf("%s: unknown label in %lu:%lu (tag=%#lx)\n", __func__,
+				L4_ThreadNo(L4_MyGlobalId()), L4_Version(L4_MyGlobalId()),
+				muidl_get_tag().raw);
+		}
+	}
+
+	assert(false);
+
+	/* DEATH HAS APPEARED! */
+	L4_Set_ExceptionHandler(L4_nilthread);
+	for(;;) asm volatile ("int $23");
 }

@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <assert.h>
+#include <ccan/likely/likely.h>
 
 #include "defs.h"
 
@@ -33,5 +34,6 @@ void muidl_supp_alloc_context(unsigned int length)
 
 
 void *muidl_supp_get_context(void) {
+	if(unlikely(muidl_ctx_key < 0)) return NULL;
 	return tsd_get(muidl_ctx_key);
 }

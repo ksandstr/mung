@@ -38,6 +38,7 @@ testbench: testbench.ld crt0.o testbench.o dlmalloc.o heap.o thread.o tsd.o \
 		legacy.o thread_test.o \
 		syscalls.o ccan-list.o ccan-htable.o ccan-hash.o ccan-crc.o \
 		$(TEST_IDL_OBJS) \
+		threadmgr-common.o threadmgr-service.o threadmgr-client.o \
 		forkserv-common.o forkserv-client.o
 	@echo "  LD $@"
 	@$(LD) $(LDFLAGS) -T testbench.ld $(filter %.o,$^) $(LIBS) -o $@ \
@@ -46,6 +47,7 @@ testbench: testbench.ld crt0.o testbench.o dlmalloc.o heap.o thread.o tsd.o \
 
 ipc_suite.o: ipc_suite.c ipc-suite-defs.h
 x86_suite.o: x86_suite.c x86-suite-defs.h
+thread.o: thread.c threadmgr-defs.h
 # (common dependency between forkserv and testbench, so it takes care of
 # forkserv-defs.h for both in the proper order.)
 heap.o: heap.c forkserv-defs.h common-defs.h
@@ -55,6 +57,7 @@ heap.o: heap.c forkserv-defs.h common-defs.h
 forkserv: forkserv.ld crt0.o forkserv.o syscalls.o heap.o dlmalloc.o \
 		idlsupp.o tsd.o \
 		forkserv-service.o forkserv-common.o forkserv-client.o \
+		threadmgr-common.o threadmgr-client.o \
 		ccan-list.o ccan-htable.o
 	@echo "  LD $@"
 	@$(LD) $(LDFLAGS) -T forkserv.ld $(filter %.o,$^) $(LIBS) -o $@ \

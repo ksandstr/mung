@@ -64,7 +64,10 @@ void abort(void)
 
 
 void malloc_panic(void) {
-	printf("%s: called!\n", __func__);
+	printf("testbench: %s called in %lu:%lu, returns %p, %p, %p!\n", __func__,
+		L4_ThreadNo(L4_Myself()), L4_Version(L4_Myself()),
+		__builtin_return_address(0), __builtin_return_address(1),
+		__builtin_return_address(2));
 	abort();
 }
 
@@ -488,6 +491,7 @@ static void transfer_to_forkserv(void)
 	 */
 	const L4_KernelInterfacePage_t *kip = L4_GetKernelInterface();
 	int n = forkserv_as_cfg(forkserv_tid, 1,
+		L4_nilthread.raw,		/* FIXME: create the manager thread, too */
 		L4_FpageLog2((L4_Word_t)kip, kip->KipAreaInfo.X.s),
 		L4_FpageLog2((L4_Word_t)__L4_Get_UtcbAddress(), 13));
 	if(n != 0) {
@@ -612,7 +616,11 @@ int main(void)
 	htable_init(&opts, &rehash_cmd_opt, NULL);
 	parse_cmd_opts(&opts, boot_cmdline);
 
+	add_fs_tid(1, get_mgr_tid());
+	L4_Stop(get_mgr_tid());
 	transfer_to_forkserv();
+	L4_Set_PagerOf(get_mgr_tid(), forkserv_tid);
+	L4_Start(get_mgr_tid());
 
 	/* proper test suite */
 	static Suite *(* const suites[])(void) = {

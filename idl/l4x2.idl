@@ -9,6 +9,7 @@ module L4X2
 
 native l4_word_t;
 typedef l4_word_t word;
+typedef l4_word_t ThreadId;
 
 native l4_mapgrantitem_t;
 typedef l4_mapgrantitem_t MapGrantItem;

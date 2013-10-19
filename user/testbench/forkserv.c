@@ -52,6 +52,7 @@ struct fs_space
 {
 	GUARD_MEMBER(g_0);
 	L4_Word_t id, parent_id, prog_brk;
+	L4_ThreadId_t mgr_tid;
 	struct htable pages;
 	GUARD_MEMBER(g_1);
 	struct fs_thread *threads[THREADS_PER_SPACE];
@@ -298,7 +299,9 @@ void abort(void)
 
 
 void malloc_panic(void) {
-	printf("%s: called!\n", __func__);
+	printf("forkserv: %s called in %lu:%lu, returns %p, %p!\n", __func__,
+		L4_ThreadNo(L4_Myself()), L4_Version(L4_Myself()),
+		__builtin_return_address(0), __builtin_return_address(1));
 	abort();
 }
 
@@ -806,6 +809,8 @@ static int32_t handle_fork(void)
 	copy_space->prog_brk = sp->prog_brk;
 	copy_space->utcb_area = sp->utcb_area;
 	copy_space->kip_area = sp->kip_area;
+	/* FIXME: set copy_space->mgr_tid to something reasonable! */
+	copy_space->mgr_tid = L4_nilthread;
 	GUARD_INIT(copy_space, g_0);
 	GUARD_INIT(copy_space, g_1);
 	GUARD_INIT(copy_space, g_2);
@@ -852,6 +857,7 @@ end:
 
 static void handle_as_cfg(
 	int32_t space_id,
+	L4_Word_t roottask_mgr_tid,
 	L4_Fpage_t kip_area,
 	L4_Fpage_t utcb_area)
 {
@@ -859,12 +865,31 @@ static void handle_as_cfg(
 	if(sp == NULL) sp = make_initial_space(space_id);
 	if(!L4_IsNilFpage(kip_area)) sp->kip_area = kip_area;
 	if(!L4_IsNilFpage(utcb_area)) sp->utcb_area = utcb_area;
+	L4_ThreadId_t mgr_tid = { .raw = roottask_mgr_tid };
+	if(!L4_IsNilThread(mgr_tid)) {
+		bool found = false;
+		for(int i=0; i < THREADS_PER_SPACE; i++) {
+			if(sp->threads[i] == NULL) continue;
+			if(L4_SameThreads(sp->threads[i]->tid, mgr_tid)) {
+				found = true;
+				break;
+			}
+		}
+		if(!found) {
+			printf("%s: mgr_tid %lu:%lu not in caller's space\n",
+				__func__, L4_ThreadNo(mgr_tid), L4_Version(mgr_tid));
+		} else {
+			sp->mgr_tid = mgr_tid;
+		}
+	}
 
-#if 0
+#if 1
 	const L4_ThreadId_t from = muidl_get_sender();
-	printf("%s: from %#lx, space_id %#lx, kip_area %#lx:%#lx, utcb_area %#lx:%#lx\n",
+	printf("%s: from %#lx, space_id %d, kip_area %#lx:%#lx, utcb_area %#lx:%#lx\n",
 		__func__, from.raw, space_id, L4_Address(kip_area), L4_Size(kip_area),
 		L4_Address(utcb_area), L4_Size(utcb_area));
+	printf("  ... mgr_tid %lu:%lu\n",
+		L4_ThreadNo(mgr_tid), L4_Version(mgr_tid));
 #endif
 }
 

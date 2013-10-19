@@ -169,6 +169,9 @@ extern void add_fs_tid(L4_Word_t space_id, L4_ThreadId_t tid);
 
 extern int thread_self(void);
 
+/* gets the manager thread's thread ID, starting it if necessary. */
+extern L4_ThreadId_t get_mgr_tid(void);
+
 extern L4_ThreadId_t start_thread(void (*fn)(void *), void *param);
 extern L4_ThreadId_t start_thread_long(
 	void (*fn)(void *),

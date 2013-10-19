@@ -1,0 +1,29 @@
+
+#include <muidl.idl>
+#include "l4x2.idl"
+
+
+[StubPrefix(__tmgr), IfaceLabel(0x8ac3)]
+interface ThreadMgr: L4X2::ExceptionHandler
+{
+	void add_thread(in L4X2::ThreadId new_tid);
+
+	/* used for kill_thread(). */
+	void remove_thread(in L4X2::ThreadId dead_tid);
+
+	void exit_thread(in L4X2::word result)
+		raises(muidl::NoReply);
+
+	/* exit_status is -1 when @join_tid doesn't exist, 0 for regular exit, and
+	 * 1 for segv.
+	 */
+	[StubRecvTimeout]
+	void join_thread(
+		in L4X2::ThreadId join_tid,
+		[MR(1)] out long exit_status,
+		[MR(2)] out L4X2::word result)
+			raises(muidl::NoReply);
+
+	[StubTimeouts]
+	void segv(in L4X2::ThreadId dead_tid, in L4X2::word fault_addr);
+};
