@@ -27,9 +27,11 @@ distclean: clean
 	@find . -name ".deps" -type d -print|xargs rm -rf
 
 
-# TODO: skip testbench self-tests if the perl source, and its test code, hasn't
-# changed since "testbench" and "ia32-kernel". (bit of a tall order, this.)
-qcheck: check
+# TODO: skip testbench self-tests only if the perl source, and its test code,
+# hasn't changed since "testbench" and "ia32-kernel". (bit of a tall order,
+# this.)
+qcheck: all
+	@user/testbench/report.pl
 
 
 check: all
