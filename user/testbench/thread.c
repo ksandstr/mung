@@ -24,8 +24,6 @@
 #define THREAD_STACK_SIZE (32 * 1024)
 #define MAX_THREADS 12
 
-#define PREJOIN_LABEL 0xf00d
-
 
 struct thread
 {

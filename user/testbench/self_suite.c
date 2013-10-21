@@ -399,6 +399,139 @@ START_TEST(stats_delay_test)
 END_TEST
 
 
+/* "thread" suite */
+
+static void taking_a_nap_fn(void *param) {
+	L4_Sleep(A_SHORT_NAP);
+	exit_thread(param);
+}
+
+
+/* tests "thread exits first" and "join called first" modes of join_thread(). */
+START_TEST(basic_thread_test)
+{
+	plan_tests(2);
+
+	/* first case. */
+	diag("creating thread");
+	L4_ThreadId_t tid = xstart_thread(&exit_thread, "death has appeared");
+	diag("sleeping");
+	L4_Sleep(A_SHORT_NAP);
+	L4_Word_t ec = 0;
+	diag("joining %lu:%lu", L4_ThreadNo(tid), L4_Version(tid));
+	void *ptr = join_thread_long(tid, L4_TimePeriod(5000), &ec);
+	if(!ok(ptr != NULL, "join of exited thread")) {
+		diag("ec=%#lx", ec);
+	}
+
+	/* second case. */
+	tid = xstart_thread(&taking_a_nap_fn, "in ur punani");
+	ec = 0;
+	ptr = join_thread_long(tid, L4_TimePeriod(50000), &ec);
+	if(!ok(ptr != NULL, "join of active thread")) {
+		diag("ec=%#lx", ec);
+	}
+}
+END_TEST
+
+
+/* this eats the join_thread() initiated pre-join rendezvous. */
+static void eat_prejoin_label_fn(void *param UNUSED)
+{
+	L4_Clock_t now = L4_SystemClock();
+	L4_Time_t after = L4_TimePoint2_NP(now,
+		(L4_Clock_t){ .raw = now.raw + 10000 });
+	L4_ThreadId_t sender;
+	L4_MsgTag_t tag;
+	do {
+		tag = L4_Wait_Timeout(after, &sender);
+	} while(L4_IpcSucceeded(tag) && L4_Label(tag) != PREJOIN_LABEL);
+
+	L4_Word_t ec = L4_ErrorCode();
+	if(L4_IpcFailed(tag) && ec != 3) {
+		diag("%s: wait failed, ec=%#lx", __func__, ec);
+	}
+
+	exit_thread("who goes there?");
+}
+
+
+/* tests whether it's possible to put the thread joining part out of whack
+ * with an incomplete IPC flow.
+ */
+START_TEST(join_thread_test)
+{
+	plan_tests(1);
+
+	L4_ThreadId_t tid = xstart_thread(&eat_prejoin_label_fn, NULL);
+	L4_Word_t ec = 0;
+	void *ptr = join_thread_long(tid, TEST_IPC_DELAY, &ec);
+	if(!ok(ptr != NULL && ec == 0, "out-of-whack join ok")) {
+		diag("join ec=%#lx, ret=%p", ec, ptr);
+		xjoin_thread(tid);
+	}
+}
+END_TEST
+
+
+static void wait_for_child_fn(void *param UNUSED)
+{
+	int st = 0, dead = wait(&st);
+	diag("waited for %d; st=%d", dead, st);
+	exit_thread("success!");
+}
+
+
+/* tests subprocess exit when its last thread terminates. */
+START_LOOP_TEST(exit_with_thread_test, iter, 0, 1)
+{
+	plan_tests(1);
+	const bool from_thread = CHECK_FLAG(iter, 1);
+	diag("from_thread=%s", btos(from_thread));
+
+	L4_ThreadId_t child_tid;
+	int child = fork_tid(&child_tid);
+	if(child == 0) {
+		L4_Sleep(L4_TimePeriod(5000));
+		if(from_thread) {
+			diag("child thread exiting");
+			exit_thread(NULL);
+		} else {
+			diag("child process exiting");
+			exit(0);
+		}
+		diag("child returned from exit_thread(), aborting");
+		abort();
+	}
+
+	diag("child_tid=%lu:%lu",
+		L4_ThreadNo(child_tid), L4_Version(child_tid));
+	L4_Accept(L4_UntypedWordsAcceptor);
+	L4_MsgTag_t tag = L4_Receive_Timeout(child_tid,
+		L4_TimePeriod(10000));
+	L4_Word_t ec = L4_ErrorCode();
+	fail_unless(L4_IpcFailed(tag));
+	fail_unless(ec == 3 || ec == 5, "ec=%#lx", ec);
+
+	L4_ThreadId_t w_tid = xstart_thread(&wait_for_child_fn, NULL);
+	ec = 0;
+	void *ret = join_thread_long(w_tid, L4_TimePeriod(15000), &ec);
+	if(!ok(ret != NULL && ec == 0, "wait ok")) {
+		diag("ec=%#lx", ec);
+		kill_thread(w_tid);
+	}
+}
+END_TEST
+
+
+static void add_thread_tests(TCase *tc)
+{
+	tcase_add_test(tc, basic_thread_test);
+	tcase_add_test(tc, join_thread_test);
+	tcase_add_test(tc, exit_with_thread_test);
+}
+
+
 /* start the stats-collecting pager thread. */
 static void stats_setup(void)
 {
@@ -423,6 +556,18 @@ Suite *self_suite(void)
 	tcase_set_fork(util_case, false);
 	tcase_add_test(util_case, basic_delay_test);
 	suite_add_tcase(s, util_case);
+
+	{
+		TCase *tc = tcase_create("thread");
+		add_thread_tests(tc);
+		suite_add_tcase(s, tc);
+	}
+
+	{
+		TCase *tc = tcase_create("threadnf");
+		add_thread_tests(tc);
+		suite_add_tcase(s, tc);
+	}
 
 	TCase *fork_case = tcase_create("fork");
 	tcase_set_fork(fork_case, false);

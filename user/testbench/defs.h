@@ -26,6 +26,8 @@
  * it's necessary to let the other get scheduled first.
  */
 #define TEST_IPC_DELAY L4_TimePeriod(100 * 1000)
+/* long enough to cause scheduling. */
+#define A_SHORT_NAP L4_TimePeriod(5000)
 
 /* repeated across too many tests already. */
 #define IPC_FAIL(tag) fail_if(L4_IpcFailed(tag), "ec=%#lx", L4_ErrorCode())
@@ -34,6 +36,7 @@
 #define QUIT_LABEL 0xdead
 #define RESET_LABEL 0xf579
 #define DELAY_LABEL	0x7a5a		/* "zZ" */
+#define PREJOIN_LABEL 0xf00d	/* used by the insufficient exit/join sync */
 
 #define LOG_SIZE DROP_PAGER_LOG_SIZE
 
