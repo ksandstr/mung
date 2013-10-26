@@ -524,11 +524,60 @@ START_LOOP_TEST(exit_with_thread_test, iter, 0, 1)
 END_TEST
 
 
+static void access_memory_fn(void *ptr)
+{
+	diag("accessing %p", ptr);
+	uint8_t *p = ptr;
+	(*p)++;
+	diag("didn't die");
+	exit_thread(NULL);
+}
+
+
+/* test that a segmentation fault (illegal access) is signaled to the joiner.
+ * this deviates rather hard from POSIX semantics.
+ */
+START_TEST(segv_test)
+{
+	plan_tests(3);
+
+	todo_start("fhskjdfhaksjdf");
+
+	/* test that access to valid memory doesn't fail. */
+	void *foo = malloc(128);
+	fail_if(foo == NULL);
+	memset(foo, 0x7d, 128);
+	L4_ThreadId_t tid = xstart_thread(&access_memory_fn, foo);
+	L4_Word_t ec = 0;
+	void *ret = join_thread_long(tid, L4_TimePeriod(15000), &ec);
+	if(!ok(ret == NULL && ec == 0, "valid access joined without fault")) {
+		diag("ret=%p, ec=%#lx", ret, ec);
+	}
+
+	/* and that an illegal access does fail. */
+	uintptr_t ill = (uintptr_t)foo ^ 0x40000000;
+	tid = xstart_thread(&access_memory_fn, (void *)ill);
+	ec = 0;
+	ret = join_thread_long(tid, L4_TimePeriod(15000), &ec);
+	if(!ok(ret != NULL || ec == 0, "illegal access joined ok")) {
+		diag("ret=%p, ec=%#lx", ret, ec);
+	}
+	if(!ok1(ret == (void *)ill)) {
+		diag("ret=%p", ret);
+	}
+
+	free(foo);
+	todo_end();
+}
+END_TEST
+
+
 static void add_thread_tests(TCase *tc)
 {
 	tcase_add_test(tc, basic_thread_test);
 	tcase_add_test(tc, join_thread_test);
 	tcase_add_test(tc, exit_with_thread_test);
+	tcase_add_test(tc, segv_test);
 }
 
 
