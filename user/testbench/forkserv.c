@@ -965,12 +965,18 @@ static bool end_thread(L4_ThreadId_t tid)
 	if(t == NULL) return false;
 
 	struct fs_space *sp = t->space;
-	int tnum = L4_ThreadNo(t->tid) - (sp->id << TPS_SHIFT);
-	assert(sp->threads[tnum] == t);
-	sp->threads[tnum] = NULL;
+	bool found = false;
+	for(int i=0; i < THREADS_PER_SPACE; i++) {
+		if(sp->threads[i] == t) {
+			assert(!found);		/* must only occur once. */
+			sp->threads[i] = NULL;
+			found = true;
+		}
+	}
+	assert(found);
 
 	L4_MsgTag_t tag;
-	L4_Word_t ec, res = fpager_threadctl(&tag, &ec, tid, L4_nilthread,
+	L4_Word_t ec = 0, res = fpager_threadctl(&tag, &ec, tid, L4_nilthread,
 		L4_nilthread, L4_nilthread, (void *)-1);
 	if(res != 1) {
 		printf("forkserv/end_thread: threadctl failed, %s ec %#lx\n",
