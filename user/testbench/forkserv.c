@@ -129,6 +129,7 @@ static LIST_HEAD(free_page_list);
 static L4_ThreadId_t console_tid, fpager_tid, helper_tid, forkserv_tid;
 static L4_Word_t map_range_pos = 0, next_space_id = 100, next_async_id = 1;
 static struct helper_work *helper_queue = NULL;
+static L4_Word_t max_vaddr;
 
 
 static size_t hash_word(const void *elem, void *priv) {
@@ -224,11 +225,43 @@ static bool invariants(const char *where) {
 #endif
 
 
+/* find the highest virtual address usable to user space. */
+COLD L4_Word_t find_high_vaddr(void)
+{
+	L4_KernelInterfacePage_t *kip = L4_GetKernelInterface();
+	int n_descs = kip->MemoryInfo & 0xffff;
+	L4_Word_t low = 0, high = ~0ul;
+	for(int i=0; i < n_descs; i++) {
+		const L4_MemoryDesc_t *desc = L4_MemoryDesc(kip, i);
+		if(!L4_IsMemoryDescVirtual(desc)) continue;
+		switch(L4_MemoryDescType(desc)) {
+			case L4_ConventionalMemoryType:
+				low = MAX(L4_Word_t, low, L4_MemoryDescLow(desc));
+				high = MIN(L4_Word_t, high, L4_MemoryDescHigh(desc));
+				break;
+			case L4_ReservedMemoryType:
+				if(L4_MemoryDescLow(desc) > low) {
+					high = MIN(L4_Word_t, high, L4_MemoryDescLow(desc));
+				} else {
+					low = MAX(L4_Word_t, low, L4_MemoryDescHigh(desc));
+				}
+				break;
+		}
+	}
+	if(low != 0) {
+		printf("%s: low=%#lx, don't know what the fuck\n", __func__, low);
+		abort();
+	}
+
+	return high;
+}
+
+
 static struct fs_space *make_initial_space(int id)
 {
 	struct fs_space *sp = malloc(sizeof(*sp));
 	*sp = (struct fs_space){
-		.id = id, .parent_id = 0, .prog_brk = find_phys_mem_top(),
+		.id = id, .parent_id = 0, .prog_brk = find_phys_mem_top() + 1,
 		.utcb_area = L4_Fpage(0x30000, UTCB_SIZE * THREADS_PER_SPACE),
 		.kip_area = L4_FpageLog2(0x2f000, 12),
 	};
@@ -443,17 +476,23 @@ static void handle_pf(
 	L4_Word_t page_addr = addr & ~PAGE_MASK;
 	struct fs_vpage *page = htable_get(&sp->pages,
 		int_hash(page_addr), &word_cmp, &page_addr);
-	if(page == NULL && page_addr >= sp->prog_brk) {
+	if(page == NULL && page_addr < sp->prog_brk) {
 		/* moar ramz pls */
 		page = malloc(sizeof(*page));
 		page->address = page_addr;
 		page->page = alloc_new_page();
 		page->access = L4_FullyAccessible;
 #if 0
-		printf("%s: new page %#lx -> %#lx\n", __func__,
-			page->page->local_addr, page->address);
+		printf("%s: new page %#lx -> %#lx (brk=%#lx)\n", __func__,
+			page->page->local_addr, page->address, sp->prog_brk);
 #endif
 		htable_add(&sp->pages, int_hash(page_addr), &page->address);
+	} else if(page == NULL && page_addr > max_vaddr) {
+		/* illegal address */
+#if 1
+		printf("illegal access to addr=%#lx from ip=%#lx\n", addr, ip);
+#endif
+		goto no_reply;
 	} else if(page == NULL) {
 #if 1
 		printf("segfault in thread %lu:%lu, space %lu (brk %#lx)\n",
@@ -553,14 +592,28 @@ static void handle_add_tid(int32_t space_id, L4_Word_t raw_tid)
 }
 
 
-static void handle_sbrk(L4_Word_t new_break)
+static void handle_sbrk(
+	L4_Word_t *start_p,
+	int32_t increment)
 {
 	const L4_ThreadId_t from = muidl_get_sender();
 	struct fs_space *sp = get_space_by_tid(from);
 	if(sp == NULL) {
 		printf("%s: can't find for tid %#lx's fs_space\n", __func__, from.raw);
+		*start_p = 0;
+		return;
+	}
+
+	if(increment >= 0) {
+		*start_p = sp->prog_brk;
+		if(increment > 0) {
+			sp->prog_brk += increment + PAGE_SIZE - 1;
+			sp->prog_brk &= ~PAGE_MASK;
+		}
 	} else {
-		sp->prog_brk = MIN(L4_Word_t, sp->prog_brk, new_break);
+		sp->prog_brk += increment;
+		sp->prog_brk &= ~PAGE_MASK;
+		*start_p = sp->prog_brk;
 	}
 }
 
@@ -1401,6 +1454,8 @@ int main(void)
 	fpager_tid = L4_Pager();
 	forkserv_tid = L4_Myself();
 
+	max_vaddr = find_high_vaddr();
+	printf("forkserv: high vaddr=%#lx\n", max_vaddr);
 	heap_init(0x80000);		/* leave 512 KiB for testbench */
 	start_helper_thread();
 	forkserv_dispatch_loop();

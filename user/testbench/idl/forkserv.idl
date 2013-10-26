@@ -33,8 +33,15 @@ interface ForkServ: L4X2::FaultHandler
 	[Label(0x664f)]		/* "fO" */
 	long fork();
 
-	[Label(0x7342)]		/* "sB" (more of a brk(2), though) */
-	void sbrk(in L4X2::word new_break);
+	/* @start is returned as where a positive increment's number of bytes was
+	 * allocated, or the new one-past-end address caused by a negative
+	 * increment. when @increment is 0, @start returns the current break's
+	 * address.
+	 */
+	[Label(0x7342)]		/* "sB" */
+	void sbrk(
+		out L4X2::word start,
+		in long increment);
 
 	[Label(0x7a54), StubSendTimeout]	/* "zT" */
 	void exit_thread(in L4X2::word dest_tid)

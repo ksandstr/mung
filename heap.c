@@ -39,6 +39,13 @@ static struct kmem_cache *mm_page_cache = NULL,	/* <struct page> */
 static uintptr_t heap_pos = KERNEL_HEAP_TOP;
 
 
+/* TODO: make the kernel heap also contiguous in address space -- and then
+ * enable MORECORE_CONTIGUOUS in dlmalloc.c & leave DEFAULT_GRANULARITY at
+ * default to minimize unused kernel RAM.
+ *
+ * to do this, reserve_heap_page() must allocate from the other end of the
+ * kernel address range.
+ */
 void *sbrk(intptr_t increment)
 {
 	if(increment > 0) {

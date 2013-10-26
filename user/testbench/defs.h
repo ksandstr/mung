@@ -239,9 +239,8 @@ extern void usleep(unsigned long microseconds);
 /* from heap.c */
 
 extern void *sbrk(intptr_t adjustment);
-
-extern L4_Word_t find_phys_mem_top(void);
 extern L4_Word_t get_heap_top(void);	/* valid after first sbrk() */
+extern L4_Word_t find_phys_mem_top(void);
 
 /* (no attrs are defined, so pass 0.) */
 extern L4_Fpage_t sigma0_get_page(L4_Fpage_t page, L4_Word_t attrs);

@@ -52,15 +52,23 @@ L4_Fpage_t sigma0_get_page(L4_Fpage_t page, L4_Word_t attributes)
 }
 
 
-L4_Word_t get_heap_top(void) {
-	return heap_top;
+L4_Word_t get_heap_top(void)
+{
+	if(use_forkserv_sbrk) {
+		assert(!L4_IsNilThread(heap_tid));
+		L4_Word_t ret;
+		int n = forkserv_sbrk(heap_tid, &ret, 0);
+		if(n != 0) {
+			printf("%s: forkserv_sbrk() failed, n=%d\n", __func__, n);
+			abort();
+		}
+		return ret;
+	} else {
+		return heap_top;
+	}
 }
 
 
-/* TODO: make the kernel heap also contiguous in address space -- and then
- * enable MORECORE_CONTIGUOUS in dlmalloc.c & leave DEFAULT_GRANULARITY at
- * default to minimize unused kernel RAM.
- */
 void *sbrk(intptr_t increment)
 {
 	if(unlikely(heap_pos == 0)) {
@@ -77,12 +85,13 @@ void *sbrk(intptr_t increment)
 				heap_tid = L4_Pager();
 				assert(!L4_IsNilThread(heap_tid));
 			}
-			int n = forkserv_sbrk(heap_tid, heap_pos - increment);
+			L4_Word_t new_pos;
+			int n = forkserv_sbrk(heap_tid, &new_pos, increment);
 			if(n != 0) {
 				printf("forkserv_sbrk() failed, n=%d\n", n);
 				abort();		/* whut */
 			}
-			heap_pos -= increment;
+			heap_pos = new_pos;
 		} else {
 			L4_Fpage_t page = sigma0_get_page(
 				L4_Fpage(heap_pos - increment, increment), 0);
@@ -127,8 +136,8 @@ COLD void heap_init(int adjustment)
 	assert(adjustment >= 0);
 	adjustment = (adjustment + PAGE_SIZE - 1) & ~PAGE_MASK;
 
-	/* find the highest address where there's regular memory. use that as heap
-	 * top.
+	/* for the testbench root task, find the highest address where there's
+	 * regular memory. use that as heap top.
 	 */
 	heap_pos = find_phys_mem_top() + 1 - adjustment;
 }
