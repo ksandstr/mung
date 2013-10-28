@@ -12,6 +12,7 @@
 
 #include "defs.h"
 #include "test.h"
+#include "forkserv-defs.h"
 
 
 #define now_ms() (L4_SystemClock().raw / 1000)
@@ -569,12 +570,62 @@ START_TEST(segv_test)
 END_TEST
 
 
+/* check for process termination on an unhandled segv. also tests access from
+ * another thread to confirm that the exit happens because of unhandled segv
+ * and not merely because the last thread croaked.
+ */
+START_LOOP_TEST(uncaught_segv_test, iter, 0, 3)
+{
+	plan_tests(4);
+	const bool handle_segv = !CHECK_FLAG(iter, 1),
+		indirect = CHECK_FLAG(iter, 2);
+	diag("handle_segv=%s, indirect=%s", btos(handle_segv), btos(indirect));
+
+	void *foo = malloc(128);
+	memset(foo, 0x7e, 128);
+	uint8_t *ill = (uint8_t *)((uintptr_t)foo ^ 0x40000000);
+	int child = fork();
+	if(child == 0) {
+		if(!handle_segv) {
+			int n = forkserv_set_mgr_tid(L4_Pager(), L4_nilthread.raw);
+			fail_if(n != 0, "clear mgr_tid failed, n=%d", n);
+		}
+		diag("doing %sdirect illegal access at %p",
+			indirect ? "in" : "", ill);
+		if(indirect) {
+			L4_ThreadId_t tid = xstart_thread(&access_memory_fn, ill);
+			L4_Sleep(A_SHORT_NAP);
+			xjoin_thread(tid);
+		} else {
+			access_memory_fn(ill);
+		}
+		exit(666);
+	} else {
+		int st, dead = wait(&st);
+		fail_if(dead != child, "wait returned pid=%d, wanted %d",
+			dead, child);
+		diag("st=%#lx", (unsigned long)st);
+		iff_ok1(!handle_segv, (st & 15) == 7);
+		uintptr_t f_addr = st & ~15,
+			trunc_ill = (uintptr_t)ill & ~15;
+		if(!imply_ok1(!handle_segv, f_addr == trunc_ill)) {
+			diag("f_addr=%#lx, trunc_ill=%#lx", f_addr, trunc_ill);
+		}
+
+		iff_ok1(handle_segv && !indirect, st == 1);
+		iff_ok1(handle_segv && indirect, st == 666);
+	}
+}
+END_TEST
+
+
 static void add_thread_tests(TCase *tc)
 {
 	tcase_add_test(tc, basic_thread_test);
 	tcase_add_test(tc, join_thread_test);
 	tcase_add_test(tc, exit_with_thread_test);
 	tcase_add_test(tc, segv_test);
+	tcase_add_test(tc, uncaught_segv_test);
 }
 
 
