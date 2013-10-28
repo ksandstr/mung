@@ -862,7 +862,6 @@ static int32_t handle_fork(void)
 	copy_space->prog_brk = sp->prog_brk;
 	copy_space->utcb_area = sp->utcb_area;
 	copy_space->kip_area = sp->kip_area;
-	/* FIXME: set copy_space->mgr_tid to something reasonable! */
 	copy_space->mgr_tid = L4_nilthread;
 	GUARD_INIT(copy_space, g_0);
 	GUARD_INIT(copy_space, g_1);
@@ -905,6 +904,16 @@ static int32_t handle_fork(void)
 
 end:
 	return copy_id;
+}
+
+
+static void handle_set_mgr_tid(L4_Word_t arg_tid)
+{
+	struct fs_thread *t = get_thread(muidl_get_sender());
+	if(t == NULL) return;
+
+	assert(t->space != NULL);
+	t->space->mgr_tid.raw = arg_tid;
 }
 
 
@@ -1225,6 +1234,7 @@ static void forkserv_dispatch_loop(void)
 	static const struct fork_serv_vtable vtable = {
 		.handle_fault = &handle_pf,
 		.as_cfg = &handle_as_cfg,
+		.set_mgr_tid = &handle_set_mgr_tid,
 		.send_page = &handle_send_page,
 		.add_tid = &handle_add_tid,
 		.fork = &handle_fork,

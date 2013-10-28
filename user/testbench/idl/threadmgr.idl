@@ -24,6 +24,6 @@ interface ThreadMgr: L4X2::ExceptionHandler
 		[MR(2)] out L4X2::word result)
 			raises(muidl::NoReply);
 
-	[StubTimeouts]
-	void segv(in L4X2::ThreadId dead_tid, in L4X2::word fault_addr);
+	[StubSendTimeout]
+	oneway void segv(in L4X2::ThreadId dead_tid, in L4X2::word fault_addr);
 };

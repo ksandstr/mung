@@ -33,6 +33,9 @@ interface ForkServ: L4X2::FaultHandler
 	[Label(0x664f)]		/* "fO" */
 	long fork();
 
+	[Label(0x734d)]		/* "sM" */
+	void set_mgr_tid(in L4X2::ThreadId tid);
+
 	/* @start is returned as where a positive increment's number of bytes was
 	 * allocated, or the new one-past-end address caused by a negative
 	 * increment. when @increment is 0, @start returns the current break's
