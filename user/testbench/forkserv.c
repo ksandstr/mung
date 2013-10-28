@@ -32,6 +32,7 @@
 
 /* IDL bits */
 #include "forkserv-defs.h"
+#include "threadmgr-defs.h"
 
 
 #define TPS_SHIFT 3
@@ -115,6 +116,7 @@ static size_t hash_word(const void *, void *);
 static size_t hash_threadno(const void *, void *);
 static struct fs_space *get_space(L4_Word_t id);
 static void handle_pf(L4_Word_t addr, L4_Word_t ip, L4_MapItem_t *page_ptr);
+static void handle_exit(int32_t status);
 
 
 /* thread_hash is hashed by threadno, but compared for equality with full TID
@@ -487,18 +489,39 @@ static void handle_pf(
 			page->page->local_addr, page->address, sp->prog_brk);
 #endif
 		htable_add(&sp->pages, int_hash(page_addr), &page->address);
-	} else if(page == NULL && page_addr > max_vaddr) {
-		/* illegal address */
-#if 1
-		printf("illegal access to addr=%#lx from ip=%#lx\n", addr, ip);
+	} else if(page == NULL || page_addr > max_vaddr) {
+		/* illegal address, or some such */
+#if 0
+		if(page_addr > max_vaddr) {
+			printf("illegal access to addr=%#lx from ip=%#lx\n", addr, ip);
+		} else {
+			printf("segfault in thread %lu:%lu, space %lu (brk %#lx)\n",
+				L4_ThreadNo(from), L4_Version(from), sp->id, sp->prog_brk);
+			printf("  addr %#lx, ip %#lx\n", addr, ip);
+		}
 #endif
-		goto no_reply;
-	} else if(page == NULL) {
-#if 1
-		printf("segfault in thread %lu:%lu, space %lu (brk %#lx)\n",
-			L4_ThreadNo(from), L4_Version(from), sp->id, sp->prog_brk);
-		printf("  addr %#lx, ip %#lx\n", addr, ip);
-#endif
+		int n;
+		if(!L4_IsNilThread(sp->mgr_tid)) {
+			n = __tmgr_segv_timeout(sp->mgr_tid, from.raw, addr, L4_ZeroTime);
+		} else {
+			n = -1;
+		}
+		if(n != 0) {
+			/* mgr_tid not found, or cannot be contacted; kill the
+			 * process instead.
+			 *
+			 * FIXME: this may happen more often than necessary when the
+			 * manager thread's program or stack isn't mapped to the extent
+			 * required for it to return to the ipc receive bit. that can be
+			 * alleviated by making the manager thread always have the largest
+			 * priority in its process.
+			 *
+			 * NOTE: for now, low 4 bits of status is 7 for a segfault. its
+			 * faulting address is delivered in the remaining bits, sans the
+			 * low four.
+			 */
+			handle_exit((addr & ~15) | 7);
+		}
 		goto no_reply;
 	} else if(page->page->refcount == 1
 		&& !CHECK_FLAG_ALL(page->access, fault_access))
@@ -1060,7 +1083,11 @@ static bool end_thread(L4_ThreadId_t tid)
 			found = true;
 		}
 	}
-	assert(found);
+	if(!found) {
+		printf("tid=%lu:%lu wasn't found\n",
+			L4_ThreadNo(tid), L4_Version(tid));
+		abort();
+	}
 
 	L4_MsgTag_t tag;
 	L4_Word_t ec = 0, res = fpager_threadctl(&tag, &ec, tid, L4_nilthread,

@@ -110,6 +110,12 @@ static COLD void start_mgr_thread(L4_ThreadId_t given_tid)
 			abort();
 		}
 		assert(want_tno == -1 || t == want_tno);
+
+		n = forkserv_set_mgr_tid(L4_Pager(), mgr_tid.raw);
+		if(n != 0) {
+			printf("%s: couldn't set mgr_tid (n=%d)\n", __func__, n);
+			abort();
+		}
 	} else {
 		/* this is called before forkserv is up & running. so the manager
 		 * thread will end up being paged by sigma0. its pager should be reset
@@ -432,16 +438,16 @@ void *join_thread_long(L4_ThreadId_t tid, L4_Time_t timeout, L4_Word_t *ec_p)
 	assert(abs(threads[t].version) == L4_Version(tid));
 
 	int32_t status;
-	L4_Word_t result;
+	L4_Word_t result = 0;
 	int n = __tmgr_join_thread_timeout(get_mgr_tid(), tid.raw,
 		&status, &result, timeout);
 	if(n > 0) {
 		*ec_p = n;
 		return NULL;
+	} else {
+		*ec_p = status;		/* hacky! */
+		return (void *)result;
 	}
-
-	/* TODO: return "status" somewhere? */
-	return status == 0 ? (void *)result : NULL;
 }
 
 
@@ -629,15 +635,17 @@ static void t_exit_thread(L4_Word_t result)
 static void t_segv(L4_Word_t a_dead_tid, L4_Word_t fault_addr)
 {
 	L4_ThreadId_t sender = muidl_get_sender();
-	if(!L4_IsLocalId(sender)) {
-		printf("%s: non-local sender %lu:%lu ignored\n", __func__,
-			L4_ThreadNo(sender), L4_Version(sender));
+	if(sender.raw != L4_Pager().raw && !L4_IsLocalId(sender)) {
+		printf("%s: non-local, non-pager sender %lu:%lu ignored\n",
+			__func__, L4_ThreadNo(sender), L4_Version(sender));
 		return;
 	}
 
 	L4_ThreadId_t dead_tid = { .raw = a_dead_tid };
+#if 0
 	printf("%s: dead_tid=%lu:%lu, fault_addr=%#lx\n", __func__,
 		L4_ThreadNo(dead_tid), L4_Version(dead_tid), fault_addr);
+#endif
 
 	t_end_thread(dead_tid, 1, fault_addr);
 }

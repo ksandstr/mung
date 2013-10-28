@@ -541,8 +541,6 @@ START_TEST(segv_test)
 {
 	plan_tests(3);
 
-	todo_start("fhskjdfhaksjdf");
-
 	/* test that access to valid memory doesn't fail. */
 	void *foo = malloc(128);
 	fail_if(foo == NULL);
@@ -567,7 +565,6 @@ START_TEST(segv_test)
 	}
 
 	free(foo);
-	todo_end();
 }
 END_TEST
 
