@@ -310,7 +310,7 @@ static void load_elf_module(struct boot_module *mod)
 	mod->ip = eh->e_entry;
 
 	/* blank the memory just to be safe. */
-	memset((void *)mod->start, 0, mod->end - mod->start + 1);
+	memset((void *)mod->start, 0, mod->end - mod->start);
 }
 
 
