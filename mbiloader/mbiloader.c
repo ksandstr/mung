@@ -24,9 +24,10 @@
 #define MAX_MMAP_ENTS 32
 
 
+/* when @end == 0, module is invalid. */
 struct boot_module
 {
-	L4_Word_t start, end;
+	L4_Word_t start, end;		/* [start, end) as set by bootloader */
 	L4_Word_t load_start, load_end;
 	L4_Word_t sp, ip;
 	char cmdline[128];
@@ -196,6 +197,9 @@ static void fill_kcp(
 	for(int i=0; i < sizeof(bms) / sizeof(bms[0]); i++) {
 		struct boot_module *m = bms[i];
 		if(m != NULL && m->end > 0) {
+			/* FIXME: is load_end inclusive or exclusive? this assumes
+			 * exclusive.
+			 */
 			printf("dedicating %#lx .. %#lx for boot module %d\n",
 				m->load_start, m->load_end, i);
 			mdbuf[p++] = (L4_MemoryDesc_t){
@@ -219,11 +223,13 @@ static void fill_kcp(
 			}
 		}
 		if(!found) {
-			printf("dedicating %#lx .. %#lx for module `%s'\n",
-				m->start & ~PAGE_MASK, m->end | PAGE_MASK, m->cmdline);
+			L4_Word_t lo = m->start & ~PAGE_MASK,
+				hi = (m->end - 1) | PAGE_MASK;
+			printf("dedicating [%#lx, %#lx] for module `%s'\n",
+				lo, hi, m->cmdline);
 			mdbuf[p++] = (L4_MemoryDesc_t){
 				.x.type = L4_DedicatedMemoryType, .x.v = 0,
-				.x.low = m->start >> 10, .x.high = m->end >> 10,
+				.x.low = lo >> 10, .x.high = hi >> 10,
 			};
 			list_mods[num_list++] = m;
 		}
@@ -251,7 +257,7 @@ static void fill_kcp(
 		*mod = (L4_Boot_Module_t){
 			.type = L4_BootInfo_Module, .version = 1,
 			.start = m->start,
-			.size = m->end - m->start + 1,
+			.size = m->end - m->start,
 			.cmdline_offset = (uint8_t *)cmdline_buf - (uint8_t *)mod,
 		};
 
@@ -441,7 +447,6 @@ int bootmain(multiboot_info_t *mbi, uint32_t magic)
 				bm->start, bm->end, bm->load_start, bm->load_end,
 				bm->cmdline);
 			r_start = MIN(uintptr_t, bm->start, r_start);
-			/* TODO: is the "- 1" correct? */
 			r_end = MAX(uintptr_t, bm->end - 1, r_end);
 		}
 	} else {
