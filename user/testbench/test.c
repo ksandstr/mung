@@ -197,20 +197,13 @@ struct test_thread_param
 };
 
 
-/* TODO: set up a mechanism for nonlocal exits */
+/* non-local exits can happen through exit_thread(). */
 static void test_wrapper_fn(void *param_ptr)
 {
 	const struct test_thread_param *p = param_ptr;
 	tsd_set(in_test_key, (void *)IN_TEST_MAGIC);
 	(*p->t->t_fun)(p->val);
 	/* TODO: fill in a test_status report, return it through exit_thread() */
-
-	L4_LoadMR(0, 0);
-	L4_MsgTag_t tag = L4_Send(p->end_tid);
-	if(L4_IpcFailed(tag)) {
-		printf("*** %s: pre-exit sync failed, ec=%#lx\n", __func__,
-			L4_ErrorCode());
-	}
 
 	exit_thread(NULL);
 }
@@ -244,13 +237,9 @@ struct fixture_param {
 };
 
 
-static void fixture_wrapper_fn(void *param_ptr)
-{
+static void fixture_wrapper_fn(void *param_ptr) {
 	struct fixture_param *p = param_ptr;
 	(*p->fn)();
-
-	L4_LoadMR(0, 0);
-	L4_Send(p->sync_tid);
 }
 
 
@@ -272,25 +261,16 @@ static bool run_fixture_list(struct list_head *list, bool teardown)
 			return false;
 		}
 
-		/* pre-join sync */
-		L4_MsgTag_t tag = L4_Receive_Timeout(thread, max_fixture_time);
-		if(L4_IpcFailed(tag) && L4_ErrorCode() == 3) {
-			printf("*** error: test fixture timed out\n");
-		} else if(L4_IpcFailed(tag)) {
-			printf("*** can't sync fixture, ec=%#lx\n", L4_ErrorCode());
+		L4_Word_t ec = 0;
+		struct test_status *status = join_thread_long(thread,
+			max_fixture_time, &ec);
+		if(status == NULL && ec != 0) {
+			printf("*** error: join of fixture thread failed, ec %#lx\n", ec);
+			abort();
 		} else {
-			L4_Word_t ec = 0;
-			struct test_status *status = join_thread_long(thread,
-				L4_TimePeriod(1500000), &ec); /* >1.5s indicates bad errors */
-			if(status == NULL && ec != 0) {
-				printf("*** error: join of fixture thread failed, ec %#lx\n",
-					ec);
-				abort();
-			} else {
-				if(status != NULL) rc = status->rc;
-				free(status);
-				free(p);
-			}
+			if(status != NULL) rc = status->rc;
+			free(status);
+			free(p);
 		}
 
 		if(!rc) break;
@@ -315,25 +295,27 @@ static bool run_test(TCase *tc, struct test *t, int test_value)
 		goto end;
 	}
 
-	/* sync with wrapper end
+	/* join it. there's no concurrency here; threads are merely used as a
+	 * nonlocal exit mechanism.
 	 *
 	 * FIXME: change the 3s timeout to a parameter of how long tests can take.
 	 * this should be available to all tests, and perhaps modifiable per
 	 * TCase.
 	 */
-	L4_MsgTag_t tag = L4_Receive_Timeout(thread, L4_TimePeriod(3000 * 1000));
-	if(L4_IpcFailed(tag)) {
-		printf("*** %s: wrapper sync failed, ec=%#lx\n", __func__,
-			L4_ErrorCode());
+	L4_Word_t ec = 0;
+	struct test_status *status = join_thread_long(thread,
+		L4_TimePeriod(3000 * 1000), &ec);
+	if(status == NULL && ec != 0) {
+		printf("*** %s: wrapper join failed, ec=%#lx\n", __func__, ec);
 		rc = false;
 		goto end;
-	}
-
-	struct test_status *status = join_thread(thread);
-	if(status != NULL) {
+	} else if(status != NULL) {
 		/* early terminations, etc. */
 		rc = status->rc;
 		free(status);
+	} else {
+		/* non-notable completion. */
+		assert(status == NULL && ec == 0);
 	}
 
 end:
