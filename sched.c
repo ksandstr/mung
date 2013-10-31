@@ -200,7 +200,7 @@ static uint64_t next_preempt_at(
 }
 
 
-/* dock a thread's quantum */
+/* dock a thread's quantum. not called for context switch on self-deletion. */
 static void leaving_thread(struct thread *self)
 {
 	assert(self->status != TS_RUNNING);
@@ -520,6 +520,24 @@ void return_to_scheduler(void)
 	leaving_thread(self);
 
 	assert(self->status != TS_RUNNING);
+	assert(next->status != TS_RUNNING);
+	next->status = TS_RUNNING;
+	current_thread = next;
+
+	if(!x86_irq_is_enabled()) x86_irq_enable();		/* for r_f_e() */
+	return_from_exn();
+	assert((next->ctx.eflags & (1 << 14)) == 0);
+	iret_to_scheduler(&next->ctx);
+}
+
+
+COLD void return_from_dead(void)
+{
+	struct thread *next = scheduler_thread;
+	assert(scheduler_thread != NULL);
+
+	TRACE("%s: going back to scheduler\n", __func__);
+
 	assert(next->status != TS_RUNNING);
 	next->status = TS_RUNNING;
 	current_thread = next;

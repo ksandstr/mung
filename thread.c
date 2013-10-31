@@ -1249,6 +1249,10 @@ void sys_threadcontrol(struct x86_exregs *regs)
 	assert(L4_IsGlobalId(dest->scheduler));
 
 dead:
+	if(unlikely(dest == current)) {
+		assert(check_thread_module(0));
+		return_from_dead();
+	}
 	result = 1;
 
 end:

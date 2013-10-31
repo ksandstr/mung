@@ -37,6 +37,12 @@ extern NORETURN void return_to_scheduler(void);
  */
 extern NORETURN void return_to_ipc(struct thread *target);
 
+/* very rare; invoked in thread self-deletion after the current thread has
+ * been destroyed. basically a variant of return_to_scheduler() but doesn't
+ * reference current at all.
+ */
+extern NORETURN void return_from_dead(void);
+
 /* ISRs that don't call return_to_*() should instead call return_from_exn() as
  * their last line. it disables interrupts until the interrupt flag is
  * reloaded by IRET.
