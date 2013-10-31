@@ -669,6 +669,52 @@ START_TEST(deletion)
 END_TEST
 
 
+static void suicide_thread_fn(void *param)
+{
+	L4_Sleep(A_SHORT_NAP);
+	if(param != NULL) {
+		L4_Word_t res = L4_ThreadControl(L4_Myself(), L4_nilthread,
+			L4_nilthread, L4_nilthread, (void *)-1);
+		diag("returned from suicide ThreadControl; res=%lu", res);
+	} else {
+		diag("not committing suicide");
+	}
+}
+
+
+/* test that self-deletion causes the thread to be destroyed. */
+START_LOOP_TEST(suicide, iter, 0, 1)
+{
+	plan_tests(4);
+	const bool die = CHECK_FLAG(iter, 1);
+	diag("die=%s", btos(die));
+
+	L4_ThreadId_t other = xstart_thread(&suicide_thread_fn,
+		die ? "die!" : NULL);
+	L4_MsgTag_t tag = L4_Receive_Timeout(other, TEST_IPC_DELAY);
+	L4_Word_t ec = L4_ErrorCode();
+	ok1(L4_IpcFailed(tag));
+	imply_ok1(die, ec == 5);	/* peer doesn't exist */
+	imply_ok1(!die, ec == 3);	/* receive timed out */
+	iff_ok1(!thr_exists(other), die);
+	if(exit_status() != 0) {
+		diag("ec=%#lx", ec);
+	}
+
+	if(!die) xjoin_thread(other);
+	else {
+		/* it's easier to just recreate the TID instead of changing
+		 * kill_thread() to handle threads that were deleted out of band.
+		 */
+		L4_Word_t res = L4_ThreadControl(other, L4_Myself(), L4_Myself(),
+			L4_Pager(), (void *)-1);
+		fail_if(res != 1, "ec=%#lx", L4_ErrorCode());
+		kill_thread(other);
+	}
+}
+END_TEST
+
+
 /* actually tests whether a thread is dead, or inactive. these states are
  * entered when e.g. a thread raises an exception but the exception handler
  * thread is either not set or cannot be found.
@@ -961,6 +1007,7 @@ Suite *thread_suite(void)
 		tcase_add_test(tc, spacespec_validity);
 		tcase_add_test(tc, relocate_utcb);
 		tcase_add_test(tc, deletion);
+		tcase_add_test(tc, suicide);
 		suite_add_tcase(s, tc);
 	}
 
