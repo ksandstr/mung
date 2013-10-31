@@ -132,6 +132,7 @@ static L4_ThreadId_t console_tid, fpager_tid, helper_tid, forkserv_tid;
 static L4_Word_t map_range_pos = 0, next_space_id = 100, next_async_id = 1;
 static struct helper_work *helper_queue = NULL;
 static L4_Word_t max_vaddr;
+static int32_t root_space_id = -1;
 
 
 static size_t hash_word(const void *elem, void *priv) {
@@ -490,8 +491,9 @@ static void handle_pf(
 #endif
 		htable_add(&sp->pages, int_hash(page_addr), &page->address);
 	} else if(page == NULL || page_addr > max_vaddr) {
-		/* illegal address, or some such */
-#if 0
+		/* illegal address, or some such. the print should be retained for
+		 * debugging.
+		 */
 		if(page_addr > max_vaddr) {
 			printf("illegal access to addr=%#lx from ip=%#lx\n", addr, ip);
 		} else {
@@ -499,10 +501,16 @@ static void handle_pf(
 				L4_ThreadNo(from), L4_Version(from), sp->id, sp->prog_brk);
 			printf("  addr %#lx, ip %#lx\n", addr, ip);
 		}
-#endif
 		int n;
 		if(!L4_IsNilThread(sp->mgr_tid)) {
-			n = __tmgr_segv_timeout(sp->mgr_tid, from.raw, addr, L4_ZeroTime);
+			/* we'll be somewhat more persistent with the root task, because
+			 * it cannot reasonably be killed. (it can end up in a pager loop
+			 * though, so until the helper thread starts sending these things
+			 * a finite send-timeout will serve as band-aid adequately.)
+			 */
+			n = __tmgr_segv_timeout(sp->mgr_tid, from.raw, addr,
+				sp->id == root_space_id ? L4_TimePeriod(200 * 1000)
+					: L4_ZeroTime);
 		} else {
 			n = -1;
 		}
@@ -946,6 +954,9 @@ static void handle_as_cfg(
 	L4_Fpage_t kip_area,
 	L4_Fpage_t utcb_area)
 {
+	assert(root_space_id == -1 || root_space_id == space_id);
+	root_space_id = space_id;
+
 	struct fs_space *sp = get_space(space_id);
 	if(sp == NULL) sp = make_initial_space(space_id);
 	if(!L4_IsNilFpage(kip_area)) sp->kip_area = kip_area;

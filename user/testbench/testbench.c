@@ -494,7 +494,7 @@ static void transfer_to_forkserv(void)
 	 */
 	const L4_KernelInterfacePage_t *kip = L4_GetKernelInterface();
 	int n = forkserv_as_cfg(forkserv_tid, 1,
-		L4_nilthread.raw,		/* FIXME: create the manager thread, too */
+		get_mgr_tid().raw,
 		L4_FpageLog2((L4_Word_t)kip, kip->KipAreaInfo.X.s),
 		L4_FpageLog2((L4_Word_t)__L4_Get_UtcbAddress(), 13));
 	if(n != 0) {
