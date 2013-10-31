@@ -308,13 +308,17 @@ static bool run_test(TCase *tc, struct test *t, int test_value)
 	if(status == NULL && ec != 0) {
 		printf("*** %s: wrapper join failed, ec=%#lx\n", __func__, ec);
 		rc = false;
-		goto end;
+	} else if(status != NULL && ec != 0) {
+		printf("*** test caused a segmentation fault at %p\n", status);
+		rc = false;
 	} else if(status != NULL) {
-		/* early terminations, etc. */
+		/* ordinary completion. */
 		rc = status->rc;
 		free(status);
 	} else {
-		/* non-notable completion. */
+		/* non-notable completion. (FIXME: combine w/ above in
+		 * test_wrapper_fn())
+		 */
 		assert(status == NULL && ec == 0);
 	}
 
@@ -617,16 +621,14 @@ static void run_test_in_case(
 		if(L4_IpcFailed(tag)) {
 			printf("*** receive from child failed: ec=%#lx\n",
 				L4_ErrorCode());
-			abort();
-		}
-		L4_Word_t tmp;
-		L4_StoreMR(1, &tmp); failed = (bool)tmp;
-		L4_StoreMR(2, &tmp); rc = (int)tmp;
-		L4_LoadMR(0, 0);
-		tag = L4_Reply(child_tid);
-		if(L4_IpcFailed(tag)) {
-			printf("*** reply to child failed: ec=%#lx\n", L4_ErrorCode());
-			abort();
+			failed = true;
+			rc = 0;		/* FIXME: set to something more telling */
+		} else {
+			L4_Word_t tmp;
+			L4_StoreMR(1, &tmp); failed = (bool)tmp;
+			L4_StoreMR(2, &tmp); rc = (int)tmp;
+			L4_LoadMR(0, 0);
+			L4_Reply(child_tid);
 		}
 
 		int status, dead_id;
