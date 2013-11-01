@@ -31,6 +31,7 @@ has 'iter' => ( is => 'rw', isa => 'Int' );
 
 # private bits
 has 'tap_buf' => ( is => 'rw', isa => 'ArrayRef[Str]', default => sub { [] } );
+has 'segv_address' => (is => 'rw', isa => 'Maybe[Str]', required => 0);
 
 
 
@@ -53,6 +54,14 @@ sub tap_line {
 }
 
 
+sub on_segv {
+	my $self = shift;
+	my $at = shift;
+
+	$self->segv_address($at // 0);
+}
+
+
 # open a result object on this test.
 sub begin {
 	my $self = shift;
@@ -64,7 +73,7 @@ sub begin {
 }
 
 
-# close the result object. arguments as for Mung::TestResult->done, i.e. panic
+# close the result object. arguments as for Mung::TestResult->new, i.e. panic
 # or failmsg where appropriate
 sub end {
 	my $self = shift;
@@ -74,11 +83,22 @@ sub end {
 	# in between), recognize it and add an all-skip plan.
 	my $tap = join("\n", @{$self->tap_buf});
 	my $lines = @{$self->tap_buf};
+	# (happens because ->end called twice in a row. makes debugging easier.)
+	die "no lines!" if $lines == 0;
 	if($lines == 1) {
 		$tap = "1..0\n$tap";
 	}
 
-	my $result = Mung::TestResult->new(@_,
+	my @segv;
+	if($self->segv_address) {
+		@segv = (status => 'SEGV',
+			fail_msg => sprintf('fault address is 0x%x',
+				$self->segv_address));
+	}
+
+	#print STDERR "---\n$tap\n---\n";
+	#print STDERR "  ($lines lines.)\n";
+	my $result = Mung::TestResult->new(@_, @segv,
 		test => $self, iter => $self->iter,
 		parser => TAP::Parser->new({ tap => $tap }),
 		test_log => $self->log_lines);

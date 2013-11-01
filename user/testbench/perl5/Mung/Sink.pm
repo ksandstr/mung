@@ -126,7 +126,7 @@ sub _completed {
 }
 
 
-# args: $name, (as for Mung::Test->done)
+# args: $name, (as for Mung::TestResult->new)
 # returns the relevant Mung::TestResult object, mostly for the benefit of
 # Moose "around"s.
 sub _end_test {
@@ -237,6 +237,7 @@ sub ctl_line {
 	my $self = shift;
 	my $msg = shift;
 
+	study $msg;
 	if($msg =~ /(begin|end) (suite|tcase|test) [`'](\w+)'(\s+(\w+)\s+(\d+))?/) {
 		my $tag = $5 || '';
 		my $val = $6 && int($6);
@@ -249,11 +250,15 @@ sub ctl_line {
 		# run_test()'s return value. it's used for passing the TAP return
 		# code.
 		$self->_end_test($1, rc => int($2) || 0);
+	} elsif($msg =~ /segmentation fault.*at\s+(0x[0-9a-fA-F]+)?/) {
+		my $where;
+		$where = POSIX::strtoul($1) if $1;
+		$self->test->on_segv($where);
 	} elsif($msg =~ /desc (test|tcase|suite) `(\w+)'(\s*low:(\d+)\s*high:(\d+)\s*id:([a-zA-Z0-9]+))?/) {
 		my @args = (name => $2);
 		push @args, (low => int($4), high => int($5), id => $6) if $3;
 		$self->desc_line($1, @args);
-	} elsif($msg =~ /(.+) follow/) {
+	} elsif($msg =~ /(.+) follow$/) {
 		# NOTE: should ignore from here until the next valid control
 		# message & possibly log into a hash keyed with $1
 	} else {

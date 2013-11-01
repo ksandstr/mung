@@ -195,7 +195,7 @@ subtest "test plans" => sub {
 
 # part 4: test failure (bailout, assert fail, segfault)
 subtest "test fails" => sub {
-	plan tests => 12;
+	plan tests => 24;
 
 	foreach my $suffix ("", "nf") {
 		foreach my $kind (qw/basic assert segv/) {
@@ -212,6 +212,9 @@ subtest "test fails" => sub {
 					diag("  (wanted $wantstatus)");
 				}
 				ok($res->fail_msg, "... fail_msg was captured");
+
+				ok($kind ne 'segv' || $res->did_segv);
+				ok($kind eq 'segv' || !$res->did_segv);
 			}
 		}
 	}

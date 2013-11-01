@@ -47,7 +47,7 @@ has 'results' => (
 #	required => 0,
 #	default => sub { [] });
 
-# either false, or "PANIC", or "FAIL"
+# either false, "PANIC" (kernel fails), "FAIL" (test bailouts), or "SEGV"
 has 'status' => (is => 'rw', isa => 'Str');
 
 # defined when $self->status isn't false
@@ -75,6 +75,12 @@ sub BUILDARGS {
 }
 
 
+sub did_segv {
+	my $self = shift;
+	return $self->status eq 'SEGV';
+}
+
+
 # compares the test results. this predicate controls how double results are
 # presented.
 sub eqv_to {
@@ -87,7 +93,7 @@ sub eqv_to {
 	return 0 unless $self->test->id eq $other->test->id;
 
 	my @fields = (qw/iter actual_passed actual_ok actual_failed/,
-		qw/skipped tests_planned tests_run skip_all status fail_msg/);
+		qw/skipped tests_planned tests_run skip_all status fail_msg segv/);
 	foreach my $name (@fields) {
 		my $ours = $self->$name // $scd;
 		my $theirs = $other->$name // $scd;
