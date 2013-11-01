@@ -32,6 +32,14 @@ has 'desc_stream' => (
 	default => sub { IO::String->new },
 );
 
+# private bits
+has '_iterated' => (
+	is => 'ro',
+	isa => 'ArrayRef',
+	default => sub { [] },
+);
+has '_desc_before_iter' => ( is => 'rw', isa => 'Int' );
+
 
 sub start_test {
 	my $self = shift;
@@ -41,7 +49,8 @@ sub start_test {
 		my $v = shift;
 		$self->$n($v);
 	}
-	$self->desc_stream->seek(0, 0);
+	$self->build_iter_desc if @{$self->_iterated};
+	$self->desc_stream->pos(0);
 }
 
 
@@ -109,8 +118,51 @@ sub add_test {
 	my $desc = $self->desc_stream;
 	print $desc "*** desc suite `$suite'\n";
 	print $desc "*** desc tcase `$tcase'\n";
-	# FIXME: iter support
-	print $desc "*** desc test `$test' low:0 high:0 id:$id\n";
+	# TODO: die when a test is first entered as non-iterated, and then with an
+	# iteration parameter.
+	if(!exists $args{iter}) {
+		print $desc "*** desc test `$test' low:0 high:0 id:$id\n";
+	} else {
+		push @{$self->_iterated}, [$suite, $tcase, $test, \%args];
+	}
+}
+
+
+# NOTE: this function takes, ehm, liberties with regard to the "describe mode"
+# output. as there are no tests, it's not known whether this variant would be
+# accepted by Sink just as well as the testbench variant.
+#
+# writing tests about test support code seems a bit "out there", however.
+sub build_iter_desc {
+	my $self = shift;
+
+	my $stream = $self->desc_stream;
+	if(!defined $self->_desc_before_iter) {
+		$self->_desc_before_iter($stream->pos);
+	} else {
+		$stream->truncate($self->_desc_before_iter);
+	}
+
+	my (%lohi, %map);
+	foreach (@{$self->_iterated}) {
+		my ($suite, $tcase, $test, $args) = @$_;
+		my $name = "$suite:$tcase:$test";
+		$map{$name} = $_ unless exists $map{$name};
+
+		my $iter = $args->{iter} // die "no iter? what.";
+		my ($lo, $hi) = @{$lohi{$name} // [0, 0]};
+		$lo = $iter if $iter < $lo;
+		$hi = $iter if $iter > $hi;
+		$lohi{$name} = [$lo, $hi];
+	}
+	foreach (sort (keys %map)) {
+		my ($suite, $tcase, $test, $args) = @{$map{$_}};
+		my ($lo, $hi) = @{$lohi{$_}};
+		my $id = $args->{id} // ($suite . $tcase . $test);
+		print $stream "*** desc suite `$suite'\n";
+		print $stream "*** desc tcase `$tcase'\n";
+		print $stream "*** desc test `$test' low:$lo high:$hi id:$id\n";
+	}
 }
 
 

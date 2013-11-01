@@ -6,6 +6,8 @@ use Moose;
 with('Mung::Output');
 
 
+# these are actually line fragments. newlines close lines, and may break up
+# single fragments.
 has 'lines' => (
 	is => 'ro',
 	isa => 'ArrayRef[HashRef]',
@@ -41,6 +43,34 @@ sub dump_to_diag {
 		my ($type, $line) = @$_{qw/type line/};
 		Test::More::diag("$type: $line");
 	}
+}
+
+
+# concatenated fragments from $self->lines per type given.
+sub get_full_status {
+	my $self = shift;
+	my $type = shift // 'status';
+
+	my @out;
+	my $buf = '';
+	foreach (@{$self->lines}) {
+		next unless $_->{type} eq $type;
+		my $line = $_->{line} || next;
+		if($line =~ /\n./) {
+			my @bits = split /\n/, $line;
+			push @out, $buf . (shift @bits) . "\n";
+			push @out, @bits;
+			$buf = '';
+		} else {
+			$buf .= $line;
+			if($line =~ /\n$/) {
+				push @out, $buf;
+				$buf = '';
+			}
+		}
+	}
+
+	return wantarray ? @out : \@out;
 }
 
 

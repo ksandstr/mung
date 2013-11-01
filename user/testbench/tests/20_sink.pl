@@ -11,7 +11,7 @@ use Mung::Loop;
 use ScriptModule;
 use BufferOutput;
 
-use Test::More tests => 5;
+use Test::More tests => 7;
 
 
 sub make_loop {
@@ -119,4 +119,65 @@ subtest "fail before plan" => sub {
 	ok($res->status, "test broke");
 	ok($res->passed == 0, "no tests passed");
 	ok($res->failed == 0, "no tests failed");
+};
+
+
+subtest "test count in progress report (simple)" => sub {
+	plan tests => 4;
+
+	my $m = ScriptModule->new;
+	foreach (qw/first second/) {
+		$m->add_test('s', 'tc', $_, failed => 0, rc => 0,
+			body => [
+				$m->plan(2),
+				$m->ok("fine ($_)"),
+				$m->ok("peachy ($_)"),
+			]);
+	}
+
+	my $loop = make_loop($m);
+	$loop->run;
+	my $sink = $loop->sink;
+	$sink->output->dump_to_diag if $ENV{VERBOSE};
+	my @stats = grep /Suite\s+\w+:.*\[.*OK\]/, $sink->output->get_full_status;
+	ok(@stats > 0, "status lines were produced");
+	die "no matching status lines"
+		unless @stats && $stats[0] =~ /Suite\s+\w+:.*\[(\d+)\/(\d+)\s+OK\]/;
+	my $pass = int($1);
+	my $total = int($2);
+	is($pass, $total, "all passed");
+	is($total, 2, "reported for 2");
+	isnt($total, 4, "didn't report 4");
+};
+
+
+subtest "test count in progress report (iterated)" => sub {
+	plan tests => 3;
+	use constant NUM_ITERS => 5;
+
+	my $m = ScriptModule->new;
+	foreach (qw/first second/) {
+		for(my $i = 0; $i < NUM_ITERS; $i++) {
+			$m->add_test('s', 'tc', $_, iter => $i,
+				failed => 0, rc => 0,
+				body => [
+					$m->plan(2),
+					$m->ok("fine ($_)"),
+					$m->ok("peachy ($_)"),
+				]);
+		}
+	}
+
+	my $loop = make_loop($m);
+	$loop->run;
+	my $sink = $loop->sink;
+	$sink->output->dump_to_diag if $ENV{VERBOSE};
+	my @stats = grep /Suite\s+\w+:.*\[.*OK\]/, $sink->output->get_full_status;
+	ok(@stats > 0, "status lines were produced");
+	die "no matching status lines"
+		unless @stats && $stats[0] =~ /Suite\s+\w+:.*\[(\d+)\/(\d+)\s+OK\]/;
+	my $pass = int($1);
+	my $total = int($2);
+	is($pass, $total, "all passed");
+	is($total, 2, "reported for 2");
 };
