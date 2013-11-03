@@ -3,6 +3,7 @@ use Moose;
 
 use TAP::Parser;
 use Mung::TestResult;
+use Mung::SingleResult;
 
 
 =head1 NAME
@@ -73,8 +74,8 @@ sub begin {
 }
 
 
-# close the result object. arguments as for Mung::TestResult->new, i.e. panic
-# or failmsg where appropriate
+# close the result object. arguments as for Mung::SingleResult->new, i.e.
+# panic or failmsg where appropriate
 sub end {
 	my $self = shift;
 
@@ -98,7 +99,7 @@ sub end {
 
 	#print STDERR "---\n$tap\n---\n";
 	#print STDERR "  ($lines lines.)\n";
-	my $result = Mung::TestResult->new(@_, @segv,
+	my $result = Mung::SingleResult->new(@_, @segv,
 		test => $self, iter => $self->iter,
 		parser => TAP::Parser->new({ tap => $tap }),
 		test_log => $self->log_lines);

@@ -126,8 +126,8 @@ sub _completed {
 }
 
 
-# args: $name, (as for Mung::TestResult->new)
-# returns the relevant Mung::TestResult object, mostly for the benefit of
+# args: $name, (as for Mung::SingleResult->new)
+# returns the relevant Mung::SingleResult object, mostly for the benefit of
 # Moose "around"s.
 sub _end_test {
 	my $self = shift;
@@ -160,7 +160,8 @@ sub _end_test {
 # panic lines are received from outside as they are relevant to process
 # restarts, which the Sink doesn't control.
 #
-# returns Mung::TestResult . leaves $self->test as it was before the call.
+# returns Mung::SingleResult, and leaves $self->test as it was before the
+# call.
 sub test_panic {
 	my $self = shift;
 	my $msg = shift // '<<no message>>';
