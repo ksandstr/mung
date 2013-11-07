@@ -192,11 +192,14 @@ sub close_suite {
 		push @tests, [ $test, $res ];
 	}
 	$suite->{results} = \@tests;
-	my %summary;
-	foreach my $key (qw/tests_planned passed skipped/) {
-		$summary{$key} = sum(0, map { $_->[1]->$key || () } @tests);
+
+	my $passed = 0;
+	foreach (@tests) {
+		$passed++ unless $_->[1]->has_problems;
 	}
-	$self->status("[$summary{passed}/$summary{tests_planned} OK]\n");
+	my $count = scalar @tests;
+	$self->status("[$passed/$count OK]\n");
+
 	$self->status("note: $_\n") foreach @comment;
 
 	$self->suite(undef);

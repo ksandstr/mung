@@ -134,6 +134,14 @@ subtest "test count in progress report (simple)" => sub {
 				$m->ok("peachy ($_)"),
 			]);
 	}
+	# also a failed test. this should provoke a true ->has_problems for the
+	# TestResult object.
+	$m->add_test('s', 'tc', "simple_fail", failed => 1, rc => 1,
+		body => [
+			$m->plan(2),
+			$m->ok("no problemo"),
+			$m->not_ok("what happen"),
+		]);
 
 	my $loop = make_loop($m);
 	$loop->run;
@@ -145,9 +153,9 @@ subtest "test count in progress report (simple)" => sub {
 		unless @stats && $stats[0] =~ /Suite\s+\w+:.*\[(\d+)\/(\d+)\s+OK\]/;
 	my $pass = int($1);
 	my $total = int($2);
-	is($pass, $total, "all passed");
-	is($total, 2, "reported for 2");
-	isnt($total, 4, "didn't report 4");
+	is($pass, $total - 1, "one failed");
+	is($total, 3, "reported for 3");
+	isnt($total, 6, "didn't report 6");
 };
 
 
