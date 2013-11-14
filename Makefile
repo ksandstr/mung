@@ -51,10 +51,11 @@ tags: $(shell find . -iname "*.[ch]" -or -iname "*.p[lm]")
 	@ctags -R *
 
 
-ia32-kernel: linker.ld loader.o kmain.o kip.o cpu.o heap.o thread.o kth.o \
+ia32-kernel: linker.ld loader.o kmain.o kip.o cpu.o heap.o thread.o \
+		ktest.o kth.o \
 		trace.o sched.o exception.o space.o ipc.o ipc_typed.o mapdb.o \
 		acpi.o gdt.o idt.o irq.o pic.o apic.o isr.o timer.o context.o \
-		dlmalloc.o ccan-htable.o ccan-list.o
+		dlmalloc.o tap.o ccan-htable.o ccan-list.o
 	@echo "  LD $@"
 	@$(LD) -T linker.ld -o $@ $(filter %.o,$^) \
 		-L lib -lukernel_util \
@@ -62,6 +63,13 @@ ia32-kernel: linker.ld loader.o kmain.o kip.o cpu.o heap.o thread.o kth.o \
 
 
 dlmalloc.o: CFLAGS += -Wno-unused-variable
+
+# mostly for tap.o
+%.o: user/testbench/%.c
+	@echo "  CC $@ <user>"
+	@$(CC) -c -o $@ $< $(CFLAGS) -nostartfiles -nodefaultlibs -MMD
+	@test -d .deps || mkdir -p .deps
+	@mv $(subst user/testbench/,,$(<:.c=.d)) .deps/
 
 
 include $(wildcard .deps/*.d)

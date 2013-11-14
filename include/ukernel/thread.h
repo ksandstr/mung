@@ -55,10 +55,10 @@ typedef L4_Word_t thread_id;
 /* (requires inclusion of <ukernel/space.h>) */
 #define IS_KERNEL_THREAD(thread) ((thread)->space == kernel_space)
 
-/* there's need for two kernel threads: the boot (scheduler) thread, and the
- * sigma0 pager.
+/* there's need for a few kernel threads: the boot (scheduler) thread, the
+ * sigma0 pager, and possibly the ones used by the kernel's self-tests.
  */
-#define NUM_KERNEL_THREADS 2
+#define NUM_KERNEL_THREADS 8
 
 
 struct space;

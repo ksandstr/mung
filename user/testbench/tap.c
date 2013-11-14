@@ -36,6 +36,8 @@
  * test harness (i.e. main()) thread.
  */
 
+#if !defined(__KERNEL__) || defined(ENABLE_SELFTEST)
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -43,8 +45,13 @@
 #include <stdarg.h>
 #include <ccan/likely/likely.h>
 
+#ifndef __KERNEL__
 #include "defs.h"
 #include "test.h"
+#else
+#include <ukernel/ktest.h>
+#define flush_log(...)
+#endif
 
 
 #define TRY_INIT do { \
@@ -73,6 +80,7 @@ void tap_reset(void)
 }
 
 
+#ifndef __KERNEL__
 void _fail_unless(
 	int result,
 	const char *file,
@@ -94,6 +102,7 @@ void _fail_unless(
 		exit_on_fail();
 	}
 }
+#endif
 
 
 int _gen_result(
@@ -298,3 +307,5 @@ int exit_status(void)
 		return failed_tests + expected_tests - num_tests_run;
 	}
 }
+
+#endif

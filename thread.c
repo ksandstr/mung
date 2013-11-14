@@ -29,6 +29,7 @@
 #include <ukernel/trace.h>
 #include <ukernel/bug.h>
 #include <ukernel/kip.h>
+#include <ukernel/ktest.h>
 #include <ukernel/thread.h>
 
 
@@ -605,6 +606,15 @@ L4_ThreadId_t get_local_id(struct thread *t)
 }
 
 
+static inline bool selftest_enabled(void) {
+#ifdef ENABLE_SELFTEST
+	return true;
+#else
+	return false;
+#endif
+}
+
+
 /* system calls */
 
 /* exregs control bitmasks (W RCdh pufi sSRH) */
@@ -656,8 +666,23 @@ L4_Word_t sys_exregs(
 		|| dest_thread->space != current->space
 		|| dest_thread->utcb_pos < 0)
 	{
-		L4_VREG(thread_get_utcb(current), L4_TCR_ERRORCODE) = 2;
-		return L4_nilthread.raw;
+		if(unlikely(selftest_enabled()
+			&& !L4_IsNilThread(dest) && dest_thread != NULL
+			&& L4_ThreadNo(dest) == first_user_threadno()
+			&& CHECK_FLAG(current->space->flags, SF_PRIVILEGE)))
+		{
+			/* succeed, but return only pager. do nothing else. */
+			pager_p->raw = L4_VREG(thread_get_utcb(dest_thread),
+				L4_TCR_PAGER);
+			assert(dest_thread->space != current->space);
+			return dest_thread->id;
+		} else {
+			/* threadspec was invalid, or not present, or in a different
+			 * space, or not active.
+			 */
+			L4_VREG(thread_get_utcb(current), L4_TCR_ERRORCODE) = 2;
+			return L4_nilthread.raw;
+		}
 	}
 
 	L4_ThreadId_t result;

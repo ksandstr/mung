@@ -154,8 +154,8 @@ void make_kip(
 	*(L4_Word_t *)(mem + 0xc0) =
 		(L4_Word_t)sched_prec.raw << 16
 		| (L4_Word_t)L4_TimePeriod(1000).raw;
-	/* ThreadInfo: UserBase 128, SystemBase max_irq + 1, full bits in
-	 * threadno
+	/* ThreadInfo: SystemBase max_irq + 1, UserBase = SystemBase + kth_max,
+	 * full bits in threadno
 	 */
 	*(L4_Word_t *)(mem + 0xc4) = (max_irq + 1 + NUM_KERNEL_THREADS) << 20
 		| (max_irq + 1) << 8 | 18;

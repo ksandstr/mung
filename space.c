@@ -831,6 +831,7 @@ COLD void init_spaces(struct list_head *resv_list)
 	kernel_space->tss = &kernel_tss;
 	kernel_space->tss_len = sizeof(struct tss);
 	kernel_space->tss_seg = 5;
+	kernel_space->redirector = L4_anythread;
 
 	/* preallocate page table pages for the kernel segment, so that it makes
 	 * sense to copy the page table pointers.

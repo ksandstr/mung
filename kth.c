@@ -1,4 +1,12 @@
 
+/* tricky cooperative unsafe kernel thread module. no provision for joining
+ * threads, or for knowing whether a kth's <struct thread> is still valid or
+ * not once at least one threadswitch has occurred from one kthread to
+ * another.
+ *
+ * burn, baby, burn.
+ */
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <assert.h>
@@ -111,6 +119,14 @@ struct thread *kth_start(void (*function)(void *), void *parameter)
 }
 
 
+bool kth_yield(void)
+{
+	struct thread *current = get_current_thread();
+	current->status = TS_READY;
+	return schedule();
+}
+
+
 COLD struct thread *kth_init(L4_ThreadId_t boot_tid)
 {
 	assert(next_kthread_num < 0);
@@ -135,3 +151,43 @@ COLD struct thread *kth_init(L4_ThreadId_t boot_tid)
 
 	return boot;
 }
+
+
+#include <ukernel/ktest.h>
+
+#if KTEST
+static void returning_kth(void *param) {
+	diag("%s running", __func__);
+	*(bool *)param = true;
+}
+
+
+START_TEST(t_basics)
+{
+	plan_tests(2);
+
+	bool *signal = malloc(sizeof(bool));
+	*signal = false;
+	diag("starting kthread");
+	struct thread *t = kth_start(&returning_kth, signal);
+	diag("t=%p", t);
+	bool sched_ok = true;
+	int calls = 0;
+	while(!*signal && calls++ < 500) {
+		sched_ok = sched_ok & kth_yield();
+	}
+	if(!ok(calls == 1, "called kth_yield() once")) {
+		diag("calls=%d", calls);
+	}
+	ok(sched_ok, "scheduling selected another thread");
+
+	free(signal);
+}
+END_TEST
+
+
+void ktest_kth(void)
+{
+	RUN(t_basics);
+}
+#endif

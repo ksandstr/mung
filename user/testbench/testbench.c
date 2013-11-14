@@ -608,10 +608,38 @@ end:
 }
 
 
+static void invoke_ktest(L4_ThreadId_t s0_tid)
+{
+	/* kernel tests are executed by sigma0's pager in response to a special
+	 * IPC from a privileged space (this one).
+	 *
+	 * note that L4_PagerOf() doesn't usually work on out-of-space threads;
+	 * however, when ENABLE_SELFTEST is defined for mung, it works for
+	 * first_user_threadno from a privileged space.
+	 */
+	L4_ThreadId_t s0_pager = L4_PagerOf(s0_tid);
+	if(L4_IsNilThread(s0_pager)) {
+		printf("*** can't find sigma0's pager from userspace.\n");
+		printf("*** was the microkernel compiled with ENABLE_SELFTEST?\n");
+		abort();
+	}
+
+	L4_LoadMR(0, (L4_MsgTag_t){ .X.label = 0x5374 }.raw);
+	L4_ThreadId_t from;
+	L4_MsgTag_t tag = L4_Ipc(s0_pager, L4_anythread,
+		L4_Timeouts(L4_Never, L4_Never), &from);
+	if(L4_IpcFailed(tag)) {
+		printf("%s: IPC failed, ec=%#lx\n", __func__, L4_ErrorCode());
+		abort();
+	}
+}
+
+
 int main(void)
 {
 	printf("hello, world!\n");
 	calibrate_delay_loop();
+	L4_ThreadId_t s0_tid = L4_Pager();
 
 	/* FIXME: add option to _not_ activate forkserv. */
 	const char *boot_cmdline = start_forkserv();
@@ -627,9 +655,9 @@ int main(void)
 
 	const suite_ctor *suites;
 	int n_suites;
-	/* choose between the actual test suites, or the meta suite, which
-	 * produces various results to test both generation thereof and their
-	 * capture by the reporting script.
+	/* choose between the userspace test suites, the in-kernel test suite, or
+	 * the meta suite, which produces various results to test both generation
+	 * thereof and their capture by the reporting script.
 	 */
 	if(cmd_opt(&opts, "meta") != NULL) {
 		static const suite_ctor meta_plan[] = {
@@ -637,6 +665,9 @@ int main(void)
 		};
 		suites = meta_plan;
 		n_suites = NUM_ELEMENTS(meta_plan);
+	} else if(cmd_opt(&opts, "ktest") != NULL) {
+		invoke_ktest(s0_tid);
+		n_suites = 0;
 	} else {
 		/* actual microkernel test suite */
 		static const suite_ctor real_plan[] = {

@@ -26,8 +26,9 @@
 #include <ukernel/sched.h>
 #include <ukernel/mapdb.h>
 #include <ukernel/kip.h>
-#include <ukernel/misc.h>
 #include <ukernel/bug.h>
+#include <ukernel/ktest.h>
+#include <ukernel/misc.h>
 
 
 struct tss kernel_tss;
@@ -266,6 +267,22 @@ static void add_mem_to_sigma0(
 }
 
 
+static bool try_selftest(L4_ThreadId_t from, L4_MsgTag_t tag)
+{
+#ifdef ENABLE_SELFTEST
+	if(tag.X.label == 0x5374) {		/* "St" */
+		struct thread *t = thread_find(from.raw);
+		assert(t != NULL);
+		if(CHECK_FLAG(t->space->flags, SF_PRIVILEGE)) {
+			run_all_tests();
+			return true;
+		}
+	}
+#endif
+	return false;
+}
+
+
 static void pager_thread(void *parameter)
 {
 	for(;;) {
@@ -304,7 +321,7 @@ static void pager_thread(void *parameter)
 				while(len > 0 && buf[len - 1] == '\n') buf[--len] = '\0';
 				printf("[sigma0]: %s\n", buf);
 				L4_VREG(utcb, L4_TCR_MR(0)) = 0;
-			} else {
+			} else if(!try_selftest(from, tag)) {
 				printf("%s: unknown IPC label %#lx (u %lu, t %lu) from %lu:%lu\n",
 					__func__, (L4_Word_t)tag.X.label, (L4_Word_t)tag.X.u,
 					(L4_Word_t)tag.X.t, TID_THREADNUM(from.raw), TID_VERSION(from.raw));
