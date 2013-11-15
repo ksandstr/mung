@@ -608,7 +608,7 @@ end:
 }
 
 
-static void invoke_ktest(L4_ThreadId_t s0_tid)
+static void invoke_ktest(L4_ThreadId_t s0_tid, bool describe)
 {
 	/* kernel tests are executed by sigma0's pager in response to a special
 	 * IPC from a privileged space (this one).
@@ -624,7 +624,10 @@ static void invoke_ktest(L4_ThreadId_t s0_tid)
 		abort();
 	}
 
-	L4_LoadMR(0, (L4_MsgTag_t){ .X.label = 0x5374 }.raw);
+	L4_LoadMR(0, (L4_MsgTag_t){
+		.X.label = 0x5374,
+		.X.u = describe ? 1 : 0 }.raw);
+	if(describe) L4_LoadMR(1, 0xbeefda7e);
 	L4_ThreadId_t from;
 	L4_MsgTag_t tag = L4_Ipc(s0_pager, L4_anythread,
 		L4_Timeouts(L4_Never, L4_Never), &from);
@@ -666,7 +669,7 @@ int main(void)
 		suites = meta_plan;
 		n_suites = NUM_ELEMENTS(meta_plan);
 	} else if(cmd_opt(&opts, "ktest") != NULL) {
-		invoke_ktest(s0_tid);
+		invoke_ktest(s0_tid, cmd_opt(&opts, "describe") != NULL);
 		n_suites = 0;
 	} else {
 		/* actual microkernel test suite */

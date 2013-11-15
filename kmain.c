@@ -274,6 +274,7 @@ static bool try_selftest(L4_ThreadId_t from, L4_MsgTag_t tag)
 		struct thread *t = thread_find(from.raw);
 		assert(t != NULL);
 		if(CHECK_FLAG(t->space->flags, SF_PRIVILEGE)) {
+			if(L4_UntypedWords(tag) > 0) describe_all_tests();
 			run_all_tests();
 			return true;
 		}

@@ -54,6 +54,7 @@ extern void _run_ktest(
 
 /* called from kmain.c via pager_thread() */
 extern void run_all_tests(void);
+extern void describe_all_tests(void);
 
 
 #endif

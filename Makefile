@@ -31,12 +31,17 @@ distclean: clean
 # hasn't changed since "testbench" and "ia32-kernel". (bit of a tall order,
 # this.)
 qcheck: all
+	@echo "--- In-kernel tests..."
+	@KTEST=1 user/testbench/report.pl
+	@echo "--- Userspace tests..."
 	@user/testbench/report.pl
+	@echo "--- All OK!"
 
 
 check: all
+	@echo "--- Framework self-tests..."
 	+@make -C user/testbench check
-	@user/testbench/report.pl
+	+@make qcheck
 
 
 slowcheck:
