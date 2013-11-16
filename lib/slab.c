@@ -1,5 +1,7 @@
 
-/* per-page object allocator for management of non-heap (early) kernel memory. */
+/* per-page fixed-length allocator for management of non-heap (early) memory,
+ * and kernel objects.
+ */
 
 #include <stdlib.h>
 #include <stdint.h>
@@ -16,6 +18,8 @@
 #include <ukernel/slab.h>
 
 
+#define CACHE_SIZE 8		/* # of objects cached when ctor != NULL */
+
 #define SLAB_FIRST(cache, slab) \
 	((void *)((((intptr_t)&(slab)[1]) + (cache)->align - 1) & ~((cache)->align - 1)))
 
@@ -31,12 +35,21 @@ struct kmem_cache
 {
 	size_t size, align;
 	unsigned long flags;
+	kmem_cache_ctor ctor, dtor;
 
 	struct list_head free_list, partial_list, full_list;
 	uint32_t magic;				/* for kmem_cache_find() */
 
 	struct list_node link;		/* in cache_list */
 	const char *name;
+
+	/* cached objects are used in a LIFO order, so n_cached is enough to track
+	 * it. if ctor == NULL, no caching happens and n_cached will always be 0.
+	 *
+	 * kmem_cache_shrink() flushes the cache as part of its operation.
+	 */
+	int n_cached;
+	void *cache[CACHE_SIZE];
 };
 
 
@@ -78,6 +91,8 @@ struct kmem_cache *kmem_cache_create(
 	kmem_cache_ctor ctor,
 	kmem_cache_ctor dtor)
 {
+	assert(!CHECK_FLAG(flags, SLAB_NO_RECYCLE_CTOR) || ctor != NULL);
+
 	/* TODO: do this in a concurrency-safe manner with an once() function */
 	static bool first = true;
 	if(unlikely(first)) {
@@ -95,6 +110,9 @@ struct kmem_cache *kmem_cache_create(
 	c->flags = flags;
 	c->name = name;
 	c->magic = KMEM_CACHE_MAGIC;
+	c->ctor = ctor;
+	c->dtor = dtor;
+	c->n_cached = 0;
 	list_head_init(&c->free_list);
 	list_head_init(&c->partial_list);
 	list_head_init(&c->full_list);
@@ -107,11 +125,21 @@ struct kmem_cache *kmem_cache_create(
 void kmem_cache_destroy(struct kmem_cache *cache)
 {
 	/* TODO */
+	kmem_cache_shrink(cache);
 }
 
 
 void *kmem_cache_alloc(struct kmem_cache *cache)
 {
+	if(cache->n_cached > 0) {
+		assert(cache->ctor != NULL);
+		void *ret = cache->cache[--cache->n_cached];
+		if(!CHECK_FLAG(cache->flags, SLAB_NO_RECYCLE_CTOR)) {
+			(*cache->ctor)(ret, cache, 0);
+		}
+		return ret;
+	}
+
 	struct slab *slab = list_top(&cache->partial_list, struct slab, link);
 	if(slab == NULL) {
 		slab = list_top(&cache->free_list, struct slab, link);
@@ -153,22 +181,25 @@ void *kmem_cache_alloc(struct kmem_cache *cache)
 	}
 
 	assert((uintptr_t)(ret + cache->size) <= ((uintptr_t)slab | 0xfff));
+	if(cache->ctor != NULL) {
+		(*cache->ctor)(ret, cache, 0);
+	}
 	return ret;
 }
 
 
 void *kmem_cache_zalloc(struct kmem_cache *cache)
 {
+	if(unlikely(cache->ctor != NULL)) return NULL;
+
 	void *ptr = kmem_cache_alloc(cache);
 	if(likely(ptr != NULL)) memset(ptr, '\0', cache->size);
 	return ptr;
 }
 
 
-void kmem_cache_free(struct kmem_cache *cache, void *ptr)
+static void free_object(struct kmem_cache *cache, void *ptr)
 {
-	assert(kmem_cache_find(ptr) == cache);
-
 	struct slab *slab = (struct slab *)((intptr_t)ptr & ~PAGE_MASK);
 	assert(slab->magic == SLAB_MAGIC);
 	assert(slab->in_use > 0);
@@ -189,6 +220,10 @@ void kmem_cache_free(struct kmem_cache *cache, void *ptr)
 	assert(ptr < *next || *next == NULL);
 #endif
 
+	if(cache->dtor != NULL) {
+		(*cache->dtor)(ptr, cache, 0);
+	}
+
 	*(void **)ptr = slab->freelist;
 	slab->freelist = ptr;
 	slab->in_use--;
@@ -198,6 +233,27 @@ void kmem_cache_free(struct kmem_cache *cache, void *ptr)
 		list_add(&cache->free_list, &slab->link);
 		slab->magic = 0xdeadbeef;
 		slab->flags &= ~SLAB_WAS_FULL;	/* became empty again. */
+	}
+}
+
+
+void kmem_cache_free(struct kmem_cache *cache, void *ptr)
+{
+	if(ptr == NULL) return;
+
+	assert(kmem_cache_find(ptr) == cache);
+
+	if(cache->ctor != NULL) {
+		assert(cache->n_cached < CACHE_SIZE);
+		cache->cache[cache->n_cached++] = ptr;
+		if(cache->n_cached == CACHE_SIZE) {
+			/* destroy objects as a group. */
+			while(cache->n_cached > 2) {
+				free_object(cache, cache->cache[--cache->n_cached]);
+			}
+		}
+	} else {
+		free_object(cache, ptr);
 	}
 }
 
@@ -214,6 +270,12 @@ const char *kmem_cache_name(struct kmem_cache *cache) {
 
 int kmem_cache_shrink(struct kmem_cache *cache)
 {
+	if(cache->ctor != NULL) {
+		while(cache->n_cached > 0) {
+			free_object(cache, cache->cache[--cache->n_cached]);
+		}
+	}
+
 	struct slab *next, *slab;
 	int n_freed = 0;
 	list_for_each_safe(&cache->free_list, slab, next, link) {
