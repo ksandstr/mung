@@ -35,7 +35,7 @@ qcheck: all
 	@KTEST=1 user/testbench/report.pl
 	@echo "--- Userspace tests..."
 	@user/testbench/report.pl
-	@echo "--- All OK!"
+	@echo "--- All tests completed!"
 
 
 check: all

@@ -6,7 +6,7 @@
  * now, this'll do.
  */
 
-#ifdef ENABLE_SELFTEST
+#if defined(__KERNEL__) && defined(ENABLE_SELFTEST)
 #define KTEST 1
 
 extern void plan_tests(unsigned int count);

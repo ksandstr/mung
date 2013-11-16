@@ -75,6 +75,7 @@ void _run_ktest(
 
 	if(strstarts(testname, "t_")) testname += 2;
 	if(!describe_mode) {
+		tap_reset();
 		printf("*** begin test `%s'\n", testname);
 		(*testfn)();
 		printf("*** end test `%s' rc %d\n", testname, exit_status());
@@ -97,6 +98,7 @@ void _run_ktest(
 	} while(0)
 
 void run_all_tests(void) {
+	SUITE(slab);
 	SUITE(kth);
 	_run_ktest(NULL, NULL, NULL, NULL);
 }
