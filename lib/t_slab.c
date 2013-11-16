@@ -83,7 +83,7 @@ START_TEST(ctor_and_dtor)
 {
 	plan_tests(4);
 
-	/* part #0: no ctor or dtor at all. */
+	/* part 0: no ctor or dtor at all. */
 	ctor_count = 0; dtor_count = 0;
 	struct kmem_cache *slab = KMEM_CACHE_NEW("no ctor or dtor",
 		struct t_object);
@@ -93,7 +93,7 @@ START_TEST(ctor_and_dtor)
 	ok(ctor_count == 0 && dtor_count == 0, "counts (base case)");
 	kmem_cache_destroy(slab);
 
-	/* part #1: ctor and dtor present */
+	/* part 1: ctor and dtor present */
 	ctor_count = 0; dtor_count = 0;
 	slab = kmem_cache_create("ctor and dtor present",
 		sizeof(struct t_object), ALIGNOF(struct t_object),
@@ -108,8 +108,59 @@ START_TEST(ctor_and_dtor)
 	if(!ok(dtor_count > 0, "dtor was called")) {
 		diag("dtor_count=%d", dtor_count);
 	}
+}
+END_TEST
 
-	/* TODO: test SLAB_NO_RECYCLE_CTOR */
+
+static void dancing_allocs(
+	struct kmem_cache *slab,
+	const int test_size)
+{
+	struct t_object *ary[test_size];
+	for(int i=0; i < test_size; i++) {
+		ary[i] = kmem_cache_alloc(slab);
+	}
+	for(int i=0; i < test_size; i += 2) {
+		kmem_cache_free(slab, ary[i]);
+	}
+	for(int i=0; i < test_size; i += 2) {
+		ary[i] = kmem_cache_alloc(slab);
+	}
+	for(int i=0; i < test_size; i++) {
+		kmem_cache_free(slab, ary[i]);
+	}
+}
+
+
+START_TEST(recycling)
+{
+	plan_tests(2);
+	const int test_size = 200;
+	diag("test_size=%d", test_size);
+
+	/* first without the SLAB_NO_RECYCLE_CTOR flag. */
+	diag("base case:");
+	struct kmem_cache *slab = kmem_cache_create("many ctor calls",
+		sizeof(struct t_object), ALIGNOF(struct t_object),
+		0, &ct_ctor, &ct_dtor);
+	ctor_count = 0; dtor_count = 0;
+	dancing_allocs(slab, test_size);
+	kmem_cache_destroy(slab);
+	if(!ok1(ctor_count > dtor_count)) {
+		diag("ctor_count=%d, dtor_count=%d", ctor_count, dtor_count);
+	}
+
+	/* then, with. */
+	diag("main half:");
+	slab = kmem_cache_create("many ctor calls",
+		sizeof(struct t_object), ALIGNOF(struct t_object),
+		SLAB_NO_RECYCLE_CTOR, &ct_ctor, &ct_dtor);
+	ctor_count = 0; dtor_count = 0;
+	dancing_allocs(slab, test_size);
+	kmem_cache_destroy(slab);
+	if(!ok1(ctor_count == dtor_count)) {
+		diag("ctor_count=%d, dtor_count=%d", ctor_count, dtor_count);
+	}
 }
 END_TEST
 
@@ -121,6 +172,7 @@ void ktest_slab(void)
 	 */
 	RUN(many_alloc);
 	RUN(ctor_and_dtor);
+	RUN(recycling);
 	/* TODO: add test for kmem_cache_find() */
 }
 
