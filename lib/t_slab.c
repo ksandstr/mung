@@ -5,6 +5,7 @@
 #include <string.h>
 #include <ccan/list/list.h>
 #include <ccan/alignof/alignof.h>
+#include <ccan/str/str.h>
 
 #include <ukernel/slab.h>
 #include <ukernel/ktest.h>
@@ -17,6 +18,76 @@ struct t_object {
 	char name[32];
 	int value;
 };
+
+
+static bool alloc_chunks_and_test(
+	void *(*alloc_fn)(struct kmem_cache *),
+	struct kmem_cache *cache)
+{
+	const int test_size = 1200;
+	struct t_object *o[test_size];
+	bool all_zero = true;
+	for(int i=0; i < test_size; i++) {
+		o[i] = (*alloc_fn)(cache);
+		if(all_zero) {
+			uint8_t *mem = (uint8_t *)o[i];
+			for(int j=0; j < sizeof(struct t_object); j++) {
+				if(mem[j] != 0) {
+					all_zero = false;
+					break;
+				}
+			}
+		}
+	}
+	for(int i=0; i < test_size; i++) {
+		kmem_cache_free(cache, o[i]);
+	}
+
+	return all_zero;
+}
+
+
+/* basic allocation test, checking if zalloc returns a zeroed segment,
+ * and the kmem_cache_size() and _name() return values (because otherwise it'd
+ * be a fairly small test)
+ */
+START_TEST(basic_api)
+{
+	plan_tests(8);
+
+	struct kmem_cache *cache = KMEM_CACHE_NEW("test slab", struct t_object);
+
+	struct t_object *o = kmem_cache_alloc(cache);
+	ok1(o != NULL);
+	struct t_object *o2 = kmem_cache_alloc(cache);
+	ok1(o2 != NULL);
+	ok1(o != o2);
+
+	/* dirty the two objects to see if regular alloc may sometimes return
+	 * non-zeroed objects.
+	 */
+	memset(o, 1, sizeof(*o));
+	memset(o2, 1, sizeof(*o2));
+	kmem_cache_free(cache, o);
+	kmem_cache_free(cache, o2);
+
+	bool all_zero = alloc_chunks_and_test(&kmem_cache_alloc, cache);
+	ok(!all_zero, "not all regular alloc chunks were zero");
+	all_zero = alloc_chunks_and_test(&kmem_cache_zalloc, cache);
+	ok(all_zero, "zalloc chunks were all zeroed");
+
+	/* name and size */
+	ok1(kmem_cache_size(cache) == sizeof(struct t_object));
+	ok1(streq(kmem_cache_name(cache), "test slab"));
+
+	/* try to free an object that doesn't exist. */
+	diag("freeing NULL");
+	kmem_cache_free(cache, NULL);
+	ok(true, "didn't die");
+
+	kmem_cache_destroy(cache);
+}
+END_TEST
 
 
 START_TEST(many_alloc)
@@ -165,15 +236,33 @@ START_TEST(recycling)
 END_TEST
 
 
+START_TEST(find_test)
+{
+	plan_tests(4);
+
+	ok1(kmem_cache_find(NULL) == NULL);
+	ok1(kmem_cache_find("not a heap pointer") == NULL);
+
+	struct kmem_cache *cache = KMEM_CACHE_NEW("bleh", struct t_object);
+	struct t_object *o = kmem_cache_alloc(cache);
+
+	ok1(kmem_cache_find(o) == cache);
+
+	kmem_cache_free(cache, o);
+	kmem_cache_destroy(cache);
+
+	ok1(kmem_cache_find(o) == NULL);
+}
+END_TEST
+
+
 void ktest_slab(void)
 {
-	/* TODO: add a basic allocation test, checking if zalloc returns a zeroed
-	 * segment, kmem_cache_size() and _name() return values, and so forth
-	 */
+	RUN(basic_api);
 	RUN(many_alloc);
 	RUN(ctor_and_dtor);
 	RUN(recycling);
-	/* TODO: add test for kmem_cache_find() */
+	RUN(find_test);
 }
 
 #endif

@@ -292,6 +292,8 @@ int kmem_cache_shrink(struct kmem_cache *cache)
 
 struct kmem_cache *kmem_cache_find(void *allocation)
 {
+	if(allocation == NULL) return NULL;
+
 	struct slab *slab = (void *)((uintptr_t)allocation & ~PAGE_MASK);
 	if(slab->magic != SLAB_MAGIC) return NULL;
 	for(struct list_node *n = slab->link.next;
