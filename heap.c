@@ -248,7 +248,8 @@ void free_kern_page(struct page *page)
 		free_heap_page((uintptr_t)page->vm_addr);
 		page->vm_addr = NULL;
 	}
-	list_add(&k_free_pages, &page->link);
+	/* grow the freelist at the end for t_slab.c's sake */
+	list_add_tail(&k_free_pages, &page->link);
 }
 
 

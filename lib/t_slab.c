@@ -256,6 +256,58 @@ START_TEST(find_test)
 END_TEST
 
 
+START_TEST(kmem_test)
+{
+	plan_tests(3);
+	const int test_size = 100;
+	diag("test_size=%d", test_size);
+
+	void *pages[test_size];
+	bool success = true;
+	for(int i=0; i < test_size; i++) {
+		if(!success) pages[i] = NULL;
+		else {
+			pages[i] = kmem_alloc_new_page();
+			if(pages[i] == NULL) {
+				diag("alloc %d failed", i);
+				success = false;
+			}
+		}
+	}
+	ok(success, "page allocs succeeded");
+
+	for(int i=0; i < test_size; i++) {
+		if(pages[i] != NULL) kmem_free_page(pages[i]);
+	}
+	ok(true, "page free didn't die");
+
+	/* now allocate some further pages, checking that they're ones that were
+	 * allocated and freed right before.
+	 */
+	const int tail_size = test_size / 17;
+	void *other[tail_size];
+	success = true;
+	for(int i=0; i < tail_size; i++) {
+		other[i] = kmem_alloc_new_page();
+		if(other[i] == NULL) success = false;
+		bool found = false;
+		for(int j=0; j < test_size; j++) {
+			if(pages[j] == other[i]) {
+				found = true;
+				break;
+			}
+		}
+		if(!found && other[i] != NULL) diag("%p not found", other[i]);
+		success = found && success;
+	}
+	ok(success, "pages were recycled");
+	for(int i=0; i < tail_size; i++) {
+		if(other[i] != NULL) kmem_free_page(other[i]);
+	}
+}
+END_TEST
+
+
 void ktest_slab(void)
 {
 	RUN(basic_api);
@@ -263,6 +315,9 @@ void ktest_slab(void)
 	RUN(ctor_and_dtor);
 	RUN(recycling);
 	RUN(find_test);
+
+	/* tangentially slab-related tests, i.e. the page-grain allocator thing */
+	RUN(kmem_test);
 }
 
 #endif
