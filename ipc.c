@@ -342,7 +342,7 @@ void abort_waiting_ipc(L4_ThreadId_t with_tid, L4_Word_t errcode)
  * "cancel_ipc_from()". there's already abort_waiting_ipc(), which should be
  * renamed to "cancel_ipc_to()".
  */
-void abort_thread_ipc(struct thread *t)
+void cancel_ipc_from(struct thread *t)
 {
 	assert(t->status == TS_SEND_WAIT || t->status == TS_STOPPED);
 

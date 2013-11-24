@@ -214,8 +214,8 @@ extern void thread_resume(struct thread *t);
 
 /* effects an IPC failure (timeout, abort, cancel) state transition. doesn't
  * change vregs, toss the string transfer state, or call the post-exception
- * hooks; just does the status, send-wait (via abort_thread_ipc()) &
- * scheduling bits.
+ * hooks; just does the status, send-wait (via cancel_ipc_from()) & scheduling
+ * bits.
  *
  * requires status \in {RECV_WAIT, SEND_WAIT, R_RECV}.
  */

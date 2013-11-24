@@ -38,8 +38,11 @@ extern void ipc_xfer_timeout(struct ipc_state *st);
  */
 extern void abort_waiting_ipc(L4_ThreadId_t with_tid, L4_Word_t errorcode);
 
-/* removes the ipc_wait structure associated with the passive send in @t. */
-extern void abort_thread_ipc(struct thread *t);
+/* removes the ipc_wait structure associated with the passive send in @t.
+ *
+ * previously known as abort_thread_ipc().
+ */
+extern void cancel_ipc_from(struct thread *t);
 
 
 extern L4_MsgTag_t kipc(

@@ -477,9 +477,9 @@ void thread_ipc_fail(struct thread *t)
 	if(t->status == TS_SEND_WAIT) {
 		/* (NOTE: also, $t->ipc != NULL \implies \
 		 * Myself \notin \dom sendwait\_hash$, so this isn't actually
-		 * required. abort_thread_ipc() accepts that, though.)
+		 * required. cancel_ipc_from() accepts that, though.)
 		 */
-		abort_thread_ipc(t);
+		cancel_ipc_from(t);
 	}
 
 	if(CHECK_FLAG(t->flags, TF_HALT)) {
@@ -1171,7 +1171,7 @@ void sys_threadcontrol(struct x86_exregs *regs)
 		 * phase.)
 		 */
 		if(dest->status == TS_SEND_WAIT || dest->status == TS_STOPPED) {
-			abort_thread_ipc(dest);
+			cancel_ipc_from(dest);
 		}
 		if(!CHECK_FLAG(dest->flags, TF_HALT)) thread_halt(dest);
 		if(CHECK_FLAG(dest->flags, TF_INTR)) int_kick(dest);
@@ -1192,8 +1192,8 @@ void sys_threadcontrol(struct x86_exregs *regs)
 			assert(L4_ThreadNo(dest_tid) == TID_THREADNUM(dest->id));
 			assert(L4_Version(dest_tid) != TID_VERSION(dest->id));
 			if(dest->status == TS_SEND_WAIT) {
-				/* send-side waiter */
-				abort_thread_ipc(dest);
+				/* remove send-side waiter */
+				cancel_ipc_from(dest);
 			}
 			L4_ThreadId_t stale_tid = { .raw = dest->id };
 			dest->id = dest_tid.raw;
