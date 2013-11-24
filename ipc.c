@@ -279,7 +279,7 @@ static inline int do_ipc_transfer(
  * TODO: this should signal preemption when it occurs: one of the aborted
  * senders may have priority.
  */
-void abort_waiting_ipc(L4_ThreadId_t with_tid, L4_Word_t errcode)
+void cancel_ipc_to(L4_ThreadId_t with_tid, L4_Word_t errcode)
 {
 	/* fail those IPC operations that're waiting to send to this one. */
 	assert(L4_IsGlobalId(with_tid));
@@ -337,10 +337,6 @@ void abort_waiting_ipc(L4_ThreadId_t with_tid, L4_Word_t errcode)
 /* called from thread_ipc_fail() and from the deleting ThreadControl. takes
  * care of the sendwait_hash entry. leaves errorcode setting to caller's
  * caller.
- *
- * TODO: this should be renamed to indicate its function; e.g. something like
- * "cancel_ipc_from()". there's already abort_waiting_ipc(), which should be
- * renamed to "cancel_ipc_to()".
  */
 void cancel_ipc_from(struct thread *t)
 {
@@ -694,7 +690,7 @@ void ipc_user(
 	struct thread *to,
 	uint64_t xferto_at)
 {
-	/* this must be a global ID so that abort_waiting_ipc()'s receiver search
+	/* this must be a global ID so that cancel_ipc_to()'s receiver search
 	 * will find it.
 	 */
 	from->ipc_to.raw = to->id;

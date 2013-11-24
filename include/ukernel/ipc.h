@@ -35,8 +35,10 @@ extern void ipc_xfer_timeout(struct ipc_state *st);
  *
  * this function also does the other thing, i.e. aborting threads waiting for
  * IPC from @with_tid specifically.
+ *
+ * previously known as abort_waiting_ipc().
  */
-extern void abort_waiting_ipc(L4_ThreadId_t with_tid, L4_Word_t errorcode);
+extern void cancel_ipc_to(L4_ThreadId_t dest_tid, L4_Word_t errorcode);
 
 /* removes the ipc_wait structure associated with the passive send in @t.
  *

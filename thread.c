@@ -1182,7 +1182,7 @@ void sys_threadcontrol(struct x86_exregs *regs)
 		}
 		L4_ThreadId_t dead_tid = { .raw = dest->id };
 		thread_destroy(dest);
-		abort_waiting_ipc(dead_tid, 2 << 1);	/* "lost partner" */
+		cancel_ipc_to(dead_tid, 2 << 1);	/* "lost partner" */
 		goto dead;
 	} else if(!L4_IsNilThread(spacespec) && dest != NULL) {
 		/* modification only. (rest shared with creation.) */
@@ -1198,7 +1198,7 @@ void sys_threadcontrol(struct x86_exregs *regs)
 			L4_ThreadId_t stale_tid = { .raw = dest->id };
 			dest->id = dest_tid.raw;
 			/* fail sends to the now-stale TID. */
-			abort_waiting_ipc(stale_tid, 2 << 1);
+			cancel_ipc_to(stale_tid, 2 << 1);	/* "lost partner" */
 
 			if(CHECK_FLAG(dest->flags, TF_INTR)) int_kick(dest);
 
