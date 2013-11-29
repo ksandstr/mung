@@ -18,7 +18,7 @@
 #include <ukernel/slab.h>
 
 
-#define CACHE_SIZE 8		/* # of objects cached when ctor != NULL */
+#define CACHE_SIZE 8		/* # of objects cached */
 
 #define SLAB_FIRST(cache, slab) \
 	((void *)((((intptr_t)&(slab)[1]) + (cache)->align - 1) & ~((cache)->align - 1)))
@@ -44,9 +44,7 @@ struct kmem_cache
 	const char *name;
 
 	/* cached objects are used in a LIFO order, so n_cached is enough to track
-	 * it. if ctor == NULL, no caching happens and n_cached will always be 0.
-	 *
-	 * kmem_cache_shrink() flushes the cache as part of its operation.
+	 * it. kmem_cache_shrink() flushes the cache immediately.
 	 */
 	int n_cached;
 	void *cache[CACHE_SIZE];
@@ -132,9 +130,10 @@ void kmem_cache_destroy(struct kmem_cache *cache)
 void *kmem_cache_alloc(struct kmem_cache *cache)
 {
 	if(cache->n_cached > 0) {
-		assert(cache->ctor != NULL);
 		void *ret = cache->cache[--cache->n_cached];
-		if(!CHECK_FLAG(cache->flags, SLAB_NO_RECYCLE_CTOR)) {
+		if(cache->ctor != NULL
+			&& !CHECK_FLAG(cache->flags, SLAB_NO_RECYCLE_CTOR))
+		{
 			(*cache->ctor)(ret, cache, 0);
 		}
 		return ret;
@@ -243,17 +242,13 @@ void kmem_cache_free(struct kmem_cache *cache, void *ptr)
 
 	assert(kmem_cache_find(ptr) == cache);
 
-	if(cache->ctor != NULL) {
-		assert(cache->n_cached < CACHE_SIZE);
-		cache->cache[cache->n_cached++] = ptr;
-		if(cache->n_cached == CACHE_SIZE) {
-			/* destroy objects as a group. */
-			while(cache->n_cached > 2) {
-				free_object(cache, cache->cache[--cache->n_cached]);
-			}
+	assert(cache->n_cached < CACHE_SIZE);
+	cache->cache[cache->n_cached++] = ptr;
+	if(cache->n_cached == CACHE_SIZE) {
+		/* destroy objects as a group. */
+		while(cache->n_cached > 2) {
+			free_object(cache, cache->cache[--cache->n_cached]);
 		}
-	} else {
-		free_object(cache, ptr);
 	}
 }
 
@@ -270,10 +265,8 @@ const char *kmem_cache_name(struct kmem_cache *cache) {
 
 int kmem_cache_shrink(struct kmem_cache *cache)
 {
-	if(cache->ctor != NULL) {
-		while(cache->n_cached > 0) {
-			free_object(cache, cache->cache[--cache->n_cached]);
-		}
+	while(cache->n_cached > 0) {
+		free_object(cache, cache->cache[--cache->n_cached]);
 	}
 
 	struct slab *next, *slab;
