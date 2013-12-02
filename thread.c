@@ -975,7 +975,7 @@ bool int_latent(void)
 }
 
 
-/* called from deleting ThreadControl */
+/* called from ThreadControl in the deletion & version stomp cases */
 static void int_kick(struct thread *t)
 {
 	assert(x86_irq_is_enabled());
@@ -994,6 +994,9 @@ static void int_kick(struct thread *t)
 		int_disable(i);
 	}
 	x86_irq_enable();
+
+	/* no longer applicable. */
+	t->flags &= ~TF_INTR;
 }
 
 
