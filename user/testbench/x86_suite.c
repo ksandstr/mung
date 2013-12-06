@@ -197,6 +197,10 @@ struct ex_ctx
 {
 	int last_int, trace_count;
 	bool running;
+
+	int32_t exn_count;
+	L4_Word_t last_ip, last_sp, last_eax, last_ec;
+	L4_ThreadId_t last_exn_tid;
 };
 
 
@@ -209,7 +213,9 @@ static struct ex_ctx *ex_ctx(void)
 	if(ptr == NULL) {
 		struct ex_ctx *ctx = malloc(sizeof(*ctx));
 		ptr = ctx;
-		*ctx = (struct ex_ctx){ .running = true, .last_int = -1 };
+		*ctx = (struct ex_ctx){
+			.running = true, .last_int = -1, .exn_count = -1,
+		};
 		tsd_set(ex_key, ptr);
 	}
 	return ptr;
@@ -223,6 +229,21 @@ static int32_t x86_exh_last_interrupt(void) {
 
 static int32_t x86_exh_get_trace_count(void) {
 	return ex_ctx()->trace_count;
+}
+
+
+static int32_t x86_exh_last_exn_detail(
+	L4_Word_t *tid_p, L4_Word_t *ec_p,
+	L4_Word_t *ip_p, L4_Word_t *sp_p,
+	L4_Word_t *eax_p)
+{
+	struct ex_ctx *c = ex_ctx();
+	*tid_p = c->last_exn_tid.raw;
+	*ec_p = c->last_ec;
+	*ip_p = c->last_ip;
+	*sp_p = c->last_sp;
+	*eax_p = c->last_eax;
+	return c->exn_count;
 }
 
 
@@ -244,7 +265,20 @@ static void x86_exh_handle_exn(
 
 	ctx->last_int = *errorcode_p >> 3;
 
+	ctx->last_ip = *eip_p;
+	ctx->last_sp = *esp_p;
+	ctx->last_eax = *eax_p;
+	ctx->last_exn_tid = muidl_get_sender();
+	ctx->last_ec = *errorcode_p;
+	ctx->exn_count++;
+
 	switch(ctx->last_int) {
+		case 0x6:
+			/* #UD; stop the task */
+			diag("got #UD at ip=%#lx", *eip_p);
+			muidl_raise_no_reply();
+			break;
+
 		default:
 			/* assume INT imm8 */
 			diag("exception at ip=%#lx, errorcode=%#lx", *eip_p, *errorcode_p);
@@ -281,6 +315,7 @@ static void x86_exh_handle_exn(
 static const struct x86ex_handler_vtable exh_vtable = {
 	.last_interrupt = &x86_exh_last_interrupt,
 	.get_trace_count = &x86_exh_get_trace_count,
+	.last_exn_detail = &x86_exh_last_exn_detail,
 	.sys_exception = &x86_exh_handle_exn,
 	.arch_exception = &x86_exh_handle_exn,
 	.quit = &x86_exh_quit,
@@ -344,6 +379,80 @@ START_TEST(trace_exn)
 END_TEST
 
 
+static void sigill_fn(void *param)
+{
+	uint32_t *magic = param;
+	L4_Set_ExceptionHandler(x86_exh_tid);
+	asm volatile ("ud2" :: "a" (*magic));
+	diag("%s: still active after UD2?", __func__);
+}
+
+
+/* illegal instruction exception test. */
+START_TEST(illegal_insn_exn)
+{
+	plan_tests(3);
+	const uint32_t magic = 0xb00bfee7;	/* outright bizarre */
+
+	int32_t exct = -666;
+	L4_ThreadId_t extid;
+	L4_Word_t exec, exip, exsp, exeax;
+	int n = __x86_last_exn_detail(x86_exh_tid, &exct, &extid.raw,
+		&exec, &exip, &exsp, &exeax);
+	fail_if(n != 0, "n=%d", n);
+	fail_if(exct == -666);
+	fail_if(exeax == magic);
+
+	L4_ThreadId_t parent_tid = L4_Myself(), child_tid = L4_nilthread;
+	int child = fork_tid(&child_tid);
+	if(child == 0) {
+		uint32_t *m_copy = malloc(sizeof(uint32_t));
+		*m_copy = magic;
+		L4_ThreadId_t failer = xstart_thread(&sigill_fn, m_copy);
+
+		/* sync exit with parent */
+		L4_MsgTag_t tag = L4_Receive_Timeout(parent_tid, TEST_IPC_DELAY);
+		if(L4_IpcFailed(tag)) {
+			diag("child failed, ec=%#lx", L4_ErrorCode());
+			exit(1);
+		}
+
+		kill_thread(failer);
+		free(m_copy);
+		exit(0);
+	} else {
+		L4_LoadMR(0, 0);
+		L4_MsgTag_t tag = L4_Send_Timeout(child_tid, TEST_IPC_DELAY);
+		IPC_FAIL(tag);
+
+		int st = 0, dead = wait(&st);
+		fail_if(dead != child, "expected dead=%d, got %d", child, dead);
+	}
+
+	const int32_t prev_exct = exct;
+	n = __x86_last_exn_detail(x86_exh_tid, &exct, &extid.raw,
+		&exec, &exip, &exsp, &exeax);
+	fail_if(n != 0, "n=%d", n);
+
+	if(!ok1(exct == prev_exct + 1)) {
+		diag("exct=%d, prev_exct=%d", exct, prev_exct);
+	}
+	if(!ok1(exeax == magic)) {
+		diag("exeax=%#x, magic=%#x", exeax, magic);
+	}
+	/* forkserv assigns the same version to threads within the same process
+	 * image. this verifies that the exception came from where it's supposed
+	 * to have.
+	 */
+	if(!ok1(L4_Version(child_tid) == L4_Version(extid))) {
+		diag("child_tid=%lu:%lu, extid=%lu:%lu",
+			L4_ThreadNo(child_tid), L4_Version(child_tid),
+			L4_ThreadNo(extid), L4_Version(extid));
+	}
+}
+END_TEST
+
+
 struct Suite *x86_suite(void)
 {
 	Suite *s = suite_create("x86");
@@ -370,6 +479,7 @@ struct Suite *x86_suite(void)
 		ADD_IDL_FIXTURE(tc, x86_exh);
 		tcase_add_test(tc, int_exn);
 		tcase_add_test(tc, trace_exn);
+		tcase_add_test(tc, illegal_insn_exn);
 		suite_add_tcase(s, tc);
 	}
 

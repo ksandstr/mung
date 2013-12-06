@@ -10,4 +10,18 @@ interface X86ExHandler: L4X2::ExceptionHandler
 
 	long last_interrupt();
 	long get_trace_count();
+
+	/* return saved register values from previous exception frame. return
+	 * value is the number of exceptions that've occurred before the one from
+	 * which values were returned.
+	 *
+	 * (that's to say: to verify that an exception occurred, store a previous
+	 * return value and compare it to the one retrieved for analysis.)
+	 */
+	long last_exn_detail(
+		out L4X2::ThreadId tid,
+		out L4X2::word errorcode,
+		out L4X2::word ip,
+		out L4X2::word sp,
+		out L4X2::word eax);
 };
