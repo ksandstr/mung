@@ -655,12 +655,11 @@ bool space_add_ioperm(struct space *sp, L4_Word_t base_port, int size)
 
 /* syscalls. */
 
-void sys_unmap(L4_Word_t control)
+void sys_unmap(L4_Word_t control, void *utcb)
 {
 	assert(check_all_spaces(0));
 
 	struct thread *current = get_current_thread();
-	void *utcb = thread_get_utcb(current);
 	struct map_db *mdb = &current->space->mapdb;
 	const bool flush = CHECK_FLAG(control, 0x40);
 	int page_count = (control & 0x3f) + 1, remove_agg = 0;

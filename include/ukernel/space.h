@@ -119,7 +119,9 @@ static inline void space_commit(struct space *sp) {
 	/* emptiness */
 }
 
-extern void sys_unmap(L4_Word_t control);
+/* UTCB is accessed by the wrapper to sync ESI and MR0. */
+extern void sys_unmap(L4_Word_t control, void *current_utcb);
+
 extern L4_Word_t sys_spacecontrol(
 	L4_ThreadId_t spacespec,
 	L4_Word_t control,

@@ -240,10 +240,9 @@ static void sys_unmap_wrap(struct x86_exregs *regs)
 {
 	L4_Word_t control = regs->eax;
 
-	/* TODO: pass utcb to sys_unmap()? */
 	void *utcb = thread_get_utcb(get_current_thread());
 	if((control & 0x3f) > 0) L4_VREG(utcb, L4_TCR_MR(0)) = regs->esi;
-	sys_unmap(control);
+	sys_unmap(control, utcb);
 
 	regs->esi = L4_VREG(utcb, L4_TCR_MR(0));
 }
