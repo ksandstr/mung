@@ -4,6 +4,7 @@
 
 #include <ccan/likely/likely.h>
 #include <ccan/compiler/compiler.h>
+#include <ccan/str/str.h>
 
 #include <l4/types.h>
 #include <l4/vregs.h>
@@ -310,6 +311,35 @@ void isr_exn_memctl_sc_bottom(struct x86_exregs *regs)
 }
 
 
+static NORETURN void return_from_gp(struct thread *current, struct x86_exregs *regs)
+{
+#if 0
+	printf("#GP(%#lx) at eip %#lx, esp %#lx in %lu:%lu\n", regs->error,
+		regs->eip, regs->esp, TID_THREADNUM(current->id),
+		TID_VERSION(current->id));
+#endif
+
+	void *utcb = thread_get_utcb(current);
+	struct thread *exh = thread_get_exnh(current, utcb);
+	if(exh != NULL) {
+		build_exn_ipc(current, utcb, -5, regs);
+		return_to_ipc(exh);
+	} else {
+		thread_halt(current);
+		assert(current->status == TS_STOPPED);
+		return_to_scheduler();
+	}
+
+	assert(false);
+}
+
+
+/* FIXME: switch to use of space_memcpy_from(), which handles the
+ * page-boundary case properly -- in both the entry sequence and the actual
+ * string. right now if the int3 instruction lies in the last four bytes of a
+ * page, the kernel will read an undefined page in its own address space,
+ * potentially leading to a #GP.
+ */
 static void handle_kdb_enter(struct thread *current, struct x86_exregs *regs)
 {
 	uintptr_t heap_addr = 0;
@@ -322,14 +352,20 @@ static void handle_kdb_enter(struct thread *current, struct x86_exregs *regs)
 		goto msgfail;
 	}
 
-	/* get string address from succeeding "MOV EAX, imm32" instruction. */
+	/* get string address from succeeding "MOV EAX, imm32" instruction.
+	 * (offset is incremented by 3 to skip over the INT3 and JMP rel8
+	 * instructions.)
+	 *
+	 * FIXME: confirm that the entry sequence is cc eb 05 b8
+	 */
 	heap_addr = reserve_heap_page();
 	put_supervisor_page(heap_addr, mapdb_page_id_in_entry(e, regs->eip));
 	int offset = regs->eip & PAGE_MASK;
 	if(((const uint8_t *)heap_addr)[offset + 3] != 0xb8) {
-		/* TODO: cause the #GP exception for int $3 instead */
-		printf("KDB message not indicated with MOV EAX, imm32!\n");
-		goto msgfail;
+		/* KDB message not indicated with MOV EAX, imm32 */
+		regs->error = 3 * 8 + 2;
+		return_from_gp(current, regs);
+		assert(false);
 	}
 	L4_Word_t strptr = *(const uint32_t *)(heap_addr + offset + 4);
 
@@ -347,10 +383,22 @@ static void handle_kdb_enter(struct thread *current, struct x86_exregs *regs)
 	char buf[257];
 	memset(buf, 0, sizeof(buf));
 	strlcpy(buf, str, MIN(size_t, 256, PAGE_SIZE - (strptr & PAGE_MASK)));
-	printf("#KDB (eip %#lx): [%#lx] %s\n", regs->eip, strptr, buf);
+	if(strstarts(buf, "mung ") && strends(buf, " do nothing")) {
+		printf("#KDB entry ignored\n");
+		regs->eip++;
+	} else {
+		printf("#KDB (eip %#lx): [%#lx] %s\n", regs->eip, strptr, buf);
+		printf(" ... (not implemented, halting thread)\n");
+		goto msgfail;
+	}
+
+	free_heap_page(heap_addr);
+	return_from_exn();
+	return;
 
 msgfail:
 	if(heap_addr != 0) free_heap_page(heap_addr);
+	thread_save_ctx(current, regs);
 	thread_halt(current);
 	assert(current->status == TS_STOPPED);
 	return_to_scheduler();
@@ -563,6 +611,10 @@ static void receive_pf_reply(struct hook *hook, uintptr_t code, void *priv)
 }
 
 
+/* NOTE: this doesn't activate from the INT3 instruction under qemu-kvm.
+ * (wondering why that is.) anyway, the #GP handler also does
+ * handle_kdb_enter() to cover for it.
+ */
 void isr_exn_int3_bottom(struct x86_exregs *regs) {
 	handle_kdb_enter(get_current_thread(), regs);
 }
@@ -587,25 +639,12 @@ void isr_exn_gp_bottom(struct x86_exregs *regs)
 
 	if(regs->error == 0) {
 		handle_io_fault(current, regs);
+	} else if(regs->error == 3 * 8 + 2) {
+		/* INT3 via #GP */
+		handle_kdb_enter(current, regs);
 	} else {
 		thread_save_ctx(current, regs);
-
-#if 0
-		printf("#GP(%#lx) at eip %#lx, esp %#lx in %lu:%lu\n", regs->error,
-			regs->eip, regs->esp, TID_THREADNUM(current->id),
-			TID_VERSION(current->id));
-#endif
-
-		void *utcb = thread_get_utcb(current);
-		struct thread *exh = thread_get_exnh(current, utcb);
-		if(exh != NULL) {
-			build_exn_ipc(current, utcb, -5, regs);
-			return_to_ipc(exh);
-		} else {
-			thread_halt(current);
-			assert(current->status == TS_STOPPED);
-			return_to_scheduler();
-		}
+		return_from_gp(current, regs);
 	}
 }
 
