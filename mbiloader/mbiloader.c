@@ -387,8 +387,8 @@ int bootmain(multiboot_info_t *mbi, uint32_t magic)
 	int mmap_count = 0;
 	struct multiboot_mmap_entry mmap_ents[MAX_MMAP_ENTS];
 	if(CHECK_FLAG(mbi->flags, MULTIBOOT_INFO_MEM_MAP)) {
-		printf("mmap_length %#x, mmap_addr %#x\n", mbi->mmap_length,
-			mbi->mmap_addr);
+		printf("MBI mmap_length=%#x, mmap_addr=%#x\n",
+			mbi->mmap_length, mbi->mmap_addr);
 		mmap_count = mbi->mmap_length / sizeof(struct multiboot_mmap_entry);
 		/* copy them off. */
 		memcpy(mmap_ents, (void *)mbi->mmap_addr,
@@ -415,17 +415,22 @@ int bootmain(multiboot_info_t *mbi, uint32_t magic)
 				ram_top = MAX(uintptr_t, ram_top, mme[i].addr + mme[i].len);
 			}
 		}
-		printf("MBI ram_top is %#lx\n", (unsigned long)ram_top);
+		printf("... ram_top is %#lx\n", (unsigned long)ram_top);
 	} else {
-		printf("no multiboot memory-map info!");
+		printf("multiboot memory-map info not present!\n");
 	}
 
 	/* get parameters for "*P". fall back to the conservative sum from
-	 * before.
+	 * before. only use the values if they're provided; qemu-kvm 1.7.0 seems
+	 * to put 0 in mbi->mem_upper.
 	 */
 	if(CHECK_FLAG(mbi->flags, MULTIBOOT_INFO_MEMORY)) {
-		mem_before_640k = mbi->mem_lower;
-		mem_after_1m = mbi->mem_upper;
+		printf("MBI mem_lower=%#lx, mem_upper=%#lx%s\n",
+			(L4_Word_t)mbi->mem_lower, (L4_Word_t)mbi->mem_upper,
+			mbi->mem_upper == 0 || mbi->mem_lower == 0
+				? " (bogus values ignored)" : "");
+		if(mbi->mem_lower > 0) mem_before_640k = mbi->mem_lower;
+		if(mbi->mem_upper > 0) mem_after_1m = mbi->mem_upper;
 	}
 
 	/* scan boot modules, noting their load-ranges. */
