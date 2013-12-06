@@ -33,6 +33,9 @@
 #define X86_FPUCW_RND_UP 2
 #define X86_FPUCW_RND_TRUNC 3
 
+/* returned from INT3 */
+#define INT3_EAX_FILLER 0xf00dcafe
+
 
 static inline uint16_t x86_fpu_getcw(void) {
 	uint16_t ax;
@@ -280,10 +283,18 @@ static void x86_exh_handle_exn(
 			break;
 
 		default:
-			/* assume INT imm8 */
 			diag("exception at ip=%#lx, errorcode=%#lx", *eip_p, *errorcode_p);
-			fail_unless(insn[0] == 0xcd, "insn=%#02x", insn[0]);
-			*eip_p += 2;
+			if(insn[0] == 0xcd) {
+				/* INT imm8 */
+				*eip_p += 2;
+			} else if(insn[0] == 0xcc) {
+				/* INT3 */
+				(*eip_p)++;
+				*eax_p = INT3_EAX_FILLER;
+			} else {
+				diag("unhandled insn=%#02x, not replying", insn[0]);
+				muidl_raise_no_reply();
+			}
 			break;
 
 		case 0x24:
@@ -379,6 +390,64 @@ START_TEST(trace_exn)
 END_TEST
 
 
+/* fork a child, have it start a thread that calls @exn_fn, and sync with the
+ * child process after three A_SHORT_NAP sleeps. cleanup is performed on pain
+ * of failure.
+ *
+ * returns the thread ID of the forked process.
+ */
+static L4_ThreadId_t child_exn_test(
+	void (*exn_fn)(void *param),
+	void *param_ptr)
+{
+	L4_ThreadId_t parent_tid = L4_Myself(), child_tid = L4_nilthread;
+	int child = fork_tid(&child_tid);
+	if(child == 0) {
+		L4_ThreadId_t failer = xstart_thread(exn_fn, param_ptr);
+
+		/* sync exit with parent */
+		L4_MsgTag_t tag = L4_Receive_Timeout(parent_tid, TEST_IPC_DELAY);
+		if(L4_IpcFailed(tag)) {
+			diag("child failed, ec=%#lx", L4_ErrorCode());
+			exit(1);
+		}
+
+		kill_thread(failer);
+		exit(0);
+	} else {
+		/* let the child execute, then sync & wait. */
+		for(int i=0; i < 3; i++) L4_Sleep(A_SHORT_NAP);
+
+		L4_LoadMR(0, 0);
+		L4_MsgTag_t tag = L4_Send_Timeout(child_tid, TEST_IPC_DELAY);
+		IPC_FAIL(tag);
+
+		int st = 0, dead = wait(&st);
+		fail_if(dead != child, "expected dead=%d, got %d", child, dead);
+	}
+
+	return child_tid;
+}
+
+
+struct exn_dets {
+	L4_ThreadId_t tid;
+	L4_Word_t ec, ip, sp, eax;
+};
+
+
+static int32_t get_exn_dets(struct exn_dets *out)
+{
+	int exct = -666;
+	int n = __x86_last_exn_detail(x86_exh_tid, &exct, &out->tid.raw,
+		&out->ec, &out->ip, &out->sp, &out->eax);
+	fail_if(n != 0, "n=%d", n);
+	fail_if(exct == -666);
+
+	return exct;
+}
+
+
 static void sigill_fn(void *param)
 {
 	uint32_t *magic = param;
@@ -403,31 +472,10 @@ START_TEST(illegal_insn_exn)
 	fail_if(exct == -666);
 	fail_if(exeax == magic);
 
-	L4_ThreadId_t parent_tid = L4_Myself(), child_tid = L4_nilthread;
-	int child = fork_tid(&child_tid);
-	if(child == 0) {
-		uint32_t *m_copy = malloc(sizeof(uint32_t));
-		*m_copy = magic;
-		L4_ThreadId_t failer = xstart_thread(&sigill_fn, m_copy);
-
-		/* sync exit with parent */
-		L4_MsgTag_t tag = L4_Receive_Timeout(parent_tid, TEST_IPC_DELAY);
-		if(L4_IpcFailed(tag)) {
-			diag("child failed, ec=%#lx", L4_ErrorCode());
-			exit(1);
-		}
-
-		kill_thread(failer);
-		free(m_copy);
-		exit(0);
-	} else {
-		L4_LoadMR(0, 0);
-		L4_MsgTag_t tag = L4_Send_Timeout(child_tid, TEST_IPC_DELAY);
-		IPC_FAIL(tag);
-
-		int st = 0, dead = wait(&st);
-		fail_if(dead != child, "expected dead=%d, got %d", child, dead);
-	}
+	uint32_t *m_copy = malloc(sizeof(uint32_t));
+	*m_copy = magic;
+	L4_ThreadId_t child_tid = child_exn_test(&sigill_fn, m_copy);
+	free(m_copy);
 
 	const int32_t prev_exct = exct;
 	n = __x86_last_exn_detail(x86_exh_tid, &exct, &extid.raw,
@@ -448,6 +496,100 @@ START_TEST(illegal_insn_exn)
 		diag("child_tid=%lu:%lu, extid=%lu:%lu",
 			L4_ThreadNo(child_tid), L4_Version(child_tid),
 			L4_ThreadNo(extid), L4_Version(extid));
+	}
+}
+END_TEST
+
+
+static void ineffective_kdb_enter(void *param UNUSED)
+{
+	L4_Word_t eax_ret = 0;
+
+	L4_Set_ExceptionHandler(x86_exh_tid);
+	diag("look ma, no hands");
+	asm volatile (
+		"/* hand-written test code in x86_suite.c */\n"
+		"\ttestb 1f, %%al\n"
+		"\tint3\n"
+		"\tjmp 2f\n"
+		"\tmovl $1f, %%eax\n"
+		".section .rodata\n"
+		"1:\t.ascii \"mung has a feature where this will do nothing\"\n"
+		"\t.byte 0\n"
+		".previous\n"
+		"2:\n"
+		: "=a" (eax_ret)
+		:: "cc");
+	diag("WE OUT");
+	fail_if(eax_ret == INT3_EAX_FILLER, "eax_ret=%#lx", eax_ret);
+
+	/* pop another exception to signify correct return from the previous. */
+	asm volatile ("int $0xbb" :: "a" (0xbeefc0de));
+
+	/* FIXME: see FIXME below */
+	L4_Sleep(L4_Never);
+}
+
+
+START_TEST(valid_kdb_exn)
+{
+	plan_tests(3);
+
+	struct exn_dets d;
+	const int32_t first_exct = get_exn_dets(&d);
+
+	L4_ThreadId_t child_tid = child_exn_test(&ineffective_kdb_enter, NULL);
+	int32_t exct = get_exn_dets(&d);
+	if(!ok(exct == first_exct + 1, "one exception occurred")) {
+		diag("exct=%d, first_exct=%d", (int)exct, (int)first_exct);
+	}
+	ok1(L4_Version(child_tid) == L4_Version(d.tid));
+	if(!ok1(d.ec == 0xbb * 8 + 2)) {
+		diag("ec=%#lx", d.ec);
+	}
+}
+END_TEST
+
+
+static void invalid_kdb_enter(void *param UNUSED)
+{
+	L4_Word_t eax_ret;
+
+	L4_Set_ExceptionHandler(x86_exh_tid);
+	diag("super happy invalid KDB entry!!!!");
+	asm volatile (
+		"int3\n"
+		"\txorl %%ecx, %%ecx\n"
+		: "=a" (eax_ret)
+		:: "ecx");
+	diag("returned from INT3");
+	fail_unless(eax_ret == INT3_EAX_FILLER, "eax_ret=%#lx", eax_ret);
+
+	/* FIXME: remove this sleep once kill_thread() works on threads that've
+	 * already exited. *sigh* *paperbag*
+	 */
+	L4_Sleep(L4_Never);
+}
+
+
+/* execute INT3 that isn't followed by a movl $straddr, %eax. this should
+ * cause a #GP as though int $3 had been executed instead.
+ */
+START_TEST(invalid_kdb_exn)
+{
+	plan_tests(3);
+
+	struct exn_dets d;
+	const int32_t first_exct = get_exn_dets(&d);
+
+	L4_ThreadId_t child_tid = child_exn_test(&invalid_kdb_enter, NULL);
+	int32_t exct = get_exn_dets(&d);
+	ok1(L4_Version(child_tid) == L4_Version(d.tid));
+	if(!ok(exct == first_exct + 1, "exception occurred")) {
+		diag("exct=%d, first_exct=%d", (int)exct, (int)first_exct);
+	}
+	if(!ok(d.ec == 8 * 3 + 2, "errorcode was for int3")) {
+		diag("d.ec=%#lx", d.ec);
 	}
 }
 END_TEST
@@ -480,6 +622,8 @@ struct Suite *x86_suite(void)
 		tcase_add_test(tc, int_exn);
 		tcase_add_test(tc, trace_exn);
 		tcase_add_test(tc, illegal_insn_exn);
+		tcase_add_test(tc, valid_kdb_exn);
+		tcase_add_test(tc, invalid_kdb_exn);
 		suite_add_tcase(s, tc);
 	}
 
