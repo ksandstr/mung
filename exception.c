@@ -334,74 +334,48 @@ static NORETURN void return_from_gp(struct thread *current, struct x86_exregs *r
 }
 
 
-/* FIXME: switch to use of space_memcpy_from(), which handles the
- * page-boundary case properly -- in both the entry sequence and the actual
- * string. right now if the int3 instruction lies in the last four bytes of a
- * page, the kernel will read an undefined page in its own address space,
- * potentially leading to a #GP.
- */
 static void handle_kdb_enter(struct thread *current, struct x86_exregs *regs)
 {
-	uintptr_t heap_addr = 0;
-
-	/* int3, i.e. KDB enter. there's a message we should decode. */
-	const struct map_entry *e = mapdb_probe(&current->space->mapdb,
-		regs->eip & ~PAGE_MASK);
-	if(e == NULL) {
-		printf("KDB callsite not mapped? what.\n");
-		goto msgfail;
-	}
-
-	/* get string address from succeeding "MOV EAX, imm32" instruction.
-	 * (offset is incremented by 3 to skip over the INT3 and JMP rel8
-	 * instructions.)
-	 *
-	 * FIXME: confirm that the entry sequence is cc eb 05 b8
+	/* check the instruction sequence used. it should be cc eb 05 b8, i.e.
+	 * int3; jmp +5; mov imm32, %eax.
 	 */
-	heap_addr = reserve_heap_page();
-	put_supervisor_page(heap_addr, mapdb_page_id_in_entry(e, regs->eip));
-	int offset = regs->eip & PAGE_MASK;
-	if(((const uint8_t *)heap_addr)[offset + 3] != 0xb8) {
-		/* KDB message not indicated with MOV EAX, imm32 */
+	static const uint8_t expected[4] = { 0xcc, 0xeb, 0x05, 0xb8 };
+	union {
+		L4_Word_t w[2];
+		uint8_t b[8];
+	} entryseq;
+	size_t n = space_memcpy_from(current->space, entryseq.b, regs->eip, 8);
+	if(n < 8) {
+		printf("KDB: can't memcpy 8 bytes from %#lx (got %u)\n",
+			regs->eip, (unsigned)n);
+	}
+	if(n < 4 || memcmp(entryseq.b, expected, 4) != 0) {
+		/* KDB message not indicated with the right sequence, or not mapped */
+		if(n < 4) printf("KDB: entry sequence not mapped (n=%d)\n", (int)n);
 		regs->error = 3 * 8 + 2;
 		return_from_gp(current, regs);
 		assert(false);
-	}
-	L4_Word_t strptr = *(const uint32_t *)(heap_addr + offset + 4);
-
-	/* now crawl out at most 256 bytes of debug crap, not crossing a page
-	 * boundary.
-	 */
-	e = mapdb_probe(&current->space->mapdb, strptr & ~PAGE_MASK);
-	if(e == NULL) {
-		printf("KDB message not mapped\n");
-		goto msgfail;
-	}
-	put_supervisor_page(heap_addr, mapdb_page_id_in_entry(e, strptr));
-	assert((heap_addr & PAGE_MASK) == 0);
-	const char *str = (void *)(heap_addr | (strptr & PAGE_MASK));
-	char buf[257];
-	memset(buf, 0, sizeof(buf));
-	strlcpy(buf, str, MIN(size_t, 256, PAGE_SIZE - (strptr & PAGE_MASK)));
-	if(strstarts(buf, "mung ") && strends(buf, " do nothing")) {
-		printf("#KDB entry ignored\n");
-		regs->eip++;
 	} else {
-		printf("#KDB (eip %#lx): [%#lx] %s\n", regs->eip, strptr, buf);
-		printf(" ... (not implemented, halting thread)\n");
-		goto msgfail;
+		/* copy out at most 256 bytes of KDB entry string */
+		L4_Word_t strptr = entryseq.w[1];
+		char strbuf[257];
+		n = space_memcpy_from(current->space, strbuf, strptr, 256);
+		strbuf[MIN(size_t, n, 256)] = '\0';
+		if(strstarts(strbuf, "mung ") && strends(strbuf, " do nothing")) {
+			printf("#KDB entry ignored\n");
+			regs->eip++;
+		} else {
+			printf("#KDB (eip %#lx): [%#lx] %s\n", regs->eip, strptr, strbuf);
+			printf(" ... (not implemented, halting thread)\n");
+			thread_save_ctx(current, regs);
+			thread_halt(current);
+			assert(current->status == TS_STOPPED);
+			return_to_scheduler();
+			assert(false);
+		}
 	}
 
-	free_heap_page(heap_addr);
 	return_from_exn();
-	return;
-
-msgfail:
-	if(heap_addr != 0) free_heap_page(heap_addr);
-	thread_save_ctx(current, regs);
-	thread_halt(current);
-	assert(current->status == TS_STOPPED);
-	return_to_scheduler();
 }
 
 
