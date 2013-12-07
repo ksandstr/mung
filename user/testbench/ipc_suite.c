@@ -1681,6 +1681,134 @@ START_TEST(c_bit_in_typed_words)
 END_TEST
 
 
+/* the "bug" tcase */
+
+
+struct big_reply_param {
+	size_t n_trash;
+	int n_faults;
+};
+
+/* pager thread that replies with a configurable number of trash MRs,
+ * inflating the message and overwriting registers beyond that expected of a
+ * minimal pager reply.
+ */
+static void big_reply_pager(void *param_ptr)
+{
+	struct big_reply_param *p = param_ptr;
+	const size_t n_trash = p->n_trash;
+	p->n_faults = 0;
+	uint32_t r_state = 0xb337f00d;	/* not a balanced diet, though */
+	bool running = true;
+	while(running) {
+		L4_ThreadId_t sender;
+		L4_Accept(L4_UntypedWordsAcceptor);
+		L4_MsgTag_t tag = L4_Wait(&sender);
+		for(;;) {
+			if(L4_IpcFailed(tag)) {
+				diag("%s: IPC failed, ec=%#lx", __func__, L4_ErrorCode());
+				break;
+			}
+			if(L4_Label(tag) == QUIT_LABEL) {
+				running = false;
+				break;
+			} else if(L4_Label(tag) >> 4 != 0xffe) {
+				diag("%s: unknown label %#lx", __func__, L4_Label(tag));
+				break;
+			}
+
+			/* forward to own pager */
+			L4_Word_t u[2];
+			assert(L4_UntypedWords(tag) == 2);
+			L4_StoreMRs(1, 2, u);
+			p->n_faults++;
+			diag("serving fault %#lx, %#lx", u[0], u[1]);
+			L4_Accept(L4_MapGrantItems(L4_CompleteAddressSpace));
+			L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 2,
+				.X.label = L4_Label(tag) }.raw);
+			L4_LoadMRs(1, 2, u);
+			tag = L4_Call(L4_Pager());
+			if(L4_IpcFailed(tag)) {
+				diag("%s: forward failed, ec=%#lx", __func__, L4_ErrorCode());
+				break;
+			}
+
+			assert(L4_UntypedWords(tag) == 0);
+			assert(L4_TypedWords(tag) == 2);
+			L4_StoreMRs(1, 2, u);
+			/* reply w/ trash */
+			L4_LoadMR(0, (L4_MsgTag_t){ .X.u = n_trash, .X.t = 2 }.raw);
+			for(int i=0; i < n_trash; i++) {
+				L4_LoadMR(i + 1, rand32(&r_state));
+			}
+			L4_LoadMRs(n_trash + 1, 2, u);
+			L4_Accept(L4_UntypedWordsAcceptor);
+			tag = L4_ReplyWait(sender, &sender);
+		}
+	}
+
+	diag("%s exiting", __func__);
+}
+
+
+/* Bug description: if a pagefault is replied to with more than 3 MRs (tag,
+ * single MapItem), the reply's data overwrites that present in the
+ * recipient's TCB. this can disrupt ongoing IPC by overwriting registers that
+ * haven't been copied, and munge MRs in a pre-IPC condition when a pagefault
+ * or exception is generated while the thread loads its MRs.
+ * ---
+ *
+ * when successful, this test demonstrates that the pagefault IPC mechanism
+ * avoids stomping the receiver's MRs regardless of reply length.
+ */
+START_LOOP_TEST(big_pf_stomp, iter, 0, 1)
+{
+	plan_tests(2);
+	const size_t n_trash = CHECK_FLAG(iter, 1) ? 7 : 0;
+	diag("n_trash=%u", (unsigned)n_trash);
+	const uint32_t initial_seed = 0x498ba2c1;
+
+	struct big_reply_param *param = malloc(sizeof(*param));
+	*param = (struct big_reply_param){ .n_trash = n_trash };
+	L4_ThreadId_t old_pager = L4_Pager(),
+		helper = xstart_thread(&big_reply_pager, param);
+
+	uint8_t *fault_mem = valloc(PAGE_SIZE);
+	assert(((L4_Word_t)fault_mem & PAGE_MASK) == 0);
+	memset(fault_mem, 1, PAGE_SIZE);
+	uint32_t seed = initial_seed;
+	for(int i=0; i < 63; i++) L4_LoadMR(i + 1, rand32(&seed));
+	L4_Set_Pager(helper);
+	diag("inits done, helper pager set");
+
+	L4_Fpage_t p = L4_Fpage((L4_Word_t)fault_mem, PAGE_SIZE);
+	L4_Set_Rights(&p, L4_FullyAccessible);
+	L4_FlushFpage(p);
+	memset(fault_mem, 2, PAGE_SIZE);
+	L4_Set_Pager(old_pager);
+	diag("fault done, pager reset");
+
+	bool all_ok = true;
+	seed = initial_seed;
+	for(int i=0; i < 63; i++) {
+		L4_Word_t w; L4_StoreMR(i + 1, &w);
+		uint32_t expect = rand32(&seed);
+		if(w != expect) {
+			diag("index %d: w=%#lx, expect=%#x", i, w, expect);
+			all_ok = false;
+		}
+	}
+	ok(param->n_faults > 0, "faults occurred");
+	ok(all_ok, "MRs weren't trashed");
+
+	fail_if(!send_quit(helper));
+	xjoin_thread(helper);
+	free(fault_mem);
+	free(param);
+}
+END_TEST
+
+
 Suite *ipc_suite(void)
 {
 	Suite *s = suite_create("ipc");
@@ -1693,6 +1821,13 @@ Suite *ipc_suite(void)
 		tcase_add_test(tc, receive_from_anylocalthread);
 		tcase_add_test(tc, map_into_large_acceptor);
 		tcase_add_test(tc, map_into_small_acceptor);
+		suite_add_tcase(s, tc);
+	}
+
+	/* bug-provocation tests */
+	{
+		TCase *tc = tcase_create("bug");
+		tcase_add_test(tc, big_pf_stomp);
 		suite_add_tcase(s, tc);
 	}
 
