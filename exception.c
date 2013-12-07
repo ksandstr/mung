@@ -71,6 +71,32 @@ void isr_exn_de_bottom(struct x86_exregs *regs)
 }
 
 
+/* TODO: could this be merged with return_from_gp()? */
+static NORETURN void return_from_ud(struct thread *current, struct x86_exregs *regs)
+{
+	void *utcb = thread_get_utcb(current);
+	struct thread *exh = thread_get_exnh(current, utcb);
+	if(exh != NULL) {
+		/* indicate "invalid opcode" as though it was an INT# GP on line 6
+		 * (#UD). label will be an architecture-specific exception despite
+		 * invalid opcodes occurring on all architectures.
+		 */
+		regs->error = (6 << 3) + 2;
+		build_exn_ipc(current, utcb, -5, regs);
+		return_to_ipc(exh);
+	} else {
+		printf("#UD unhandled in %lu:%lu; eip=%#lx, esp=%#lx\n",
+			TID_THREADNUM(current->id), TID_VERSION(current->id),
+			regs->eip, regs->esp);
+		thread_halt(current);
+		assert(current->status == TS_STOPPED);
+		return_to_scheduler();
+	}
+
+	assert(false);
+}
+
+
 void isr_exn_ud_bottom(struct x86_exregs *regs)
 {
 	assert(x86_irq_is_enabled());
@@ -102,24 +128,8 @@ void isr_exn_ud_bottom(struct x86_exregs *regs)
 		regs->esi = (23 << 24) | (17 << 16);	/* KERNEL ID */
 		return_from_exn();
 	} else {
-		void *utcb = thread_get_utcb(current);
-		struct thread *exh = thread_get_exnh(current, utcb);
-		if(exh != NULL) {
-			/* indicate "invalid opcode" as though it was an INT# GP on line 6
-			 * (#UD). label will be an architecture-specific exception despite
-			 * invalid opcodes occurring on all architectures.
-			 */
-			regs->error = (6 << 3) + 2;
-			build_exn_ipc(current, utcb, -5, regs);
-			return_to_ipc(exh);
-		} else {
-			printf("#UD unhandled in %lu:%lu; eip=%#lx, esp=%#lx\n",
-				TID_THREADNUM(current->id), TID_VERSION(current->id),
-				regs->eip, regs->esp);
-			thread_halt(current);
-			assert(current->status == TS_STOPPED);
-			return_to_scheduler();
-		}
+		return_from_ud(current, regs);
+		assert(false);
 	}
 }
 
@@ -445,10 +455,8 @@ static void handle_io_fault(struct thread *current, struct x86_exregs *regs)
 		default:
 			printf("unknown instruction %#02x in I/O fault at %#lx\n",
 				insn[0], regs->eip);
-			/* FIXME: pop an "illegal instruction" exception message,
-			 * somehow
-			 */
-			goto fail;
+			return_from_ud(current, regs);
+			assert(false);
 	}
 
 	void *utcb = thread_get_utcb(current);
