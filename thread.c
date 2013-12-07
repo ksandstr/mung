@@ -157,12 +157,11 @@ void save_ipc_regs(struct thread *t, void *utcb, int n_regs)
 	if(sr == NULL) {
 		/* create */
 		hook_push_back(&t->post_exn_call, &restore_saved_regs, NULL);
-		int n_alloc = 1 << size_to_shift(n_regs);
-		sr = malloc(sizeof(struct saved_regs) + sizeof(L4_Word_t) * n_alloc);
+		sr = malloc(sizeof(struct saved_regs) + sizeof(L4_Word_t) * n_regs);
 		sr->br0 = L4_VREG(utcb, L4_TCR_BR(0));
 		sr->va_sender.raw = L4_VREG(utcb, L4_TCR_VA_SENDER);
 		sr->ir.raw = L4_VREG(utcb, L4_TCR_INTENDEDRECEIVER);
-		sr->size = n_alloc;
+		sr->size = n_regs;
 		sr->length = 0;
 		t->u0.regs = sr;
 	} else if(sr->size < n_regs) {
@@ -1092,9 +1091,7 @@ int int_clear(int intnum, struct thread *sender)
 }
 
 
-/* TODO: make this function atomic on error? it seems a proper microkernel
- * should be like that.
- */
+/* FIXME: make this function atomic on error! */
 void sys_threadcontrol(struct x86_exregs *regs)
 {
 	assert(check_thread_module(0));
