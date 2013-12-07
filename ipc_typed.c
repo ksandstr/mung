@@ -443,7 +443,7 @@ static void prexfer_ipc_hook(struct hook *hook, uintptr_t code, void *dataptr)
 		 *      timeout was hit;
 		 *   3) IPC abort from ExchangeRegisters, on either peer.
 		 *
-		 * if t->ipc isn't NULL, we'll clean it up on both sides.
+		 * if t->ipc isn't NULL, we'll clean it up for both peers.
 		 */
 		if(t->ipc != NULL) {
 			struct ipc_state *st = t->ipc;
@@ -453,16 +453,14 @@ static void prexfer_ipc_hook(struct hook *hook, uintptr_t code, void *dataptr)
 			free(st);
 		}
 
-		assert(t->saved_mrs == 0 && t->saved_brs == 0);
 		return;
 	}
 
 	assert(t->ipc != NULL);
 
-	t->ipc_from.raw = t->saved_regs[12];
-	t->ipc_to.raw = t->saved_regs[13];
-
-	/* FIXME: restore send, recv timeouts (needed for other IPC stage) */
+	t->ipc_from = t->orig_ipc_from;
+	t->ipc_to = t->orig_ipc_to;
+	/* FIXME: also restore send, recv timeouts (needed for other IPC stage) */
 
 	const bool is_sender = CHECK_FLAG(t->flags, TF_SENDER);
 	TRACE("%s: t=%lu:%lu, t->ipc=%p\n", __func__,
@@ -536,8 +534,8 @@ static void send_xfer_fault(
 
 	void *utcb = thread_get_utcb(t);
 	struct thread *pager = thread_get_pager(t, utcb);
-	t->saved_regs[12] = t->ipc_from.raw;
-	t->saved_regs[13] = t->ipc_to.raw;
+	t->orig_ipc_from = t->ipc_from;
+	t->orig_ipc_to = t->ipc_to;
 	set_pf_msg(t, utcb, L4_Address(fault), ip, L4_Rights(fault));
 	/* (this can cause calls to ipc_send_half() to nest. due to the way IPC
 	 * works in L4.X2, that's completely safe.)

@@ -45,6 +45,16 @@ struct interrupt
 };
 
 
+/* stored TCRs for an exception originator */
+struct saved_regs
+{
+	L4_Word_t br0;
+	L4_ThreadId_t va_sender, ir;
+	uint8_t size, length;	/* size = space in mrs[], len = use */
+	L4_Word_t mrs[];
+};
+
+
 /* only accessible with interrupts disabled. */
 static short num_ints = 0, num_async_words = 0;
 static struct interrupt *int_table = NULL;
@@ -121,55 +131,58 @@ COLD void init_threading(void)
 static void restore_saved_regs(struct hook *hook, uintptr_t code, void *priv)
 {
 	struct thread *t = container_of(hook, struct thread, post_exn_call);
-
-#ifndef NDEBUG
-	/* this is useful for catching mis-nesting of restore_saved_regs() and
-	 * save_ipc_regs(), i.e. spots where post_exn_{ok,fail}() isn't being
-	 * called properly.
-	 */
-	if(t->saved_mrs <= 0 && t->saved_brs <= 0) {
-		printf("%s: called for %lu:%lu (%d MRs, %d BRs) on %s\n", __func__,
-			TID_THREADNUM(t->id), TID_VERSION(t->id),
-			(int)t->saved_mrs, (int)t->saved_brs,
-			code != 0 ? "IPC fail" : "IPC success");
-	}
-	assert(t->saved_mrs > 0 || t->saved_brs > 0);
-#endif
-
+	assert(t->utcb_pos >= 0 && !IS_KERNEL_THREAD(t));
 	void *utcb = thread_get_utcb(t);
-	memcpy(&L4_VREG(utcb, L4_TCR_MR(0)), t->saved_regs,
-		sizeof(L4_Word_t) * (int)t->saved_mrs);
-	memcpy(&L4_VREG(utcb, L4_TCR_BR(t->saved_brs - 1)),
-		&t->saved_regs[t->saved_mrs], sizeof(L4_Word_t) * (int)t->saved_brs);
-	t->saved_mrs = 0;
-	t->saved_brs = 0;
+
+	struct saved_regs *sr = t->u0.regs;
+	assert(sr != NULL);
+	t->u0.regs = NULL;
+	L4_VREG(utcb, L4_TCR_BR(0)) = sr->br0;
+	L4_VREG(utcb, L4_TCR_VA_SENDER) = sr->va_sender.raw;
+	L4_VREG(utcb, L4_TCR_INTENDEDRECEIVER) = sr->ir.raw;
+	memcpy(&L4_VREG(utcb, L4_TCR_MR(0)), sr->mrs,
+		sizeof(L4_Word_t) * sr->length);
+	free(sr);
 
 	hook_detach(hook);
 }
 
 
-void save_ipc_regs(struct thread *t, int mrs, int brs)
+void save_ipc_regs(struct thread *t, void *utcb, int n_regs)
 {
-#ifndef NDEBUG
-	if(t->saved_mrs != 0 || t->saved_brs != 0) {
-		printf("%s: called for %lu:%lu (%d MRs, %d BRs) from %p\n", __func__,
-			TID_THREADNUM(t->id), TID_VERSION(t->id), mrs, brs,
-			__builtin_return_address(0));
+	assert(n_regs >= 0 && n_regs <= 64);
+	assert(t->utcb_pos >= 0 && !IS_KERNEL_THREAD(t));
+
+	struct saved_regs *sr = t->u0.regs;
+	if(sr == NULL) {
+		/* create */
+		hook_push_back(&t->post_exn_call, &restore_saved_regs, NULL);
+		int n_alloc = 1 << size_to_shift(n_regs);
+		sr = malloc(sizeof(struct saved_regs) + sizeof(L4_Word_t) * n_alloc);
+		sr->br0 = L4_VREG(utcb, L4_TCR_BR(0));
+		sr->va_sender.raw = L4_VREG(utcb, L4_TCR_VA_SENDER);
+		sr->ir.raw = L4_VREG(utcb, L4_TCR_INTENDEDRECEIVER);
+		sr->size = n_alloc;
+		sr->length = 0;
+		t->u0.regs = sr;
+	} else if(sr->size < n_regs) {
+		/* enlarge */
+		int n_alloc = 1 << size_to_shift(n_regs);
+		sr = realloc(sr, sizeof(struct saved_regs)
+			+ sizeof(L4_Word_t) * n_alloc);
+		if(sr == NULL) {
+			panic("there's something wrong with the world today");
+			/* and i don't know what it is */
+		}
+		sr->size = n_alloc;
+		t->u0.regs = sr;
 	}
-#endif
-	assert(t->saved_mrs == 0 && t->saved_brs == 0);
-	assert(mrs >= 1 && brs >= 0);
-	assert(mrs + brs <= sizeof(t->saved_regs) / sizeof(t->saved_regs[0]));
 
-	t->saved_mrs = mrs;
-	t->saved_brs = brs;
-	void *utcb = thread_get_utcb(t);
-	memcpy(t->saved_regs, &L4_VREG(utcb, L4_TCR_MR(0)),
-		sizeof(L4_Word_t) * mrs);
-	memcpy(&t->saved_regs[mrs], &L4_VREG(utcb, L4_TCR_BR(brs - 1)),
-		sizeof(L4_Word_t) * brs);
-
-	hook_push_back(&t->post_exn_call, &restore_saved_regs, NULL);
+	if(sr->length < n_regs) {
+		memcpy(&sr->mrs[sr->length], &L4_VREG(utcb, L4_TCR_MR(sr->length)),
+			sizeof(L4_Word_t) * (n_regs - sr->length));
+		sr->length = n_regs;
+	}
 }
 
 
@@ -197,12 +210,9 @@ struct thread *thread_new(thread_id tid)
 	/* must be a currently not-existing thread number */
 	assert(thread_find(tid) == NULL);
 
-	struct thread *t = list_top(&dead_thread_list, struct thread, dead_link);
-	if(t == NULL) {
-		t = kmem_cache_alloc(thread_slab);
-	} else {
-		list_del_from(&dead_thread_list, &t->dead_link);
-	}
+	struct thread *t = list_pop(&dead_thread_list,
+		struct thread, u0.dead_link);
+	if(t == NULL) t = kmem_cache_alloc(thread_slab);
 
 	*t = (struct thread){
 		.id = tid,
@@ -981,9 +991,7 @@ static void int_kick(struct thread *t)
 	assert(x86_irq_is_enabled());
 	assert(CHECK_FLAG(t->flags, TF_INTR));
 
-	/* brute force, but acceptable because interrupts are usually few.
-	 * (could repurpose dead_link for an interrupt owner listhead, though.)
-	 */
+	/* brute force, but acceptable because interrupts are usually few. */
 	x86_irq_disable();
 	for(int i=0; i < num_ints; i++) {
 		struct interrupt *it = &int_table[i];
@@ -1250,7 +1258,8 @@ void sys_threadcontrol(struct x86_exregs *regs)
 
 		if(created) {
 			dest_utcb = thread_get_utcb(dest);
-			L4_VREG(dest_utcb, L4_TCR_PAGER) = dest->saved_regs[0];
+			L4_VREG(dest_utcb, L4_TCR_PAGER) = dest->u0.pager.raw;
+			dest->u0.pager = L4_nilthread;
 		}
 	}
 
@@ -1259,7 +1268,7 @@ void sys_threadcontrol(struct x86_exregs *regs)
 			dest_utcb = thread_get_utcb(dest);
 			L4_VREG(dest_utcb, L4_TCR_PAGER) = pager.raw;
 		} else {
-			dest->saved_regs[0] = pager.raw;
+			dest->u0.pager = pager;
 		}
 	}
 

@@ -152,7 +152,6 @@ void sq_remove_thread(struct thread *t)
 /* simple IPC timeout. signaled to exactly one thread. */
 static void timeout_ipc(struct thread *t)
 {
-	assert(t->saved_mrs + t->saved_brs == 0);
 	assert(hook_empty(&t->post_exn_call));
 
 	bool is_send = t->status == TS_SEND_WAIT;
@@ -587,7 +586,7 @@ static void return_to_other(struct thread *current, struct thread *other)
 void return_to_ipc(struct thread *target)
 {
 	struct thread *cur = get_current_thread();
-	assert(cur->saved_mrs != 0 || cur->saved_brs != 0);
+	assert(!hook_empty(&cur->post_exn_call));
 	ipc_user(cur, target, 0);
 
 	/* TODO: schedule the target thread next */
@@ -698,9 +697,8 @@ void sys_schedule(struct x86_exregs *regs)
 		| L4_TimePeriod(dest->total_quantum).raw;
 
 	if(IS_IPC(dest->status)
-		/* TODO: check flag to see if current IPC is by kernel */
-		&& (!hook_empty(&dest->post_exn_call)
-			|| dest->saved_mrs > 0 || dest->saved_brs > 0))
+		/* TODO: check flag to see if current IPC is by kernel, instead */
+		&& !hook_empty(&dest->post_exn_call))
 	{
 		result = L4_SCHEDRESULT_RUNNING;
 	} else {

@@ -261,6 +261,11 @@ static inline int do_ipc_transfer(
 	void *d_utcb)
 {
 	L4_MsgTag_t tag = { .raw = L4_VREG(s_utcb, L4_TCR_MR(0)) };
+	if(unlikely(!hook_empty(&dest->post_exn_call))) {
+		/* (likelihood reflects exceptions' nature.) */
+		save_ipc_regs(dest, d_utcb,
+			L4_UntypedWords(tag) + L4_TypedWords(tag) + 1);
+	}
 	L4_VREG(d_utcb, L4_TCR_MR(0)) = tag.raw;
 	for(int i=0; i < tag.X.u; i++) {
 		int reg = L4_TCR_MR(i + 1);

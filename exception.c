@@ -462,7 +462,7 @@ static void handle_io_fault(struct thread *current, struct x86_exregs *regs)
 	void *utcb = thread_get_utcb(current);
 	struct thread *pager = thread_get_pager(current, utcb);
 	if(pager == NULL) goto fail;
-	save_ipc_regs(current, 3, 1);
+	save_ipc_regs(current, utcb, 3);
 	L4_VREG(utcb, L4_TCR_BR(0)) = L4_IoFpageLog2(0, 16).raw;
 	L4_VREG(utcb, L4_TCR_MR(0)) = ((-8) & 0xfff) << 20 | 0x6 << 16 | 2;
 	L4_VREG(utcb, L4_TCR_MR(1)) = L4_IoFpage(port, size).raw;
@@ -539,7 +539,7 @@ void build_exn_ipc(
 	assert(label < 0);
 	assert(utcb != NULL);
 
-	save_ipc_regs(t, 13, 1);
+	save_ipc_regs(t, utcb, 13);
 	L4_VREG(utcb, L4_TCR_BR(0)) = 0;
 	L4_VREG(utcb, L4_TCR_MR(0)) = (L4_MsgTag_t){
 		.X.label = (label & 0xfff) << 4, .X.u = 12 }.raw;
@@ -717,15 +717,6 @@ void isr_exn_pf_bottom(struct x86_exregs *regs)
 
 /* functions exported in <ukernel/ipc.h> */
 
-/* FIXME: if a pagefault is replied to with more than 3 MRs (tag, single
- * MapItem), the reply's data overwrites that present in the recipient's TCB.
- * this can disrupt ongoing IPC by overwriting registers that haven't been
- * copied, and munge MRs in a pre-IPC condition when a pagefault or exception
- * is generated while the thread loads its MRs.
- *
- * proposed solution: when !hook_empty(&t->post_exn_call), store existing MRs
- * into a buffer that gets restored when post_exn_ok() returns true.
- */
 void set_pf_msg(
 	struct thread *t,
 	void *utcb,
@@ -735,7 +726,7 @@ void set_pf_msg(
 {
 	assert(utcb != NULL);
 
-	save_ipc_regs(t, 3, 1);
+	save_ipc_regs(t, utcb, 3);
 	L4_VREG(utcb, L4_TCR_BR(0)) = L4_CompleteAddressSpace.raw;
 	L4_VREG(utcb, L4_TCR_MR(0)) = ((-2) & 0xfff) << 20		/* label */
 		| fault_access << 16	/* access */

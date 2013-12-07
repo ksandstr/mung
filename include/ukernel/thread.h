@@ -63,6 +63,7 @@ typedef L4_Word_t thread_id;
 
 struct space;
 struct ipc_state;		/* private to ipc.c */
+struct saved_regs;		/* private to thread.c */
 
 struct thread
 {
@@ -127,30 +128,21 @@ struct thread
 	void *fpu_context;			/* TODO: what about MMX, SSE, etc? */
 	struct x86_exregs ctx;
 
-	/* saved IPC registers. at most 14 (acceptor, tag, 12 MRs for exception
-	 * message) for x86.
-	 *
-	 * NOTE: before a thread is activated, saved_regs[0] is used for the pager
-	 * value set by ThreadControl before a thread's pager TCR is available.
-	 * NOTE #2: buffer registers are stored in a reverse order at
-	 * saved_regs[saved_mrs .. saved_brs - 1], i.e. high number to low. this
-	 * is due to the spec's UTCB layout.
-	 * NOTE #3: send_prexfer_fault() and its hook function keep the original
-	 * ipc_from & ipc_to values in saved_regs[12, 13] respectively, as it's
-	 * known that set_pf_msg() only uses the first four.
-	 */
-	uint8_t saved_mrs, saved_brs;
-	L4_Word_t saved_regs[14];
+	union {
+		struct saved_regs *regs;	/* under exception IPC */
+		L4_ThreadId_t pager;		/* before activation */
+		struct list_node dead_link;	/* kth after termination */
+	} u0;
 
-	/* context of the IPC state machine. emitted by do_typed_transfer()
+	/* context of the typed IPC state machine. emitted by do_typed_transfer()
 	 * whenever a string transfer becomes complex and doesn't immediately
 	 * abort. when this field is not NULL, threads coming out of RECV_WAIT
 	 * (for pager replies) transition into SENDING/RECVING per the presence or
 	 * absence, respectively, of the TF_SENDER bit in @flags.
 	 */
 	struct ipc_state *ipc;
-
-	struct list_node dead_link;	/* link in dead_thread_list */
+	/* saved copies of ipc_from, ipc_to during string-transfer pagefault */
+	L4_ThreadId_t orig_ipc_from, orig_ipc_to;
 };
 
 
@@ -242,9 +234,11 @@ extern void thread_sleep(struct thread *t, L4_Time_t period);
 #define thread_wake(t) thread_sleep((t), L4_ZeroTime)
 
 /* used by exception handlers to save previous IPC registers & automagically
- * restore them on IPC completion.
+ * restore them on IPC completion. the restoring happens when @t next receives
+ * a message as part of post_exn_{fail,ok}() processing at the back of the
+ * hook; the handler detaches itself and resets t->u0.regs .
  */
-extern void save_ipc_regs(struct thread *t, int mrs, int brs);
+extern void save_ipc_regs(struct thread *t, void *utcb, int n_mrs);
 
 /* these return false for ordinary IPC (with return values etc), and true for
  * exception IPC (with a full frame restore). they don't care about kernel
