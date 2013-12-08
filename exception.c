@@ -51,9 +51,7 @@ void return_from_exn(void)
 		do {
 			x86_irq_enable();
 			if(int_latent()) {
-				/* FIXME: or, like, pop off to another thread entirely? that
-				 * could happen.
-				 */
+				/* TODO: cause preemption before exit */
 				printf("%s: preemption! (caller %p)\n", __func__,
 					__builtin_return_address(0));
 			}

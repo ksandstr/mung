@@ -958,17 +958,17 @@ bool int_latent(void)
 	bool preempt = false;
 	if(num_vecs > 0) {
 		int no_deliver = 0;
-		struct thread *t = get_current_thread();
+		struct thread *current = get_current_thread();
 		for(int i=0; i < num_vecs; i++) {
 			if(ts[i] == NULL) continue;
 			if(send_int_ipc(vecs[i], ts[i], false)) {
-				if(ts[i]->pri > t->pri) preempt = true;
+				if(ts[i]->pri > current->pri) preempt = true;
 			} else {
 				no_deliver++;
 				ts[i] = NULL;
 			}
 		}
-		preempt = preempt && !IS_KERNEL_THREAD(t);
+		if(IS_KERNEL_THREAD(current)) preempt = false;
 
 		if(no_deliver > 0) {
 			/* go clear the delivery bits for the ones that failed. */

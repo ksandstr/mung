@@ -76,8 +76,8 @@ struct thread
 	uint64_t wakeup_time;		/* absolute microseconds since epoch */
 
 	thread_id id;
-	/* TODO: alter ipc.c to go to TS_STOPPED after IPC completion when TF_HALT
-	 * is set
+	/* FIXME: alter ipc.c to go to TS_STOPPED after IPC completion when
+	 * TF_HALT is set
 	 */
 	uint8_t flags;
 	uint8_t status;
@@ -125,7 +125,7 @@ struct thread
 
 	struct page *stack_page;
 
-	void *fpu_context;			/* TODO: what about MMX, SSE, etc? */
+	void *fpu_context;
 	struct x86_exregs ctx;
 
 	union {
