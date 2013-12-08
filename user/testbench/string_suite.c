@@ -119,29 +119,75 @@ static void stt_echo_impl(
 		strlcpy(recvbuf, tmp, tmplen);
 		free(tmp);
 	}
-	*got_si = L4_StringItem(strlen(recvbuf) + 1, recvbuf);
-	L4_MsgTag_t rtag = { .X.t = 2 };
 
-	if(L4_TypedWords(tag) > gs_words) {
-		L4_StringItem_t *next_si = (L4_StringItem_t *)&got_si->raw[gs_words];
-		while(!L4_IsStringItem(next_si) && gs_words + 2 < L4_TypedWords(tag)) {
-			gs_words += 2;
-			next_si++;
+	diag("%s: tag.X.t=%d, gs_words=%d, reply len=%d", __func__,
+		(int)L4_TypedWords(tag), gs_words, strlen(recvbuf));
+	L4_MsgTag_t rtag = { };
+	L4_StringItem_t *out_si = alloca(sizeof(L4_Word_t) * 64);
+	if(L4_TypedWords(tag) == 2) {
+		/* simple echo string gets a simple reply. */
+		*out_si = L4_StringItem(strlen(recvbuf) + 1, recvbuf);
+		rtag.X.t = 2;
+	} else {
+		/* a compound echo gets a compound reply. it'll have the same form as
+		 * the sender's string, and a spill segment at the end.
+		 */
+		int pos = 0;
+		bool end = false;
+		while(!end) {
+			const int n_subs = L4_Substrings(got_si),
+				sz = got_si->X.string_length;
+			if(pos == 0) {
+				diag("first header 0:%d", sz);
+				*out_si = L4_StringItem(sz, recvbuf);
+				pos = sz;
+			} else {
+				diag("continuation header %d:%d", pos, sz);
+				L4_StringItem_t t = L4_StringItem(sz, &recvbuf[pos]);
+				L4_AddSubstringTo(out_si, &t);
+				pos += sz;
+			}
+			for(int i=1; i < n_subs; i++) {
+				diag(" ... substring %d = %d:%d", i, pos, sz);
+				L4_AddSubstringAddressTo(out_si, &recvbuf[pos]);
+				pos += sz;
+			}
+			rtag.X.t += n_subs + 1;
+			end = !L4_CompoundString(got_si);
+			got_si = (L4_StringItem_t *)&got_si->raw[n_subs + 1];
 		}
-		if(!L4_IsStringItem(next_si)) {
-			diag("second typed item is not a string item");
-			goto fail;
+		if(strlen(recvbuf) + 1 > pos) {
+			diag("tail header %d:%d", pos, strlen(recvbuf) + 1 - pos);
+			L4_StringItem_t rest = L4_StringItem(
+				strlen(recvbuf) + 1 - pos, &recvbuf[pos]);
+			L4_AddSubstringTo(out_si, &rest);
+			rtag.X.t += 2;
 		}
-		si_len = stritemlen(next_si);
-		rbuf2[MIN(int, rbuf_len - 1, si_len)] = '\0';
-		rec_len = strlen(rbuf2);
-		next_si = (L4_StringItem_t *)&got_si->raw[2];
-		*next_si = L4_StringItem(rec_len + 1, rbuf2);
-		rtag.X.t += 2;
 	}
 
+	/* echo a second string item, too. */
+	if(L4_TypedWords(tag) > gs_words) {
+		/* skip non-string typed items */
+		L4_StringItem_t *next = got_si;
+		while(!L4_IsStringItem(next) && gs_words + 2 < L4_TypedWords(tag)) {
+			gs_words += 2;
+			next++;
+		}
+		if(!L4_IsStringItem(next)) {
+			diag("next typed items had no string item");
+			goto fail;
+		}
+		diag("HAEV SECOND STREGN (%d x %d bytes)",
+			(int)next->X.string_length, (int)L4_Substrings(next));
+		L4_StringItem_t *next_out = __L4_EndOfString(out_si, NULL);
+		rbuf2[MIN(int, rbuf_len - 1, stritemlen(next))] = '\0';
+		*next_out = L4_StringItem(strlen(rbuf2) + 1, rbuf2);
+		rtag.X.t += 2;
+	}
+	diag("%s: reply has %lu typed words", __func__, L4_TypedWords(rtag));
+
 	L4_LoadMR(0, rtag.raw);
-	L4_LoadMRs(1, L4_TypedWords(rtag), got_si->raw);
+	L4_LoadMRs(1, L4_TypedWords(rtag), out_si->raw);
 	return;
 
 fail:
@@ -320,11 +366,13 @@ static void echo_ok_2(
 		diag("%s: inventing a 2-byte string item", __func__);
 		*got_si = L4_StringItem(2, got_si->raw);
 	}
-	replybuf[MIN(int, replybuf_len - 1, got_si->X.string_length)] = '\0';
+	replybuf[MIN(int, replybuf_len - 1, stritemlen(got_si))] = '\0';
 	int rlen = strlen(replybuf);
 	ok(rlen >= strlen(echostr), "reply length >= input length");
-	ok(streq(&replybuf[rlen - strlen(echostr)], echostr),
-		"echo output ends with input");
+	if(!ok(strends(replybuf, echostr), "echo output ends with input")) {
+		diag("replybuf=`%s'", replybuf);
+		diag("echostr=`%s'", echostr);
+	}
 }
 
 
@@ -333,7 +381,7 @@ static void echo_ok_2(
 
 START_TEST(echo_simple)
 {
-	plan_tests(2);
+	plan_tests(5);
 	const char *echostr = "does a polar bear crap in the woods?";
 
 	char replybuf[1024];
@@ -346,6 +394,18 @@ START_TEST(echo_simple)
 	ok(rlen >= strlen(echostr), "reply length >= input length");
 	ok(streq(&replybuf[rlen - strlen(echostr)], echostr),
 		"echo output ends with input");
+	ok(got_si.X.C == 0, "string item was the last one");
+	if(!ok1(L4_Substrings(&got_si) == 1)) {
+		diag("...=%d", (int)L4_Substrings(&got_si));
+	}
+
+	if(!ok(L4_Substrings(&got_si) >= 1
+			&& L4_Substring(&got_si, 1) == &replybuf[0],
+		"received stringitem points to replybuf"))
+	{
+		diag("substr=%p, replybuf=%p",
+			L4_Substring(&got_si, 1), &replybuf[0]);
+	}
 }
 END_TEST
 
@@ -391,7 +451,7 @@ static size_t build_stritem(
  */
 START_LOOP_TEST(echo_compound_send, iter, 0, 1)
 {
-	plan_tests(3);
+	plan_tests(5);
 	const bool multi = CHECK_FLAG(iter, 1);
 	char *echo_str = strdup(copypasta);
 	const size_t echo_len = strlen(echo_str);
@@ -436,14 +496,39 @@ START_LOOP_TEST(echo_compound_send, iter, 0, 1)
 	else ec = L4_ErrorCode();
 	if(!ok(L4_IpcSucceeded(tag), "ipc ok")) diag("ec=%#lx", ec);
 
-	fail_unless(L4_IsStringItem(got_si) || !L4_CompoundString(got_si));
+	fail_unless(L4_IsStringItem(got_si));
 	replybuf[MIN(int, 2047, stritemlen(got_si))] = '\0';
 	size_t reply_len = strlen(replybuf);
 	if(!ok1(reply_len >= echo_len)) {
 		diag("reply_len=%d, echo_len=%d", reply_len, echo_len);
 	}
-	ok(streq(&replybuf[reply_len - echo_len], echo_str),
-		"echo output ends with input");
+	if(!ok1(strends(replybuf, echo_str))) {
+		diag("replybuf=`%s'", replybuf);
+		diag("echo_str=`%s'", echo_str);
+	}
+
+	/* verify pointers returned for the compound string. */
+	ok1(L4_CompoundString(got_si));
+	diag("subs=%d, is_comp=%s", (int)L4_Substrings(got_si),
+		btos(L4_CompoundString(got_si)));
+	diag("got_si length = %d words, %d bytes",
+		__L4_EndOfString(got_si, NULL)->raw - got_si->raw,
+		stritemlen(got_si));
+	int pos = 0;
+	bool last, all_ok = true;
+	do {
+		last = !L4_CompoundString(got_si);
+		for(int i=1; i <= L4_Substrings(got_si); i++) {
+			if(&replybuf[pos] != L4_Substring(got_si, i)) {
+				all_ok = false;
+				diag("pos=%d, i=%d, &replybuf[pos]=%p, substr=%p",
+					pos, i, &replybuf[pos], L4_Substring(got_si, i));
+			}
+			pos += got_si->X.string_length;
+		}
+		got_si = (L4_StringItem_t *)&got_si->raw[L4_Substrings(got_si) + 1];
+	} while(!last);
+	ok(all_ok, "received stringitem points to buffer");
 
 	free(replybuf);
 	free(echo_str);
@@ -1456,29 +1541,35 @@ Suite *string_suite(void)
 		suite_add_tcase(s, tc);
 	}
 
-	TCase *basic = tcase_create("basic");
-	tcase_add_checked_fixture(basic, &stt_setup, &stt_teardown);
-	tcase_add_checked_fixture(basic, &stats_setup, &stats_teardown);
-	ADD_IDL_FIXTURE(basic, drop);
-	add_echo_tests(basic);
-	suite_add_tcase(s, basic);
+	{
+		TCase *tc = tcase_create("basic");
+		tcase_add_checked_fixture(tc, &stt_setup, &stt_teardown);
+		tcase_add_checked_fixture(tc, &stats_setup, &stats_teardown);
+		ADD_IDL_FIXTURE(tc, drop);
+		add_echo_tests(tc);
+		suite_add_tcase(s, tc);
+	}
 
 	/* inter-space cases, i.e. mapdb interactions and so forth. */
-	TCase *space = tcase_create("space");
-	tcase_add_checked_fixture(space, &fork_stt_setup, &fork_stt_teardown);
-	tcase_add_checked_fixture(space, &stats_setup, &stats_teardown);
-	ADD_IDL_FIXTURE(space, drop);
-	add_echo_tests(space);
-	suite_add_tcase(s, space);
+	{
+		TCase *tc = tcase_create("space");
+		tcase_add_checked_fixture(tc, &fork_stt_setup, &fork_stt_teardown);
+		tcase_add_checked_fixture(tc, &stats_setup, &stats_teardown);
+		ADD_IDL_FIXTURE(tc, drop);
+		add_echo_tests(tc);
+		suite_add_tcase(s, tc);
+	}
 
 	/* transfer timeout tests */
-	TCase *xferto = tcase_create("xferto");
-	tcase_add_checked_fixture(xferto, &stt_setup, &stt_teardown);
-	tcase_add_checked_fixture(xferto, &stats_setup, &stats_teardown);
-	tcase_add_test(xferto, no_xfer_timeout);
-	tcase_add_test(xferto, immediate_xfer_timeout);
-	tcase_add_test(xferto, finite_xfer_timeout);
-	suite_add_tcase(s, xferto);
+	{
+		TCase *tc = tcase_create("xferto");
+		tcase_add_checked_fixture(tc, &stt_setup, &stt_teardown);
+		tcase_add_checked_fixture(tc, &stats_setup, &stats_teardown);
+		tcase_add_test(tc, no_xfer_timeout);
+		tcase_add_test(tc, immediate_xfer_timeout);
+		tcase_add_test(tc, finite_xfer_timeout);
+		suite_add_tcase(s, tc);
+	}
 
 	return s;
 }
