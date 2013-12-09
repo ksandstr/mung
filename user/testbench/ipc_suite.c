@@ -1681,6 +1681,87 @@ START_TEST(c_bit_in_typed_words)
 END_TEST
 
 
+/* verify that when map/grant items are transferred, the SndPage field's
+ * address part is rewritten to match the position in RcvWindow.
+ *
+ * variables:
+ *   - whether the item is a map or a grant;
+ *   - position within RcvWindow (zero, nonzero);
+ *   - size of the sent page (4k, >4k) [TODO]
+ */
+START_LOOP_TEST(mapgrant_address, iter, 0, 3)
+{
+	plan_tests(5);
+	const bool is_grant = CHECK_FLAG(iter, 1);
+	const size_t accept_size = PAGE_SIZE * 16,
+		snd_offset = CHECK_FLAG(iter, 2) ? PAGE_SIZE * 3 : 0;
+	diag("is_grant=%s, snd_offset=%u",
+		btos(is_grant), (unsigned)snd_offset);
+	assert(accept_size >= snd_offset + PAGE_SIZE);
+
+	union {
+		L4_MapItem_t mi;
+		L4_GrantItem_t gi;
+		L4_Word_t raw[2];
+	} t;
+
+	uint8_t *map_mem = valloc(PAGE_SIZE);
+	memset(map_mem, 1, PAGE_SIZE);
+	L4_ThreadId_t child_tid, parent_tid = L4_Myself();
+	int child = fork_tid(&child_tid);
+	if(child == 0) {
+		memset(map_mem, 2, PAGE_SIZE);
+		L4_Fpage_t map_page = L4_Fpage((L4_Word_t)map_mem, PAGE_SIZE);
+		L4_Set_Rights(&map_page, L4_FullyAccessible);
+		if(is_grant) t.gi = L4_GrantItem(map_page, snd_offset);
+		else t.mi = L4_MapItem(map_page, snd_offset);
+		L4_Accept(L4_UntypedWordsAcceptor);
+		L4_LoadMR(0, (L4_MsgTag_t){ .X.t = 2 }.raw);
+		L4_LoadMRs(1, 2, t.raw);
+		L4_Call(parent_tid);
+		exit(0);
+	} else {
+		free(map_mem);
+	}
+
+	uint8_t *accept_base = valloc(accept_size * 2);
+	uintptr_t aligned = ((uintptr_t)accept_base + accept_size - 1)
+		& ~(accept_size - 1);
+	uint8_t *accept_mem = (uint8_t *)aligned;
+	diag("accept_base=%p, accept_mem=%p", accept_base, accept_mem);
+	memset(accept_mem, 0xff, accept_size);
+	assert(accept_mem[0] == 0xff);
+	L4_Accept(L4_MapGrantItems(
+		L4_Fpage((L4_Word_t)accept_mem, accept_size)));
+	L4_MsgTag_t tag = L4_Receive_Timeout(child_tid, TEST_IPC_DELAY);
+	L4_StoreMRs(1, 2, t.raw);
+	ok(L4_IpcSucceeded(tag) && L4_TypedWords(tag) == 2
+		&& L4_UntypedWords(tag) == 0, "ipc ok");
+	size_t map_pos = L4_MapItemSndBase(t.mi);
+	if(!ok1(map_pos == snd_offset)) {
+		diag("map_pos=%u, snd_offset=%u",
+			(unsigned)map_pos, (unsigned)snd_offset);
+	}
+	if(!ok(accept_mem[map_pos] != 0xff, "page was mapped")) {
+		diag("accept_mem[map_pos]=%#02x", accept_mem[map_pos]);
+	}
+	iff_ok1(L4_IsGrantItem(t.gi), is_grant);
+	L4_Fpage_t m_page = L4_MapItemSndFpage(t.mi);
+	if(!ok1(L4_Address(m_page) == (L4_Word_t)accept_mem + map_pos)) {
+		diag("m_page.address=%#lx, (accept_mem + map_pos)=%p",
+			L4_Address(m_page), accept_mem + map_pos);
+	}
+
+	L4_LoadMR(0, 0);
+	L4_Reply(child_tid);
+	int st, dead = wait(&st);
+	fail_if(dead != child, "dead=%d, child=%d", dead, child);
+
+	free(accept_base);
+}
+END_TEST
+
+
 /* the "bug" tcase */
 
 
@@ -1878,6 +1959,7 @@ Suite *ipc_suite(void)
 	{
 		TCase *tc = tcase_create("typed");
 		tcase_add_test(tc, c_bit_in_typed_words);
+		tcase_add_test(tc, mapgrant_address);
 		suite_add_tcase(s, tc);
 	}
 
