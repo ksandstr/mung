@@ -137,6 +137,7 @@ static bool stritem_next(struct stritem_iter *it)
  * another hassle.
  *
  * TODO: this doesn't fail atomically.
+ * FIXME: the resulting Map/Grant item's contents aren't being tested for.
  */
 static int apply_io_mapitem(
 	struct thread *source,
@@ -184,6 +185,8 @@ static int apply_io_mapitem(
 /* returns the return value of mapdb_map_pages(), i.e. a mask of rights that
  * were given across the entire segment that was mapped. so if the MapItem's
  * page is RWX, but the sender's mapdb has only RX, the return value is RX.
+ * modifies m->SndFpage to indicate where the map took effect in the
+ * destination space, including the map window size.
  *
  * on failure, returns negative errno.
  */
@@ -192,35 +195,47 @@ static int apply_mapitem(
 	const void *s_base,
 	struct thread *dest,
 	void *d_base,
-	L4_MapItem_t m)
+	L4_MapItem_t *m)
 {
-	L4_Fpage_t map_page = L4_MapItemSndFpage(m);
-
-	/* no-ops */
-	if(source->space == dest->space) return 0;
-	if(L4_IsNilFpage(map_page)) return 0;
-
+	L4_Fpage_t map_page = L4_MapItemSndFpage(*m);
 	L4_Fpage_t wnd = { .raw = L4_VREG(d_base, L4_TCR_BR(0)) & ~0xfUL };
-	if(L4_IsNilFpage(wnd)) return 0;	/* no ReceiveWindow */
+
+	/* parameter validation */
+	if(source->space == dest->space
+		|| L4_IsNilFpage(map_page)
+		|| L4_IsNilFpage(wnd))
+	{
+		/* FIXME: these conditions haven't been tested for */
+		goto noop;
+	}
 
 	bool is_grant;
-	switch(m.X.__type) {
+	switch(m->X.__type) {
 		case 0x5: is_grant = true; break;
 		case 0x4: is_grant = false; break;
 		default:
 			/* neither mapitem or grantitem. skip it. */
-			return 0;
+			goto noop;
 	}
 
 	if(unlikely(L4_IsIoFpage(map_page))) {
-		if(!L4_IsIoFpage(wnd)) return 0;	/* no I/O ReceiveWindow */
-		else if(L4_IoFpageSizeLog2(wnd) != 16) return 0;	/* wrong size */
-		else if(L4_IoFpagePort(wnd) != 0) return 0;		/* wrong offset */
-		else return apply_io_mapitem(source, s_base, dest, d_base, m, wnd);
+		if(!L4_IsIoFpage(wnd)		/* no I/O RcvWindow */
+			|| L4_IoFpageSizeLog2(wnd) != 16	/* wrong size */
+			|| L4_IoFpagePort(wnd) != 0)	/* wrong offset */
+		{
+			/* it'd seem reasonable that a no-op IO fpage mapping should
+			 * return a nil IOFpage, but such a format doesn't exist. instead
+			 * it'll be indistinguishable from a failed memory mapping from
+			 * the receiver's POV.
+			 */
+			goto noop;
+		} else {
+			return apply_io_mapitem(source, s_base, dest, d_base, *m, wnd);
+		}
 	}
 
 	bool is_cas = wnd.raw == L4_CompleteAddressSpace.raw;
-	const L4_Word_t snd_base = L4_MapItemSndBase(m);
+	const L4_Word_t snd_base = L4_MapItemSndBase(*m);
 	TRACE("mapping 0x%lx:0x%lx, sndbase 0x%lx, rcvwindow %#lx:%#lx (%s)\n",
 		L4_Address(map_page), L4_Size(map_page),
 		snd_base, is_cas ? 0 : L4_Address(wnd),
@@ -234,7 +249,7 @@ static int apply_mapitem(
 		if(!is_cas && unlikely(snd_base >= L4_Size(wnd))) {
 			TRACE("sndbase %#lx too big (wnd size %#lx)\n",
 				snd_base, L4_Size(wnd));
-			return 0;
+			goto noop;
 		}
 		wnd = L4_FpageLog2(wnd_base + (snd_base & ~mask),
 			L4_SizeLog2(map_page));
@@ -244,14 +259,14 @@ static int apply_mapitem(
 		if(unlikely(snd_base >= L4_Size(map_page))) {
 			TRACE("sndbase %#lx too big (map size %#lx)\n",
 				snd_base, L4_Size(map_page));
-			return 0;
+			goto noop;
 		}
 		map_page = L4_FpageLog2(L4_Address(map_page) + (snd_base & ~mask),
 			L4_SizeLog2(wnd));
-		L4_Set_Rights(&map_page, L4_Rights(L4_MapItemSndFpage(m)));
+		L4_Set_Rights(&map_page, L4_Rights(L4_MapItemSndFpage(*m)));
 	}
 	TRACE("map_page=%#lx:%#lx, sndbase=%#lx, map_page'=%#lx:%#lx\n",
-		L4_Address(L4_MapItemSndFpage(m)), L4_Size(L4_MapItemSndFpage(m)),
+		L4_Address(L4_MapItemSndFpage(*m)), L4_Size(L4_MapItemSndFpage(*m)),
 		snd_base, L4_Address(map_page), L4_Size(map_page));
 	assert(L4_SizeLog2(map_page) == L4_SizeLog2(wnd));
 
@@ -262,7 +277,14 @@ static int apply_mapitem(
 		mapdb_unmap_fpage(&source->space->mapdb, map_page, true, false,
 			false);
 	}
+
+	m->X.snd_fpage.X.s = wnd.X.s;
+	m->X.snd_fpage.X.b = wnd.X.b;
 	return given;
+
+noop:
+	m->X.snd_fpage = L4_Nilpage;
+	return 0;
 }
 
 
@@ -1022,10 +1044,9 @@ static int do_mapgrant_transfer(
 			L4_VREG(s_base, L4_TCR_MR(first_mr + 1)),
 		},
 	};
-	int given = apply_mapitem(source, s_base, dest, d_base, m);
+	int given = apply_mapitem(source, s_base, dest, d_base, &m);
 	if(given < 0) return given;
 
-	m.X.snd_fpage.X.b = 0;
 	m.X.snd_fpage.X.rwx = given;
 	m.X.C = is_last ? 1 : 0;
 	L4_VREG(d_base, L4_TCR_MR(first_mr)) = m.raw[0];
