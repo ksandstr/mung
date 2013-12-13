@@ -689,16 +689,12 @@ static int copy_stritem(L4_Fpage_t *fault_p, struct ipc_state *st)
 
 
 /* copy the sender's string item to the receiver's message registers, and
- * initialize the string item iterator.
+ * initialize the string item iterator. this function must be called only
+ * after a valid next_dst_strbuf(). it also bumps st->str_pos when successful.
  *
- * note: it says "next", but this doesn't actually bump @st->str_pos .
- * next_dst_strbuf() does that instead.
- *
- * TODO: receive addresses should be modified so that they refer to the
- * receiver's buffers
  * TODO[v1]: make a copy of the sender's string item, because right now
  * st->send_si will end up referring to the sender's UTCB which may disappear
- * once address space recycling comes about.
+ * (or relocate; same thing really) once address space recycling comes about.
  */
 static bool next_src_string(
 	struct ipc_state *st,
@@ -713,13 +709,57 @@ static bool next_src_string(
 		? &st->meta.inl[0] : st->meta.ptr[0];
 	meta += st->str_pos;
 
-	/* copy to receiver, set C bit as appropriate */
+	/* copy to receiver, set/clear C bit as appropriate */
 	memcpy(&L4_VREG(d_base, L4_TCR_MR(meta->first_reg)),
 		&L4_VREG(s_base, L4_TCR_MR(meta->first_reg)),
 		meta->n_words * sizeof(L4_Word_t));
 	L4_StringItem_t *rcv_si = (L4_StringItem_t *)&L4_VREG(d_base,
 		L4_TCR_MR(meta->first_reg));
 	rcv_si->X.C = meta->first_reg + meta->n_words < L4_TypedWords(st->tag);
+	/* change string pointers to match receive buffer addresses.
+	 *
+	 * however, if a substring cannot fit into the portion of a receive buffer
+	 * where its copy starts at, the pointer is zeroed instead. this would
+	 * typically cause a null-page fault, which helps avoid a neglectful
+	 * redirector passing the in-betweens of its scatter data structure along
+	 * unnoticed.
+	 *
+	 * TODO[v1]: this loop could be removed by having stritem_next() store a
+	 * word offset to the substring pointer somewhere as well. this way, the
+	 * transfer would provide the location of the substring pointer in the
+	 * destination's MRs also, which would be written as the copy gathers
+	 * fragments from the sender.
+	 */
+	bool last;
+	assert(st->xfer.it[1].words != NULL);
+	struct stritem_iter rb_iter = st->xfer.it[1];
+	int left = rb_iter.len - st->d_off;
+	do {
+		last = !L4_CompoundString(rcv_si);
+		int sublen = rcv_si->X.string_length, n_subs = L4_Substrings(rcv_si);
+		for(int i=0; i < n_subs; i++) {
+			if(left < sublen) {
+				bool got_next = stritem_next(&rb_iter);
+				if(left > 0 || rb_iter.len < sublen) {
+					/* zero pointer, dock length. this gives the next
+					 * substring a chance to report its address correctly,
+					 * making for nicer error reports in the receiver.
+					 */
+					rcv_si->X.str.substring_ptr[i] = (void *)0;
+					left -= sublen;		/* dips below zero */
+					if(got_next) left += rb_iter.len;
+				} else {
+					rcv_si->X.str.substring_ptr[i] = (void *)rb_iter.ptr;
+					left = rb_iter.len - sublen;
+				}
+			} else {
+				rcv_si->X.str.substring_ptr[i] = (void *)rb_iter.ptr
+					+ rb_iter.len - left;
+				left -= sublen;
+			}
+		}
+		rcv_si = (L4_StringItem_t *)&rcv_si->raw[n_subs + 1];
+	} while(!last);
 
 	/* set up us the bomb. */
 	st->str_off = 0;
@@ -728,19 +768,21 @@ static bool next_src_string(
 	if(unlikely(!L4_IsStringItem(si))) return false;
 	stritem_first(&st->xfer.it[0], si, meta->n_words - 1);
 	st->s_off = 0;
-#ifndef NDEBUG
-	st->xfer.it[1].words = (void *)0xfaceb00b;	/* mm hmm. */
-#endif
 
-	/* FIXME: this can fall off the end if a compound string's last header's C
-	 * bit is set in between. this may cause an invalid read access in the
-	 * kernel.
+	/* TODO: this could fall off the end if a compound string's last header's
+	 * C bit is set in between (such as by a cooperating local pager). that
+	 * may cause an invalid read access in the kernel.
 	 */
 	*len_p = stritemlen(si);
+
+	st->str_pos++;
 	return true;
 }
 
 
+/* note: it says "next", but this doesn't actually bump @st->str_pos .
+ * next_src_string() does that instead.
+ */
 static bool next_dst_strbuf(struct ipc_state *st, void *d_base, size_t *len_p)
 {
 	assert(st->str_pos <= st->num_rsis);
@@ -768,7 +810,6 @@ static bool next_dst_strbuf(struct ipc_state *st, void *d_base, size_t *len_p)
 
 	stritem_first(&st->xfer.it[1], get_rsi(st), meta->n_words - 1);
 	st->d_off = 0;
-	st->str_pos++;
 	return true;
 }
 
@@ -975,9 +1016,10 @@ static int do_string_transfer(
 			 * iterators, so recreate those.
 			 */
 			st->str_pos--;
+			st->str_off = 0;
 			size_t dst_len = 0;
-			bool s_ok = next_src_string(st, s_base, d_base, &src_len),
-				d_ok = next_dst_strbuf(st, d_base, &dst_len);
+			bool d_ok = next_dst_strbuf(st, d_base, &dst_len),
+				s_ok = next_src_string(st, s_base, d_base, &src_len);
 			/* (implied by pre-xfer fault processing.) */
 			BUG_ON(!s_ok || !d_ok || src_len > dst_len,
 				"hey, don't shoot me! src_len=%u, dst_len=%u",
@@ -995,16 +1037,15 @@ static int do_string_transfer(
 			src_len = stritemlen(si);
 		}
 	} else {
+		size_t dst_len = 0;
+		bool have_next = next_dst_strbuf(st, d_base, &dst_len);
 		if(next_src_string(st, s_base, d_base, &src_len)) {
-			size_t dst_len = 0;
-			if(next_dst_strbuf(st, d_base, &dst_len)) {
-				if(src_len > dst_len) return -E2BIG;
-
-				int rc = check_prexfer_faults(st, src_len, s_base, d_base);
-				if(rc != 0) return rc;
-			} else {
+			if(!have_next || src_len > dst_len) {
 				/* no more woodchucks. */
 				return -E2BIG;
+			} else {
+				int rc = check_prexfer_faults(st, src_len, s_base, d_base);
+				if(rc != 0) return rc;
 			}
 		} else {
 			/* completed. */
