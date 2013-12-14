@@ -1137,6 +1137,12 @@ int do_typed_transfer(
 		int max_rsi = 0;
 		size_t n_rsis = scan_buffer_regs(rsi_buf, &max_rsi, d_base, n_strs);
 		assert(n_rsis <= n_strs);
+		if(max_rsi < 2) {
+			/* receiver can't accept even one string item despite having the
+			 * BR0 flag set.
+			 */
+			return 8;	/* msg overflow */
+		}
 
 		size_t st_size = ipc_state_size(n_strs, max_rsi);
 		st = alloca(st_size);
