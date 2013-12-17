@@ -1365,28 +1365,52 @@ static void stats_teardown(void)
 }
 
 
-/* receives a string item of at most 64 bytes, then returns. signals parent
- * before exit.
- */
-static void str_receiver_fn(void *param)
-{
-	L4_ThreadId_t parent = { .raw = (L4_Word_t)param };
+struct str_receiver_param {
+	L4_ThreadId_t parent;
+	int n_bufs;		/* how many receive buffers should be defined */
+};
 
-	char buffer[64];
-	L4_StringItem_t buf = L4_StringItem(sizeof(buffer), buffer);
-	L4_Accept(L4_StringItemsAcceptor);
-	buf.raw[0] &= ~1ul;		/* last string buffer */
-	L4_LoadBR(1, buf.raw[0]);
-	L4_LoadBR(2, buf.raw[1]);
+
+/* receives p->n_bufs string items of at most 64 bytes each, then returns.
+ * delivers ErrorCode to parent before exit.
+ */
+static void str_receiver_fn(void *param_ptr)
+{
+	const size_t buf_size = 64;
+
+	struct str_receiver_param *p = param_ptr;
+	L4_ThreadId_t parent = p->parent;
+
+	char *bufs[p->n_bufs];
+	L4_StringItem_t strs[p->n_bufs];
+	if(p->n_bufs == 0) {
+		/* indicate acceptance, but no receive buffers. */
+		L4_Accept(L4_StringItemsAcceptor);
+		L4_LoadBR(1, 1 << 3);	/* invalid stringitem header. */
+		L4_LoadBR(2, 0);
+	} else {
+		for(int i=0; i < p->n_bufs; i++) {
+			bufs[i] = malloc(buf_size);
+			fail_if(bufs[i] == NULL, "failed to allocate %u bytes (i=%d)",
+				(unsigned)buf_size, i);
+			memset(bufs[i], 0, buf_size);
+			strs[i] = L4_StringItem(buf_size, (void *)bufs[i]);
+			strs[i].raw[0] |= 1;		/* continuation bit */
+		}
+		strs[p->n_bufs - 1].raw[0] &= ~1ul;		/* last string buffer */
+		L4_Accept(L4_StringItemsAcceptor);
+		L4_LoadBRs(1, p->n_bufs * 2, strs[0].raw);
+	}
 
 	L4_ThreadId_t sender;
-	memset(buffer, 0, sizeof(buffer));
 	L4_MsgTag_t tag = L4_WaitLocal_Timeout(TEST_IPC_DELAY, &sender);
 	L4_Word_t ec = L4_ErrorCode();
 	L4_LoadBR(0, 0);
 	if(L4_IpcSucceeded(tag) && tag.X.t > 0) {
-		buffer[sizeof(buffer) - 1] = '\0';
-		diag("received `%s'", buffer);
+		for(int i=0; i < L4_TypedWords(tag); i += 2) {
+			bufs[i / 2][buf_size - 1] = '\0';
+			diag("received `%s' (i=%d)", bufs[i / 2], i);
+		}
 	}
 
 	L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 1 }.raw);
@@ -1395,6 +1419,20 @@ static void str_receiver_fn(void *param)
 	if(L4_IpcFailed(tag)) {
 		diag("%s: reply to parent failed, ec=%#lx", __func__, L4_ErrorCode());
 	}
+
+	for(int i=0; i < p->n_bufs; i++) free(bufs[i]);
+	free(param_ptr);
+}
+
+
+static L4_ThreadId_t start_str_receiver(int n_bufs)
+{
+	struct str_receiver_param *p = malloc(sizeof(*p));
+	*p = (struct str_receiver_param){
+		.parent = L4_Myself(),
+		.n_bufs = n_bufs,
+	};
+	return xstart_thread(&str_receiver_fn, p);
 }
 
 
@@ -1404,8 +1442,7 @@ START_TEST(str_receiver_test)
 	plan_tests(2);
 
 	/* the timeout case. */
-	L4_ThreadId_t rec = xstart_thread(&str_receiver_fn,
-		(void *)L4_Myself().raw);
+	L4_ThreadId_t rec = start_str_receiver(1);
 	L4_MsgTag_t tag = L4_Receive_Timeout(rec,
 		L4_TimePeriod(L4_PeriodUs_NP(TEST_IPC_DELAY) * 2));
 	L4_Word_t remote_ec = ~0ul; L4_StoreMR(1, &remote_ec);
@@ -1417,7 +1454,7 @@ START_TEST(str_receiver_test)
 	xjoin_thread(rec);
 
 	/* the OK case, with no string items. */
-	rec = xstart_thread(&str_receiver_fn, (void *)L4_Myself().raw);
+	rec = start_str_receiver(1);
 
 	L4_LoadMR(0, 0);
 	tag = L4_Send_Timeout(rec, TEST_IPC_DELAY);
@@ -1438,13 +1475,16 @@ END_TEST
 
 /* test for message overflow error when there are more string items given by
  * the sender, than string buffer items in the receiver.
+ *
+ * the sole variable is whether there's a single receive string, or none.
  */
-START_TEST(too_many_items)
+START_LOOP_TEST(too_many_items, iter, 0, 1)
 {
-	plan_tests(2);
+	plan_tests(6);
+	const bool zero = CHECK_FLAG(iter, 1);
+	diag("zero=%s", btos(zero));
 
-	L4_ThreadId_t rec = xstart_thread(&str_receiver_fn,
-		(void *)L4_Myself().raw);
+	L4_ThreadId_t rec = start_str_receiver(zero ? 0 : 1);
 
 	const char *thing = "of late, i've mostly been eating old doorknobs";
 	L4_StringItem_t str = L4_StringItem(strlen(thing) + 1, (void *)thing),
@@ -1454,10 +1494,13 @@ START_TEST(too_many_items)
 	L4_LoadMRs(1, 2, str.raw);
 	L4_LoadMRs(3, 2, another.raw);
 	L4_MsgTag_t tag = L4_Send_Timeout(rec, TEST_IPC_DELAY);
-	L4_Word_t ec = L4_ErrorCode();
+	L4_Word_t ec = L4_ErrorCode(), err_offset = ec >> 4;
 	if(!ok1(L4_IpcFailed(tag) && (ec & 0xf) == 8)) {
 		diag("tag=%#lx, ec=%#lx", tag.raw, ec);
 	}
+	imply_ok1(zero, err_offset == 0);
+	imply_ok1(!zero, err_offset == strlen(thing) + 1);
+	diag("sender's err_offset=%#lx", err_offset);
 
 	tag = L4_Receive_Timeout(rec,
 		L4_TimePeriod(L4_PeriodUs_NP(TEST_IPC_DELAY) * 2));
@@ -1465,6 +1508,10 @@ START_TEST(too_many_items)
 	L4_Word_t remote_ec = ~0ul; L4_StoreMR(1, &remote_ec);
 	ec = L4_ErrorCode();
 	if(!ok1((remote_ec & 0xf) == 9)) diag("remote_ec=%#lx", remote_ec);
+	err_offset = remote_ec >> 4;
+	imply_ok1(zero, err_offset == 0);
+	imply_ok1(!zero, err_offset == strlen(thing) + 1);
+	diag("receiver's err_offset=%#lx", err_offset);
 	xjoin_thread(rec);
 }
 END_TEST
@@ -1477,8 +1524,7 @@ START_TEST(item_too_long)
 {
 	plan_tests(2);
 
-	L4_ThreadId_t rec = xstart_thread(&str_receiver_fn,
-		(void *)L4_Myself().raw);
+	L4_ThreadId_t rec = start_str_receiver(1);
 
 	const char *thing = "though there are times when i ask"
 		" whether it is i who eats the doorknob, or do the"
