@@ -1606,6 +1606,30 @@ START_TEST(item_too_long)
 END_TEST
 
 
+START_TEST(invalid_buffer_item)
+{
+	plan_tests(3);
+
+	L4_ThreadId_t rec = start_str_receiver(-1, 0);
+	L4_StringItem_t str = L4_StringItem(32, (void *)copypasta);
+	L4_LoadMR(0, (L4_MsgTag_t){ .X.t = 2 }.raw);
+	L4_LoadMRs(1, 2, str.raw);
+	L4_MsgTag_t tag = L4_Send_Timeout(rec, TEST_IPC_DELAY);
+	L4_Word_t ec = L4_ErrorCode();
+
+	L4_MsgTag_t sync_tag = L4_Receive_Timeout(rec, TEST_IPC_DELAY);
+	IPC_FAIL(sync_tag);
+	L4_Word_t remote_ec; L4_StoreMR(1, &remote_ec);
+
+	ok(L4_IpcFailed(tag), "send failed");
+	ok1((ec & 0xf) == 0x8);
+	ok1((remote_ec & 0xf) == 0x9);
+
+	xjoin_thread(rec);
+}
+END_TEST
+
+
 static void add_echo_tests(TCase *tc)
 {
 	tcase_add_test(tc, echo_simple);
@@ -1640,6 +1664,7 @@ Suite *string_suite(void)
 		TCase *tc = tcase_create("error");
 		tcase_add_test(tc, too_many_items);
 		tcase_add_test(tc, item_too_long);
+		tcase_add_test(tc, invalid_buffer_item);
 		suite_add_tcase(s, tc);
 	}
 
