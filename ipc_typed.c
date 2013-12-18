@@ -89,15 +89,15 @@ static struct ipc_state *dup_state(struct ipc_state *old_st, size_t st_size)
 static void stritem_first(
 	struct stritem_iter *it,
 	L4_StringItem_t *si,
-	unsigned int max)		/* max = n_words - 1 */
+	int n_words)		/* at most this many under @si */
 {
 	assert(L4_IsStringItem(si));
-	assert(max < 64);
+	assert(n_words >= 0 && n_words < 64);
 
 	it->words = (L4_Word_t *)si;
 	it->hdr = 0;
 	it->sub = 1;
-	it->max = max;
+	it->max = n_words - 1;
 	it->ptr = (uintptr_t)si->X.str.substring_ptr[0];
 	it->len = si->X.string_length;
 }
@@ -105,7 +105,7 @@ static void stritem_first(
 
 static bool stritem_next(struct stritem_iter *it)
 {
-	if(unlikely(it->hdr + it->sub > it->max)) {
+	if(it->hdr + it->sub > it->max) {
 		/* out of range */
 		return false;
 	}
@@ -344,6 +344,8 @@ static void scan_typed_items(
 	}
 
 end:
+	assert(n_maps <= L4_TypedWords(tag) / 2);
+	assert(n_strs <= L4_TypedWords(tag) / 2);
 	*mapgrant_len_p = n_maps;
 	*str_buf_len_p = n_strs;
 }
@@ -766,7 +768,7 @@ static bool next_src_string(
 	L4_StringItem_t *si = (L4_StringItem_t *)&L4_VREG(s_base,
 		L4_TCR_MR(meta->first_reg));
 	if(unlikely(!L4_IsStringItem(si))) return false;
-	stritem_first(&st->xfer.it[0], si, meta->n_words - 1);
+	stritem_first(&st->xfer.it[0], si, meta->n_words);
 	st->s_off = 0;
 
 	/* TODO: this could fall off the end if a compound string's last header's
@@ -808,7 +810,7 @@ static bool next_dst_strbuf(struct ipc_state *st, void *d_base, size_t *len_p)
 	 */
 	*len_p = stritemlen(rsi);
 
-	stritem_first(&st->xfer.it[1], get_rsi(st), meta->n_words - 1);
+	stritem_first(&st->xfer.it[1], get_rsi(st), meta->n_words);
 	st->d_off = 0;
 	return true;
 }

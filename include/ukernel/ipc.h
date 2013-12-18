@@ -110,7 +110,7 @@ struct stritem_iter
 	/* state */
 	L4_Word_t *words;
 	uint8_t hdr, sub;
-	uint8_t max;
+	int8_t max;			/* -1 .. 63 */
 };
 
 
