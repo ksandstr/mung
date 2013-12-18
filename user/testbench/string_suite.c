@@ -2,8 +2,7 @@
 /* tests of L4.X2 string transfer features.
  *
  * TODO: tests on the following:
- *   - offset field in L4_ErrorCode() in message overflow
- *   - same in xfer timeout
+ *   - offset field in L4_ErrorCode() in xfer timeout
  *   - and in xfer abort
  */
 
@@ -43,6 +42,9 @@ static const char *copypasta = "John Stalvern waited. The lights above him "
 static const uint32_t seed_bins[4] = {
 	0xdeadbeef, 0xf0adcafe, 0xb00b1e5, 0x71849a3f,
 };
+
+
+static L4_ThreadId_t start_str_receiver(int n_bufs, size_t buf_size);
 
 
 static bool read_fault(L4_Word_t addr) {
@@ -695,6 +697,45 @@ START_LOOP_TEST(echo_multi_comp, iter, 0, 7)
 	/* cleanup */
 	free(echo_str);
 	for(int i=0; i < NUM_ELEMENTS(recvbufs); i++) free(recvbufs[i]);
+}
+END_TEST
+
+
+/* use str_receiver_fn to receive 2**i - 1, i <- 1..5 simple string items.
+ * another flag determines if there should be too few receive buffers just to
+ * cover that error case under the same conditions.
+ */
+START_LOOP_TEST(receive_many_strings, iter, 0, 9)
+{
+	plan_tests(3);
+	const bool too_few = CHECK_FLAG(iter, 1);
+	const int i_val = (iter >> 1) + 1, n_strs = (1 << i_val) - 1;
+	diag("too_few=%s, n_strs=%d", btos(too_few), n_strs);
+
+	// todo_start("WHEEEEE");
+	L4_ThreadId_t receiver = start_str_receiver(
+		too_few ? n_strs - 1 : n_strs, 512);
+	int cp_len = strlen(copypasta);
+	L4_StringItem_t strs[n_strs];
+	for(int i=0; i < n_strs; i++) {
+		strs[i] = L4_StringItem(cp_len - i + 1, (void *)&copypasta[i]);
+	}
+	L4_LoadMR(0, (L4_MsgTag_t){ .X.t = n_strs * 2 }.raw);
+	L4_LoadMRs(1, n_strs * 2, strs[0].raw);
+	L4_MsgTag_t tag = L4_Send_Timeout(receiver, TEST_IPC_DELAY);
+	L4_Word_t ec = L4_ErrorCode();
+	diag("send tag=%#lx, ec=%#lx", tag.raw, ec);
+
+	L4_MsgTag_t end_tag = L4_Receive_Timeout(receiver, TEST_IPC_DELAY);
+	IPC_FAIL(end_tag);
+	L4_Word_t other_ec; L4_StoreMR(1, &other_ec);
+	if(other_ec != 0) diag("other_ec=%#lx", other_ec);
+
+	iff_ok1(L4_IpcFailed(tag), too_few);
+	imply_ok1(too_few, (ec & 0xf) == 8);
+	imply_ok1(too_few, (other_ec & 0xf) == 9);
+
+	xjoin_thread(receiver);
 }
 END_TEST
 
@@ -1368,6 +1409,7 @@ static void stats_teardown(void)
 struct str_receiver_param {
 	L4_ThreadId_t parent;
 	int n_bufs;		/* how many receive buffers should be defined */
+	size_t buf_size;
 };
 
 
@@ -1376,24 +1418,31 @@ struct str_receiver_param {
  */
 static void str_receiver_fn(void *param_ptr)
 {
-	const size_t buf_size = 64;
-
 	struct str_receiver_param *p = param_ptr;
 	L4_ThreadId_t parent = p->parent;
+	const size_t buf_size = MAX(size_t, p->buf_size, 64);
 
+	bool invd = p->n_bufs < 0;
+	if(p->n_bufs < 0) p->n_bufs = 0;
 	char *bufs[p->n_bufs];
 	L4_StringItem_t strs[p->n_bufs];
 	if(p->n_bufs == 0) {
-		/* indicate acceptance, but no receive buffers. */
-		L4_Accept(L4_StringItemsAcceptor);
-		L4_LoadBR(1, 1 << 3);	/* invalid stringitem header. */
-		L4_LoadBR(2, 0);
+		if(!invd) {
+			/* don't indicate any receive buffers. */
+			L4_Accept(L4_UntypedWordsAcceptor);
+		} else {
+			/* indicate acceptance, but no receive buffers. */
+			L4_Accept(L4_StringItemsAcceptor);
+			L4_LoadBR(1, 1 << 3);	/* invalid stringitem header. */
+			L4_LoadBR(2, 0);
+		}
 	} else {
 		for(int i=0; i < p->n_bufs; i++) {
 			bufs[i] = malloc(buf_size);
 			fail_if(bufs[i] == NULL, "failed to allocate %u bytes (i=%d)",
 				(unsigned)buf_size, i);
 			memset(bufs[i], 0, buf_size);
+			strlcpy(bufs[i], CHECK_FLAG(i, 1) ? "NOTHINGNESS" : "EMPTINESS", buf_size);
 			strs[i] = L4_StringItem(buf_size, (void *)bufs[i]);
 			strs[i].raw[0] |= 1;		/* continuation bit */
 		}
@@ -1402,35 +1451,42 @@ static void str_receiver_fn(void *param_ptr)
 		L4_LoadBRs(1, p->n_bufs * 2, strs[0].raw);
 	}
 
-	L4_ThreadId_t sender;
-	L4_MsgTag_t tag = L4_WaitLocal_Timeout(TEST_IPC_DELAY, &sender);
-	L4_Word_t ec = L4_ErrorCode();
-	L4_LoadBR(0, 0);
-	if(L4_IpcSucceeded(tag) && tag.X.t > 0) {
-		for(int i=0; i < L4_TypedWords(tag); i += 2) {
-			bufs[i / 2][buf_size - 1] = '\0';
-			diag("received `%s' (i=%d)", bufs[i / 2], i);
-		}
-	}
+	L4_MsgTag_t tag = L4_Receive_Timeout(parent, TEST_IPC_DELAY);
+	L4_Word_t ec = L4_IpcFailed(tag) ? L4_ErrorCode() : 0;
 
+	L4_LoadBR(0, 0);
 	L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 1 }.raw);
 	L4_LoadMR(1, ec);
-	tag = L4_Send_Timeout(parent, TEST_IPC_DELAY);
-	if(L4_IpcFailed(tag)) {
+	L4_MsgTag_t sync_tag = L4_Send_Timeout(parent, TEST_IPC_DELAY);
+	if(L4_IpcFailed(sync_tag)) {
 		diag("%s: reply to parent failed, ec=%#lx", __func__, L4_ErrorCode());
 	}
+
+	/* FIXME: this should rather compute a checksum of the received strings,
+	 * and return those in the parent-sync IPC above.
+	 */
+#if 0
+	if(L4_IpcSucceeded(tag) && L4_TypedWords(tag) > 0) {
+		for(int i=0; i < L4_TypedWords(tag); i += 2) {
+			char *ptr = bufs[i / 2];
+			ptr[buf_size - 1] = '\0';
+			diag("received `%s' (i=%d)", ptr, i);
+		}
+	}
+#endif
 
 	for(int i=0; i < p->n_bufs; i++) free(bufs[i]);
 	free(param_ptr);
 }
 
 
-static L4_ThreadId_t start_str_receiver(int n_bufs)
+static L4_ThreadId_t start_str_receiver(int n_bufs, size_t buf_size)
 {
 	struct str_receiver_param *p = malloc(sizeof(*p));
 	*p = (struct str_receiver_param){
 		.parent = L4_Myself(),
 		.n_bufs = n_bufs,
+		.buf_size = buf_size,
 	};
 	return xstart_thread(&str_receiver_fn, p);
 }
@@ -1442,7 +1498,7 @@ START_TEST(str_receiver_test)
 	plan_tests(2);
 
 	/* the timeout case. */
-	L4_ThreadId_t rec = start_str_receiver(1);
+	L4_ThreadId_t rec = start_str_receiver(1, 0);
 	L4_MsgTag_t tag = L4_Receive_Timeout(rec,
 		L4_TimePeriod(L4_PeriodUs_NP(TEST_IPC_DELAY) * 2));
 	L4_Word_t remote_ec = ~0ul; L4_StoreMR(1, &remote_ec);
@@ -1454,7 +1510,7 @@ START_TEST(str_receiver_test)
 	xjoin_thread(rec);
 
 	/* the OK case, with no string items. */
-	rec = start_str_receiver(1);
+	rec = start_str_receiver(1, 0);
 
 	L4_LoadMR(0, 0);
 	tag = L4_Send_Timeout(rec, TEST_IPC_DELAY);
@@ -1484,7 +1540,7 @@ START_LOOP_TEST(too_many_items, iter, 0, 1)
 	const bool zero = CHECK_FLAG(iter, 1);
 	diag("zero=%s", btos(zero));
 
-	L4_ThreadId_t rec = start_str_receiver(zero ? 0 : 1);
+	L4_ThreadId_t rec = start_str_receiver(zero ? 0 : 1, 0);
 
 	const char *thing = "of late, i've mostly been eating old doorknobs";
 	L4_StringItem_t str = L4_StringItem(strlen(thing) + 1, (void *)thing),
@@ -1524,14 +1580,14 @@ START_TEST(item_too_long)
 {
 	plan_tests(2);
 
-	L4_ThreadId_t rec = start_str_receiver(1);
+	L4_ThreadId_t rec = start_str_receiver(1, 64);
 
 	const char *thing = "though there are times when i ask"
 		" whether it is i who eats the doorknob, or do the"
 		" doorknobs actually eat me? a most vexing conundrum.";
 	L4_StringItem_t str = L4_StringItem(strlen(thing) + 1, (void *)thing);
 	assert(str.X.string_length > 64);
-	L4_LoadMR(0, (L4_MsgTag_t){ .X.t = 4 }.raw);
+	L4_LoadMR(0, (L4_MsgTag_t){ .X.t = 2 }.raw);
 	L4_LoadMRs(1, 2, str.raw);
 	L4_MsgTag_t tag = L4_Send_Timeout(rec, TEST_IPC_DELAY);
 	L4_Word_t ec = L4_ErrorCode();
@@ -1593,6 +1649,7 @@ Suite *string_suite(void)
 		tcase_add_checked_fixture(tc, &stats_setup, &stats_teardown);
 		ADD_IDL_FIXTURE(tc, drop);
 		add_echo_tests(tc);
+		tcase_add_test(tc, receive_many_strings);
 		suite_add_tcase(s, tc);
 	}
 
@@ -1603,6 +1660,7 @@ Suite *string_suite(void)
 		tcase_add_checked_fixture(tc, &stats_setup, &stats_teardown);
 		ADD_IDL_FIXTURE(tc, drop);
 		add_echo_tests(tc);
+		tcase_add_test(tc, receive_many_strings);
 		suite_add_tcase(s, tc);
 	}
 
