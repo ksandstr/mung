@@ -1153,14 +1153,18 @@ int do_typed_transfer(
 			.num_strings = n_strs, .num_rsis = n_rsis,
 			.max_brs = max_rsi,
 		};
+		struct str_meta *meta[2];
 		if(n_strs <= 2) {
-			memcpy(st->meta.inl, str_buf, sizeof(struct str_meta) * n_strs);
-			memcpy(&st->meta.inl[2], rsi_buf,
-				sizeof(struct str_meta) * MIN(size_t, n_strs, n_rsis));
+			meta[0] = &st->meta.inl[0];
+			meta[1] = &st->meta.inl[2];
 		} else {
-			st->meta.ptr[0] = (void *)st + max_rsi * sizeof(L4_Word_t);
-			st->meta.ptr[1] = st->meta.ptr[0] + n_strs;
+			void *base = &st[1];
+			meta[0] = st->meta.ptr[0] = base + max_rsi * sizeof(L4_Word_t);
+			meta[1] = st->meta.ptr[1] = st->meta.ptr[0] + n_strs;
 		}
+		memcpy(meta[0], str_buf, sizeof(struct str_meta) * n_strs);
+		memcpy(meta[1], rsi_buf,
+			sizeof(struct str_meta) * MIN(size_t, n_strs, n_rsis));
 		rc = do_string_transfer(st, s_base, d_base, false);
 		if(rc > 0) return rc;	/* straight-up error code */
 		else if(rc == -EFAULT) {
