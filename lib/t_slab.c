@@ -238,7 +238,7 @@ END_TEST
 
 START_TEST(find_test)
 {
-	plan_tests(4);
+	plan_tests(3);
 
 	ok1(kmem_cache_find(NULL) == NULL);
 	ok1(kmem_cache_find("not a heap pointer") == NULL);
@@ -250,8 +250,6 @@ START_TEST(find_test)
 
 	kmem_cache_free(cache, o);
 	kmem_cache_destroy(cache);
-
-	ok1(kmem_cache_find(o) == NULL);
 }
 END_TEST
 

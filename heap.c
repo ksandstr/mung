@@ -67,23 +67,17 @@ void *sbrk(intptr_t increment)
  *
  * NB: disabling recycling of old heap addresses makes for an interesting
  * one-bit way to debug kernel-space page table weirdness.
- *
- * FIXME: add tracing
  */
 uintptr_t reserve_heap_page(void)
 {
-	if(!list_empty(&free_as_list)) {
-		struct as_free *f = container_of(free_as_list.n.next,
-			struct as_free, link);
-		list_del_from(&free_as_list, &f->link);
+	struct as_free *f = list_pop(&free_as_list, struct as_free, link);
+	if(f != NULL) {
 		uintptr_t addr = f->address;
 		kmem_cache_free(free_as_cache, f);
-		// printf("%s: took old address %#x\n", __func__, addr);
 		assert((addr & PAGE_MASK) == 0);
 		return addr;
 	} else {
 		heap_pos -= PAGE_SIZE;
-		// printf("%s: took new address %#x\n", __func__, heap_pos);
 		assert((heap_pos & PAGE_MASK) == 0);
 		return heap_pos;
 	}
@@ -94,11 +88,11 @@ void free_heap_page(uintptr_t addr)
 {
 	assert((addr & PAGE_MASK) == 0);
 
+	put_supervisor_page(addr, 0);
+
 	struct as_free *f = kmem_cache_alloc(free_as_cache);
 	f->address = addr;
 	list_add(&free_as_list, &f->link);
-
-	/* FIXME: unmap it as well */
 }
 
 
@@ -241,9 +235,6 @@ void free_kern_page(struct page *page)
 	/* better here than at the call sites. */
 	if(page == NULL) return;
 
-	/* NOTE: this may be too eager. it could be a good thing if pages weren't
-	 * unmapped early.
-	 */
 	if(page->vm_addr != NULL) {
 		free_heap_page((uintptr_t)page->vm_addr);
 		page->vm_addr = NULL;
