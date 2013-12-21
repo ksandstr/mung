@@ -77,7 +77,7 @@ static UNNEEDED uint32_t max_page_id(void)
 }
 
 
-/* FIXME: this function is needlessly heavy. it makes unit tests very slow. */
+/* TODO: this function is needlessly heavy. it makes unit tests very slow. */
 static bool check_space(int opt, struct space *sp)
 {
 #ifdef DEBUG_ME_HARDER
@@ -397,7 +397,9 @@ int space_set_kip_area(struct space *sp, L4_Fpage_t area)
 	}
 
 	if(!L4_IsNilFpage(sp->kip_area)) {
-		/* FIXME: remove old KIP mapping */
+		for(L4_Word_t pos = 0; pos < L4_Size(sp->kip_area); pos += PAGE_SIZE) {
+			space_put_page(sp, L4_Address(sp->kip_area) + pos, 0, 0);
+		}
 	}
 
 	sp->kip_area = area;
@@ -443,6 +445,7 @@ void space_put_page(
 {
 	assert(check_space(NO_PTAB_TO_MAPDB, sp));
 	assert(addr < KERNEL_SEG_START);
+	assert(page_id == 0 || access != 0);
 
 	int dir_ix = addr >> 22, ptab_ix = (addr >> 12) & 0x3ff;
 	assert(sp->pdirs->vm_addr != NULL);
@@ -702,8 +705,8 @@ void sys_unmap(L4_Word_t control, void *utcb)
 
 
 /* FIXME: this isn't at all robust against things like space_set_kip_area()'s
- * various failure modes. an attempt should be made to restore the previous
- * values as appropriate.
+ * failure result. an attempt should be made to restore the previous values as
+ * appropriate.
  */
 L4_Word_t sys_spacecontrol(
 	L4_ThreadId_t spacespec,
