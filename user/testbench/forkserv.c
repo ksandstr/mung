@@ -479,7 +479,7 @@ static void handle_pf(
 	L4_Word_t page_addr = addr & ~PAGE_MASK;
 	struct fs_vpage *page = htable_get(&sp->pages,
 		int_hash(page_addr), &word_cmp, &page_addr);
-	if(page == NULL && page_addr < sp->prog_brk) {
+	if(page == NULL && page_addr > 0xf000 && page_addr < sp->prog_brk) {
 		/* moar ramz pls */
 		page = malloc(sizeof(*page));
 		page->address = page_addr;

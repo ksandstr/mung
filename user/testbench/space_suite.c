@@ -9,6 +9,7 @@
 #include <string.h>
 #include <assert.h>
 #include <ctype.h>
+#include <ccan/compiler/compiler.h>
 
 #include <l4/types.h>
 #include <l4/ipc.h>
@@ -185,9 +186,105 @@ START_TEST(poke_peek_fault_test)
 	ok(pg_stats->n_faults == old_n + 1
 		&& pg_stats->n_read == old_r + 1, "peek caused read fault");
 
-	/* "nonfaulted" isn't released. who cares? testbench tests will run inside
-	 * a copy-on-write fork soon enough.
+	/* "nonfaulted" isn't released. who cares? this stuff runs in a fork
+	 * anyway.
 	 */
+}
+END_TEST
+
+
+static void illegal_accessor(void *param_ptr)
+{
+	volatile uint8_t *p = param_ptr;
+	*p = 0x23;
+	diag("still alive (p=%#p)", p);
+	exit_thread(NULL);
+}
+
+
+/* cause an illegal access, returning the segfault address to caller. for an
+ * address outside the user-mappable range, this confirms that the kernel will
+ * signal faults for such accesses rather than panicing.
+ */
+static uintptr_t cause_segv_at(uintptr_t address)
+{
+	L4_ThreadId_t tid = xstart_thread(&illegal_accessor, (void *)address);
+	L4_Word_t ec = 0;
+	void *ret = join_thread_long(tid, TEST_IPC_DELAY, &ec);
+	if(ec != 0) diag("%s: ec=%#lx", __func__, ec);
+	return (uintptr_t)ret;
+}
+
+
+START_TEST(illegal_access_test)
+{
+	plan_tests(4);
+
+	/* base case 0: test access that isn't illegal. */
+	void *mem = valloc(16 * 1024);
+	memset(mem, 0, 16 * 1024);
+	uintptr_t ret = cause_segv_at((uintptr_t)mem + 711);
+	if(!ok(ret == 0, "legal access is legal")) {
+		diag("ret=%#lx", ret);
+	}
+	free(mem);
+
+	/* base case 1: access that's legal, but unmapped by forkserv. */
+	ret = cause_segv_at(PAGE_SIZE + 711);
+	if(!ok((ret & ~PAGE_MASK) == PAGE_SIZE, "unmapped access was caught")) {
+		diag("ret=%#lx", ret);
+	}
+
+	/* explore the KIP's MemoryDescs to find a position outside the permitted
+	 * virtual address range. if none exists, skip the test.
+	 */
+	L4_KernelInterfacePage_t *kip = L4_GetKernelInterface();
+	for(int i=0; i <= 0xffff; i++) {
+		L4_MemoryDesc_t *md = L4_MemoryDesc(kip, i);
+		if(md == NULL) {
+			skip(1, "no small virtual MemoryDesc found");
+			break;
+		} else if(L4_IsMemoryDescVirtual(md)
+			&& L4_MemoryDescType(md) != L4_ReservedMemoryType
+			&& (L4_MemoryDescLow(md) > 0
+				|| L4_MemoryDescHigh(md) < ~(L4_Word_t)0))
+		{
+			diag("doing vfault in %#lx..%#lx (type %d)",
+				L4_MemoryDescLow(md), L4_MemoryDescHigh(md),
+				(int)L4_MemoryDescType(md));
+			uintptr_t addr;
+			if(L4_MemoryDescLow(md) > 0) addr = L4_MemoryDescLow(md) - 1;
+			else addr = L4_MemoryDescHigh(md) + 1;
+			ret = cause_segv_at(addr);
+			if(!ok(ret == addr, "illegal access at %#lx", addr)) {
+				diag("ret=%#lx", ret);
+			}
+			break;
+		}
+	}
+
+	/* same, but for a reserved range. */
+	for(int i=0; i <= 0xffff; i++) {
+		L4_MemoryDesc_t *md = L4_MemoryDesc(kip, i);
+		if(md == NULL) {
+			skip(1, "no reserved kernel range found");
+			break;
+		} else if(L4_IsMemoryDescVirtual(md)
+			&& L4_MemoryDescType(md) == L4_ReservedMemoryType)
+		{
+			diag("doing rfault in %#lx..%#lx (type %d)",
+				L4_MemoryDescLow(md), L4_MemoryDescHigh(md),
+				(int)L4_MemoryDescType(md));
+			uintptr_t addr;
+			if(L4_MemoryDescLow(md) > 0) addr = L4_MemoryDescLow(md);
+			else addr = L4_MemoryDescHigh(md);
+			ret = cause_segv_at(addr);
+			if(!ok(ret == addr, "illegal access at %#lx", addr)) {
+				diag("ret=%#lx", ret);
+			}
+			break;
+		}
+	}
 }
 END_TEST
 
@@ -467,6 +564,7 @@ Suite *space_suite(void)
 	tcase_add_checked_fixture(pager_case, &pager_setup, &pager_teardown);
 	tcase_add_test(pager_case, poke_peek_nofault_test);
 	tcase_add_test(pager_case, poke_peek_fault_test);
+	tcase_add_test(pager_case, illegal_access_test);
 	suite_add_tcase(s, pager_case);
 
 	TCase *ctl_case = tcase_create("ctl");
