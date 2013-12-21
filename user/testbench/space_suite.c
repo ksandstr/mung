@@ -1,14 +1,13 @@
 
-/* unit tests concerning the SpaceControl system call, and pager operation. */
-
-/* TODO: the timeout values for poke(), peek(), and send_quit() should be
- * considered and adjusted to something reasonable and module global.
+/* unit tests concerning the SpaceControl and Unmap system calls, and pager
+ * operation.
  */
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
 #include <string.h>
+#include <assert.h>
 #include <ctype.h>
 
 #include <l4/types.h>
@@ -118,21 +117,14 @@ static void pager_setup(void)
 
 	fail_unless(L4_IsGlobalId(pg_pager));
 	L4_Set_PagerOf(pg_poker, pg_pager);
-/* FIXME: restore when the sys_exregs() can handle readouts */
-#if 0
-	fail_if(L4_PagerOf(pg_poker).raw != pg_pager.raw,
-		"poker's pager TCR wasn't set");
-#endif
+	assert(L4_PagerOf(pg_poker).raw == pg_pager.raw);
 }
 
 
 static void pager_teardown(void)
 {
-	if(send_quit(pg_poker)) join_thread(pg_poker);
-	else {
-		/* FIXME: do forced teardown of a failed poker thread */
-		fail_if(true, "can't stop hung poker thread");
-	}
+	send_quit(pg_poker);
+	xjoin_thread(pg_poker);
 
 	L4_Word_t err = stop_stats_pager(pg_pager);
 	fail_if(err != 0, "can't stop pager thread; ipc ec %#lx", err);

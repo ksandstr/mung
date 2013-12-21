@@ -147,12 +147,9 @@ L4_ThreadId_t start_stats_pager(struct pager_stats *stats_mem)
 
 L4_Word_t stop_stats_pager(L4_ThreadId_t tid)
 {
-	if(send_quit(tid)) {
-		join_thread(tid);
-		return 0;
-	} else {
-		return L4_ErrorCode();
-	}
+	send_quit(tid);
+	xjoin_thread(tid);
+	return 0;
 }
 
 
