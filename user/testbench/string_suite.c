@@ -13,6 +13,7 @@
 #include <alloca.h>
 #include <ccan/compiler/compiler.h>
 #include <ccan/str/str.h>
+#include <ccan/crc/crc.h>
 
 #include <l4/types.h>
 #include <l4/space.h>
@@ -707,12 +708,11 @@ END_TEST
  */
 START_LOOP_TEST(receive_many_strings, iter, 0, 9)
 {
-	plan_tests(3);
+	plan_tests(6);
 	const bool too_few = CHECK_FLAG(iter, 1);
 	const int i_val = (iter >> 1) + 1, n_strs = (1 << i_val) - 1;
 	diag("too_few=%s, n_strs=%d", btos(too_few), n_strs);
 
-	// todo_start("WHEEEEE");
 	L4_ThreadId_t receiver = start_str_receiver(
 		too_few ? n_strs - 1 : n_strs, 512);
 	int cp_len = strlen(copypasta);
@@ -729,7 +729,25 @@ START_LOOP_TEST(receive_many_strings, iter, 0, 9)
 	L4_MsgTag_t end_tag = L4_Receive_Timeout(receiver, TEST_IPC_DELAY);
 	IPC_FAIL(end_tag);
 	L4_Word_t other_ec; L4_StoreMR(1, &other_ec);
-	if(other_ec != 0) diag("other_ec=%#lx", other_ec);
+	if(!iff_ok1(other_ec == 0, L4_IpcSucceeded(tag))) {
+		diag("other_ec=%#lx", other_ec);
+	}
+	L4_Word_t checksums[64];
+	int n_csums = MAX(int, 0, L4_UntypedWords(end_tag) - 1);
+	L4_StoreMRs(2, n_csums, checksums);
+	if(!imply_ok1(!too_few, n_csums == n_strs)) {
+		diag("n_csums=%d, n_strs=%d", n_csums, n_strs);
+	}
+	bool all_match = true;
+	for(int i=0; i < n_csums; i++) {
+		L4_Word_t expect = crc32c(0, &copypasta[i], strlen(&copypasta[i]));
+		if(expect != checksums[i]) {
+			diag("i=%d, expect=%#lx, checksums[i]=%#lx",
+				i, expect, checksums[i]);
+			all_match = false;
+		}
+	}
+	imply_ok1(L4_IpcSucceeded(tag), all_match);
 
 	iff_ok1(L4_IpcFailed(tag), too_few);
 	imply_ok1(too_few, (ec & 0xf) == 8);
@@ -1413,8 +1431,9 @@ struct str_receiver_param {
 };
 
 
-/* receives p->n_bufs string items of at most 64 bytes each, then returns.
- * delivers ErrorCode to parent before exit.
+/* receives p->n_bufs string items of at most 64 bytes each, then returns
+ * checksums of the received data, along with ErrorCode from previous, to
+ * parent before exit.
  */
 static void str_receiver_fn(void *param_ptr)
 {
@@ -1426,6 +1445,7 @@ static void str_receiver_fn(void *param_ptr)
 	if(p->n_bufs < 0) p->n_bufs = 0;
 	char *bufs[p->n_bufs];
 	L4_StringItem_t strs[p->n_bufs];
+	L4_Word_t checksums[p->n_bufs];
 	if(p->n_bufs == 0) {
 		if(!invd) {
 			/* don't indicate any receive buffers. */
@@ -1454,26 +1474,24 @@ static void str_receiver_fn(void *param_ptr)
 	L4_MsgTag_t tag = L4_Receive_Timeout(parent, TEST_IPC_DELAY);
 	L4_Word_t ec = L4_IpcFailed(tag) ? L4_ErrorCode() : 0;
 
-	L4_LoadBR(0, 0);
-	L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 1 }.raw);
-	L4_LoadMR(1, ec);
-	L4_MsgTag_t sync_tag = L4_Send_Timeout(parent, TEST_IPC_DELAY);
-	if(L4_IpcFailed(sync_tag)) {
-		diag("%s: reply to parent failed, ec=%#lx", __func__, L4_ErrorCode());
-	}
-
-	/* FIXME: this should rather compute a checksum of the received strings,
-	 * and return those in the parent-sync IPC above.
-	 */
-#if 0
+	int num_cs = 0;
 	if(L4_IpcSucceeded(tag) && L4_TypedWords(tag) > 0) {
 		for(int i=0; i < L4_TypedWords(tag); i += 2) {
 			char *ptr = bufs[i / 2];
 			ptr[buf_size - 1] = '\0';
-			diag("received `%s' (i=%d)", ptr, i);
+			checksums[num_cs++] = crc32c(0, ptr, strlen(ptr));
+			// diag("received `%s' (i=%d)", ptr, i);
 		}
 	}
-#endif
+
+	L4_LoadBR(0, 0);
+	L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 1 + num_cs }.raw);
+	L4_LoadMR(1, ec);
+	L4_LoadMRs(2, num_cs, checksums);
+	L4_MsgTag_t sync_tag = L4_Send_Timeout(parent, TEST_IPC_DELAY);
+	if(L4_IpcFailed(sync_tag)) {
+		diag("%s: reply to parent failed, ec=%#lx", __func__, L4_ErrorCode());
+	}
 
 	for(int i=0; i < p->n_bufs; i++) free(bufs[i]);
 	free(param_ptr);
@@ -1492,10 +1510,12 @@ static L4_ThreadId_t start_str_receiver(int n_bufs, size_t buf_size)
 }
 
 
-/* check that str_receiver_fn() delivers timeouts and success correctly. */
+/* check that str_receiver_fn() delivers timeouts, success, and string
+ * checksums correctly.
+ */
 START_TEST(str_receiver_test)
 {
-	plan_tests(2);
+	plan_tests(5);
 
 	/* the timeout case. */
 	L4_ThreadId_t rec = start_str_receiver(1, 0);
@@ -1524,6 +1544,39 @@ START_TEST(str_receiver_test)
 		diag("parent tag=%#lx, ec=%#lx, remote_ec=%#lx", tag.raw,
 			ec, remote_ec);
 	}
+	xjoin_thread(rec);
+
+	/* a three-string case. */
+	rec = start_str_receiver(3, 256);
+	L4_StringItem_t strs[3];
+	for(int i=0; i < 3; i++) {
+		strs[i] = L4_StringItem(strlen(copypasta) - i + 1,
+			(void *)&copypasta[i]);
+	}
+	L4_LoadMR(0, (L4_MsgTag_t){ .X.t = 6 }.raw);
+	L4_LoadMRs(1, 6, strs[0].raw);
+	tag = L4_Send_Timeout(rec, TEST_IPC_DELAY);
+	IPC_FAIL(tag);
+	tag = L4_Receive_Timeout(rec, TEST_IPC_DELAY);
+	IPC_FAIL(tag);
+	remote_ec = ~0ul; L4_StoreMR(1, &remote_ec);
+	L4_Word_t checksums[3]; L4_StoreMRs(2, 3, checksums);
+	if(!ok1(remote_ec == 0)) diag("remote_ec=%#lx", remote_ec);
+	if(!ok(L4_UntypedWords(tag) >= 4, "returned 3 checksums")) {
+		diag("  tag.u=%#lx, tag.t=%#lx, tag.label=%#lx",
+			L4_UntypedWords(tag), L4_TypedWords(tag), L4_Label(tag));
+	}
+	bool all_ok = true;
+	for(int i=0; i < 3; i++) {
+		L4_Word_t expect = crc32c(0, &copypasta[i],
+			strlen(&copypasta[i]));
+		if(expect != checksums[i]) {
+			diag("i=%d, expect=%#lx, checksums[i]=%#lx",
+				i, expect, checksums[i]);
+			all_ok = false;
+		}
+	}
+	ok(all_ok, "checksums match");
 	xjoin_thread(rec);
 }
 END_TEST
