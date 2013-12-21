@@ -97,6 +97,11 @@ static inline bool pt_is_valid(L4_Clock_t base, L4_Time_t t)
 extern uint32_t int_hash(uint32_t key);
 extern uint32_t ptr_hash(const void *ptr);
 
+static inline bool int_eq(const void *elem, void *ref) {
+	return *(const int *)elem == *(int *)ref;
+}
+
+
 
 /* from l4util.c */
 extern size_t stritemlen(L4_StringItem_t *si);

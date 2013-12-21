@@ -78,12 +78,6 @@ static struct htable ref_hash = HTABLE_INITIALIZER(ref_hash,
 	rehash_ref_hash, NULL);
 
 
-/* FIXME: move this into a utility header. many places duplicate it. */
-static inline bool int_eq(const void *elem, void *ref) {
-	return *(const int *)elem == *(int *)ref;
-}
-
-
 static void dump_map_group(struct map_group *g)
 {
 #ifndef NDEBUG

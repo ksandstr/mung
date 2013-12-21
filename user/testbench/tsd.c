@@ -43,11 +43,6 @@ static size_t hash_int(const void *k, void *priv) {
 }
 
 
-static bool int_eq(const void *cand, void *ref) {
-	return *(const int *)cand == *(int *)ref;
-}
-
-
 static size_t hash_tsd_key(const void *key, void *priv) {
 	const struct tsd_key *k = key;
 	return int_hash(k->key);
