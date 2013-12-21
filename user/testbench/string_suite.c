@@ -758,6 +758,50 @@ START_LOOP_TEST(receive_many_strings, iter, 0, 9)
 END_TEST
 
 
+/* causes the receiver to allocate enormous buffers with the idea that faults
+ * should occur for each string transfer, despite the small amount being
+ * actually copied.
+ */
+START_TEST(receive_many_to_fault)
+{
+	plan_tests(4);
+	const size_t n_strs = 30, buf_size = 128 * 1024;
+
+	L4_ThreadId_t rec = start_str_receiver(n_strs, buf_size);
+	L4_StringItem_t strs[n_strs];
+	for(int i=0; i < n_strs; i++) {
+		strs[i] = L4_StringItem(strlen(&copypasta[i]) + 1,
+			(void *)&copypasta[i]);
+	}
+	const int flt_before = stats->n_faults, w_before = stats->n_write;
+	L4_LoadMR(0, (L4_MsgTag_t){ .X.t = n_strs * 2 }.raw);
+	L4_LoadMRs(1, n_strs * 2, strs[0].raw);
+	L4_MsgTag_t tag = L4_Send_Timeout(rec, TEST_IPC_DELAY);
+	IPC_FAIL(tag);
+	const int flt_after = stats->n_faults, w_after = stats->n_write;
+
+	L4_Accept(L4_UntypedWordsAcceptor);
+	L4_MsgTag_t end_tag = L4_Receive_Timeout(rec, TEST_IPC_DELAY);
+	IPC_FAIL(end_tag);
+	L4_Word_t remote_ec = ~0ul; L4_StoreMR(1, &remote_ec);
+	L4_Word_t checksums[n_strs]; L4_StoreMRs(2, n_strs, checksums);
+
+	ok1(remote_ec == 0);
+	ok1(L4_UntypedWords(end_tag) == n_strs + 1);
+	if(!ok1(flt_after - flt_before >= n_strs)) {
+		diag("flt_before=%d, flt_after=%d, n_strs=%d",
+			flt_before, flt_after, n_strs);
+	}
+	if(!ok1(w_after - w_before >= n_strs)) {
+		diag("w_before=%d, w_after=%d, n_strs=%d", w_before, w_after, n_strs);
+	}
+	/* TODO: check the checksums, too */
+
+	xjoin_thread(rec);
+}
+END_TEST
+
+
 START_TEST(echo_long)
 {
 	uint32_t seed = seed_bins[1];
@@ -1446,6 +1490,7 @@ static void str_receiver_fn(void *param_ptr)
 	char *bufs[p->n_bufs];
 	L4_StringItem_t strs[p->n_bufs];
 	L4_Word_t checksums[p->n_bufs];
+	L4_ThreadId_t old_pager = L4_Pager();
 	if(p->n_bufs == 0) {
 		if(!invd) {
 			/* don't indicate any receive buffers. */
@@ -1458,7 +1503,8 @@ static void str_receiver_fn(void *param_ptr)
 		}
 	} else {
 		for(int i=0; i < p->n_bufs; i++) {
-			bufs[i] = malloc(buf_size);
+			if(buf_size >= PAGE_SIZE) bufs[i] = valloc(buf_size);
+			else bufs[i] = malloc(buf_size);
 			fail_if(bufs[i] == NULL, "failed to allocate %u bytes (i=%d)",
 				(unsigned)buf_size, i);
 			memset(bufs[i], 0, buf_size);
@@ -1469,10 +1515,21 @@ static void str_receiver_fn(void *param_ptr)
 		strs[p->n_bufs - 1].raw[0] &= ~1ul;		/* last string buffer */
 		L4_Accept(L4_StringItemsAcceptor);
 		L4_LoadBRs(1, p->n_bufs * 2, strs[0].raw);
+
+		if(buf_size >= PAGE_SIZE) {
+			for(int i=0; i < p->n_bufs; i++) {
+				flush_byte_range((uintptr_t)bufs[i], buf_size, L4_FullyAccessible);
+			}
+
+			L4_Set_Pager(stats_tid);
+			bool ok = send_reset(stats_tid);
+			fail_unless(ok, "send_reset() failed");
+		}
 	}
 
 	L4_MsgTag_t tag = L4_Receive_Timeout(parent, TEST_IPC_DELAY);
 	L4_Word_t ec = L4_IpcFailed(tag) ? L4_ErrorCode() : 0;
+	L4_Set_Pager(old_pager);
 
 	int num_cs = 0;
 	if(L4_IpcSucceeded(tag) && L4_TypedWords(tag) > 0) {
@@ -1696,6 +1753,13 @@ static void add_echo_tests(TCase *tc)
 }
 
 
+static void add_receiver_tests(TCase *tc)
+{
+	tcase_add_test(tc, receive_many_strings);
+	tcase_add_test(tc, receive_many_to_fault);
+}
+
+
 IDL_FIXTURE(drop, drop_pager, &pg_drop_vtab, FIX_QUIT_COND);
 
 Suite *string_suite(void)
@@ -1727,7 +1791,7 @@ Suite *string_suite(void)
 		tcase_add_checked_fixture(tc, &stats_setup, &stats_teardown);
 		ADD_IDL_FIXTURE(tc, drop);
 		add_echo_tests(tc);
-		tcase_add_test(tc, receive_many_strings);
+		add_receiver_tests(tc);
 		suite_add_tcase(s, tc);
 	}
 
@@ -1738,7 +1802,7 @@ Suite *string_suite(void)
 		tcase_add_checked_fixture(tc, &stats_setup, &stats_teardown);
 		ADD_IDL_FIXTURE(tc, drop);
 		add_echo_tests(tc);
-		tcase_add_test(tc, receive_many_strings);
+		add_receiver_tests(tc);
 		suite_add_tcase(s, tc);
 	}
 
