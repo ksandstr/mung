@@ -198,7 +198,7 @@ struct page *get_kern_page(uintptr_t vm_addr)
 		 * are special on the x86 (video memory, etc)
 		 */
 		if(p->id < (0x100000 >> PAGE_BITS)) {
-			/* FIXME: stick these in a reserved list. maybe. */
+			/* TODO: stick these in a reserved list. maybe. */
 			printf("%s: NOTE: skipping page id %u (physaddr 0x%x)\n",
 				__func__, p->id, (uintptr_t)p->id << PAGE_BITS);
 			p = NULL;
@@ -221,7 +221,6 @@ struct page *get_kern_page(uintptr_t vm_addr)
 			p->vm_addr = NULL;
 		}
 
-		/* FIXME: check that there isn't already a page at vm_addr */
 		put_supervisor_page(vm_addr, p->id);
 		p->vm_addr = (void *)vm_addr;
 	}
@@ -260,7 +259,13 @@ void *kmem_alloc_new_page(void)
 
 void kmem_free_page(void *ptr)
 {
-	/* FIXME: proper data structures, man */
+	/* TODO: proper data structures, man. hash tables won't work because
+	 * kmem_alloc_new_page() will be called before the sbrk heap is ready;
+	 * so a custom solution seems to be required. (perhaps a chain of pages,
+	 * each containing 1000 or 500 pointers hashed by address. would require a
+	 * bigger test of this mechanism in t_slab.c, and also an bigger slice of
+	 * kernel-reserved memory.)
+	 */
 	struct page *pg;
 	list_for_each(&k_slab_pages, pg, link) {
 		if(pg->vm_addr == ptr) {
