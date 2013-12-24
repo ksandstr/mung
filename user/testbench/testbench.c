@@ -638,9 +638,74 @@ static void invoke_ktest(L4_ThreadId_t s0_tid, bool describe)
 }
 
 
+static void print_boot_info(void)
+{
+	L4_KernelInterfacePage_t *kip = L4_GetKernelInterface();
+	if(kip == NULL || memcmp(&kip->magic, "L4\346K", 4) != 0) {
+		printf("L4.X2 microkernel not found!\n");
+		return;
+	}
+	char api_buf[256];
+	const char *api_str = api_buf;
+	switch(kip->ApiVersion.X.version) {
+		case 0x2: api_str = "Version 2"; break;
+		case 0x83:
+			if(kip->ApiVersion.X.subversion == 0x80) {
+				api_str = "Experimental Version X.0";
+			} else if(kip->ApiVersion.X.subversion == 0x81) {
+				api_str = "Experimental Version X.1";
+			} else {
+				snprintf(api_buf, sizeof(api_buf),
+					"Experimental [subver=%#02x]",
+					kip->ApiVersion.X.subversion);
+			}
+			break;
+		case 0x84:
+			snprintf(api_buf, sizeof(api_buf),
+				"Experimental Version X.2 (Revision %u)",
+				kip->ApiVersion.X.subversion);
+			break;
+		default:
+			snprintf(api_buf, sizeof(api_buf),
+				"L4 version=%#02x subversion=%#02x",
+				kip->ApiVersion.X.version,
+				kip->ApiVersion.X.subversion);
+	}
+
+	printf("microkernel is L4, API `%s' (%s endian, %d-bit)\n", api_str,
+		kip->ApiFlags.X.ee == 0 ? "little" : "big",
+		kip->ApiFlags.X.ww == 0 ? 32 : 64);
+	L4_KernelDesc_t *kdesc = (void *)kip + kip->KernelVerPtr;
+	printf("  kernel ID %#02x:%#02x\n", kdesc->KernelId.X.id,
+		kdesc->KernelId.X.subid);
+	printf("  generated on %04d-%02d-%02d\n",
+		(int)kdesc->KernelGenDate.X.year + 2000,
+		(int)kdesc->KernelGenDate.X.month,
+		(int)kdesc->KernelGenDate.X.day);
+	printf("  kernel version %d.%d.%d\n",
+		(int)kdesc->KernelVer.X.ver,
+		(int)kdesc->KernelVer.X.subver,
+		(int)kdesc->KernelVer.X.subsubver);
+	char supl[5]; memcpy(supl, &kdesc->Supplier, 4); supl[4] = '\0';
+	printf("  supplier `%s'\n", supl);
+	printf("  version string `%s'\n", kdesc->VersionString);
+	int vpos = strlen(kdesc->VersionString) + 1;
+	if(kdesc->VersionString[vpos] != '\0') {
+		printf("  features:");
+		do {
+			char *str = &kdesc->VersionString[vpos];
+			printf(" %s", str);
+			vpos += strlen(str) + 1;
+		} while(kdesc->VersionString[vpos] != '\0');
+		printf("\n");
+	}
+}
+
+
 int main(void)
 {
 	printf("hello, world!\n");
+	print_boot_info();
 	calibrate_delay_loop();
 	L4_ThreadId_t s0_tid = L4_Pager();
 

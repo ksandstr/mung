@@ -322,7 +322,7 @@ START_TEST(spacectl_iface)
 
 	/* find top of the virtual address space. */
 	L4_Word_t vaddr_end = ~(L4_Word_t)0;
-	for(int i=0; i < (kip->MemoryInfo & 0xffff); i++) {
+	for(int i=0; i < kip->MemoryInfo.n; i++) {
 		L4_MemoryDesc_t *md = L4_MemoryDesc(kip, i);
 		if(L4_IsMemoryDescVirtual(md)) {
 			if(L4_MemoryDescType(md) == L4_ConventionalMemoryType) {

@@ -63,14 +63,47 @@ typedef union {
 
 
 typedef struct {
+	/* (half a word each.) */
+	L4_Word_t n:16;
+	L4_Word_t MemDescPtr:16;
+} L4_MemoryInfo_t;
+
+
+typedef struct {
+	L4_KernelId_t KernelId;
+	union {
+		L4_Word_t raw;
+		struct {
+			L4_Word_t day:5;
+			L4_Word_t month:4;
+			L4_Word_t year:7;
+			L4_Word_t __padding:16;
+		} X;
+	} KernelGenDate;
+
+	union {
+		L4_Word_t raw;
+		struct {
+			L4_Word_t subsubver:16;
+			L4_Word_t subver:8;
+			L4_Word_t ver:8;
+		} X;
+	} KernelVer;
+
+	L4_Word_t Supplier;
+	char VersionString[0];
+} L4_KernelDesc_t;
+
+
+typedef struct {
 	L4_Word_t magic;
 	L4_ApiVersion_t ApiVersion;
 	L4_ApiFlags_t ApiFlags;
-	L4_Word_t KernelVerPtr;
+	L4_Word_t KernelVerPtr;		/* seen as KernDescPtr in the spec */
 
 	/* 0x10 */
 	L4_Word_t __padding10[17];
-	L4_Word_t MemoryInfo;
+	L4_MemoryInfo_t MemoryInfo;
 	L4_Word_t __padding58[2];
 
 	/* 0x60 */
@@ -86,7 +119,7 @@ typedef struct {
 			L4_Word_t s:6;
 			L4_Word_t __padding:10;
 		} X;
-	} UtcbAreaInfo;
+	} UtcbAreaInfo;			/* seen as UtcbInfo in the spec */
 	union {
 		L4_Word_t raw;
 		struct {

@@ -111,7 +111,7 @@ void *sbrk(intptr_t increment)
 COLD L4_Word_t find_phys_mem_top(void)
 {
 	L4_KernelInterfacePage_t *kip = L4_GetKernelInterface();
-	int n_descs = kip->MemoryInfo & 0xffff;
+	int n_descs = kip->MemoryInfo.n;
 	L4_Word_t high = 0;
 	for(int i=0; i < n_descs; i++) {
 		const L4_MemoryDesc_t *desc = L4_MemoryDesc(kip, i);

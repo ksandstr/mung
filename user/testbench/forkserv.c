@@ -232,7 +232,7 @@ static bool invariants(const char *where) {
 COLD L4_Word_t find_high_vaddr(void)
 {
 	L4_KernelInterfacePage_t *kip = L4_GetKernelInterface();
-	int n_descs = kip->MemoryInfo & 0xffff;
+	int n_descs = kip->MemoryInfo.n;
 	L4_Word_t low = 0, high = ~0ul;
 	for(int i=0; i < n_descs; i++) {
 		const L4_MemoryDesc_t *desc = L4_MemoryDesc(kip, i);
