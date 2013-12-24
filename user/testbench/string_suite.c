@@ -776,7 +776,7 @@ START_TEST(receive_many_to_fault)
 	const int flt_before = stats->n_faults, w_before = stats->n_write;
 	L4_LoadMR(0, (L4_MsgTag_t){ .X.t = n_strs * 2 }.raw);
 	L4_LoadMRs(1, n_strs * 2, strs[0].raw);
-	L4_MsgTag_t tag = L4_Send_Timeout(rec, TEST_IPC_DELAY);
+	L4_MsgTag_t tag = L4_Send(rec);
 	IPC_FAIL(tag);
 	const int flt_after = stats->n_faults, w_after = stats->n_write;
 
