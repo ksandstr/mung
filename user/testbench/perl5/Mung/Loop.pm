@@ -59,7 +59,7 @@ sub run {
 		try {
 			while($_ = $module->next_line) {
 				chomp;
-				s/^\s+//;	# apparently sometimes there are carriage returns.
+				s/^\r+//;	# apparently sometimes there are carriage returns.
 
 				if(!$ctl_seen) {
 					next unless /^\*\*\*\s/;

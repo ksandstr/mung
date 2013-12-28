@@ -59,6 +59,45 @@ START_LOOP_TEST(todo_iter_points, iter, 0, 1)
 END_TEST
 
 
+static void successful_subtest(void *param_ptr UNUSED)
+{
+	plan_tests(2);
+	ok1(true);
+	ok1(true);
+}
+
+
+static void failing_subtest(void *param_ptr UNUSED)
+{
+	plan_tests(2);
+	ok1(false);
+	ok1(true);
+}
+
+
+static void malformed_subtest(void *param_ptr UNUSED)
+{
+	plan_tests(2);
+
+	ok1(true);
+	ok1(true);
+	ok1(true);
+	ok1(true);
+}
+
+
+START_TEST(subtests)
+{
+	plan_tests(4);
+
+	ok(true, "non-subtest test point");	/* POINT 1: ok */
+	subtest_f(&successful_subtest, NULL, "successful subtest");	/* POINT 2: ok */
+	subtest_f(&failing_subtest, NULL, "failing subtest");	/* POINT 3: not ok */
+	subtest_f(&malformed_subtest, NULL, "malformed subtest");	/* POINT 4: not ok */
+}
+END_TEST
+
+
 START_TEST(skip_plan)
 {
 	plan_skip_all("nothing useful can be determined here.");
@@ -135,6 +174,7 @@ Suite *meta_suite(void)
 		tcase_add_test(tc, iterated_test_points);
 		tcase_add_test(tc, todo_test_points);
 		tcase_add_test(tc, todo_iter_points);
+		tcase_add_test(tc, subtests);
 		suite_add_tcase(s, tc);
 	}
 

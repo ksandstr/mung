@@ -62,21 +62,111 @@
 	} while(0)
 
 
+struct saved_ctx
+{
+	struct saved_ctx *next;
+	int depth;
+
+	bool no_plan, have_plan, skip_all, todo, test_died;
+	int num_tests_run, expected_tests, failed_tests;
+	char *todo_msg;
+
+	char testmsg[];
+};
+
+
 static bool no_plan, have_plan, skip_all, todo, test_died;
 static int num_tests_run, expected_tests, failed_tests;
 static char *todo_msg = NULL;		/* must be valid on first reset */
+static struct saved_ctx *save_stack = NULL;		/* for subtests */
 
 static bool tap_init_done = false;
 
 
-void tap_reset(void)
+static void reset_state(void)
 {
 	/* (yeah, I know) */
 	no_plan = have_plan = skip_all = todo = test_died = false;
 	num_tests_run = expected_tests = failed_tests = 0;
+}
+
+
+void tap_reset(void)
+{
+	reset_state();
+	while(save_stack != NULL) {
+		struct saved_ctx *next = save_stack->next;
+		free(save_stack->todo_msg);
+		free(save_stack);
+		save_stack = next;
+	}
 
 	free(todo_msg);
 	todo_msg = NULL;
+}
+
+
+void subtest_start(const char *fmt, ...)
+{
+	va_list al;
+	va_start(al, fmt);
+	int msglen = vsnprintf(NULL, 0, fmt, al) + 1;
+	va_end(al);
+
+	struct saved_ctx *c = malloc(sizeof(*c) + msglen);
+	va_start(al, fmt);
+	vsnprintf(c->testmsg, msglen, fmt, al);
+	va_end(al);
+
+	c->depth = save_stack == NULL ? 1 : save_stack->depth + 1;
+	c->no_plan = no_plan;
+	c->have_plan = have_plan;
+	c->skip_all = skip_all;
+	c->todo = todo;
+	c->test_died = test_died;
+	c->num_tests_run = num_tests_run;
+	c->expected_tests = expected_tests;
+	c->failed_tests = failed_tests;
+	c->todo_msg = todo_msg;
+	todo_msg = c->todo_msg != NULL ? strdup(c->todo_msg) : NULL;
+
+	c->next = save_stack;
+	save_stack = c;
+
+	reset_state();
+}
+
+
+int subtest_end(void)
+{
+	int exst = exit_status();
+	struct saved_ctx *c = save_stack;
+	save_stack = c->next;
+
+	/* (there's likely a nicer way to do this, but, meh.) */
+	no_plan = c->no_plan;
+	have_plan = c->have_plan;
+	skip_all = c->skip_all;
+	todo = c->todo;
+	test_died = c->test_died;
+	num_tests_run = c->num_tests_run;
+	expected_tests = c->expected_tests;
+	failed_tests = c->failed_tests;
+	free(todo_msg); todo_msg = c->todo_msg;
+
+	int ret = ok(exst == 0, "%s", c->testmsg);
+	if(!ret) diag("subtest exit_status=%d", exst);
+	free(c);
+
+	return ret;
+}
+
+
+static void print_sub_prefix(void)
+{
+	if(save_stack != NULL) {
+		for(int i=0; i < save_stack->depth; i++) printf("    ");
+	}
 }
 
 
@@ -96,6 +186,7 @@ void _fail_unless(
 		if(msg == NULL) msg = expr;
 		vsnprintf(buf, sizeof(buf), msg, ap);
 		va_end(ap);
+		/* NOTE: bailouts don't get a subtest prefix. */
 		printf("Bail out!  %s (`%s' in %s:%d)\n", buf, expr, file, line);
 		flush_log(true);
 
@@ -113,7 +204,6 @@ int _gen_result(
 	const char *test_name_fmt,
 	...)
 {
-
 	TRY_INIT;
 	num_tests_run++;
 
@@ -143,6 +233,7 @@ int _gen_result(
 		}
 	}
 
+	print_sub_prefix();
 	if(!ok) {
 		printf("not ");
 		failed_tests++;
@@ -205,6 +296,7 @@ void plan_skip_all(const char *reason)
 	have_plan = true;
 	skip_all = true;
 
+	print_sub_prefix();
 	printf("1..0");
 	if(reason != NULL) printf(" # Skip %s", reason);
 	printf("\n");
@@ -231,6 +323,7 @@ void plan_tests(unsigned int num_tests)
 	}
 
 	have_plan = 1;
+	print_sub_prefix();
 	printf("1..%u\n", num_tests);
 	expected_tests = num_tests;
 }
@@ -238,6 +331,7 @@ void plan_tests(unsigned int num_tests)
 
 int diag(const char *fmt, ...)
 {
+	print_sub_prefix();
 	fprintf(stderr, "# ");
 	va_list al;
 	va_start(al, fmt);
@@ -260,6 +354,7 @@ int skip(unsigned int num_skip, const char *reason, ...)
 	va_end(al);
 	for(unsigned int i = 0; i < num_skip; i++) {
 		num_tests_run++;
+		print_sub_prefix();
 		printf("ok %d # skip %s\n", num_tests_run, msg);
 	}
 

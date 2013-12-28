@@ -41,6 +41,12 @@
 #define skip_end \
 	} while(false)
 
+#define subtest_f(test_fn, param, fmt, ...) \
+	({ subtest_start(fmt, ##__VA_ARGS__); \
+	   (*(test_fn))((param)); \
+	   subtest_end(); \
+	 })
+
 
 /* Check-style unit testing things */
 
@@ -138,6 +144,9 @@ extern int diag(const char *fmt, ...);
 extern int skip(unsigned int num_skip, const char *reason, ...);
 extern void todo_start(const char *fmt, ...);
 extern void todo_end(void);
+
+extern void subtest_start(const char *fmt, ...);
+extern int subtest_end(void);
 
 extern int exit_status(void);
 
