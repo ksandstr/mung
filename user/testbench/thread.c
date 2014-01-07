@@ -27,7 +27,6 @@
 
 
 #define THREAD_STACK_SIZE (32 * 1024)
-#define MAX_THREADS 12
 
 
 struct thread

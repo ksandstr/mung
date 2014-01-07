@@ -35,7 +35,7 @@
 #include "threadmgr-defs.h"
 
 
-#define TPS_SHIFT 3
+#define TPS_SHIFT 5
 #define THREADS_PER_SPACE (1 << TPS_SHIFT)
 
 

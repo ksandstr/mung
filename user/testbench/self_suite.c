@@ -619,6 +619,47 @@ START_LOOP_TEST(uncaught_segv_test, iter, 0, 3)
 END_TEST
 
 
+static void ping_fn(void *param_ptr UNUSED)
+{
+	L4_ThreadId_t sender;
+	L4_MsgTag_t tag = L4_Wait_Timeout(TEST_IPC_DELAY, &sender);
+	if(L4_IpcSucceeded(tag)) {
+		L4_LoadMR(0, 0);
+		L4_Reply(sender);
+	}
+}
+
+
+/* check that it's possible to start at least MAX_THREADS - 4 threads, and
+ * that the show can go on even when no more can be started.
+ */
+START_TEST(many_threads_test)
+{
+	plan_tests(2);
+	const int goal = MAX_THREADS - 4;
+
+	int count_ok = 0;
+	L4_ThreadId_t threads[MAX_THREADS];
+	for(int i=0; i < MAX_THREADS; i++) threads[i] = L4_nilthread;
+	for(int i=0; i < MAX_THREADS; i++) {
+		threads[i] = start_thread(&ping_fn, NULL);
+		if(L4_IsNilThread(threads[i])) break; else count_ok++;
+	}
+	ok(count_ok < MAX_THREADS, "ran out of slots as expected");
+	if(!ok1(count_ok >= goal)) {
+		diag("count_ok=%d, goal=%d", count_ok, goal);
+	}
+
+	for(int i=0; i < MAX_THREADS && count_ok > 0; i++, count_ok--) {
+		L4_LoadMR(0, 0);
+		L4_MsgTag_t tag = L4_Call(threads[i]);
+		IPC_FAIL(tag);
+		xjoin_thread(threads[i]);
+	}
+}
+END_TEST
+
+
 static void add_thread_tests(TCase *tc)
 {
 	tcase_add_test(tc, basic_thread_test);
@@ -626,6 +667,7 @@ static void add_thread_tests(TCase *tc)
 	tcase_add_test(tc, exit_with_thread_test);
 	tcase_add_test(tc, segv_test);
 	tcase_add_test(tc, uncaught_segv_test);
+	tcase_add_test(tc, many_threads_test);
 }
 
 

@@ -490,13 +490,16 @@ static void transfer_to_forkserv(void)
 
 	/* inform forkserv of the shape of testbench's address space, i.e. the KIP
 	 * and UTCB locations.
-	 * space=1 is the testbench space's ID; s=13 means room for 16 threads.
+	 *
+	 * space=1 is the testbench space's ID; s=16 means room for 128 threads.
+	 * the latter is assumed rather than determined, but it's also the size
+	 * used by mung kmain.c .
 	 */
 	const L4_KernelInterfacePage_t *kip = L4_GetKernelInterface();
 	int n = forkserv_as_cfg(forkserv_tid, 1,
 		get_mgr_tid().raw,
 		L4_FpageLog2((L4_Word_t)kip, kip->KipAreaInfo.X.s),
-		L4_FpageLog2((L4_Word_t)__L4_Get_UtcbAddress(), 13));
+		L4_FpageLog2((L4_Word_t)__L4_Get_UtcbAddress(), 16));
 	if(n != 0) {
 		printf("%s: A/S config with forkserv failed, n=%d\n", __func__, n);
 		abort();
