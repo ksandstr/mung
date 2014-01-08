@@ -6,7 +6,15 @@
 #include <l4/kip.h>
 
 
+/* sysexit epilogue offsets from start of KIP. */
+struct sysexit_offs {
+	L4_Word16_t fast, ecx, edx, ecdx;
+};
+
+
 extern void *kip_mem;
+extern struct sysexit_offs sysexit_epilogs;
+
 
 /* parameter is a pointer to the KCP, which gets reworked to be a proper
  * KIP. the range between kern_start and kern_end will be added to MemoryInfo

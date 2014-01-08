@@ -12,4 +12,8 @@
 #define SC_THREADCONTROL 7
 #define SC_PROCESSORCONTROL 8
 
+/* not passed through the basic_sc software interrupt bottom half */
+#define SC_MEMCTL 9
+#define SC_EXREGS 10
+
 #endif

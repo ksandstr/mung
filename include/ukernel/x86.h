@@ -47,6 +47,9 @@
 
 /* MSRs */
 #define IA32_APIC_BASE	0x1b
+#define IA32_SYSENTER_CS	0x174
+#define IA32_SYSENTER_ESP	0x175
+#define IA32_SYSENTER_EIP	0x176
 
 
 struct thread;

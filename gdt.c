@@ -75,14 +75,18 @@ static struct htable gdt_addr_hash = HTABLE_INITIALIZER(
 
 COLD void dump_gdt(struct gdt_desc *gd)
 {
+	struct gdt_desc foo;
+	if(gd == NULL) {
+		asm volatile ("sgdt %0" :: "m" (foo));
+		gd = &foo;
+	}
+
 	printf("gdt_desc: base 0x%x, limit %u\n", gd->base, gd->limit);
 	void *base = (void *)(gd->base < KERNEL_SEG_START ? gd->base : gd->base - KERNEL_SEG_START);
 	for(int i=0; i < ((int)gd->limit + 1) / 8; i++) {
 		const struct gdt_entry *ge = base + i * 8;
-		if(!CHECK_FLAG(ge->access, DESC_A_PRESENT)) {
-			printf("GDT entry %d not present\n", i);
-			continue;
-		}
+		if(!CHECK_FLAG(ge->access, DESC_A_PRESENT)) continue;
+
 		printf("GDT entry %d (selector 0x%x, access 0x%x, flags 0x%x):\n",
 			i, (unsigned)i * 8, ge->access, ge->flags_limit1 & 0xf0);
 		printf("  base 0x%x, limit 0x%x (%s)",

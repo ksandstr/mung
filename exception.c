@@ -321,6 +321,36 @@ static void glue_schedule(struct x86_exregs *regs)
 }
 
 
+/* FIXME: implement sys_memctl() in a memory.c, or some such */
+static void glue_memctl(struct x86_exregs *regs)
+{
+	printf("MemoryControl not implemented\n");
+}
+
+
+static void glue_exregs(struct x86_exregs *regs)
+{
+	assert(x86_irq_is_enabled());
+	regs->eax = sys_exregs((L4_ThreadId_t){ .raw = regs->eax },
+		&regs->ecx, &regs->edx, &regs->esi, &regs->edi, &regs->ebx,
+		(L4_ThreadId_t *)&regs->ebp);
+}
+
+
+static void (*const sys_fns[])(struct x86_exregs *regs) = {
+	[SC_IPC] = &glue_ipc,
+	[SC_LIPC] = &glue_ipc,
+	[SC_UNMAP] = &glue_unmap,
+	[SC_THREADSWITCH] = &glue_threadswitch,
+	[SC_SCHEDULE] = &glue_schedule,
+	[SC_SPACECONTROL] = &glue_spacecontrol,
+	[SC_THREADCONTROL] = &glue_threadcontrol,
+	[SC_PROCESSORCONTROL] = &glue_processorcontrol,
+	[SC_EXREGS] = &glue_exregs,
+	[SC_MEMCTL] = &glue_memctl,
+};
+
+
 void isr_exn_basic_sc_bottom(struct x86_exregs *regs)
 {
 	assert(x86_irq_is_enabled());
@@ -352,10 +382,13 @@ void isr_exn_basic_sc_bottom(struct x86_exregs *regs)
 
 void isr_exn_exregs_sc_bottom(struct x86_exregs *regs)
 {
-	assert(x86_irq_is_enabled());
-	regs->eax = sys_exregs((L4_ThreadId_t){ .raw = regs->eax },
-		&regs->ecx, &regs->edx, &regs->esi, &regs->edi, &regs->ebx,
-		(L4_ThreadId_t *)&regs->ebp);
+#if 0
+	printf("got EXREGS: current=%lu:%lu, target=%lu:%lu\n",
+		TID_THREADNUM(get_current_thread()->id),
+		TID_VERSION(get_current_thread()->id),
+		TID_THREADNUM(regs->eax), TID_VERSION(regs->eax));
+#endif
+	glue_exregs(regs);
 	return_from_exn();
 }
 
@@ -365,6 +398,91 @@ void isr_exn_memctl_sc_bottom(struct x86_exregs *regs)
 	assert(x86_irq_is_enabled());
 	printf("%s: MemoryControl called\n", __func__);
 	return_from_exn();
+}
+
+
+/* NOTE: the sysenter top half is a good candidate for a rewrite in assembly.
+ * it'd combine the functions of both with sys_*() functions that take the
+ * right parameters on the stack instead of ad-hockery and glue as we have
+ * now.
+ */
+void sysenter_bottom(struct x86_exregs *regs)
+{
+	struct thread *current = get_current_thread();
+	unsigned int target = regs->error & 0xff;
+	L4_Word_t kip_base = L4_Address(current->space->kip_area);
+
+#if 0
+	printf("got SYSENTER [target=%u, current=%lu:%lu, esp=%#lx]\n",
+		target, TID_THREADNUM(current->id), TID_VERSION(current->id),
+		regs->esp);
+#endif
+
+	if(target <= 2) {
+		/* dedicated path for Ipc & Lipc.
+		 *
+		 * we'll set the return EIP here already because sys_ipc() may
+		 * perform a non-local exit. the same is true of ThreadSwitch.
+		 */
+		regs->eip = kip_base + sysexit_epilogs.fast;
+		glue_ipc(regs);
+		return_from_exn();
+	} else if(target == SC_THREADSWITCH) {
+		/* special handling of ThreadSwitch. */
+		void *utcb = thread_get_utcb(current);
+		regs->ebp = L4_VREG(utcb, TCR_SYSENTER_EBP);
+		regs->ebx = L4_VREG(utcb, TCR_SYSENTER_EBX);
+		regs->eip = kip_base + sysexit_epilogs.ecdx;
+		L4_VREG(utcb, TCR_SYSEXIT_ECX) = regs->ecx;
+		L4_VREG(utcb, TCR_SYSEXIT_EDX) = regs->edx;
+		thread_save_ctx(current, regs);
+		glue_threadswitch(regs);
+		return_from_exn();
+	} else if(unlikely(target >= NUM_ELEMENTS(sys_fns)
+		|| sys_fns[target] == NULL))
+	{
+		printf("unknown sysenter target %u (caller stopped)\n", target);
+		/* context is not saved. */
+		thread_halt(get_current_thread());
+		return_to_scheduler();
+	} else {
+		void *utcb = thread_get_utcb(current);
+		int ret_offset;
+		/* special cases for syscalls that either accept ebx or ebp, or return
+		 * ecx or edx.
+		 */
+		switch(target) {
+			case SC_SCHEDULE:
+				glue_schedule(regs);
+				L4_VREG(utcb, TCR_SYSEXIT_EDX) = regs->edx;
+				ret_offset = sysexit_epilogs.edx;
+				break;
+			case SC_SPACECONTROL:
+				glue_spacecontrol(regs);
+				L4_VREG(utcb, TCR_SYSEXIT_ECX) = regs->ecx;
+				ret_offset = sysexit_epilogs.ecx;
+				break;
+			case SC_EXREGS:
+			case SC_MEMCTL:
+				regs->ebp = L4_VREG(utcb, TCR_SYSEXIT_ECX);
+				regs->ebx = L4_VREG(utcb, TCR_SYSEXIT_EDX);
+				if(unlikely(target == SC_MEMCTL)) {
+					glue_memctl(regs);
+					ret_offset = sysexit_epilogs.fast;
+				} else {
+					glue_exregs(regs);
+					L4_VREG(utcb, TCR_SYSEXIT_ECX) = regs->ecx;
+					L4_VREG(utcb, TCR_SYSEXIT_EDX) = regs->edx;
+					ret_offset = sysexit_epilogs.ecdx;
+				}
+				break;
+			default:
+				ret_offset = sysexit_epilogs.fast;
+				(*sys_fns[target])(regs);
+		}
+		regs->eip = kip_base + ret_offset;
+		return_from_exn();
+	}
 }
 
 
@@ -680,8 +798,6 @@ void isr_exn_gp_bottom(struct x86_exregs *regs)
 
 void isr_exn_pf_bottom(struct x86_exregs *regs)
 {
-	assert(x86_irq_is_enabled());
-
 	L4_Word_t fault_addr;
 	asm volatile ("movl %%cr2, %0": "=r" (fault_addr));
 
@@ -692,6 +808,17 @@ void isr_exn_pf_bottom(struct x86_exregs *regs)
 	}
 
 	struct thread *current = get_current_thread();
+
+#if 0
+	printf("#PF (%s, %s, %s) @ %#lx (eip %#lx); current thread %lu:%lu\n",
+		CHECK_FLAG(regs->error, 4) ? "user" : "super",
+		CHECK_FLAG(regs->error, 2) ? "write" : "read",
+		CHECK_FLAG(regs->error, 1) ? "access" : "presence",
+		fault_addr, regs->eip,
+		TID_THREADNUM(current->id), TID_VERSION(current->id));
+#endif
+
+	assert(x86_irq_is_enabled());
 
 	if(unlikely(!CHECK_FLAG(regs->error, 4))
 		&& fault_addr >= KERNEL_SEG_START)
@@ -713,15 +840,6 @@ void isr_exn_pf_bottom(struct x86_exregs *regs)
 	 * see also the x86 hack in mapdb_add_map().
 	 */
 	if(regs->eip == fault_addr) fault_access |= L4_eXecutable;
-
-#if 0
-	printf("#PF (%s, %s, %s) @ %#lx (eip %#lx); current thread %lu:%lu\n",
-		CHECK_FLAG(regs->error, 4) ? "user" : "super",
-		CHECK_FLAG(regs->error, 2) ? "write" : "read",
-		CHECK_FLAG(regs->error, 1) ? "access" : "presence",
-		fault_addr, regs->eip,
-		TID_THREADNUM(current->id), TID_VERSION(current->id));
-#endif
 
 #ifndef NDEBUG
 	static uintptr_t last_fault = ~0;

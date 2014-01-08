@@ -1130,14 +1130,18 @@ SYSCALL L4_ThreadId_t sys_ipc(
 		__func__, TID_THREADNUM(current->id), TID_VERSION(current->id),
 		to.raw, from.raw, timeouts);
 
-	/* parameter validation. */
+	/* parameter validation.
+	 *
+	 * TODO: catch attempts to IPC to a kernel thread from within a
+	 * non-privileged space.
+	 */
 	if(unlikely(to.raw == L4_anythread.raw
 		|| to.raw == L4_anylocalthread.raw))
 	{
 		set_ipc_error(utcb, 4);		/* non-existing partner, send phase */
 		return L4_nilthread;
 	}
-	if(unlikely(!L4_IsNilThread(from)
+	if(unlikely(L4_IsGlobalId(from)
 		&& L4_ThreadNo(from) > last_int_threadno()
 		&& L4_ThreadNo(from) < first_user_threadno()))
 	{

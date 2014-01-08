@@ -10,18 +10,27 @@
 #include <ukernel/mm.h>
 #include <ukernel/syscall.h>
 #include <ukernel/thread.h>
+#include <ukernel/cpu.h>
 #include <ukernel/kip.h>
 
 
+/* TODO: move this into config.h, to be generated from kernel configuration */
+#define USE_SYSENTER (cpu_has_sysenter())
+
+
 void *kip_mem = NULL;
+struct sysexit_offs sysexit_epilogs;
 
 
 /* let's use interrupt 0x8f, for now.
  *
  * TODO: use whatever L4Ka::Pistachio uses when SYSENTER/SYSCALL
  * aren't present.
+ *
+ * TODO: rename this function to indicate that it uses software interrupts and
+ * a syscall ID in EBX.
  */
-static void make_syscall_stub(void *start, int *len_p, int sc_num)
+static int make_syscall_stub(void *start, int sc_num)
 {
 	/* ThreadSwitch must retain %ebx. */
 	bool keep_ebx = (sc_num == SC_THREADSWITCH);
@@ -34,24 +43,81 @@ static void make_syscall_stub(void *start, int *len_p, int sc_num)
 	mem[p++] = 0x8f;
 	if(keep_ebx) mem[p++] = 0x5b;	/* POP EBX */
 	mem[p++] = 0xc3;	/* RET */
-	*len_p = p;
+
+	return p;
 }
 
 
-static void make_int_sc_stub(uint8_t *mem, int *len_p, int interrupt)
+static int make_int_sc_stub(uint8_t *mem, int interrupt)
 {
 	int p = 0;
 	mem[p++] = 0xcd;	/* INT imm8 */
 	mem[p++] = (unsigned)interrupt;
 	mem[p++] = 0xc3;	/* RET */
-	*len_p = p;
+
+	return p;
+}
+
+
+static int make_sysenter_stub(void *start, int sc_num, bool save_bees)
+{
+	int p = 0;
+	uint8_t *mem = start;
+	if(save_bees) mem[p++] = 0x55;	/* pushl %ebp */
+	mem[p++] = 0x65; mem[p++] = 0x8b; mem[p++] = 0x2d;
+	*(uint32_t *)&mem[p] = 0; p += 4;	/* movb %gs:0, %ebp */
+	if(save_bees) {
+		mem[p++] = 0x89;	/* movl %ebx, -0x8(%ebp) */
+		mem[p++] = 0x5d;
+		mem[p++] = 0xf8;
+	}
+	if(save_bees) {
+		mem[p++] = 0x8f;	/* popl -0x4(%ebp) */
+		mem[p++] = 0x45;
+		mem[p++] = 0xfc;
+	}
+	mem[p++] = 0xb3; mem[p++] = sc_num;	/* movb $sc_num, %bl */
+	mem[p++] = 0x89; mem[p++] = 0xe5;	/* movl %esp, %ebp */
+	mem[p++] = 0x0f; mem[p++] = 0x34;	/* sysenter */
+
+	return p;
+}
+
+
+static int make_sysexit_epilog(void *start, bool get_ecx, bool get_edx)
+{
+	int p = 0;
+	uint8_t *mem = start;
+	if(get_ecx) {
+		/* movl %gs:0, %ecx */
+		mem[p++] = 0x65; mem[p++] = 0x8b; mem[p++] = 0x0d;
+		for(int i=0; i < 4; i++) mem[p++] = 0x00;
+		if(get_edx) {
+			/* movl -8(%ecx), %edx */
+			mem[p++] = 0x8b; mem[p++] = 0x51; mem[p++] = 0xf8;
+		}
+		/* movl -4(%ecx), %ecx */
+		mem[p++] = 0x8b; mem[p++] = 0x49; mem[p++] = 0xfc;
+	} else if(get_edx) {
+		/* used by Schedule (timectl in edx) */
+		/* movl %gs:0, %edx */
+		mem[p++] = 0x65;
+		mem[p++] = 0x8b;
+		mem[p++] = 0x15;
+		for(int i=0; i < 4; i++) mem[p++] = 0x00;
+		/* movl -8(%edx), %edx */
+		mem[p++] = 0x8b; mem[p++] = 0x52; mem[p++] = 0xf8;
+	}
+	mem[p++] = 0xc3;		/* ret */
+
+	return p;
 }
 
 
 /* extra clever thing where the syscall stub never enters the kernel.
  * instead, the clock tick is stored in the last 8 bytes of the KIP.
  */
-static void make_systemclock_stub(void *start, int *len_p)
+static int make_systemclock_stub(void *start)
 {
 	int p = 0;
 	uint8_t *mem = start;
@@ -83,7 +149,7 @@ static void make_systemclock_stub(void *start, int *len_p)
 	mem[p++] = 0xf8;
 	mem[p++] = 0xc3;			/* RET */
 
-	*len_p = p;
+	return p;
 }
 
 
@@ -181,16 +247,20 @@ void make_kip(
 	static const struct {
 		uint16_t sc_num;
 		uint16_t offset;
+		bool save_bees;	/* %ebx, %ebp are preserved or parameters */
 	} syscalls[] = {
 		/* not included:
 		 * SC_SYSTEMCLOCK, implemented as a soft syscall.
-		 * SC_EXCHANGEREGISTERS, SC_MEMORYCONTROL; have interrupts of their
-		 * very own.
+		 *
+		 * also, in non-sysenter mode SC_EXREGS and SC_MEMCTL have dedicated
+		 * interrupt vectors.
 		 */
 		{ SC_IPC, 0xe0 },
 		{ SC_LIPC, 0xe4 },
 		{ SC_UNMAP, 0xe8 },
-		{ SC_THREADSWITCH, 0xf4 },
+		{ SC_THREADSWITCH, 0xf4, true },
+		{ SC_EXREGS, 0xec, true },
+		{ SC_MEMCTL, 0xdc, true },
 		{ SC_SCHEDULE, 0xf8 },
 		{ SC_SPACECONTROL, 0xd0 },
 		{ SC_THREADCONTROL, 0xd4 },
@@ -198,25 +268,70 @@ void make_kip(
 	};
 	const int num_syscalls = sizeof(syscalls) / sizeof(syscalls[0]);
 	int kip_pos = 0x100;
-	for(int i=0; i < num_syscalls; i++) {
-		int len = 0;
-		make_syscall_stub(mem + kip_pos, &len, syscalls[i].sc_num);
-		*(L4_Word_t *)(mem + syscalls[i].offset) = kip_pos;
-		kip_pos += (len + 63) & ~63;
+	if(USE_SYSENTER) {
+		printf("using SYSENTER/SYSEXIT for syscalls\n");
+		/* FIXME: move this into cpu.c or somewhere; it should run for each
+		 * CPU, possibly per space if smallspaces are involved
+		 */
+		extern void _sysenter_top();
+		x86_wrmsr(IA32_SYSENTER_CS, SEG_KERNEL_CODE_HIGH << 3);
+		x86_wrmsr(IA32_SYSENTER_EIP,
+			(L4_Word_t)&_sysenter_top + KERNEL_SEG_START);
+		x86_wrmsr(IA32_SYSENTER_ESP, kernel_tss.esp0 + KERNEL_SEG_START);
+
+		for(int i=0; i < num_syscalls; i++) {
+			int len = make_sysenter_stub(mem + kip_pos, syscalls[i].sc_num,
+				syscalls[i].save_bees);
+			*(L4_Word_t *)(mem + syscalls[i].offset) = kip_pos;
+
+			/* sprinkle certain epilogs in between for cache efficiency. */
+			switch(syscalls[i].sc_num) {
+				case SC_IPC:
+					sysexit_epilogs.fast = kip_pos + len;
+					len += make_sysexit_epilog(
+						mem + kip_pos + len, false, false);
+					break;
+				case SC_SCHEDULE:
+					sysexit_epilogs.edx = kip_pos + len;
+					len += make_sysexit_epilog(
+						mem + kip_pos + len, false, true);
+					break;
+				case SC_SPACECONTROL:
+					sysexit_epilogs.ecx = kip_pos + len;
+					len += make_sysexit_epilog(
+						mem + kip_pos + len, true, false);
+					break;
+				case SC_EXREGS:
+					sysexit_epilogs.ecdx = kip_pos + len;
+					len += make_sysexit_epilog(
+						mem + kip_pos + len, true, true);
+					break;
+			}
+
+			kip_pos += (len + 15) & ~15;
+		}
+	} else {
+		/* syscalls via software interrupt, like it's still 1994 */
+		for(int i=0; i < num_syscalls; i++) {
+			int sc = syscalls[i].sc_num;
+			if(sc == SC_EXREGS || sc == SC_MEMCTL) continue;
+			int len = make_syscall_stub(mem + kip_pos, sc);
+			*(L4_Word_t *)(mem + syscalls[i].offset) = kip_pos;
+			kip_pos += (len + 15) & ~15;
+		}
+		/* ExchangeRegisters */
+		int len = make_int_sc_stub(mem + kip_pos, 0x8d);
+		*(L4_Word_t *)(mem + 0xec) = kip_pos;
+		kip_pos += (len + 15) & ~15;
+		/* MemoryControl */
+		len = make_int_sc_stub(mem + kip_pos, 0x8e);
+		*(L4_Word_t *)(mem + 0xdc) = kip_pos;
+		kip_pos += (len + 15) & ~15;
 	}
-	/* slightly more special ones. */
-	int len = 0;
 	/* SystemClock (pure vsyscall) */
-	make_systemclock_stub(mem + kip_pos, &len);
+	kip_pos += 63; kip_pos &= ~63;
+	int len = make_systemclock_stub(mem + kip_pos);
 	*(L4_Word_t *)(mem + 0xf0) = kip_pos;
-	kip_pos += (len + 63) & ~63;
-	/* MemoryControl */
-	make_int_sc_stub(mem + kip_pos, &len, 0x8e);
-	*(L4_Word_t *)(mem + 0xdc) = kip_pos;
-	kip_pos += (len + 63) & ~63;
-	/* ExchangeRegisters */
-	make_int_sc_stub(mem + kip_pos, &len, 0x8d);
-	*(L4_Word_t *)(mem + 0xec) = kip_pos;
 	kip_pos += (len + 63) & ~63;
 
 	void *memdesc_base = mem + kip_pos;
