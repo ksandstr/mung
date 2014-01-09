@@ -17,6 +17,7 @@ struct feature_bit {
 };
 
 
+bool use_sysenter = false;
 static struct x86_features features;
 
 
@@ -37,6 +38,8 @@ static COLD void print_features(uint32_t mask, const struct feature_bit *fs)
  */
 COLD void scan_cpuid(void)
 {
+	memset(&features, 0, sizeof(features));
+
 	struct cpuid_out id;
 	char cpuname[13];
 	x86_cpuid(&id, 0, 0, 0, 0);
@@ -60,6 +63,10 @@ COLD void scan_cpuid(void)
 		if(family_id == 0xf) family_id += ext_family;
 		printf("  type %d, model %d, family %d, stepping %d\n",
 			proc_type, model, family_id, stepping);
+		features.type = proc_type;
+		features.family = family_id;
+		features.model = ext_model;
+		features.stepping = stepping;
 		int brand_ix = id.ebx & 0xff, clflush_sz = ((id.ebx >> 8) & 0xff) << 3,
 			max_local_cpus = (id.ebx >> 16) & 0xff,
 			init_apic_id = (id.ebx >> 24) & 0xff;
@@ -114,12 +121,27 @@ COLD void scan_cpuid(void)
 			x86_cpuid(&id, 2, 0, 0, 0);
 		} while(++iter_id < id_iters);
 	}
+
+	use_sysenter = cpu_has_sysenter();
 }
 
 
-/* TODO: for smp, get this from the per-CPU spot */
+/* TODO: for smp, get this from the per-CPU spot & inline the call. */
 const cpu_features *get_features(void) {
 	return &features;
+}
+
+
+bool cpu_has_sysenter(void)
+{
+	if(!CHECK_FLAG(features.edx, X86_FEATURE_D_SEP)
+		|| (features.family == 6 && features.model < 3
+			&& features.stepping < 3))
+	{
+		return false;
+	} else {
+		return true;
+	}
 }
 
 

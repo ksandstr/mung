@@ -27,6 +27,7 @@
 
 /* CPUID page 01h EDX flag masks */
 #define X86_FEATURE_D_APIC (1 << 9)
+#define X86_FEATURE_D_SEP (1 << 11)
 #define X86_FEATURE_D_FXSR (1 << 24)
 #define X86_FEATURE_D_SSE (1 << 25)
 #define X86_FEATURE_D_SSE2 (1 << 26)
@@ -75,7 +76,9 @@ struct x86_exregs {
 
 
 /* feature info from CPUID page 01h (edx, ecx) */
-struct x86_features {
+struct x86_features
+{
+	uint8_t type, family, model, stepping;
 	uint32_t edx, ecx;
 };
 
