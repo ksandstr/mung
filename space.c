@@ -858,7 +858,7 @@ COLD void init_spaces(struct list_head *resv_list)
 	space_init(kernel_space, resv_list);
 	kernel_space->tss = &kernel_tss;
 	kernel_space->tss_len = sizeof(struct tss);
-	kernel_space->tss_seg = 5;
+	kernel_space->tss_seg = SEG_KERNEL_TSS;
 	kernel_space->redirector = L4_anythread;
 
 	/* preallocate page table pages for the kernel segment, so that it makes
