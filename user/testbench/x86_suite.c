@@ -49,6 +49,13 @@ static inline void x86_fpu_setcw(uint16_t new_cw) {
 }
 
 
+static inline uint64_t x86_rdtsc(void) {
+	uint64_t output;
+	asm volatile ("rdtsc" : "=A" (output));
+	return output;
+}
+
+
 /* a helper thread that sleeps for 2 ms, then alters the FPU rounding mode. */
 static void sleep_and_twiddle(void *param UNUSED)
 {
@@ -192,6 +199,27 @@ START_TEST(sse_smoketest)
 	}
 	ok(still_ok, "results consistent");
 #endif
+}
+END_TEST
+
+
+START_TEST(rdtsc_smoketest)
+{
+	plan_tests(2);
+
+	uint64_t start = x86_rdtsc(), mid = x86_rdtsc();
+	if(!ok(start > 0, "didn't die")) {
+		diag("start=%u", (unsigned)start);
+	}
+
+	uint64_t end = x86_rdtsc();
+	if(!ok(end > start, "timer went forward")) {
+		/* TODO: add 64-bit longs to vsnprintf, use them here */
+		diag("start=%u, end=%u", (unsigned)start, (unsigned)end);
+	}
+
+	diag("difference=%u cycles", (unsigned)(end - start));
+	diag("backtoback=%u cycles", (unsigned)(mid - start));
 }
 END_TEST
 
@@ -604,6 +632,7 @@ struct Suite *x86_suite(void)
 		TCase *tc = tcase_create("smoke");
 		tcase_add_test(tc, mmx_smoketest);
 		tcase_add_test(tc, sse_smoketest);
+		tcase_add_test(tc, rdtsc_smoketest);
 		suite_add_tcase(s, tc);
 	}
 
