@@ -328,35 +328,32 @@ static void glue_schedule(struct x86_exregs *regs)
 }
 
 
-/* basically the slowest possible syscall wrappers. */
 void isr_exn_basic_sc_bottom(struct x86_exregs *regs)
 {
 	assert(x86_irq_is_enabled());
+	assert(x86_frame_len(regs) == sizeof(*regs));
 
-	static void (*const fn[])(struct x86_exregs *regs) = {
-		[SC_IPC] = &glue_ipc,
-		[SC_LIPC] = &glue_ipc,
-		[SC_UNMAP] = &glue_unmap,
-		[SC_THREADSWITCH] = &glue_threadswitch,
-		[SC_SCHEDULE] = &glue_schedule,
-		[SC_SPACECONTROL] = &glue_spacecontrol,
-		[SC_THREADCONTROL] = &glue_threadcontrol,
-		[SC_PROCESSORCONTROL] = &glue_processorcontrol,
-	};
-
-	int sc_num = regs->ebx;
-	const int num_sc = sizeof(fn) / sizeof(fn[0]);
-	if(unlikely(sc_num >= num_sc || fn[sc_num] == NULL)) {
-		struct thread *current = get_current_thread();
-		printf("unknown basic syscall %lu (caller stopped)\n", regs->eax);
-		thread_halt(current);
-		assert(current->status == TS_STOPPED);
-		return_to_scheduler();
-	} else {
-		assert(x86_frame_len(regs) == sizeof(*regs));
-		(*fn[sc_num])(regs);
-		return_from_exn();
+	switch(regs->ebx & 0xff) {
+		case SC_IPC:
+		case SC_LIPC:
+			glue_ipc(regs);
+			break;
+		case SC_UNMAP: glue_unmap(regs); break;
+		case SC_THREADSWITCH: glue_threadswitch(regs); break;
+		case SC_SCHEDULE: glue_schedule(regs); break;
+		case SC_SPACECONTROL: glue_spacecontrol(regs); break;
+		case SC_THREADCONTROL: glue_threadcontrol(regs); break;
+		case SC_PROCESSORCONTROL: glue_processorcontrol(regs); break;
+		default: {
+			struct thread *current = get_current_thread();
+			printf("unknown basic syscall %lu (caller stopped)\n", regs->eax);
+			thread_halt(current);
+			assert(current->status == TS_STOPPED);
+			return_to_scheduler();
+		}
 	}
+
+	return_from_exn();
 }
 
 
