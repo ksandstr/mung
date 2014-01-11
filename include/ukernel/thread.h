@@ -19,6 +19,7 @@
 #include <ukernel/x86.h>
 #include <ukernel/slab.h>
 #include <ukernel/guard.h>
+#include <ukernel/misc.h>
 
 
 typedef L4_Word_t thread_id;
@@ -161,14 +162,14 @@ extern void init_threading(void);
 extern struct thread *thread_find(thread_id tid);
 
 
-extern L4_Word_t sys_exregs(
+extern SYSCALL L4_Word_t sys_exregs(
 	L4_ThreadId_t dest,
 	L4_Word_t *control_p,
 	L4_Word_t *sp_p, L4_Word_t *ip_p, L4_Word_t *flags_p,
 	L4_Word_t *udh_p,
 	L4_ThreadId_t *pager_p);
 
-extern L4_Word_t sys_threadcontrol(
+extern SYSCALL L4_Word_t sys_threadcontrol(
 	L4_ThreadId_t dest_tid,
 	L4_ThreadId_t pager,
 	L4_ThreadId_t scheduler,

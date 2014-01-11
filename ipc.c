@@ -1119,7 +1119,7 @@ end:
 }
 
 
-L4_ThreadId_t sys_ipc(
+SYSCALL L4_ThreadId_t sys_ipc(
 	void *utcb,
 	L4_ThreadId_t to,
 	L4_ThreadId_t from,

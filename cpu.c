@@ -123,7 +123,7 @@ const cpu_features *get_features(void) {
 }
 
 
-L4_Word_t sys_processorcontrol(
+SYSCALL L4_Word_t sys_processorcontrol(
 	L4_Word_t proc_no,
 	L4_Word_t internal_freq,
 	L4_Word_t external_freq,

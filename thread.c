@@ -640,7 +640,7 @@ static inline bool selftest_enabled(void) {
 #define CTL_XFER_MASK (0x1c00)
 
 
-L4_Word_t sys_exregs(
+SYSCALL L4_Word_t sys_exregs(
 	L4_ThreadId_t dest,
 	L4_Word_t *control_p,
 	L4_Word_t *sp_p, L4_Word_t *ip_p, L4_Word_t *flags_p,
@@ -1092,7 +1092,7 @@ int int_clear(int intnum, struct thread *sender)
 
 
 /* FIXME: make this function atomic on error! */
-L4_Word_t sys_threadcontrol(
+SYSCALL L4_Word_t sys_threadcontrol(
 	L4_ThreadId_t dest_tid,
 	L4_ThreadId_t pager,
 	L4_ThreadId_t scheduler,

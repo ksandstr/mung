@@ -17,6 +17,9 @@
 #include <ukernel/util.h>
 
 
+#define SYSCALL __attribute__((regparm(3)))
+
+
 /* from kmain.c */
 
 extern uint8_t syscall_stack[];

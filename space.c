@@ -658,7 +658,7 @@ bool space_add_ioperm(struct space *sp, L4_Word_t base_port, int size)
 
 /* syscalls. */
 
-void sys_unmap(L4_Word_t control, void *utcb)
+SYSCALL void sys_unmap(L4_Word_t control, void *utcb)
 {
 	assert(check_all_spaces(0));
 
@@ -708,7 +708,7 @@ void sys_unmap(L4_Word_t control, void *utcb)
  * failure result. an attempt should be made to restore the previous values as
  * appropriate.
  */
-L4_Word_t sys_spacecontrol(
+SYSCALL L4_Word_t sys_spacecontrol(
 	L4_ThreadId_t spacespec,
 	L4_Word_t control,
 	L4_Fpage_t kip_area,

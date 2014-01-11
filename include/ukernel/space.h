@@ -10,6 +10,7 @@
 #include <ukernel/thread.h>
 #include <ukernel/mm.h>
 #include <ukernel/mapdb.h>
+#include <ukernel/misc.h>
 
 
 /* space->flags */
@@ -120,9 +121,9 @@ static inline void space_commit(struct space *sp) {
 }
 
 /* UTCB is accessed by the wrapper to sync ESI and MR0. */
-extern void sys_unmap(L4_Word_t control, void *current_utcb);
+extern SYSCALL void sys_unmap(L4_Word_t control, void *current_utcb);
 
-extern L4_Word_t sys_spacecontrol(
+extern SYSCALL L4_Word_t sys_spacecontrol(
 	L4_ThreadId_t spacespec,
 	L4_Word_t control,
 	L4_Fpage_t kip_area,

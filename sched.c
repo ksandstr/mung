@@ -596,7 +596,7 @@ void return_to_ipc(struct thread *target)
 }
 
 
-void sys_threadswitch(L4_ThreadId_t target)
+SYSCALL void sys_threadswitch(L4_ThreadId_t target)
 {
 	struct thread *current = get_current_thread();
 
@@ -632,7 +632,7 @@ static int ipc_xfer_schedstate(struct thread *t) {
 }
 
 
-L4_Word_t sys_schedule(
+SYSCALL L4_Word_t sys_schedule(
 	L4_ThreadId_t dest_tid,
 	L4_Word_t prioctl,
 	L4_Word_t *timectl_p,
