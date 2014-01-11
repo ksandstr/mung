@@ -102,6 +102,14 @@ void *malloc(size_t size) {
 	panic("malloc(3) not implemented in mbiloader");
 }
 
+void free(void *ptr) {
+	panic("free(3) not implemented in mbiloader");
+}
+
+void abort(void) {
+	panic("mbiloader abort() called!");
+}
+
 
 /* construct a 32-bit kernel configuration page.
  * TODO: handle kdebug also.

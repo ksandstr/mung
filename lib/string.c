@@ -25,8 +25,10 @@
 #include <stdint.h>
 #include <assert.h>
 
+#include <ukernel/util.h>
 
-void *memcpy(void *dst, const void *src, size_t len)
+
+static void *memcpy_forward(void *dst, const void *src, size_t len)
 {
 	uint32_t *d = dst;
 	const uint32_t *s = src;
@@ -47,6 +49,30 @@ void *memcpy(void *dst, const void *src, size_t len)
 	}
 
 	return dst;
+}
+
+
+void *memcpy(void *dst, const void *src, size_t len) {
+	return memcpy_forward(dst, src, len);
+}
+
+
+void *memmove(void *dst, const void *src, size_t len)
+{
+	if(dst + MIN(size_t, len, 32) < src || dst >= src + len
+		|| dst + len < src)
+	{
+		/* strictly forward OK, or no overlap */
+		return memcpy_forward(dst, src, len);
+	} else {
+		/* the brute force solution */
+		void *buf = malloc(len);
+		if(buf == NULL) abort();	/* FIXME, somehow */
+		memcpy(buf, src, len);
+		memcpy(dst, buf, len);
+		free(buf);
+		return dst;
+	}
 }
 
 
