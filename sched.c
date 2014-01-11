@@ -551,6 +551,7 @@ COLD void return_from_dead(void)
 /* returns on failure. caller should fall back to return_to_scheduler(). */
 static void return_to_other(struct thread *current, struct thread *other)
 {
+	assert(other != current);
 	if(other->status != TS_READY) return;
 
 	TRACE("%s: %c-%c: %lu:%lu -> %lu:%lu\n", __func__,
@@ -608,8 +609,10 @@ void sys_threadswitch(struct x86_exregs *regs)
 	if(!L4_IsNilThread(target)
 		&& (other = resolve_tid_spec(current->space, target)) != NULL)
 	{
-		return_to_other(current, other);
-		/* on failure (i.e. other not TS_READY), return to caller. */
+		/* on failure (i.e. other not TS_READY), return to caller. also return
+		 * if other isn't.
+		 */
+		if(other != current) return_to_other(current, other);
 	} else {
 		current->status = TS_READY;
 		/* the thread gets a new quantum once other threads have run. */
