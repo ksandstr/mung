@@ -12,6 +12,7 @@
 #include <assert.h>
 #include <ccan/compiler/compiler.h>
 #include <ccan/likely/likely.h>
+#include <ccan/tally/tally.h>
 
 #include <l4/types.h>
 #include <l4/thread.h>
@@ -27,6 +28,17 @@
 #define L_PING 0x1234	/* reply with received words, untyped */
 #define L_REPLY 0x1235	/* reply with empty IPC */
 #define L_LPING 0x1236	/* reply with Lipc */
+
+
+static void print_tally(struct tally *t)
+{
+	size_t err = 0;
+	printf("[min=%d, mean=%d, median=%d",
+		(int)tally_min(t), (int)tally_mean(t),
+		(int)tally_approx_median(t, &err));
+	if(err != 0) printf("+-%u", (unsigned)err);
+	printf("]");
+}
 
 
 /* benchmark the Ipc/Lipc syscall. peer should answer L_PING and L_REPLY. */
@@ -54,14 +66,13 @@ static void bench_sys_ipc(
 			continue;
 		}
 		for(int mrs_shift=0; mrs_shift < 7; mrs_shift++) {
+			struct tally *t = tally_new(256);
 			int n_mrs = (1 << mrs_shift) - 1;
 			printf("  %s with %d MRs:\t",
 				label == L_PING ? "ping"
 					: (label == L_LPING ? "lping" : "bonk"),
 				n_mrs);
 
-			uint64_t total_cycles = 0;
-			int total_iters = 0;
 			for(int i = 0; i < 64; i++) {
 				L4_LoadMR(0, (L4_MsgTag_t){
 					.X.label = label, .X.u = n_mrs }.raw);
@@ -88,12 +99,11 @@ static void bench_sys_ipc(
 				/* toss results for first 8 iters for warmup's sake */
 				if(i < 8) continue;
 
-				total_cycles += end - start;
-				total_iters++;
+				tally_add(t, end - start);
 			}
 
-			printf("cpi=%u\n",
-				total_iters > 0 ? (unsigned)(total_cycles / total_iters) : 0);
+			printf("cpi="); print_tally(t); printf("\n");
+			free(t);
 		}
 	}
 }
@@ -150,13 +160,12 @@ static void bench_idl_ipc(const char *desc, L4_ThreadId_t partner)
 		partner.raw, L4_IsLocalId(partner) ? "local" : "global");
 
 	for(int msg_type=0; msg_type < 2; msg_type++) {
+		struct tally *t = tally_new(256);
 		int (*fn)(L4_ThreadId_t, int16_t *, int32_t, int32_t, int32_t *, int32_t *) =
 			msg_type == 0 ? &__bench_ping : &__bench_other_ping;
 
 		printf("  %s():\t", msg_type == 0 ? "ping" : "other_ping");
 
-		uint64_t total_cycles = 0;
-		int total_iters = 0;
 		for(int i = 0; i < 64; i++) {
 			int32_t a = 0, b = 0;
 			int16_t retval;
@@ -172,12 +181,11 @@ static void bench_idl_ipc(const char *desc, L4_ThreadId_t partner)
 			/* toss results for first 8 iters for warmup's sake */
 			if(i < 8) continue;
 
-			total_cycles += end - start;
-			total_iters++;
+			tally_add(t, end - start);
 		}
 
-		printf("cpi=%u\n",
-			total_iters > 0 ? (unsigned)(total_cycles / total_iters) : 0);
+		printf("cpi="); print_tally(t); printf("\n");
+		free(t);
 	}
 }
 
@@ -242,6 +250,7 @@ static void end_pair(int child, L4_ThreadId_t local, L4_ThreadId_t remote)
 
 static void bench_threadswitch(void)
 {
+	const size_t n_iters = 512;
 	struct {
 		const char *name;
 		L4_ThreadId_t tid;
@@ -253,11 +262,11 @@ static void bench_threadswitch(void)
 	};
 
 	for(int alt=0; alt < NUM_ELEMENTS(alts); alt++) {
+		struct tally *t = tally_new(256);
+
 		printf("%s; %s:\t", __func__, alts[alt].name);
 		L4_ThreadId_t dest = alts[alt].tid;
-		uint64_t total_cycles = 0;
-		int total_iters = 0;
-		for(int i=0; i < 512; i++) {
+		for(int i=0; i < n_iters; i++) {
 			uint64_t start = x86_rdtsc();
 			L4_ThreadSwitch(dest);
 			uint64_t end = x86_rdtsc();
@@ -267,12 +276,11 @@ static void bench_threadswitch(void)
 				continue;
 			}
 
-			total_cycles += end - start;
-			total_iters++;
+			tally_add(t, (ssize_t)(end - start));
 		}
 
-		printf("cpi=%u\n",
-			total_iters > 0 ? (unsigned)(total_cycles / total_iters) : 0);
+		printf("cpi="); print_tally(t); printf("\n");
+		free(t);
 	}
 }
 
