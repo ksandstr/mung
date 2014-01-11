@@ -5,7 +5,8 @@ include $(CFGDIR)/config.mk
 LDFLAGS=-e_start -N -nostdlib
 CFLAGS:=$(subst -D__KERNEL__,,$(CFLAGS))
 
-TEST_IDL:=idl/common.idl $(wildcard idl/*-suite.idl)
+TEST_IDL:=idl/common.idl idl/benchmark.idl \
+	$(wildcard idl/*-suite.idl)
 TEST_IDL_OBJS:=$(patsubst idl/%.idl,%-service.o,$(TEST_IDL)) \
 	$(patsubst idl/%.idl,%-client.o,$(TEST_IDL)) \
 	$(patsubst idl/%.idl,%-common.o,$(TEST_IDL))

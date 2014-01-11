@@ -1,0 +1,19 @@
+
+
+#include <muidl.idl>
+#include "l4x2.idl"
+#include "common.idl"
+
+
+[StubPrefix(__bench)]
+interface IdlBench: Quittable
+{
+	/* direct labeling, simple two-word IPC with return value. */
+	[Label(0xbabe)]
+	short ping(in long a, in long b, out long i, out long j);
+
+	/* indirect labeling */
+	short other_ping(
+		in long a, in long b,
+		out long i, out long j);
+};

@@ -1,5 +1,8 @@
 
+#define IDLBENCH_IMPL_SOURCE 1
+
 #include <stdio.h>
+#include <stdint.h>
 #include <assert.h>
 #include <ccan/compiler/compiler.h>
 #include <ccan/likely/likely.h>
@@ -9,6 +12,7 @@
 #include <l4/ipc.h>
 
 #include "defs.h"
+#include "benchmark-defs.h"
 
 
 #define L_QUIT 0xdead	/* show's over */
@@ -132,28 +136,122 @@ static void ipc_peer_fn(void *param UNUSED)
 }
 
 
-void run_benchmarks(void)
+static void bench_idl_ipc(const char *desc, L4_ThreadId_t partner)
 {
-	L4_ThreadId_t local_tid = xstart_thread(&ipc_peer_fn, NULL);
-	L4_ThreadId_t remote_tid;
-	int child = fork_tid(&remote_tid);
-	if(child == 0) {
-		ipc_peer_fn(NULL);
+	printf("%s (%s); partner=%#lx (%s):\n", __func__, desc,
+		partner.raw, L4_IsLocalId(partner) ? "local" : "global");
+
+	for(int msg_type=0; msg_type < 2; msg_type++) {
+		int (*fn)(L4_ThreadId_t, int16_t *, int32_t, int32_t, int32_t *, int32_t *) =
+			msg_type == 0 ? &__bench_ping : &__bench_other_ping;
+
+		printf("  %s():\t", msg_type == 0 ? "ping" : "other_ping");
+
+		uint64_t total_cycles = 0;
+		int total_iters = 0;
+		for(int i = 0; i < 64; i++) {
+			int32_t a = 0, b = 0;
+			int16_t retval;
+			uint64_t start = x86_rdtsc();
+			int n = (*fn)(partner, &retval, 1, 2, &a, &b);
+			uint64_t end = x86_rdtsc();
+
+			if(n < 0) {
+				printf("!!! iter %d discarded (n=%d)\n", i, (int)n);
+				continue;
+			}
+
+			/* toss results for first 8 iters for warmup's sake */
+			if(i < 8) continue;
+
+			total_cycles += end - start;
+			total_iters++;
+		}
+
+		printf("cpi=%u\n",
+			total_iters > 0 ? (unsigned)(total_cycles / total_iters) : 0);
+	}
+}
+
+
+static bool idl_peer_running;
+
+static void impl_quit(void) {
+	idl_peer_running = false;
+}
+
+
+static int16_t impl_ping(
+	int32_t a, int32_t b,
+	int32_t *i_p, int32_t *j_p)
+{
+	*i_p = a;
+	*j_p = b;
+	return 666;		/* HAIL SATAN */
+}
+
+
+static void idl_peer_fn(void *param UNUSED)
+{
+	static const struct idl_bench_vtable vtab = {
+		.quit = &impl_quit,
+		.ping = &impl_ping,
+		.other_ping = &impl_ping,
+	};
+
+	idl_peer_running = true;
+	while(idl_peer_running) {
+		/* ignoring "status". */
+		_muidl_idl_bench_dispatch(&vtab);
+	}
+}
+
+
+static void start_pair(
+	int *child_p,
+	L4_ThreadId_t *local_tid_p,
+	L4_ThreadId_t *remote_tid_p,
+	void (*fn)(void *))
+{
+	*local_tid_p = xstart_thread(fn, NULL);
+	*child_p = fork_tid(remote_tid_p);
+	if(*child_p == 0) {
+		(*fn)(NULL);
 		exit(0);
 	}
+}
 
+
+static void end_pair(int child, L4_ThreadId_t local, L4_ThreadId_t remote)
+{
+	local = L4_GlobalIdOf(local);
+	send_quit(local);
+	xjoin_thread(local);
+
+	idl_fixture_teardown_fork(child, remote);
+}
+
+
+void run_benchmarks(void)
+{
+	L4_ThreadId_t local_tid, remote_tid;
+	int child;
+
+	/* basic IPC tests */
+	start_pair(&child, &local_tid, &remote_tid, &ipc_peer_fn);
 	local_tid = L4_LocalIdOf(local_tid);
 	bench_sys_ipc("intra-space", false, L4_GlobalIdOf(local_tid));
 	bench_sys_ipc("intra-space", false, local_tid);
 	bench_sys_ipc("inter-space", false, remote_tid);
-
 	bench_sys_ipc("intra-space (L)", true, local_tid);
 	bench_sys_ipc("inter-space (L)", true, remote_tid);
+	end_pair(child, local_tid, remote_tid);
 
-	send_quit(local_tid);
-	send_quit(remote_tid);
-	int st, dead = wait(&st);
-	if(dead != child) {
-		printf("!!! unrecognized dead child %d (expected %d)\n", dead, child);
-	}
+	/* similar ones, mediated by the IDL compiler */
+	start_pair(&child, &local_tid, &remote_tid, &idl_peer_fn);
+	local_tid = L4_LocalIdOf(local_tid);
+	bench_idl_ipc("intra-space", L4_GlobalIdOf(local_tid));
+	bench_idl_ipc("intra-space", local_tid);
+	bench_idl_ipc("inter-space", remote_tid);
+	end_pair(child, local_tid, remote_tid);
 }

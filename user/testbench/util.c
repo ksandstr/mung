@@ -45,11 +45,7 @@ static void fixture_teardown_common(int pid, L4_ThreadId_t tid)
 	 * thread. 0xcbad is seen in IDL_FIXTURE()'s dispatch-calling loop.
 	 */
 	L4_LoadMR(0, (L4_MsgTag_t){ .X.label = 0xcbad }.raw);
-	L4_MsgTag_t tag = L4_Send_Timeout(tid, TEST_IPC_DELAY);
-	if(L4_IpcFailed(tag)) {
-		printf("%s: ec %#lx\n", __func__, L4_ErrorCode());
-		abort();
-	}
+	L4_Send_Timeout(tid, TEST_IPC_DELAY);
 
 	if(pid > 0) {
 		int st, dead = wait(&st);
