@@ -25,7 +25,7 @@
 #define TRACE_TIME_PREFIX 0
 
 /* special "global option" item */
-#define TRID_GLOBAL_OPT	-1
+#define TRID_GLOBAL_OPT	0
 
 
 extern void trace_enable(int id);

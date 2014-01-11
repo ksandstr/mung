@@ -3,7 +3,6 @@
 #include <stdlib.h>
 #include <stdint.h>
 #include <assert.h>
-#include <ccan/htable/htable.h>
 #include <ccan/container_of/container_of.h>
 #include <ccan/compiler/compiler.h>
 
@@ -14,54 +13,42 @@
 
 struct trace_item
 {
-	int id;
-	int enabled;
-	uint8_t opts;
+	int16_t enabled;
+	uint16_t opts;
 };
 
 
-static size_t hash_trace_item(const void *, void *);
-
-
 static bool trace_on = false;
-static struct htable trace_status = HTABLE_INITIALIZER(trace_status,
-	&hash_trace_item, NULL);
-
-
-static size_t hash_trace_item(const void *key, void *priv) {
-	const struct trace_item *it = key;
-	return int_hash(it->id);
-}
-
-
-static bool cmp_trace_item_id(const void *a, void *b) {
-	const struct trace_item *c = a, *d = b;
-	return c->id == d->id;
-}
+static struct trace_item *trace_status = NULL;
+static size_t trace_status_size = 0;
 
 
 static struct trace_item *add_trace_item(int id)
 {
-	/* (could allocate them from a slab. but why?) */
-	struct trace_item *it = malloc(sizeof(struct trace_item));
-	if(it == NULL) panic("can't allocate trace_item");
-	*it = (struct trace_item){ .id = id, .enabled = 0, .opts = 0 };
-	bool ok = htable_add(&trace_status, hash_trace_item(it, NULL), it);
-	if(!ok) panic("allocation failure in htable_add (from trace.c)");
-	return it;
+	if(id >= trace_status_size) {
+		assert(id >= 0);
+		struct trace_item *repl = realloc(trace_status,
+			(id + 1) * sizeof(struct trace_item));
+		if(repl == NULL) {
+			panic("can't reallocate trace_status");
+		}
+		for(int i=trace_status_size; i <= id + 1; i++) {
+			repl[i] = (struct trace_item){ };
+		}
+		trace_status = repl;
+		trace_status_size = id + 1;
+
+		printf("trace_status_size=%u\n", (unsigned)trace_status_size);
+	}
+
+	return &trace_status[id];
 }
 
 
 static struct trace_item *get_trace_item(int id)
 {
-	struct trace_item key = { .id = id };
-	void *ptr = htable_get(&trace_status, hash_trace_item(&key, NULL),
-		&cmp_trace_item_id, &key);
-	if(ptr == NULL && id == TRID_GLOBAL_OPT) {
-		/* create it. */
-		return add_trace_item(id);
-	}
-	return ptr != NULL ? container_of(ptr, struct trace_item, id) : NULL;
+	assert(id >= 0);
+	return id < trace_status_size ? &trace_status[id] : NULL;
 }
 
 
