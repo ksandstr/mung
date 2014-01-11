@@ -123,7 +123,12 @@ const cpu_features *get_features(void) {
 }
 
 
-void sys_processorcontrol(struct x86_exregs *regs)
+L4_Word_t sys_processorcontrol(
+	L4_Word_t proc_no,
+	L4_Word_t internal_freq,
+	L4_Word_t external_freq,
+	L4_Word_t voltage)
 {
 	printf("%s: called\n", __func__);
+	return 1;
 }

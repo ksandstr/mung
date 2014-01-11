@@ -1119,38 +1119,30 @@ end:
 }
 
 
-void sys_ipc(struct x86_exregs *regs)
+L4_ThreadId_t sys_ipc(
+	void *utcb,
+	L4_ThreadId_t to,
+	L4_ThreadId_t from,
+	L4_Word_t timeouts)
 {
-	L4_ThreadId_t to = { .raw = regs->eax }, from = { .raw = regs->edx };
-	L4_Word_t timeouts = regs->ecx, mr0 = regs->esi;
-	// L4_Word_t utcb_addr = regs->edi;
-
 	struct thread *current = get_current_thread();
 	TRACE("%s: called in %lu:%lu; to %#lx, from %#lx, timeouts %#lx\n",
 		__func__, TID_THREADNUM(current->id), TID_VERSION(current->id),
-		regs->eax, regs->edx, regs->ecx);
-
-	/* TODO: could translate "utcb_addr" into a user-space pointer,
-	 * verify that it points to the current thread's UTCB, and if not,
-	 * do this slower thing.
-	 */
-	void *utcb = thread_get_utcb(current);
+		to.raw, from.raw, timeouts);
 
 	/* parameter validation. */
 	if(unlikely(to.raw == L4_anythread.raw
 		|| to.raw == L4_anylocalthread.raw))
 	{
 		set_ipc_error(utcb, 4);		/* non-existing partner, send phase */
-		set_ipc_return_regs(regs, current, utcb);
-		return;
+		return L4_nilthread;
 	}
 	if(unlikely(!L4_IsNilThread(from)
 		&& L4_ThreadNo(from) > last_int_threadno()
 		&& L4_ThreadNo(from) < first_user_threadno()))
 	{
 		set_ipc_error(utcb, 5);		/* non-existing partner, receive phase */
-		set_ipc_return_regs(regs, current, utcb);
-		return;
+		return L4_nilthread;
 	}
 
 	bool preempt = false;
@@ -1158,20 +1150,17 @@ void sys_ipc(struct x86_exregs *regs)
 	current->ipc_from = from;
 	current->send_timeout.raw = timeouts >> 16;
 	current->recv_timeout.raw = timeouts & 0xffff;
-	L4_VREG(utcb, L4_TCR_MR(0)) = mr0;
 	ipc(current, utcb, &preempt);
 	if(preempt && IS_READY(current->status)) {
 		/* would return, but was pre-empted */
 		assert(!IS_KERNEL_THREAD(current));		/* >implying */
 		TRACE("%s: scheduling (pre-empted)\n", __func__);
-		thread_save_ctx(current, regs);
 		set_ipc_return_regs(&current->ctx, current, utcb);
 		return_to_scheduler();
 		assert(false);
 	} else if(IS_IPC(current->status)) {
 		/* IPC ongoing. */
 		TRACE("%s: scheduling (ongoing IPC)\n", __func__);
-		thread_save_ctx(current, regs);
 		/* TODO: schedule the waitee */
 		return_to_scheduler();
 		assert(false);
@@ -1180,6 +1169,7 @@ void sys_ipc(struct x86_exregs *regs)
 		TRACE("%s: returning to caller\n", __func__);
 		assert(current->status == TS_RUNNING);
 		assert(!IS_KERNEL_THREAD(current));
-		set_ipc_return_regs(regs, current, utcb);
 	}
+
+	return current->ipc_from;
 }

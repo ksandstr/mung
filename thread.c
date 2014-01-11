@@ -1092,15 +1092,16 @@ int int_clear(int intnum, struct thread *sender)
 
 
 /* FIXME: make this function atomic on error! */
-void sys_threadcontrol(struct x86_exregs *regs)
+L4_Word_t sys_threadcontrol(
+	L4_ThreadId_t dest_tid,
+	L4_ThreadId_t pager,
+	L4_ThreadId_t scheduler,
+	L4_ThreadId_t spacespec,
+	void *utcblocation)
 {
 	assert(check_thread_module(0));
 
-	L4_ThreadId_t dest_tid = { .raw = regs->eax },
-		pager = { .raw = regs->ecx },
-		scheduler = { .raw = regs->edx },
-		spacespec = { .raw = regs->esi };
-	L4_Word_t utcb_loc = regs->edi, result = 0, ec = 0;
+	L4_Word_t ec = 0, result = 0, utcb_loc = (L4_Word_t)utcblocation;
 	struct thread *current = get_current_thread();
 	void *utcb = thread_get_utcb(current);
 	if(unlikely(!CHECK_FLAG(current->space->flags, SF_PRIVILEGE))) {
@@ -1303,10 +1304,9 @@ end:
 	if(result == 0) {
 		L4_VREG(utcb, L4_TCR_ERRORCODE) = ec;
 	}
-	regs->eax = result;
 
 	assert(check_thread_module(0));
-	return;
+	return result;
 
 out_of_mem:
 	ec = 8;

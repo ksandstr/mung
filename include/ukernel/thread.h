@@ -168,7 +168,12 @@ extern L4_Word_t sys_exregs(
 	L4_Word_t *udh_p,
 	L4_ThreadId_t *pager_p);
 
-extern void sys_threadcontrol(struct x86_exregs *regs);
+extern L4_Word_t sys_threadcontrol(
+	L4_ThreadId_t dest_tid,
+	L4_ThreadId_t pager,
+	L4_ThreadId_t scheduler,
+	L4_ThreadId_t spacespec,
+	void *utcb_loc);
 
 
 /* thread of tid's threadnum must not exist already. caller handles

@@ -596,15 +596,14 @@ void return_to_ipc(struct thread *target)
 }
 
 
-void sys_threadswitch(struct x86_exregs *regs)
+void sys_threadswitch(L4_ThreadId_t target)
 {
 	struct thread *current = get_current_thread();
-	thread_save_ctx(current, regs);
 
-	L4_ThreadId_t target = { .raw = regs->eax };
 	TRACE("%s: called in %lu:%lu; target is %lu:%lu\n",
 		__func__, TID_THREADNUM(current->id), TID_VERSION(current->id),
 		L4_ThreadNo(target), L4_Version(target));
+
 	struct thread *other;
 	if(!L4_IsNilThread(target)
 		&& (other = resolve_tid_spec(current->space, target)) != NULL)
@@ -633,16 +632,16 @@ static int ipc_xfer_schedstate(struct thread *t) {
 }
 
 
-void sys_schedule(struct x86_exregs *regs)
+L4_Word_t sys_schedule(
+	L4_ThreadId_t dest_tid,
+	L4_Word_t prioctl,
+	L4_Word_t *timectl_p,
+	L4_Word_t procctl,
+	L4_Word_t preemptctl)
 {
 	struct thread *current = get_current_thread();
 
-	/* raw inputs */
-	L4_ThreadId_t dest_tid = { .raw = regs->eax };
-	L4_Word_t timectl = regs->edx, procctl = regs->esi,
-		prioctl = regs->ecx, preemptctl = regs->edi;
-	/* outputs */
-	L4_Word_t old_timectl = 0, result = L4_SCHEDRESULT_ERROR, ec = 0;
+	L4_Word_t result = L4_SCHEDRESULT_ERROR, ec = 0, timectl = *timectl_p;
 
 	/* test for user TID range */
 	if(unlikely(L4_ThreadNo(dest_tid) < first_user_threadno())) {
@@ -696,7 +695,7 @@ void sys_schedule(struct x86_exregs *regs)
 		goto inv_param;
 	}
 
-	old_timectl = (L4_Word_t)L4_TimePeriod(dest->quantum).raw << 16
+	*timectl_p = (L4_Word_t)L4_TimePeriod(dest->quantum).raw << 16
 		| L4_TimePeriod(dest->total_quantum).raw;
 
 	if(IS_IPC(dest->status)
@@ -765,9 +764,7 @@ end_noupdate:
 		assert((result & 0xff) == L4_SCHEDRESULT_ERROR);
 		L4_VREG(thread_get_utcb(current), L4_TCR_ERRORCODE) = ec;
 	}
-	regs->eax = result;
-	regs->edx = old_timectl;
-	return;
+	return result;
 
 inv_param:
 	ec = L4_ERROR_INVALID_PARAM;

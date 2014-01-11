@@ -83,8 +83,13 @@ static inline bool preempted_by(
 		&& other->wakeup_time <= switch_at_us + self->quantum;
 }
 
-extern void sys_schedule(struct x86_exregs *regs);
-extern void sys_threadswitch(struct x86_exregs *regs);
+extern L4_Word_t sys_schedule(
+	L4_ThreadId_t dest_tid,
+	L4_Word_t prioctl,
+	L4_Word_t *timectl_p,
+	L4_Word_t procctl,
+	L4_Word_t preemptctl);
+extern void sys_threadswitch(L4_ThreadId_t target);
 
 /* switches away from a kernel thread.
  * returns false when no thread was activated.

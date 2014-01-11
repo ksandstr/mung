@@ -245,7 +245,7 @@ void isr_exn_xm_bottom(struct x86_exregs *regs)
 }
 
 
-static void sys_unmap_wrap(struct x86_exregs *regs)
+static void glue_unmap(struct x86_exregs *regs)
 {
 	L4_Word_t control = regs->eax;
 
@@ -257,7 +257,20 @@ static void sys_unmap_wrap(struct x86_exregs *regs)
 }
 
 
-static void sys_spacecontrol_wrap(struct x86_exregs *regs)
+static void glue_threadcontrol(struct x86_exregs *regs)
+{
+	L4_ThreadId_t dest_tid = { .raw = regs->eax },
+		pager = { .raw = regs->ecx },
+		scheduler = { .raw = regs->edx },
+		spacespec = { .raw = regs->esi };
+	L4_Word_t utcb_loc = regs->edi;
+
+	regs->eax = sys_threadcontrol(dest_tid, pager, scheduler, spacespec,
+		(void *)utcb_loc);
+}
+
+
+static void glue_spacecontrol(struct x86_exregs *regs)
 {
 	regs->eax = sys_spacecontrol(
 		(L4_ThreadId_t){ .raw = regs->eax },	/* spacespec */
@@ -269,20 +282,66 @@ static void sys_spacecontrol_wrap(struct x86_exregs *regs)
 }
 
 
+static void glue_ipc(struct x86_exregs *regs)
+{
+	/* TODO: validate this using segment games and pass it to sys_ipc(). it's
+	 * the current thread's UTCB address.
+	 */
+	// L4_Word_t utcb_addr = regs->edi;
+	struct thread *current = get_current_thread();
+	void *utcb = thread_get_utcb(current);
+	L4_VREG(utcb, L4_TCR_MR(0)) = regs->esi;
+
+	thread_save_ctx(current, regs);
+
+	L4_ThreadId_t to = { .raw = regs->eax }, from = { .raw = regs->edx };
+	L4_Word_t timeouts = regs->ecx;
+	regs->eax = sys_ipc(utcb, to, from, timeouts).raw;
+	regs->esi = L4_VREG(utcb, L4_TCR_MR(0));
+	regs->ebx = L4_VREG(utcb, L4_TCR_MR(1));
+	regs->ebp = L4_VREG(utcb, L4_TCR_MR(2));
+}
+
+
+static void glue_threadswitch(struct x86_exregs *regs)
+{
+	struct thread *current = get_current_thread();
+	thread_save_ctx(current, regs);
+
+	L4_ThreadId_t target = { .raw = regs->eax };
+	sys_threadswitch(target);
+}
+
+
+static void glue_processorcontrol(struct x86_exregs *regs)
+{
+	regs->eax = sys_processorcontrol(regs->eax, regs->ecx,
+		regs->edx, regs->esi);
+}
+
+
+static void glue_schedule(struct x86_exregs *regs)
+{
+	L4_ThreadId_t dest_tid = { .raw = regs->eax };
+	regs->eax = sys_schedule(dest_tid, regs->ecx,
+		&regs->edx, regs->esi, regs->edi);
+}
+
+
 /* basically the slowest possible syscall wrappers. */
 void isr_exn_basic_sc_bottom(struct x86_exregs *regs)
 {
 	assert(x86_irq_is_enabled());
 
 	static void (*const fn[])(struct x86_exregs *regs) = {
-		[SC_IPC] = &sys_ipc,
-		[SC_LIPC] = &sys_ipc,
-		[SC_UNMAP] = &sys_unmap_wrap,
-		[SC_THREADSWITCH] = &sys_threadswitch,
-		[SC_SCHEDULE] = &sys_schedule,
-		[SC_SPACECONTROL] = &sys_spacecontrol_wrap,
-		[SC_THREADCONTROL] = &sys_threadcontrol,
-		[SC_PROCESSORCONTROL] = &sys_processorcontrol,
+		[SC_IPC] = &glue_ipc,
+		[SC_LIPC] = &glue_ipc,
+		[SC_UNMAP] = &glue_unmap,
+		[SC_THREADSWITCH] = &glue_threadswitch,
+		[SC_SCHEDULE] = &glue_schedule,
+		[SC_SPACECONTROL] = &glue_spacecontrol,
+		[SC_THREADCONTROL] = &glue_threadcontrol,
+		[SC_PROCESSORCONTROL] = &glue_processorcontrol,
 	};
 
 	int sc_num = regs->ebx;

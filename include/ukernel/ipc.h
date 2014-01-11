@@ -53,7 +53,11 @@ extern L4_MsgTag_t kipc(
 	L4_Word_t timeouts);
 
 /* the full L4.X2 IPC system call. registers and everything. */
-extern void sys_ipc(struct x86_exregs *regs);
+extern L4_ThreadId_t sys_ipc(
+	void *utcb,
+	L4_ThreadId_t to,
+	L4_ThreadId_t from,
+	L4_Word_t timeouts);
 
 /* perform one half of the IPC system call. ipc_send_half() is only valid for
  * non-STOPPED, non-halted threads.
