@@ -285,6 +285,28 @@ static void bench_threadswitch(void)
 }
 
 
+static void bench_systemclock(void)
+{
+	const size_t n_iters = 512;
+
+	struct tally *t = tally_new(256);
+	printf("%s:\t", __func__);
+	uint64_t acc = 0;
+	for(int i=0; i < n_iters; i++) {
+		uint64_t start = x86_rdtsc();
+		L4_Clock_t clk = L4_SystemClock();
+		uint64_t end = x86_rdtsc();
+		acc += clk.raw;
+		if(i < 8) continue;
+
+		tally_add(t, (ssize_t)(end - start));
+	}
+
+	printf("cpi="); print_tally(t); printf("\n");
+	free(t);
+}
+
+
 void run_benchmarks(void)
 {
 	L4_ThreadId_t local_tid, remote_tid;
@@ -312,4 +334,6 @@ void run_benchmarks(void)
 	 * this will never switch context.
 	 */
 	bench_threadswitch();
+
+	bench_systemclock();
 }
