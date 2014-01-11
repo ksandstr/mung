@@ -1,4 +1,10 @@
 
+/* TODO: all sampling should be fed to the CCAN tally module. plain averaging,
+ * as is done right now, does a very bad job of disregarding outliers; and
+ * those can happen due to VM host scheduling, its interrupts, or whatever
+ * else besides.
+ */
+
 #define IDLBENCH_IMPL_SOURCE 1
 
 #include <stdio.h>
@@ -10,6 +16,8 @@
 #include <l4/types.h>
 #include <l4/thread.h>
 #include <l4/ipc.h>
+
+#include <ukernel/util.h>
 
 #include "defs.h"
 #include "benchmark-defs.h"
@@ -232,12 +240,49 @@ static void end_pair(int child, L4_ThreadId_t local, L4_ThreadId_t remote)
 }
 
 
+static void bench_threadswitch(void)
+{
+	struct {
+		const char *name;
+		L4_ThreadId_t tid;
+	} alts[] = {
+		{ "nil", L4_nilthread },
+		{ "self[global]", L4_MyGlobalId() },
+		{ "self[local]", L4_MyLocalId() },
+		/* TODO: add intraspace (global and local), interspace */
+	};
+
+	for(int alt=0; alt < NUM_ELEMENTS(alts); alt++) {
+		printf("%s; %s:\t", __func__, alts[alt].name);
+		L4_ThreadId_t dest = alts[alt].tid;
+		uint64_t total_cycles = 0;
+		int total_iters = 0;
+		for(int i=0; i < 512; i++) {
+			uint64_t start = x86_rdtsc();
+			L4_ThreadSwitch(dest);
+			uint64_t end = x86_rdtsc();
+
+			if(i < 8) {
+				/* discard early data */
+				continue;
+			}
+
+			total_cycles += end - start;
+			total_iters++;
+		}
+
+		printf("cpi=%u\n",
+			total_iters > 0 ? (unsigned)(total_cycles / total_iters) : 0);
+	}
+}
+
+
 void run_benchmarks(void)
 {
 	L4_ThreadId_t local_tid, remote_tid;
 	int child;
 
-	/* basic IPC tests */
+	/* basic IPC benchmarks. */
 	start_pair(&child, &local_tid, &remote_tid, &ipc_peer_fn);
 	local_tid = L4_LocalIdOf(local_tid);
 	bench_sys_ipc("intra-space", false, L4_GlobalIdOf(local_tid));
@@ -247,11 +292,16 @@ void run_benchmarks(void)
 	bench_sys_ipc("inter-space (L)", true, remote_tid);
 	end_pair(child, local_tid, remote_tid);
 
-	/* similar ones, mediated by the IDL compiler */
+	/* similar, mediated by the IDL compiler */
 	start_pair(&child, &local_tid, &remote_tid, &idl_peer_fn);
 	local_tid = L4_LocalIdOf(local_tid);
 	bench_idl_ipc("intra-space", L4_GlobalIdOf(local_tid));
 	bench_idl_ipc("intra-space", local_tid);
 	bench_idl_ipc("inter-space", remote_tid);
 	end_pair(child, local_tid, remote_tid);
+
+	/* ThreadSwitch benchmark. mostly a measure of system call latency, as
+	 * this will never switch context.
+	 */
+	bench_threadswitch();
 }
