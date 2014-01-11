@@ -725,12 +725,19 @@ int main(void)
 	L4_Start(get_mgr_tid());
 
 	const suite_ctor *suites;
-	int n_suites;
+	int n_suites = 0;
 	/* choose between the userspace test suites, the in-kernel test suite, or
 	 * the meta suite, which produces various results to test both generation
 	 * thereof and their capture by the reporting script.
+	 *
+	 * also "notest" can be specified to e.g. run just the benchmarks, if
+	 * enabled.
 	 */
-	if(cmd_opt(&opts, "meta") != NULL) {
+	bool notest = false;
+	if(cmd_opt(&opts, "notest") != NULL) {
+		printf("*** notest specified, tests skipped.\n");
+		notest = true;
+	} else if(cmd_opt(&opts, "meta") != NULL) {
 		static const suite_ctor meta_plan[] = {
 			&meta_suite,
 		};
@@ -766,7 +773,7 @@ int main(void)
 		srunner_describe(run);
 	}
 	const char *only = cmd_opt(&opts, "runonly");
-	if(only != NULL) {
+	if(!notest && only != NULL) {
 		char *copy = strdup(only), *pos = copy;
 		for(;;) {
 			char *sep = strchr(pos, '+');
@@ -779,12 +786,19 @@ int main(void)
 			if(sep == NULL) break; else pos = sep + 1;
 		}
 		free(copy);
-	} else {
+	} else if(!notest) {
 		srunner_run_all(run, 0);
 	}
 
-	printf("*** legacy tests follow\n");
-	legacy_tests();
+	if(cmd_opt(&opts, "bench") != NULL) {
+		printf("*** benchmarks follow\n");
+		run_benchmarks();
+	}
+
+	if(!notest) {
+		printf("*** legacy tests follow\n");
+		legacy_tests();
+	}
 
 	printf("*** testbench completed.\n");
 

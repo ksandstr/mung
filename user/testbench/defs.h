@@ -145,6 +145,18 @@ struct pager_stats
 };
 
 
+/* this properly belongs in <ukernel/x86.h> (because of rdtsc potential as a
+ * clock source), but that header stomps on PAGE_SIZE etc. the solution is
+ * renaming those defines to something else that can be fetched from the KIP,
+ * and then moving this function over.
+ */
+static inline uint64_t x86_rdtsc(void) {
+	uint64_t output;
+	asm volatile ("rdtsc" : "=A" (output));
+	return output;
+}
+
+
 /* various test suites */
 
 extern struct Suite *self_suite(void);
@@ -166,6 +178,11 @@ extern void threadctl_test(void);
 extern void thread_test(void);
 
 extern void legacy_tests(void);		/* from legacy.c */
+
+
+/* from benchmark.c */
+
+extern void run_benchmarks(void);
 
 
 /* from testbench.c */

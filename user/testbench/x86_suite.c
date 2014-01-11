@@ -49,13 +49,6 @@ static inline void x86_fpu_setcw(uint16_t new_cw) {
 }
 
 
-static inline uint64_t x86_rdtsc(void) {
-	uint64_t output;
-	asm volatile ("rdtsc" : "=A" (output));
-	return output;
-}
-
-
 /* a helper thread that sleeps for 2 ms, then alters the FPU rounding mode. */
 static void sleep_and_twiddle(void *param UNUSED)
 {
