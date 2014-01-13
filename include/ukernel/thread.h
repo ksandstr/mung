@@ -61,6 +61,15 @@ typedef L4_Word_t thread_id;
  */
 #define NUM_KERNEL_THREADS 8
 
+/* allocation of implementation-defined UTCB fields.
+ * one is used for %gs:0, and two more to return ECX and EDX via SYSEXIT.
+ *
+ * position 0 is trampled by L4_LoadMR(0, ...), so it cannot be used.
+ */
+#define TCR_SYSEXIT_ECX (-1)
+#define TCR_SYSEXIT_EDX (-2)
+#define TCR_UTCB_PTR (-3)
+
 
 struct space;
 struct ipc_state;		/* private to ipc.c */

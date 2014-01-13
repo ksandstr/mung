@@ -256,7 +256,8 @@ static void thread_destroy(struct thread *t)
 	struct space *sp = t->space;
 	if(t->utcb_ptr_seg != 0) {
 		release_gdt_ptr_seg(L4_Address(sp->utcb_area)
-			+ t->utcb_pos * UTCB_SIZE + 256 - 4, t->utcb_ptr_seg);
+				+ t->utcb_pos * UTCB_SIZE + 256 + TCR_UTCB_PTR * 4,
+			t->utcb_ptr_seg);
 		t->utcb_ptr_seg = 0;
 	}
 	space_remove_thread(sp, t);
@@ -314,7 +315,8 @@ bool thread_set_utcb(struct thread *t, L4_Word_t start)
 
 	if(t->utcb_ptr_seg != 0) {
 		release_gdt_ptr_seg(L4_Address(sp->utcb_area)
-			+ t->utcb_pos * UTCB_SIZE + 256 - 4, t->utcb_ptr_seg);
+				+ t->utcb_pos * UTCB_SIZE + 256 + TCR_UTCB_PTR * 4,
+			t->utcb_ptr_seg);
 		t->utcb_ptr_seg = 0;
 	} else if(sp->utcb_pages == NULL) {
 		sp->utcb_pages = calloc(sizeof(struct page *),
@@ -345,14 +347,14 @@ bool thread_set_utcb(struct thread *t, L4_Word_t start)
 		memset(utcb_mem, 0, UTCB_SIZE);
 		if(t->utcb_pos >= 0) copy_tcrs(utcb_mem + 256, thread_get_utcb(t));
 		L4_VREG(utcb_mem + 256, L4_TCR_MYGLOBALID) = t->id;
-		*(L4_Word_t *)(utcb_mem + 256 - 4) = start + 256;
+		*(L4_Word_t *)(utcb_mem + 256 + TCR_UTCB_PTR * 4) = start + 256;
 	}
 
 	t->utcb_pos = new_pos;
 	assert(start == L4_Address(sp->utcb_area) + UTCB_SIZE * t->utcb_pos);
 	if(likely(sp != kernel_space)) {
 		assert(t->utcb_ptr_seg == 0);
-		t->utcb_ptr_seg = reserve_gdt_ptr_seg(start + 256 - 4);
+		t->utcb_ptr_seg = reserve_gdt_ptr_seg(start + 256 + TCR_UTCB_PTR * 4);
 		if(unlikely(t->utcb_ptr_seg < 0)) {
 			t->utcb_ptr_seg = 0;
 			return false;
