@@ -17,6 +17,7 @@
 #include <l4/types.h>
 #include <l4/thread.h>
 #include <l4/ipc.h>
+#include <l4/schedule.h>
 
 #include <ukernel/util.h>
 
@@ -248,6 +249,9 @@ static void end_pair(int child, L4_ThreadId_t local, L4_ThreadId_t remote)
 }
 
 
+/* ThreadSwitch benchmark. mostly a measure of system call latency, as this
+ * will never switch context.
+ */
 static void bench_threadswitch(void)
 {
 	const size_t n_iters = 512;
@@ -307,6 +311,62 @@ static void bench_systemclock(void)
 }
 
 
+static void spin_thread_fn(void *param UNUSED)
+{
+	L4_ThreadId_t sender;
+	L4_Wait(&sender);
+	L4_Word_t n_ms = 0; L4_StoreMR(1, &n_ms);
+	L4_LoadMR(0, 0);
+	L4_Reply(sender);
+
+	L4_Clock_t start = L4_SystemClock();
+	while(start.raw + n_ms * 1000 > L4_SystemClock().raw) {
+		usleep(250);
+	}
+
+	exit_thread("done");
+}
+
+
+/* benchmark of the Schedule syscall. creates a child spinner thread and
+ * queries its remaining timeslice. number of clocks spent in Schedule is
+ * measured.
+ */
+static void bench_schedule(void)
+{
+	const size_t ms_per_call = 2, n_calls = 256, n_iters = n_calls / 16,
+		iters_per_thread = n_calls / n_iters;
+
+	struct tally *t = tally_new(256);
+	int n_ok = 0, n_fail = 0;
+	for(int iter=0; iter < n_iters; iter++) {
+		L4_ThreadId_t spinner = start_thread_long(&spin_thread_fn,
+			NULL, find_own_priority() - 1, L4_TimePeriod(50 * 1000),
+			L4_Never);
+		L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 1 }.raw);
+		L4_LoadMR(1, ms_per_call * iters_per_thread + 1);
+		L4_Call(spinner);
+	
+		for(int i=0; i < iters_per_thread; i++) {
+			uint64_t start = x86_rdtsc();
+			L4_Word_t timectl_out, res = L4_Schedule(spinner,
+				~0ul, ~0ul, ~0ul, ~0ul, &timectl_out);
+			uint64_t end = x86_rdtsc();
+			if(res == L4_SCHEDRESULT_ERROR) n_fail++; else n_ok++;
+
+			if(i < 3) continue;
+			tally_add(t, (ssize_t)end - start);
+		}
+
+		xjoin_thread(spinner);
+	}
+
+	printf("%s: cycles_per_schedule=", __func__); print_tally(t); printf("\n");
+	printf("  n_ok=%d, n_fail=%d\n", n_ok, n_fail);
+	free(t);
+}
+
+
 void run_benchmarks(void)
 {
 	L4_ThreadId_t local_tid, remote_tid;
@@ -330,10 +390,8 @@ void run_benchmarks(void)
 	bench_idl_ipc("inter-space", remote_tid);
 	end_pair(child, local_tid, remote_tid);
 
-	/* ThreadSwitch benchmark. mostly a measure of system call latency, as
-	 * this will never switch context.
-	 */
 	bench_threadswitch();
 
 	bench_systemclock();
+	bench_schedule();
 }
