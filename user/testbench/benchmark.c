@@ -367,6 +367,26 @@ static void bench_schedule(void)
 }
 
 
+static void bench_kernelinterface(void)
+{
+	const size_t n_iters = 1024;
+
+	struct tally *t = tally_new(256);
+	for(int i=0; i < n_iters; i++) {
+		uint64_t start = x86_rdtsc();
+		L4_Word_t apiver, apiflags, kernelid;
+		void *kip_base = L4_KernelInterface(&apiver, &apiflags, &kernelid);
+		uint64_t end = x86_rdtsc();
+
+		if(i < 8) continue;
+		tally_add(t, (ssize_t)end - start);
+	}
+
+	printf("%s: cpi=", __func__); print_tally(t); printf("\n");
+	free(t);
+}
+
+
 void run_benchmarks(void)
 {
 	L4_ThreadId_t local_tid, remote_tid;
@@ -391,7 +411,7 @@ void run_benchmarks(void)
 	end_pair(child, local_tid, remote_tid);
 
 	bench_threadswitch();
-
 	bench_systemclock();
 	bench_schedule();
+	bench_kernelinterface();
 }
