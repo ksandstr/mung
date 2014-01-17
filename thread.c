@@ -647,7 +647,7 @@ SYSCALL L4_Word_t sys_exregs(
 	L4_Word_t *udh_p,
 	L4_ThreadId_t *pager_p)
 {
-	assert(check_thread_module(0));
+	assert(check_thread_module(0));	/* NB: adds 15k cycles to benchmark */
 
 	struct thread *current = get_current_thread();
 
@@ -833,7 +833,8 @@ SYSCALL L4_Word_t sys_exregs(
 	}
 
 end:
-	assert(check_thread_module(0));
+	/* NB: this line adds about 6k cycles to the exregs benchmark on core2. */
+	assert(dest_thread == NULL || check_thread(0, dest_thread));
 	return result.raw;
 
 fail:

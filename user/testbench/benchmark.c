@@ -375,8 +375,10 @@ static void bench_kernelinterface(void)
 	for(int i=0; i < n_iters; i++) {
 		uint64_t start = x86_rdtsc();
 		L4_Word_t apiver, apiflags, kernelid;
-		void *kip_base = L4_KernelInterface(&apiver, &apiflags, &kernelid);
+		void *kip_base = L4_KernelInterface(&apiver, &apiflags,
+			&kernelid);
 		uint64_t end = x86_rdtsc();
+		assert(kip_base != NULL);	/* clears the warning */
 
 		if(i < 8) continue;
 		tally_add(t, (ssize_t)end - start);
@@ -384,6 +386,71 @@ static void bench_kernelinterface(void)
 
 	printf("%s: cpi=", __func__); print_tally(t); printf("\n");
 	free(t);
+}
+
+
+static void wait_and_quit_fn(void *param UNUSED)
+{
+	L4_ThreadId_t sender;
+	L4_Wait(&sender);
+	exit_thread("done");
+}
+
+
+static void bench_exregs(void)
+{
+	const size_t n_iters = 512;
+	printf("%s:\n", __func__);
+
+	/* first, bare ExchangeRegisters. no delivery, no modification. what this
+	 * does is it changes the destination thread ID's localness, so we run the
+	 * test twice.
+	 */
+	for(int round = 0; round < 2; round++) {
+		struct tally *t = tally_new(256);
+		L4_ThreadId_t test_tid = xstart_thread(&wait_and_quit_fn, NULL);
+		test_tid = round == 0 ? L4_GlobalIdOf(test_tid) : L4_LocalIdOf(test_tid);
+		for(int i=0; i < n_iters; i++) {
+			uint64_t start = x86_rdtsc();
+			L4_Word_t dummy;
+			L4_ThreadId_t dummy_tid, result = L4_ExchangeRegisters(test_tid,
+				0, 0, 0, 0, 0, L4_nilthread, &dummy, &dummy, &dummy, &dummy,
+				&dummy, &dummy_tid);
+			uint64_t end = x86_rdtsc();
+			assert(round != 0 || L4_IsLocalId(result));
+			assert(round == 0 || L4_IsGlobalId(result));
+
+			if(i < 8) continue;
+			tally_add(t, (ssize_t)end - start);
+		}
+		L4_LoadMR(0, 0); L4_Send(test_tid); xjoin_thread(test_tid);
+		printf("  %s: cpi=", round == 0 ? "global-to-local" : "local-to-global");
+		print_tally(t);
+		printf("\n");
+		free(t);
+	}
+
+	/* readouts. local TID only. */
+	struct tally *t = tally_new(256);
+	L4_ThreadId_t test_tid = xstart_thread(&wait_and_quit_fn, NULL);
+	test_tid = L4_LocalIdOf(test_tid);
+	for(int i=0; i < n_iters; i++) {
+		uint64_t start = x86_rdtsc();
+		L4_Word_t dummy;
+		L4_ThreadId_t dummy_tid, result = L4_ExchangeRegisters(test_tid,
+			0x200, 0, 0, 0, 0, L4_nilthread, &dummy, &dummy, &dummy, &dummy,
+			&dummy, &dummy_tid);
+		uint64_t end = x86_rdtsc();
+		assert(!L4_IsNilThread(result));
+
+		if(i < 8) continue;
+		tally_add(t, (ssize_t)end - start);
+	}
+	L4_LoadMR(0, 0); L4_Send(test_tid); xjoin_thread(test_tid);
+	printf("  readout: cpi="); print_tally(t); printf("\n");
+	free(t);
+
+	/* TODO: benchmark modification of thread state, one field at a time. */
 }
 
 
@@ -414,4 +481,5 @@ void run_benchmarks(void)
 	bench_systemclock();
 	bench_schedule();
 	bench_kernelinterface();
+	bench_exregs();
 }
