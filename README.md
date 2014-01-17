@@ -46,6 +46,13 @@ a few Perl packages (names from the Debian repository):
     libmoose-perl libtrycatch-perl liblist-moreutils-perl libdevel-cover-perl
     libstruct-compare-perl libmodern-perl-perl
 
+To run the benchmark suite, use
+
+    mung$ make && TESTBENCH_OPTS="notest=1 bench=1" ./run.sh -nographic
+
+Note that this doesn't cause qemu to exit once it's done; the user should
+supply a ctrl-c at the end.
+
 
 ### Doesn't work. ###
 
