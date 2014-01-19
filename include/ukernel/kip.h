@@ -8,7 +8,7 @@
 
 /* sysexit epilogue offsets from start of KIP. */
 struct sysexit_offs {
-	L4_Word16_t fast, ecx, edx, ecdx;
+	uint32_t fast, ecx, edx, ecdx;
 };
 
 

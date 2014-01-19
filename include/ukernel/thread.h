@@ -85,6 +85,20 @@ struct saved_regs;		/* private to thread.c */
 
 struct thread
 {
+	/* the fields up to and including "ctx" are accessed from the fast
+	 * Ipc/Lipc path and should remain at the head of <struct thread>.
+	 */
+	struct space *space;
+
+	/* FIXME: alter ipc.c to go to TS_STOPPED after IPC completion when
+	 * TF_HALT is set
+	 */
+	uint8_t flags;
+	uint8_t status, pri, sens_pri;
+
+	struct x86_exregs ctx;
+	void *fpu_context;
+
 	GUARD_MEMBER(sched_rb_0);
 	/* sched_rb is in a scheduling queue whenever the thread is not TS_STOPPED
 	 * or TS_DEAD. this can be tested with IS_SCHED().
@@ -94,13 +108,6 @@ struct thread
 	uint64_t wakeup_time;		/* absolute microseconds since epoch */
 
 	thread_id id;
-	/* FIXME: alter ipc.c to go to TS_STOPPED after IPC completion when
-	 * TF_HALT is set
-	 */
-	uint8_t flags;
-	uint8_t status;
-
-	uint8_t pri, sens_pri;
 	uint16_t max_delay;
 	L4_Time_t ts_len;
 	uint32_t quantum;			/* # of µs left (goes up to 1h 6m) */
@@ -140,7 +147,6 @@ struct thread
 	/* inactive threads have space != NULL && utcb_pos < 0, and haven't been
 	 * added with space_add_thread().
 	 */
-	struct space *space;
 	struct utcb_page *utcb_page;
 	int utcb_pos;				/* offset in space's UTCB region */
 	int utcb_ptr_seg;			/* segment descriptor index for %gs */
@@ -159,9 +165,6 @@ struct thread
 		 */
 		L4_ThreadId_t waited_redir;
 	} u1;
-
-	void *fpu_context;
-	struct x86_exregs ctx;
 
 	union {
 		L4_ThreadId_t pager;		/* before activation */

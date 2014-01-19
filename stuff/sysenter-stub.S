@@ -5,7 +5,7 @@
 	.global _sc_sched_epilog
 
 _sc_ipc:
-	movb $1, %bl
+	movb $1, %ebx
 	movl %esp, %ebp
 	sysenter
 

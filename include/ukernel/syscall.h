@@ -5,8 +5,8 @@
 /* system call names. */
 #define SC_IPC 1
 #define SC_LIPC 2
-#define SC_UNMAP 3
-#define SC_THREADSWITCH 4
+#define SC_THREADSWITCH 3
+#define SC_UNMAP 4
 #define SC_SCHEDULE 5
 #define SC_SPACECONTROL 6
 #define SC_THREADCONTROL 7

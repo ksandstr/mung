@@ -15,6 +15,8 @@
 
 #define N_KERNEL_SEGS 8		/* last segment index + 1 */
 
+#define SYSENTER_CS_SEG SEG_KERNEL_CODE_HIGH
+
 
 #ifndef IN_ASM_SOURCE
 

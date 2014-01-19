@@ -59,10 +59,11 @@ extern L4_MsgTag_t kipc(
 
 /* the full L4.X2 IPC system call. registers and everything. */
 extern SYSCALL L4_Word_t sys_ipc(
-	void *utcb,
 	L4_ThreadId_t to,
-	L4_ThreadId_t from,
-	L4_Word_t timeouts);
+	L4_ThreadId_t fromspec,
+	L4_Word_t timeouts,
+	void *utcb,
+	L4_Word_t mr0);
 
 /* perform active IPC receive, or put @t into passive receive.
  *

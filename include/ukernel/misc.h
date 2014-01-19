@@ -17,7 +17,7 @@
 #include <ukernel/util.h>
 
 
-#define SYSCALL __attribute__((regparm(3)))
+#define SYSCALL __attribute__((regparm(3), noinline))
 #define KERNEL_STACK_SIZE (16 * 1024)
 
 

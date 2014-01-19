@@ -243,6 +243,7 @@ static bool check_all_spaces(int opt) { return true; }
 
 static void space_init(struct space *sp, struct list_head *resv_list)
 {
+	sp->utcb_top = 0;
 	sp->kip_area = L4_Nilpage;
 	sp->utcb_area = L4_Nilpage;
 
@@ -510,6 +511,7 @@ int space_set_utcb_area(struct space *sp, L4_Fpage_t area)
 
 	clear_utcb_pages(sp);
 	sp->utcb_area = area;
+	sp->utcb_top = L4_Address(area) + L4_Size(area) - UTCB_SIZE / 2 - 1;
 
 	return 0;
 }

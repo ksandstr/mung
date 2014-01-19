@@ -276,22 +276,19 @@ static void glue_spacecontrol(struct x86_exregs *regs)
 
 static void glue_ipc(struct x86_exregs *regs)
 {
-	/* TODO: validate this using segment games and pass it to sys_ipc(). it's
-	 * the current thread's UTCB address.
-	 */
-	// L4_Word_t utcb_addr = regs->edi;
 	struct thread *current = get_current_thread();
-	void *utcb = thread_get_utcb(current);
-	L4_VREG(utcb, L4_TCR_MR(0)) = regs->esi;
+	/* TODO: instead of get_utcb, validate caller_utcb in the kernel */
+	void // *caller_utcb = (void *)regs->edi,
+		*utcb = thread_get_utcb(current);
 
 	/* preserve registers. eip set by caller for return from scheduling. */
 	current->ctx.edi = regs->edi;
 	current->ctx.esp = regs->esp;
 
 	L4_ThreadId_t to = { .raw = regs->eax }, from = { .raw = regs->edx };
-	L4_Word_t timeouts = regs->ecx;
+	L4_Word_t timeouts = regs->ecx, mr0 = regs->esi;
 	current->flags |= TF_SYSCALL;
-	regs->eax = sys_ipc(utcb, to, from, timeouts);
+	regs->eax = sys_ipc(to, from, timeouts, utcb, mr0);
 	current->flags &= ~TF_SYSCALL;
 	regs->esi = L4_VREG(utcb, L4_TCR_MR(0));
 	regs->ebx = L4_VREG(utcb, L4_TCR_MR(1));
@@ -427,16 +424,8 @@ void sysenter_bottom(struct x86_exregs *regs)
 		regs->esp);
 #endif
 
-	if(target <= 2) {
-		/* dedicated path for Ipc & Lipc.
-		 *
-		 * we'll set the return EIP here already because sys_ipc() may
-		 * perform a non-local exit. the same is true of ThreadSwitch.
-		 */
-		current->ctx.eip = regs->eip = kip_base + sysexit_epilogs.fast;
-		glue_ipc(regs);
-		return_from_exn();
-	} else if(target == SC_THREADSWITCH) {
+	assert(target > 2);	/* Ipc & Lipc have fastpaths in _sysenter_top */
+	if(target == SC_THREADSWITCH) {
 		/* special handling of ThreadSwitch. */
 		void *utcb = thread_get_utcb(current);
 		regs->ebp = L4_VREG(utcb, TCR_SYSENTER_EBP);

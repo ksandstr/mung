@@ -1,5 +1,6 @@
 #include <ukernel/gdt.h>
 #include <ukernel/config.h>
+#include <ukernel/syscall.h>
 
 	/* NOTE: when using the "regs" parameter for task switching, the callee
 	 * should also fill in the correct %fs and %gs selectors! this is not
@@ -148,14 +149,19 @@ isr_exn_\name\()_top:
 # the EBX field in the caller's frame will be filled in (for ThreadSwitch) or
 # substituted for (everything else) by syscall glue.
 #
+# it'll also call sys_ipc() from a fast-path.
+#
+# TODO: add a fastpath for sys_threadswitch() as well; it should save the
+# caller's context in the current thread (like thread_save_ctx() would), set
+# TF_SYSCALL, and call sys_threadswitch().
+#
 # TODO: it'd be more efficient to use a per-syscall return path instead of one
 # that restores all registers except EDX and ECX, if only by a couple of load
 # instructions.
-#
-# TODO: similarly, _sysenter_top could dispatch for sys_ipc() and
-# sys_threadswitch() directly, without going through sysenter_bottom(). this
-# would have a considerable advantage due to no construction of the x86_exregs
-# frame.
+
+#define UTCB_SIZE 512		/* FIXME: get this from an asm header */
+#define THREAD_CTX_OFF (4 + 4)
+#define THREAD_FLAGS_OFF 4
 
 	.global _sysenter_top
 	.type _sysenter_top, @function
@@ -166,10 +172,99 @@ _sysenter_top:
 	andl $0x0fffffff, %esp	# drop back to kernel %ss (EXTRA FUCKY)
 	movl $(SEG_KERNEL_DATA_HIGH << 3), %ebx
 	movl %ebx, %ss
-	sti
 	movl %ebx, %ds
 	movl %ebx, %es
-	# construct generic x86_exregs frame
+	sti
+
+	# direct dispatch. requires that SC_IPC=1, SC_LIPC=2, SC_THREADSWITCH=3
+	# and that no syscall is at 0.
+	movzbl (%esp), %ebx
+	cmpl $SC_THREADSWITCH, %ebx
+	# ja 2f
+	# je _sys_threadswitch_fast
+	jae 2f
+
+	# IPC fastpath.
+	#
+	# the spec has a 1:1 mapping between GCC regparms and the
+	# to/fromspec/timeouts parameters to Ipc and Lipc. so that's quite
+	# convenient.
+	pushl %esi	# arg: mr0
+	leal 0x10000000(%edi), %esi
+	pushl %esi	# arg: user UTCB in kernel segment
+	# retain caller %esp (in %ebp) and %edi for when sys_ipc() goes to
+	# scheduler instead. generate %eip for the same reason, and keep it in
+	# %esi for use in the epilogue.
+	movl current_thread, %ebx
+	movl (%ebx), %esi	# ->space
+	movl 8(%esi), %esi	# ->kip_area
+	andl $0xfffffc00, %esi	# ... address
+	addl sysexit_epilogs, %esi	# + no-restore epilog offset
+	movl %edi, THREAD_CTX_OFF+12(%ebx)
+	movl %esi, THREAD_CTX_OFF+48(%ebx)
+	movl %ebp, THREAD_CTX_OFF+60(%ebx)
+
+	# utcb validation. compare %edi to utcb_top, and to utcb_area +
+	# UTCB_SIZE / 2.
+	movl (%ebx), %ebx	# ->space
+	cmpl (%ebx), %edi
+	ja 3f			# if %edi > utcb_top
+	movl 4(%ebx), %ebx	# ->utcb_area
+	andl $0xfffffc00, %ebx	# its address
+	addl $(UTCB_SIZE / 2), %ebx	# + UTCB_SIZE / 2
+	cmpl %ebx, %edi
+	jb 3f			# if %edi < %ebx, halt & schedule
+
+	movl current_thread, %ebx
+	orb $0x10, THREAD_FLAGS_OFF(%ebx)	# set TF_SYSCALL
+	call sys_ipc		# OUT %eax=retval
+	andb $0xef, THREAD_FLAGS_OFF(%ebx)	# clear TF_SYSCALL
+
+	# check for and process interrupts that occurred while IRQ processing
+	# was soft disabled.
+10:	movzbl kernel_irq_deferred, %ecx
+	test %cl, %cl
+	jz 11f
+	call int_latent
+	jmp 10b
+
+	# now test for a pending preemption & handle it like the C part would.
+11:	movzbl kernel_preempt_pending, %ecx
+	test %cl, %cl
+	jnz 12f
+
+	sti
+	movl %ebp, %ecx		# OUT caller %esp
+	movl %esi, %edx		# OUT epilog %eip
+	# loads from visible UTCB: %esi=MR0, %ebx=MR1, %ebp=MR2.
+	leal 0x10000000(%edi), %esi
+	pushl 4(%esi)		# MR1 (stashed)
+	movl 8(%esi), %ebp	# OUT MR2
+	movl (%esi), %esi	# OUT MR0
+	movl $USER_DATA_SEL, %ebx
+	movl %ebx, %ds
+	movl %ebx, %es
+	movl %ebx, %fs
+	popl %ebx		# OUT MR1
+	sysexit
+
+12:	# store caller's return info for rescheduling
+	#
+	# TODO: the current unit tests never hit this path, and it can't be
+	# properly hand-tested because of how return_from_exn will actually
+	# return to caller when preemption didn't happen. to test it, somehow
+	# Ipc processing would have to take long enough for a
+	# preemption-causing interrupt to occur.
+	movl %ebp, THREAD_CTX_OFF+60(%ebx)	# caller %esp
+	movl %esi, THREAD_CTX_OFF+48(%ebx)	# caller %eip
+	# no need for a proper call if kernel_preempt_pending is set; then the
+	# function is guaranteed to never return (except if current ==
+	# scheduler_thread, but... how would it end up in the sysenter tophalf
+	# anyway).
+	jmp return_from_exn
+
+	.align 16,0
+2:	# construct generic x86_exregs frame
 	pushl $USER_DATA_SEL	# .ss
 	pushl %ebp		# .esp
 	pushf			# .eflags
@@ -183,17 +278,16 @@ _sysenter_top:
 	pushl %esp		# frame address on sysenter stack
 	call sysenter_bottom
 
-	addl $4, %esp		# TODO: remove this, adjust offsets below
-	movl 12(%esp), %edi
-	movl 16(%esp), %esi
-	movl 20(%esp), %ebp
-	movl 28(%esp), %ebx
+	movl 16(%esp), %edi
+	movl 20(%esp), %esi
+	movl 24(%esp), %ebp
+	movl 32(%esp), %ebx
 
-	movl 48(%esp), %edx	# eip
-	movl 60(%esp), %ecx	# esp
+	movl 52(%esp), %edx	# eip
+	movl 64(%esp), %ecx	# esp
 
-	pushl 56(%esp)		# eflags
-	pushl 44(%esp)		# eax (temporary, at +4 due to preceding push)
+	pushl 60(%esp)		# eflags
+	pushl 48(%esp)		# eax (temporary, at +4 due to preceding push)
 	movl $USER_DATA_SEL, %eax
 	movl %eax, %ds
 	movl %eax, %es
@@ -201,4 +295,19 @@ _sysenter_top:
 	popl %eax
 	popf
 	sysexit
+
+	# the "utcb wasn't valid at all" branch.
+3:	pushl %ecx
+	pushl %edx
+	pushl %eax
+	pushl %edi
+	pushl $4f
+	call printf
+	pushl current_thread
+	call thread_halt
+	call return_to_scheduler
+
+4:	.ascii "utcb=%#lx wasn't valid at all (to=%#lx, from=%#lx, timeouts=%#lx)"
+	.byte 10, 0
+
 #endif

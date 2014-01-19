@@ -49,12 +49,12 @@ struct utcb_page
 
 struct space
 {
-	struct list_node link;		/* in the global space list */
-
-	uint16_t flags;				/* SF_* */
-
+	/* cached value for UTCB validation. see space_set_utcb_area() */
+	L4_Word_t utcb_top;
 	L4_Fpage_t utcb_area;
 	L4_Fpage_t kip_area;
+
+	uint16_t flags;				/* SF_* */
 
 	/* when flags & SF_REDIRECT, NULL for invalid (removed and not set) and
 	 * non-NULL when set to a valid TID;
@@ -64,6 +64,7 @@ struct space
 
 	struct htable ptab_groups;	/* <struct map_group *>, by MG_START(grp) */
 	struct htable utcb_pages;	/* <struct utcb_page *>, by ->pos */
+	struct list_node link;		/* in the global space list */
 
 	/* x86 specific bits */
 	struct page *pdirs;			/* toplevel page directory table */
