@@ -51,11 +51,10 @@ static size_t hash_page_by_id(const void *page_ptr, void *priv)
 }
 
 
-#ifndef NDEBUG
-#include <ukernel/invariant.h>
-
 #define NO_PTAB_TO_MAPDB (1 << 0)
 
+#ifndef NDEBUG
+#include <ukernel/invariant.h>
 
 static UNNEEDED uint32_t max_page_id(void)
 {
@@ -225,6 +224,9 @@ static bool check_all_spaces(int opt)
 
 	return true;
 }
+#else
+static bool check_space(int opt, struct space *sp) { return true; }
+static bool check_all_spaces(int opt) { return true; }
 #endif
 
 

@@ -19,7 +19,8 @@ extern NORETURN void __assert_failure(
 		} \
 	} while(0)
 #else
-#define assert(condition) do { } while(0)
+/* this shuts the compiler up. */
+#define assert(condition) do { (void)sizeof((condition)); } while(0)
 #endif
 
 

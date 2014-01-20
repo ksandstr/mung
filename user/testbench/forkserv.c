@@ -221,7 +221,7 @@ static bool invariants(const char *context)
 inv_fail:
 	return false;
 }
-#elif !defined(NDEBUG)
+#else
 static bool invariants(const char *where) {
 	return true;
 }

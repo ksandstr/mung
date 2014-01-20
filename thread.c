@@ -73,7 +73,7 @@ struct list_head dead_thread_list = LIST_HEAD_INIT(dead_thread_list);
 struct kmem_cache *thread_slab = NULL;
 
 
-#ifndef NDEBUG
+#ifdef DEBUG_ME_HARDER
 #include <ukernel/invariant.h>
 
 static bool check_thread(int opt, struct thread *t)
@@ -103,6 +103,9 @@ static bool check_thread_module(int opt)
 
 	return true;
 }
+#else
+static bool check_thread(int a, struct thread *b) { return true; }
+static bool check_thread_module(int a) { return true; }
 #endif
 
 
