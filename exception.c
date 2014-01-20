@@ -10,6 +10,7 @@
 #include <l4/vregs.h>
 
 #include <ukernel/x86.h>
+#include <ukernel/setjmp.h>
 #include <ukernel/thread.h>
 #include <ukernel/sched.h>
 #include <ukernel/space.h>
@@ -30,6 +31,9 @@ static struct thread *fpu_thread = NULL;
 
 static struct kmem_cache *fpu_context_slab = NULL;
 static void *next_fpu_context = NULL;
+
+jmp_buf catch_pf_env;
+volatile bool catch_pf_ok = false;
 
 
 /* this must be the last line of an exception handler that doesn't call one of
@@ -691,6 +695,12 @@ void isr_exn_pf_bottom(struct x86_exregs *regs)
 
 	L4_Word_t fault_addr;
 	asm volatile ("movl %%cr2, %0": "=r" (fault_addr));
+
+	if(unlikely(!CHECK_FLAG(regs->error, 4)) && catch_pf_ok) {
+		catch_pf_ok = false;
+		longjmp(catch_pf_env, fault_addr);
+		assert(false);
+	}
 
 	struct thread *current = get_current_thread();
 

@@ -5,11 +5,13 @@
 #include <stdint.h>
 #include <ccan/list/list.h>
 #include <ccan/htable/htable.h>
+#include <ccan/likely/likely.h>
 #include <l4/types.h>
 
 #include <ukernel/thread.h>
 #include <ukernel/mm.h>
 #include <ukernel/mapdb.h>
+#include <ukernel/setjmp.h>
 #include <ukernel/misc.h>
 
 
@@ -139,6 +141,25 @@ extern void init_spaces(struct list_head *resv_list);
 extern void space_add_resv_pages(
 	struct space *sp,
 	struct list_head *resv_list);
+
+
+/* in-kernel pf catching. variables defined in exception.c */
+
+extern jmp_buf catch_pf_env;
+extern volatile bool catch_pf_ok;
+
+/* setjmp-like, fault address on 2nd return. */
+#define catch_pf() ({ \
+		assert(!catch_pf_ok); \
+		uint32_t _faddr; \
+		likely((_faddr = setjmp(catch_pf_env)) == 0) \
+			? (catch_pf_ok = true, 0) : _faddr; \
+	})
+
+/* disables the mechanism before frame exit */
+static inline void uncatch_pf(void) {
+	catch_pf_ok = false;
+}
 
 
 #endif

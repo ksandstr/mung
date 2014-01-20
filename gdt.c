@@ -118,13 +118,15 @@ COLD void setup_gdt(void)
 
 	/* special segments that make kernel code and data appear at low
 	 * addresses, even though they are at the top of the linear address space.
+	 *
+	 * note that the data segment allows access to userspace pages when
+	 * KERNEL_SEG_START is added to the address with wraparound semantics.
 	 */
 	gdt_array[SEG_KERNEL_CODE_HIGH] = GDT_ENTRY(KERNEL_SEG_START,
 		KERNEL_SEG_SIZE >> PAGE_BITS,
 		DESC_A_PRESENT | DESC_A_RW | DESC_A_SYSTEM | DESC_A_EX,
 		DESC_F_SZ | DESC_F_GR);
-	gdt_array[SEG_KERNEL_DATA_HIGH] = GDT_ENTRY(KERNEL_SEG_START,
-		KERNEL_SEG_SIZE >> PAGE_BITS,
+	gdt_array[SEG_KERNEL_DATA_HIGH] = GDT_ENTRY(KERNEL_SEG_START, 0xfffff,
 		DESC_A_PRESENT | DESC_A_RW | DESC_A_SYSTEM, DESC_F_SZ | DESC_F_GR);
 
 	/* user space. */

@@ -538,6 +538,26 @@ int space_probe_pt_access(
 }
 
 
+static size_t space_memcpy_from_fast(
+	struct space *sp,
+	void *dest,
+	L4_Word_t address,
+	size_t size)
+{
+	L4_Word_t fault_addr;
+	if((fault_addr = catch_pf()) != 0) {
+		return 0;
+	} else {
+		/* curious x86 segment games */
+		uint32_t wrap_addr = (uint32_t)address + KERNEL_SEG_SIZE;
+		memcpy(dest, (void *)wrap_addr, size);
+
+		uncatch_pf();
+		return size;
+	}
+}
+
+
 size_t space_memcpy_from(
 	struct space *sp,
 	void *dest,
@@ -548,8 +568,13 @@ size_t space_memcpy_from(
 
 	if(size == 0) return 0;
 
-	/* TODO: play weird segment games when sp == current_thread->space */
+	struct thread *current = get_current_thread();
+	if(sp == current->space) {
+		size_t ret = space_memcpy_from_fast(sp, dest, address, size);
+		if(likely(ret > 0)) return ret;
+	}
 
+	/* the long ungrateful slog */
 	uintptr_t heap_addr = reserve_heap_page();
 	size_t pos = 0;
 	while(pos < size) {
