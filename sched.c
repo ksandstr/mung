@@ -29,8 +29,10 @@
 #define TRACE(fmt, ...) TRACE_MSG(TRID_SCHED, fmt, ##__VA_ARGS__)
 
 
-static struct thread *current_thread = NULL, *scheduler_thread = NULL;
+static struct thread *scheduler_thread = NULL;
 static struct rb_root sched_tree = { };
+
+struct thread *current_thread = NULL;
 
 /* these control the timer interrupt. write with irqs disabled only. */
 uint64_t preempt_timer_count = ~(uint64_t)0;
@@ -43,11 +45,6 @@ bool preempt_delayed = false;
 COLD void init_sched(struct thread *current)
 {
 	current_thread = current;
-}
-
-
-struct thread *get_current_thread(void) {
-	return current_thread;
 }
 
 

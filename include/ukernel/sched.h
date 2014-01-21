@@ -50,7 +50,13 @@ extern NORETURN void return_from_dead(void);
  */
 extern void return_from_exn(void);
 
-extern struct thread *get_current_thread(void);
+/* distinct function for easier transition to SMP. (it'll be under
+ * per-processor %fs then.)
+ */
+static inline struct thread *get_current_thread(void) {
+	extern struct thread *current_thread;
+	return current_thread;
+}
 
 /* switches from current thread, which must be an userspace thread. caller
  * should save the exception context.
