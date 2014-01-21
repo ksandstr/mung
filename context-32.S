@@ -120,14 +120,12 @@ iret_to_scheduler:
 setjmp:
 	movl 4(%esp), %eax
 	movl (%esp), %edx	# return address
-	movl %edx, 48(%eax)
-	movl %edi, 12(%eax)
-	movl %esi, 16(%eax)
-	movl %ebp, 20(%eax)
-	movl %esp, 60(%eax)
-	movl %ebx, 28(%eax)
-	pushf
-	popl 56(%eax)
+	movl %ebx, (%eax)
+	movl %esi, 4(%eax)
+	movl %edi, 8(%eax)
+	movl %ebp, 12(%eax)
+	movl %edx, 16(%eax)
+	movl %esp, 20(%eax)
 	xorl %eax, %eax
 	ret
 
@@ -136,15 +134,13 @@ setjmp:
 	.type longjmp, @function
 	.align 16,0
 longjmp:
-	movl 8(%esp), %eax	# setjmp return value
 	movl 4(%esp), %ecx	# context
-	movl 12(%ecx), %edi
-	movl 16(%ecx), %esi
-	movl 20(%ecx), %ebp
-	movl 28(%ecx), %ebx
-	pushl 56(%ecx)
-	popf
-	movl 60(%ecx), %esp
+	movl 16(%ecx), %edx	# return address
+	movl 8(%esp), %eax	# setjmp return value
+	movl 20(%ecx), %esp
 	addl $4, %esp
-	movl 48(%ecx), %ecx
-	jmp *%ecx
+	movl (%ecx), %ebx
+	movl 4(%ecx), %esi
+	movl 8(%ecx), %edi
+	movl 12(%ecx), %ebp
+	jmp *%edx

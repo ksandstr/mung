@@ -7,9 +7,9 @@
 
 #include <ccan/compiler/compiler.h>
 
-#include <ukernel/x86.h>
-
-typedef struct x86_exregs jmp_buf[1];
+typedef struct jmp_buf_s {
+	uint32_t regs[6];		/* ebx, esi, edi, ebp, eip, esp */
+} jmp_buf[1];
 
 extern int setjmp(jmp_buf env);
 extern NORETURN void longjmp(jmp_buf env, int val);
