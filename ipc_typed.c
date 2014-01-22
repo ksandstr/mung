@@ -602,13 +602,18 @@ static int copy_interspace_stritem(L4_Fpage_t *fault_p, struct ipc_state *st)
 {
 	assert(st->str_off >= 0);
 
+	struct space *dest_space = st->to->space, *src_space = st->from->space;
+	/* exploit the memcpy_from() fast path under active receive.
+	 * TODO: write a test to prove active receives still work!
+	 */
+	space_switch(src_space);
+
 	int rc;
 	uintptr_t copy_dst = reserve_heap_page();
 	uint32_t copy_page = 0;
 	int s_off = st->s_off, d_off = st->d_off;
 	struct stritem_iter *src_iter = &st->xfer.it[0],
 		*dst_iter = &st->xfer.it[1];
-	struct space *dest_space = st->to->space, *src_space = st->from->space;
 	do {
 #if 0
 		printf("start of loop; str_off=%d, s_off=%d, d_off=%d\n",
@@ -681,12 +686,146 @@ fault:
 }
 
 
+static int copy_intraspace_stritem(L4_Fpage_t *fault_p, struct ipc_state *st)
+{
+	const size_t memcpy_grain = 64;		/* cache line size */
+
+	assert(st->str_off >= 0);
+	assert(st->to->space == st->from->space);
+
+	struct stritem_iter *src_iter = &st->xfer.it[0],
+		*dst_iter = &st->xfer.it[1];
+
+	struct space *sp = st->from->space;
+	space_switch(sp);
+
+	void *volatile s_ptr = NULL, *volatile d_ptr = NULL;
+	L4_Word_t fault_addr;
+	if((fault_addr = catch_pf()) != 0) {
+		/* fault_addr is the linear (userspace) address. */
+		bool is_write = BETWEEN(dst_iter->ptr,
+			dst_iter->ptr + dst_iter->len - 1, fault_addr);
+		assert(is_write || BETWEEN(src_iter->ptr,
+			src_iter->ptr + src_iter->len - 1, fault_addr));
+
+		/* duplicate last 256 bytes of progress so far, if any. on failure
+		 * retry from start.
+		 *
+		 * FIXME: the restart case carries a risk of perpetual looping when
+		 * the result is that more than 2 pages are involved per segment, and
+		 * a pager can provide only exactly two.
+		 */
+		if(catch_pf() == 0) {
+			size_t progress = 0, n_done = fault_addr
+				- (uintptr_t)(is_write ? dst_iter->ptr + st->d_off
+					: src_iter->ptr + st->s_off);
+			if(n_done > memcpy_grain) {
+				/* assume completion (but verify w/ assert) */
+				progress = n_done - memcpy_grain;
+				n_done = memcpy_grain;
+				assert(memcmp(d_ptr, s_ptr, progress) == 0);
+				st->s_off += progress;
+				st->d_off += progress;
+				st->str_off += progress;
+			}
+
+			if(n_done > 0) {
+				/* copy the tail as an exactly-sized fragment */
+				assert(is_write || (((uintptr_t)s_ptr + progress + n_done) & PAGE_MASK) == 0);
+				assert(!is_write || (((uintptr_t)d_ptr + progress + n_done) & PAGE_MASK) == 0);
+				memcpy(d_ptr + progress, s_ptr + progress, n_done);
+				st->s_off += n_done;
+				st->d_off += n_done;
+				st->str_off += n_done;
+			}
+
+			assert(memcmp(s_ptr, d_ptr, progress + n_done) == 0);
+
+			uncatch_pf();
+		}
+
+		/* try to repair it from mapdb */
+		struct map_entry *e = mapdb_probe(&sp->mapdb, fault_addr);
+		if(e != NULL && CHECK_FLAG(L4_Rights(e->range),
+			is_write ? L4_Writable : L4_Readable))
+		{
+			space_put_page(sp, fault_addr,
+				mapdb_page_id_in_entry(e, fault_addr), L4_Rights(e->range));
+			space_commit(sp);
+			return copy_intraspace_stritem(fault_p, st);
+		} else {
+			*fault_p = L4_FpageLog2(fault_addr & ~PAGE_MASK, PAGE_BITS);
+			L4_Set_Rights(fault_p, L4_Readable | (is_write ? L4_Writable : 0));
+			return -EFAULT;
+		}
+	}
+
+	int s_off = st->s_off, d_off = st->d_off;
+	do {
+		st->s_off = s_off;
+		st->d_off = d_off;
+#if 0
+		printf("start of loop; str_off=%d, s_off=%d, d_off=%d\n",
+			st->str_off, s_off, d_off);
+		printf("  src len %d, ptr %#lx\n", (int)src_iter->len,
+			(L4_Word_t)src_iter->ptr);
+		printf("  dst len %d, ptr %#lx\n", (int)dst_iter->len,
+			(L4_Word_t)dst_iter->ptr);
+#endif
+
+		int seg = MIN(int, src_iter->len - s_off, dst_iter->len - d_off);
+		assert(seg > 0);
+
+		uintptr_t src_addr = src_iter->ptr + s_off + KERNEL_SEG_SIZE,
+			dst_addr = dst_iter->ptr + d_off + KERNEL_SEG_SIZE;
+
+		/* catch illegal access into kernel range.
+		 * FIXME: make this cover the segment's end also.
+		 */
+		if(unlikely(src_addr < KERNEL_SEG_SIZE)) {
+			*fault_p = L4_FpageLog2((src_addr - KERNEL_SEG_SIZE) & ~PAGE_MASK,
+				PAGE_BITS);
+			L4_Set_Rights(fault_p, L4_Readable);
+			uncatch_pf();
+			return -EFAULT;
+		}
+		if(unlikely(dst_addr < KERNEL_SEG_SIZE)) {
+			*fault_p = L4_FpageLog2((dst_addr - KERNEL_SEG_SIZE) & ~PAGE_MASK,
+				PAGE_BITS);
+			L4_Set_Rights(fault_p, L4_Writable);
+			uncatch_pf();
+			return -EFAULT;
+		}
+
+		s_ptr = (void *)src_addr;
+		d_ptr = (void *)dst_addr;
+		memcpy((void *)dst_addr, (void *)src_addr, seg);
+		s_off += seg;
+		d_off += seg;
+		st->str_off += seg;
+
+		assert(d_off <= dst_iter->len);
+		if(d_off == dst_iter->len) {
+			bool ok = stritem_next(dst_iter);
+			assert(ok);
+			d_off = 0;
+		}
+	} while(s_off < src_iter->len || (s_off = 0, stritem_next(src_iter)));
+
+	uncatch_pf();
+	st->s_off = s_off;
+	st->d_off = d_off;
+	return 0;
+}
+
+
 static int copy_stritem(L4_Fpage_t *fault_p, struct ipc_state *st)
 {
-	/* TODO: add special case for intra-space transfers (with the appropriate
-	 * segment etc. hax)
-	 */
-	return copy_interspace_stritem(fault_p, st);
+	if(st->from->space == st->to->space) {
+		return copy_intraspace_stritem(fault_p, st);
+	} else {
+		return copy_interspace_stritem(fault_p, st);
+	}
 }
 
 
