@@ -9,6 +9,7 @@
 
 #include <stdio.h>
 #include <stdint.h>
+#include <string.h>
 #include <assert.h>
 #include <ccan/compiler/compiler.h>
 #include <ccan/likely/likely.h>
@@ -157,6 +158,7 @@ static void ipc_peer_fn(void *param UNUSED)
 
 static void bench_idl_ipc(const char *desc, L4_ThreadId_t partner)
 {
+	const size_t n_iters = 128;
 	printf("%s (%s); partner=%#lx (%s):\n", __func__, desc,
 		partner.raw, L4_IsLocalId(partner) ? "local" : "global");
 
@@ -167,7 +169,7 @@ static void bench_idl_ipc(const char *desc, L4_ThreadId_t partner)
 
 		printf("  %s():\t", msg_type == 0 ? "ping" : "other_ping");
 
-		for(int i = 0; i < 64; i++) {
+		for(int i = 0; i < n_iters; i++) {
 			int32_t a = 0, b = 0;
 			int16_t retval;
 			uint64_t start = x86_rdtsc();
@@ -188,6 +190,42 @@ static void bench_idl_ipc(const char *desc, L4_ThreadId_t partner)
 		printf("cpi="); print_tally(t); printf("\n");
 		free(t);
 	}
+
+	/* for string transfers: strings of 31, 511, 2047, 8191, and 16k-1
+	 * bytes. both send-only and echo.
+	 */
+	static const int str_sizes[] = { 31, 511, 2047, 8191, 16 * 1024 - 1 };
+	uint32_t seed = 0xb0a7face;
+	char *sendbuf = valloc(65536), *replybuf = valloc(65536);
+	for(int mode = 0; mode < 2; mode++) {
+		for(int size_ix = 0; size_ix < NUM_ELEMENTS(str_sizes); size_ix++) {
+			const size_t ss = str_sizes[size_ix];
+			random_string(sendbuf, ss, &seed);
+			memset(replybuf, '\0', ss);
+			struct tally *t = tally_new(256);
+
+			printf("  %s[size=%u]:\t",
+				mode == 0 ? "s_bonk" : "s_echo", (unsigned)ss);
+			for(int i=0; i < n_iters; i++) {
+				uint64_t start = x86_rdtsc();
+				int n;
+				if(mode == 0) n = __bench_string_bonk(partner, sendbuf);
+				else n = __bench_string_echo(partner, sendbuf, replybuf);
+				uint64_t end = x86_rdtsc();
+				if(n < 0) {
+					printf("!!! iter %d discarded (n=%d)\n", i, n);
+					continue;
+				}
+				if(i < 8) continue;
+				tally_add(t, end - start);
+			}
+
+			printf("cpi="); print_tally(t); printf("\n");
+			free(t);
+		}
+	}
+	free(sendbuf);
+	free(replybuf);
 }
 
 
@@ -208,12 +246,24 @@ static int16_t impl_ping(
 }
 
 
+static void impl_string_bonk(const char *text) {
+	/* woo hoo */
+}
+
+
+static void impl_string_echo(const char *text, char *reply) {
+	strlcpy(reply, text, 65536);
+}
+
+
 static void idl_peer_fn(void *param UNUSED)
 {
 	static const struct idl_bench_vtable vtab = {
 		.quit = &impl_quit,
 		.ping = &impl_ping,
 		.other_ping = &impl_ping,
+		.string_bonk = &impl_string_bonk,
+		.string_echo = &impl_string_echo,
 	};
 
 	idl_peer_running = true;
@@ -473,7 +523,7 @@ void run_benchmarks(void)
 	start_pair(&child, &local_tid, &remote_tid, &idl_peer_fn);
 	local_tid = L4_LocalIdOf(local_tid);
 	bench_idl_ipc("intra-space", L4_GlobalIdOf(local_tid));
-	bench_idl_ipc("intra-space", local_tid);
+	bench_idl_ipc("intra-space (L)", local_tid);
 	bench_idl_ipc("inter-space", remote_tid);
 	end_pair(child, local_tid, remote_tid);
 

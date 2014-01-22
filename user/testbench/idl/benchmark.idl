@@ -16,4 +16,9 @@ interface IdlBench: Quittable
 	short other_ping(
 		in long a, in long b,
 		out long i, out long j);
+
+	/* string transfers */
+	typedef string<65536> benchstr;
+	void string_bonk(in benchstr text);
+	void string_echo(in benchstr text, out benchstr reply);
 };
