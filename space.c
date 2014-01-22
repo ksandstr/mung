@@ -568,8 +568,7 @@ size_t space_memcpy_from(
 
 	if(size == 0) return 0;
 
-	struct thread *current = get_current_thread();
-	if(sp == current->space) {
+	if(sp == current_space) {
 		size_t ret = space_memcpy_from_fast(sp, dest, address, size);
 		if(likely(ret > 0)) return ret;
 	}
