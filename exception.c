@@ -104,32 +104,21 @@ void isr_exn_ud_bottom(struct x86_exregs *regs)
 	assert(x86_irq_is_enabled());
 
 	/* see if it's a LOCK NOP. (this is why the "syscall" is so slow.) */
-
-	/* NOTE: could extend the kernel data segment to the full address space,
-	 * and wrap the user-space pointer. that'd remove the farting around with
-	 * the mapping database, page tables, and supervisor space.
-	 */
 	struct thread *current = get_current_thread();
 	uint8_t buf[2];
 	size_t n = space_memcpy_from(current->space, buf, regs->eip, 2);
-	if(n < 2) {
-		panic("can't read from #UD eip? what.");
-	}
-	if(buf[0] == 0xf0 && buf[1] == 0x90) {
-		/* it is L4_KernelInterface().
-		 * TODO: proper values
-		 */
+	if(n == 2 && buf[0] == 0xf0 && buf[1] == 0x90) {
+		/* it is L4_KernelInterface(). */
+		const L4_KernelInterfacePage_t *kip = kip_mem;
 		regs->eip += 2;
 		regs->eax = L4_Address(current->space->kip_area);
-		/* TODO: replace these with proper KIP accessors */
-		regs->ecx = *(L4_Word_t *)(kip_mem + 0x04);		/* API VERSION */
-		regs->edx = *(L4_Word_t *)(kip_mem + 0x08);		/* API FLAGS */
-		/* id = 23 (because 2 + 3 = 5); subid = 17
-		 * TODO: get proper values at some point.
-		 */
-		regs->esi = (23 << 24) | (17 << 16);	/* KERNEL ID */
+		regs->ecx = kip->ApiVersion.raw;
+		regs->edx = kip->ApiFlags.raw;
+		const L4_KernelDesc_t *kdesc = kip_mem + kip->KernelVerPtr;
+		regs->esi = kdesc->KernelId.raw;
 		return_from_exn();
 	} else {
+		/* short read, or not a KernelInterface sequence. */
 		return_from_ud(current, regs);
 		assert(false);
 	}
