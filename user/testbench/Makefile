@@ -3,7 +3,9 @@ export CFGDIR:=$(abspath ../..)
 include $(CFGDIR)/config.mk
 
 LDFLAGS=-e_start -N -nostdlib
-CFLAGS:=$(subst -D__KERNEL__,,$(CFLAGS))
+# under -O3, GCC may produce SSE instructions in a runtime that doesn't align
+# the stack properly. FIXME: repair that, then remove -mstackrealign.
+CFLAGS:=$(subst -D__KERNEL__,,$(CFLAGS)) -mstackrealign
 
 TEST_IDL:=idl/common.idl idl/benchmark.idl \
 	$(wildcard idl/*-suite.idl)
