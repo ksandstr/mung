@@ -82,13 +82,13 @@ void *memset(void *start, int c, size_t len)
 
 	uint32_t *dst = start;
 	const uint8_t t = c;
-	uint32_t c32 = (t << 24) | (t << 16) | (t << 8) | t;
+	uint32_t c32 = 0x01010101u * (uint32_t)t;
 	while(len >= 4) {
 		dst[i++] = c32;
 		len -= 4;
 	}
-
 	i *= 4;
+
 	uint8_t *dst8 = start;
 	while(len > 0) {
 		dst8[i++] = t;
@@ -177,11 +177,11 @@ size_t strnlen(const char *str, size_t n) {
 char *strncpy(char *dest, const char *src, size_t n)
 {
 	size_t i=0;
-	while(src[i] != '\0' && i < n) {
+	while(i < n && src[i] != '\0') {
 		dest[i] = src[i];
 		i++;
 	}
-	while(i < n) dest[i++] = '\0';
+	memset(&dest[i], '\0', n - i);
 
 	return dest;
 }
