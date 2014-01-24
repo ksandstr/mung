@@ -37,5 +37,14 @@ extern FILE *stdout, *stderr;
 /* interface for consumers of lib/fake_stdio.c */
 extern void con_putstr(const char *string);
 
+/* some compilers change a simple printf() to a puts(). likewise for other
+ * things.
+ */
+extern int puts(const char *s);
+extern int fputs(const char *s, FILE *stream);
+extern int putchar(char c);
+extern int fputc(char c, FILE *stream);
+extern size_t fwrite(const void *ptr, size_t size, size_t nmemb, FILE *stream);
+
 
 #endif

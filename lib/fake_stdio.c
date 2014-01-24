@@ -3,6 +3,7 @@
 #include <stdarg.h>
 #include <stdbool.h>
 #include <string.h>
+#include <assert.h>
 
 
 static FILE stdout_file, stderr_file;
@@ -46,4 +47,41 @@ int snprintf(char *buf, size_t size, const char *fmt, ...)
 	int n = vsnprintf(buf, size, fmt, al);
 	va_end(al);
 	return n;
+}
+
+
+int puts(const char *s)
+{
+	con_putstr(s);
+	con_putstr("\n");
+	return 0;
+}
+
+
+int fputs(const char *s, FILE *stream) {
+	/* ignore @stream entirely. */
+	return puts(s);
+}
+
+
+int putchar(char c)
+{
+	char s[2] = { c, '\0' };
+	con_putstr(s);
+	return c;
+}
+
+
+int fputc(char c, FILE *stream) {
+	/* wheeeeee */
+	return putchar(c);
+}
+
+
+size_t fwrite(const void *ptr, size_t size, size_t nmemb, FILE *stream)
+{
+	assert(stream == stdout || stream == stderr);
+	const char *cs = ptr;
+	for(size_t i=0; i < size * nmemb; i++) fputc(cs[i], stream);
+	return nmemb;
 }
