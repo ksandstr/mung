@@ -2,6 +2,9 @@
 export CFGDIR:=$(abspath .)
 include config.mk
 
+# the kernel doesn't support use of coprocessors in kernel mode.
+CFLAGS+=-mno-sse -mno-avx -mno-mmx
+
 .PHONY: all clean distclean check qcheck
 
 

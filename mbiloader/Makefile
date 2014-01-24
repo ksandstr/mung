@@ -3,7 +3,10 @@ export CFGDIR:=$(abspath ..)
 include ../config.mk
 
 LDFLAGS=-e_start -N -nostdlib
-CFLAGS:=$(subst -D__KERNEL__,,$(CFLAGS))
+
+# mbiloader runs before exception ISRs have been installed. so it absolutely
+# doesn't support coprocessor contexts.
+CFLAGS:=$(subst -D__KERNEL__,,$(CFLAGS)) -mno-sse -mno-mmx -mno-avx
 
 
 all: mbiloader

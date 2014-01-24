@@ -5,6 +5,10 @@ include ../config.mk
 TEST_SOURCE:=$(wildcard t_*.c)
 TEST_OBJS=$(patsubst %.c,%.o,$(TEST_SOURCE))
 
+# the library is shared between userspace and kernel, so no MMX/SSE/AVX
+# malarkey please.
+CFLAGS+=-mno-mmx -mno-sse -mno-avx
+
 
 all: libukernel_util.a
 
