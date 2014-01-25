@@ -46,8 +46,10 @@ testbench: testbench.ld crt0.o testbench.o dlmalloc.o heap.o thread.o tsd.o \
 		threadmgr-common.o threadmgr-service.o threadmgr-client.o \
 		forkserv-common.o forkserv-client.o
 	@echo "  LD $@"
-	@$(LD) $(LDFLAGS) -T testbench.ld $(filter %.o,$^) $(LIBS) -o $@ \
+	@$(LD) $(LDFLAGS) -static -o $@ -b elf32-i386 -T testbench.ld \
+		$(filter %.o,$^) $(LIBS) \
 		-L $(CFGDIR)/lib -lukernel_util \
+		-L /usr/lib32 -lm \
 		$(shell gcc $(CFLAGS) -print-libgcc-file-name)
 
 ipc_suite.o: ipc_suite.c ipc-suite-defs.h
