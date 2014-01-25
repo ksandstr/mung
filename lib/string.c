@@ -28,6 +28,12 @@
 #include <ukernel/util.h>
 
 
+/* TODO: make this conditional on those versions to which GCC bug #56888
+ * applies.
+ */
+#pragma GCC optimize ("no-tree-loop-distribute-patterns")
+
+
 static void *memcpy_forward(void *dst, const void *src, size_t len)
 {
 	uint32_t *d = dst;
