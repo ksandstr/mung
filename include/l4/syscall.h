@@ -120,6 +120,7 @@ static inline L4_MsgTag_t L4_Ipc(
 #ifdef __pic__
 #error "PIC support not quite here yet."
 #else
+	L4_Word_t dummy;
 	__asm__ __volatile__ (
 		__L4_SAVE_REGS
 		"\tcall __L4_Ipc\n"
@@ -127,7 +128,8 @@ static inline L4_MsgTag_t L4_Ipc(
 		__L4_RESTORE_REGS
 		: "=a" (*from_p), "=S" (tag.raw),
 		  "=b" (L4_VREG(utcb, L4_TCR_MR(1))),
-		  "=c" (L4_VREG(utcb, L4_TCR_MR(2)))
+		  "=c" (L4_VREG(utcb, L4_TCR_MR(2))),
+		  "=d" (dummy)
 		: "a" (to.raw), "c" (timeouts), "d" (fromspec.raw),
 		  "S" (L4_VREG(utcb, L4_TCR_MR(0))), "D" (utcb)
 		: "memory", "cc");
@@ -147,6 +149,7 @@ static inline L4_MsgTag_t L4_Lipc(
 #ifdef __pic__
 #error "PIC support not quite here yet."
 #else
+	L4_Word_t dummy;
 	__asm__ __volatile__ (
 		__L4_SAVE_REGS
 		"\tcall __L4_Lipc\n"
@@ -154,7 +157,8 @@ static inline L4_MsgTag_t L4_Lipc(
 		__L4_RESTORE_REGS
 		: "=a" (*from_p), "=S" (tag.raw),
 		  "=b" (L4_VREG(utcb, L4_TCR_MR(1))),
-		  "=c" (L4_VREG(utcb, L4_TCR_MR(2)))
+		  "=c" (L4_VREG(utcb, L4_TCR_MR(2))),
+		  "=d" (dummy)
 		: "a" (to.raw), "c" (timeouts), "d" (fromspec.raw),
 		  "S" (L4_VREG(utcb, L4_TCR_MR(0))), "D" (utcb)
 		: "memory", "cc");
