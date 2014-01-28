@@ -33,6 +33,7 @@ swap_context:
 	jmp *%eax
 
 
+/* void swap_to_ring3(struct x86_exregs *store, *load, int gs_sel) */
 	.global swap_to_ring3
 	.type swap_to_ring3, @function
 
@@ -78,6 +79,61 @@ swap_to_ring3:
 	movl %eax, %fs
 	popl %eax
 	iret
+
+
+/* exit from kthread (e.g. the scheduler) to userspace syscall epilogue. */
+/* void sysexit_from_kth(struct x86_exregs *store, *load, int gs_sel) */
+	.global sysexit_from_kth
+	.type sysexit_from_kth, @function
+
+	.equ USER_DATA_SEL, (SEG_USER_DATA << 3 + 0x3)
+	.equ USER_CODE_SEL, (SEG_USER_CODE << 3 + 0x3)
+
+	.align 16,0
+sysexit_from_kth:
+	movl 4(%esp), %eax
+	movl %edi, 12(%eax)
+	movl %esi, 16(%eax)
+	movl %ebp, 20(%eax)
+	movl %esp, 60(%eax)
+	movl %ebx, 28(%eax)
+	/* eip and eflags for iret_to_scheduler() */
+	movl (%esp), %ebx
+	movl %ebx, 48(%eax)
+	pushf
+	popl 56(%eax)
+	# ... segments, too?
+
+	addl $4, %esp	# make stack look like it's for sysexit_to_ring3
+	jmp sysexit_to_ring3
+
+
+/* NORETURN void sysexit_to_ring3(const struct x86_exregs *r3_ctx, int gs_sel) */
+	.global sysexit_to_ring3
+	.type sysexit_to_ring3, @function
+	.align 16,0
+sysexit_to_ring3:
+	movl 8(%esp), %eax
+	movl %eax, %gs
+
+	movl 4(%esp), %eax
+	movl 12(%eax), %edi
+	movl 16(%eax), %esi
+	movl 20(%eax), %ebp
+	movl 28(%eax), %ebx
+
+	movl 48(%eax), %edx	# eip
+	movl 60(%eax), %ecx	# esp
+
+	pushl 56(%eax)		# eflags
+	pushl 40(%eax)		# eax (temporary)
+	movl $USER_DATA_SEL, %eax
+	movl %eax, %ds
+	movl %eax, %es
+	movl %eax, %fs
+	popl %eax
+	popf
+	sysexit
 
 
 /* NORETURN void iret_to_scheduler(const struct x86_context *sched_ctx) */

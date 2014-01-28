@@ -22,6 +22,7 @@
 #include <ukernel/hook.h>
 #include <ukernel/bug.h>
 #include <ukernel/interrupt.h>
+#include <ukernel/cpu.h>
 #include <ukernel/sched.h>
 
 
@@ -325,13 +326,17 @@ static void switch_thread(struct thread *prev, struct thread *next)
 	cop_switch(next);
 
 	/* load the new context */
+	int gs_sel = !IS_KERNEL_THREAD(next) ? next->utcb_ptr_seg << 3 | 3 : 0;
 	if(IS_KERNEL_THREAD(next)) {
 		/* zomg optimized */
 		swap_context(&prev->ctx, &next->ctx);
+	} else if(use_sysenter && CHECK_FLAG(next->flags, TF_SYSCALL)) {
+		next->flags &= ~TF_SYSCALL;
+		sysexit_from_kth(&prev->ctx, &next->ctx, gs_sel);
 	} else {
 		/* go go goblin balls! */
 		assert(next->utcb_ptr_seg != 0);
-		swap_to_ring3(&prev->ctx, &next->ctx, next->utcb_ptr_seg << 3 | 3);
+		swap_to_ring3(&prev->ctx, &next->ctx, gs_sel);
 	}
 }
 
@@ -345,10 +350,18 @@ NORETURN void switch_thread_u2u(struct thread *next)
 	cop_switch(next);
 
 	assert(next->utcb_ptr_seg != 0);
-	struct x86_exregs dummy;
-	swap_to_ring3(&dummy, &next->ctx, next->utcb_ptr_seg << 3 | 3);
+	int utcb_sel = next->utcb_ptr_seg << 3 | 3;
+	/* TODO: use a compiletime macro for use_sysenter */
+	if(use_sysenter && CHECK_FLAG(next->flags, TF_SYSCALL)) {
+		next->flags &= ~TF_SYSCALL;
+		sysexit_to_ring3(&next->ctx, utcb_sel);
+	} else {
+		struct x86_exregs dummy;
+		swap_to_ring3(&dummy, &next->ctx, utcb_sel);
+		panic("u2u swap_to_ring3() shouldn't return!");
+	}
 
-	panic("switch_thread_u2u(): returned from swap_to_ring3()!");
+	assert(false);
 }
 
 
@@ -499,6 +512,10 @@ NORETURN void scheduler_loop(struct thread *self)
 /* this function must always perform a nonlocal exit, because it'll always
  * represent an intra-privilege control transfer (user thread in kernel mode
  * to kernel thread). so it's a stack exiting thing.
+ *
+ * FIXME: the above is bullshit. iret_to_scheduler() isn't required: we're
+ * already in kernel space. in truth it'd suffice just to jump to the
+ * scheduler context sans the IRET.
  */
 void return_to_scheduler(void)
 {

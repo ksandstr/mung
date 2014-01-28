@@ -289,7 +289,9 @@ static void glue_ipc(struct x86_exregs *regs)
 
 	L4_ThreadId_t to = { .raw = regs->eax }, from = { .raw = regs->edx };
 	L4_Word_t timeouts = regs->ecx;
+	current->flags |= TF_SYSCALL;
 	regs->eax = sys_ipc(utcb, to, from, timeouts).raw;
+	current->flags &= ~TF_SYSCALL;
 	regs->esi = L4_VREG(utcb, L4_TCR_MR(0));
 	regs->ebx = L4_VREG(utcb, L4_TCR_MR(1));
 	regs->ebp = L4_VREG(utcb, L4_TCR_MR(2));
@@ -302,7 +304,9 @@ static void glue_threadswitch(struct x86_exregs *regs)
 	thread_save_ctx(current, regs);
 
 	L4_ThreadId_t target = { .raw = regs->eax };
+	current->flags |= TF_SYSCALL;
 	sys_threadswitch(target);
+	current->flags &= ~TF_SYSCALL;
 }
 
 
@@ -324,7 +328,11 @@ static void glue_schedule(struct x86_exregs *regs)
 /* FIXME: implement sys_memctl() in a memory.c, or some such */
 static void glue_memctl(struct x86_exregs *regs)
 {
-	printf("MemoryControl not implemented\n");
+	static bool first = true;
+	if(first) {
+		first = false;
+		printf("MemoryControl not implemented\n");
+	}
 }
 
 
@@ -382,12 +390,6 @@ void isr_exn_basic_sc_bottom(struct x86_exregs *regs)
 
 void isr_exn_exregs_sc_bottom(struct x86_exregs *regs)
 {
-#if 0
-	printf("got EXREGS: current=%lu:%lu, target=%lu:%lu\n",
-		TID_THREADNUM(get_current_thread()->id),
-		TID_VERSION(get_current_thread()->id),
-		TID_THREADNUM(regs->eax), TID_VERSION(regs->eax));
-#endif
 	glue_exregs(regs);
 	return_from_exn();
 }
@@ -396,7 +398,7 @@ void isr_exn_exregs_sc_bottom(struct x86_exregs *regs)
 void isr_exn_memctl_sc_bottom(struct x86_exregs *regs)
 {
 	assert(x86_irq_is_enabled());
-	printf("%s: MemoryControl called\n", __func__);
+	glue_memctl(regs);
 	return_from_exn();
 }
 

@@ -70,8 +70,6 @@ static int make_sysenter_stub(void *start, int sc_num, bool save_bees)
 		mem[p++] = 0x89;	/* movl %ebx, -0x8(%ebp) */
 		mem[p++] = 0x5d;
 		mem[p++] = 0xf8;
-	}
-	if(save_bees) {
 		mem[p++] = 0x8f;	/* popl -0x4(%ebp) */
 		mem[p++] = 0x45;
 		mem[p++] = 0xfc;

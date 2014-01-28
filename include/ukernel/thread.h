@@ -35,6 +35,7 @@ typedef L4_Word_t thread_id;
 #define TF_SENDER	0x2	/* is the sender of a suspended typed transfer */
 #define TF_INTR		0x4	/* interrupt receiver */
 #define TF_PRE_RECV	0x8	/* halted in TS_R_RECV (restored on resume) */
+#define TF_SYSCALL	0x10 /* may do fast exit (for Ipc, Lipc, ThreadSwitch) */
 
 /* thread states (<struct thread>.status); see also sched_status_str() */
 #define TS_STOPPED 0
@@ -319,5 +320,15 @@ extern void swap_to_ring3(
 
 extern NORETURN void iret_to_scheduler(
 	const struct x86_exregs *sched_ctx);
+
+/* NOTE: this doesn't fill in TCR_SYSEXIT_E[CD]X! */
+extern NORETURN void sysexit_to_ring3(
+	const struct x86_exregs *userctx,
+	int gs_selector);
+
+extern void sysexit_from_kth(
+	struct x86_exregs *store,
+	const struct x86_exregs *load,
+	int gs_selector);
 
 #endif
