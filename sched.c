@@ -331,11 +331,13 @@ static void switch_thread(struct thread *prev, struct thread *next)
 		/* zomg optimized */
 		swap_context(&prev->ctx, &next->ctx);
 	} else if(use_sysenter && CHECK_FLAG(next->flags, TF_SYSCALL)) {
+		assert(ADDR_IN_FPAGE(next->space->kip_area, next->ctx.eip));
 		next->flags &= ~TF_SYSCALL;
 		sysexit_from_kth(&prev->ctx, &next->ctx, gs_sel);
 	} else {
 		/* go go goblin balls! */
 		assert(next->utcb_ptr_seg != 0);
+		next->flags &= ~TF_SYSCALL;
 		swap_to_ring3(&prev->ctx, &next->ctx, gs_sel);
 	}
 }
@@ -353,9 +355,11 @@ NORETURN void switch_thread_u2u(struct thread *next)
 	int utcb_sel = next->utcb_ptr_seg << 3 | 3;
 	/* TODO: use a compiletime macro for use_sysenter */
 	if(use_sysenter && CHECK_FLAG(next->flags, TF_SYSCALL)) {
+		assert(ADDR_IN_FPAGE(next->space->kip_area, next->ctx.eip));
 		next->flags &= ~TF_SYSCALL;
 		sysexit_to_ring3(&next->ctx, utcb_sel);
 	} else {
+		next->flags &= ~TF_SYSCALL;
 		struct x86_exregs dummy;
 		swap_to_ring3(&dummy, &next->ctx, utcb_sel);
 		panic("u2u swap_to_ring3() shouldn't return!");
