@@ -63,10 +63,10 @@ static int make_sysenter_stub(void *start, int sc_num, bool save_bees)
 {
 	int p = 0;
 	uint8_t *mem = start;
-	if(save_bees) mem[p++] = 0x55;	/* pushl %ebp */
-	mem[p++] = 0x65; mem[p++] = 0x8b; mem[p++] = 0x2d;
-	*(uint32_t *)&mem[p] = 0; p += 4;	/* movb %gs:0, %ebp */
 	if(save_bees) {
+		mem[p++] = 0x55;	/* pushl %ebp */
+		mem[p++] = 0x65; mem[p++] = 0x8b;	/* movl %gs:0, %ebp */
+		mem[p++] = 0x2d; *(uint32_t *)&mem[p] = 0; p += 4;
 		mem[p++] = 0x89;	/* movl %ebx, -0x8(%ebp) */
 		mem[p++] = 0x5d;
 		mem[p++] = 0xf8;
