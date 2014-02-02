@@ -285,7 +285,9 @@ static void glue_ipc(struct x86_exregs *regs)
 	void *utcb = thread_get_utcb(current);
 	L4_VREG(utcb, L4_TCR_MR(0)) = regs->esi;
 
-	thread_save_ctx(current, regs);
+	/* preserve registers */
+	current->ctx.edi = regs->edi;
+	current->ctx.esp = regs->esp;
 
 	L4_ThreadId_t to = { .raw = regs->eax }, from = { .raw = regs->edx };
 	L4_Word_t timeouts = regs->ecx;
@@ -426,7 +428,7 @@ void sysenter_bottom(struct x86_exregs *regs)
 		 * we'll set the return EIP here already because sys_ipc() may
 		 * perform a non-local exit. the same is true of ThreadSwitch.
 		 */
-		regs->eip = kip_base + sysexit_epilogs.fast;
+		current->ctx.eip = regs->eip = kip_base + sysexit_epilogs.fast;
 		glue_ipc(regs);
 		return_from_exn();
 	} else if(target == SC_THREADSWITCH) {
