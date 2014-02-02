@@ -54,7 +54,7 @@ extern L4_MsgTag_t kipc(
 	L4_Word_t timeouts);
 
 /* the full L4.X2 IPC system call. registers and everything. */
-extern SYSCALL L4_ThreadId_t sys_ipc(
+extern SYSCALL L4_Word_t sys_ipc(
 	void *utcb,
 	L4_ThreadId_t to,
 	L4_ThreadId_t from,

@@ -290,7 +290,7 @@ static void glue_ipc(struct x86_exregs *regs)
 	L4_ThreadId_t to = { .raw = regs->eax }, from = { .raw = regs->edx };
 	L4_Word_t timeouts = regs->ecx;
 	current->flags |= TF_SYSCALL;
-	regs->eax = sys_ipc(utcb, to, from, timeouts).raw;
+	regs->eax = sys_ipc(utcb, to, from, timeouts);
 	current->flags &= ~TF_SYSCALL;
 	regs->esi = L4_VREG(utcb, L4_TCR_MR(0));
 	regs->ebx = L4_VREG(utcb, L4_TCR_MR(1));

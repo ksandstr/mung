@@ -1119,7 +1119,7 @@ end:
 }
 
 
-SYSCALL L4_ThreadId_t sys_ipc(
+SYSCALL L4_Word_t sys_ipc(
 	void *utcb,
 	L4_ThreadId_t to,
 	L4_ThreadId_t from,
@@ -1139,14 +1139,14 @@ SYSCALL L4_ThreadId_t sys_ipc(
 		|| to.raw == L4_anylocalthread.raw))
 	{
 		set_ipc_error(utcb, 4);		/* non-existing partner, send phase */
-		return L4_nilthread;
+		return L4_nilthread.raw;
 	}
 	if(unlikely(L4_IsGlobalId(from)
 		&& L4_ThreadNo(from) > last_int_threadno()
 		&& L4_ThreadNo(from) < first_user_threadno()))
 	{
 		set_ipc_error(utcb, 5);		/* non-existing partner, receive phase */
-		return L4_nilthread;
+		return L4_nilthread.raw;
 	}
 
 	bool preempt = false;
@@ -1175,5 +1175,5 @@ SYSCALL L4_ThreadId_t sys_ipc(
 		assert(!IS_KERNEL_THREAD(current));
 	}
 
-	return current->ipc_from;
+	return current->ipc_from.raw;
 }
