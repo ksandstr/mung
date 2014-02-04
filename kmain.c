@@ -358,8 +358,8 @@ static struct thread *spawn_kernel_server(
 	 * mappings.
 	 */
 	space_set_kip_area(sp, L4_FpageLog2((L4_Word_t)kip_mem, PAGE_BITS));
-	space_add_thread(sp, t);
-	assert(t->space == sp);
+	t->space = sp;
+	assert(t->utcb_pos < 0 && t->utcb_page == NULL);
 	bool ok = thread_set_utcb(t, L4_Address(sp->utcb_area));
 	BUG_ON(!ok, "thread_set_utcb() failed");
 	t->ts_len = L4_Never;
@@ -458,7 +458,7 @@ void kmain(void *bigp, unsigned int magic)
 	int n = mapdb_init(&kernel_space->mapdb, kernel_space);
 	if(n < 0) panic("mapdb_init() for the kernel space failed");
 
-	space_add_resv_pages(kernel_space, &ksp_resv);
+	space_finalize_kernel(kernel_space, &ksp_resv);
 	list_head_init(&ksp_resv);
 
 	/* NOTE: malloc(), free(), etc. are only available from this line down. */
@@ -533,7 +533,6 @@ void kmain(void *bigp, unsigned int magic)
 	init_threading();
 	struct thread *first_thread = kth_init(
 		L4_GlobalId(last_int_threadno() + 1, 1));
-	space_add_thread(kernel_space, first_thread);
 	init_sched(first_thread);
 
 	/* this creates a pager for the s0, s1 processes. it isn't necessary, but

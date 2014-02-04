@@ -49,7 +49,7 @@ static NORETURN void end_kthread(void)
 	struct thread *self = get_current_thread();
 	assert(IS_KERNEL_THREAD(self));
 
-	list_del_from(&self->space->threads, &self->space_link);
+	space_remove_thread(self->space, self);
 	htable_del(&thread_hash, int_hash(TID_THREADNUM(self->id)), self);
 	assert(self->u0.regs == NULL);
 	list_add(&dead_thread_list, &self->u0.dead_link);
@@ -87,7 +87,7 @@ struct thread *kth_start(void (*function)(void *), void *parameter)
 		 */
 		panic("arrrrrgggghhhh!");
 	}
-	space_add_thread(kernel_space, t);
+	t->space = kernel_space;
 	bool ok = thread_set_utcb(t, L4_Address(kernel_space->utcb_area)
 		+ (TID_THREADNUM(tid.raw) - 1 - last_int_threadno()) * UTCB_SIZE);
 	if(!ok) {
@@ -137,6 +137,11 @@ COLD struct thread *kth_init(L4_ThreadId_t boot_tid)
 	init_kthread_ctx(boot, 0xdeadface, 0xabadc0de);
 	GUARD_INIT(boot, sched_rb_0);
 	GUARD_INIT(boot, sched_rb_1);
+	boot->space = kernel_space;
+	boot->utcb_pos = -1;
+	boot->utcb_page = NULL;
+	boot->utcb_ptr_seg = 0;
+	thread_set_utcb(boot, L4_Address(kernel_space->utcb_area));
 	boot->stack_page = NULL;
 	boot->id = boot_tid.raw;
 	boot->status = TS_RUNNING;

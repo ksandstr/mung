@@ -76,6 +76,7 @@ typedef L4_Word_t thread_id;
 
 
 struct space;
+struct utcb_page;
 struct ipc_state;		/* private to ipc.c */
 struct saved_regs;		/* private to thread.c */
 
@@ -131,8 +132,11 @@ struct thread
 	 */
 	struct hook post_exn_call;
 
+	/* inactive threads have space != NULL && utcb_pos < 0, and haven't been
+	 * added with space_add_thread().
+	 */
 	struct space *space;
-	struct list_node space_link;
+	struct utcb_page *utcb_page;
 	int utcb_pos;				/* offset in space's UTCB region */
 	int utcb_ptr_seg;			/* segment descriptor index for %gs */
 	L4_ThreadId_t scheduler;

@@ -260,7 +260,10 @@ static void thread_destroy(struct thread *t)
 			t->utcb_ptr_seg);
 		t->utcb_ptr_seg = 0;
 	}
-	space_remove_thread(sp, t);
+	if(t->utcb_pos >= 0) {
+		assert(t->space != NULL);
+		space_remove_thread(sp, t);
+	}
 
 	if(unlikely(t->stack_page != NULL)) {
 		assert(IS_KERNEL_THREAD(t));
@@ -304,53 +307,62 @@ static void copy_tcrs(void *dst, const void *src)
 }
 
 
-/* FIXME: check return values from calloc(), mapdb_add_map(), etc */
+/* FIXME: this is only atomic on space_get_utcb_area() failure, and not on
+ * reserved_gdt_ptr_seg() failure. that's bad.
+ */
 bool thread_set_utcb(struct thread *t, L4_Word_t start)
 {
 	assert(t->space != NULL);
+	assert(t->utcb_pos < 0 || t->utcb_page != NULL);
 	assert(!L4_IsNilFpage(t->space->utcb_area));
 	assert((start & (UTCB_SIZE - 1)) == 0);
 
 	struct space *sp = t->space;
+
+	int new_pos = (start - L4_Address(sp->utcb_area)) / UTCB_SIZE,
+		page = new_pos / UTCB_PER_PAGE;
+	assert(page < NUM_UTCB_PAGES(sp->utcb_area));
+	struct utcb_page *up = space_get_utcb_page(sp, page);
+	if(up == NULL) return false;
+	const uint16_t hold_mask = 1 << UTCB_PER_PAGE;
+	assert(!CHECK_FLAG(up->occmap, hold_mask));
+	up->occmap |= hold_mask;	/* hold despite space_remove_thread() */
 
 	if(t->utcb_ptr_seg != 0) {
 		release_gdt_ptr_seg(L4_Address(sp->utcb_area)
 				+ t->utcb_pos * UTCB_SIZE + 256 + TCR_UTCB_PTR * 4,
 			t->utcb_ptr_seg);
 		t->utcb_ptr_seg = 0;
-	} else if(sp->utcb_pages == NULL) {
-		sp->utcb_pages = calloc(sizeof(struct page *),
-			NUM_UTCB_PAGES(sp->utcb_area));
 	}
-	assert(sp->utcb_pages != NULL);
 	assert(t->utcb_ptr_seg == 0);
 
-	/* (could call a space_ensure_utcb() function or something, but why.) */
-	int new_pos = (start - L4_Address(sp->utcb_area)) / UTCB_SIZE,
-		page = new_pos / UTCB_PER_PAGE;
-	assert(page < NUM_UTCB_PAGES(sp->utcb_area));
-	if(sp->utcb_pages[page] == NULL) {
-		struct page *p = get_kern_page(0);
-		sp->utcb_pages[page] = p;
-		/* TODO: list "p" somewhere? */
-		if(likely(sp != kernel_space)) {
-			L4_Fpage_t u_page = L4_FpageLog2(L4_Address(sp->utcb_area)
-				+ page * PAGE_SIZE, PAGE_BITS);
-			L4_Set_Rights(&u_page, L4_FullyAccessible);
-			mapdb_add_map(&sp->mapdb, 0, u_page, sp->utcb_pages[page]->id);
-		}
-	}
 	if(new_pos != t->utcb_pos) {
+		/* FIXME: allocate old_utcb in the heap & copy TCRs via it to avoid
+		 * the old one vanishing when it's the last in the old UTCB page.
+		 */
+		void *old_utcb = NULL;
+		if(t->utcb_pos >= 0) {
+			old_utcb = thread_get_utcb(t);
+			space_remove_thread(sp, t);
+		}
+		t->utcb_page = up;
+		t->utcb_pos = new_pos;
+		space_add_thread(sp, t);
+		up->occmap &= ~hold_mask;
+
 		int offset = new_pos - (page * UTCB_PER_PAGE);
-		assert(sp->utcb_pages[page]->vm_addr != NULL);
-		void *utcb_mem = sp->utcb_pages[page]->vm_addr + offset * UTCB_SIZE;
+		assert(up->pg->vm_addr != NULL);
+		void *utcb_mem = up->pg->vm_addr + offset * UTCB_SIZE;
 		memset(utcb_mem, 0, UTCB_SIZE);
-		if(t->utcb_pos >= 0) copy_tcrs(utcb_mem + 256, thread_get_utcb(t));
+		if(old_utcb != NULL) {
+			copy_tcrs(utcb_mem + 256, old_utcb);
+		}
 		L4_VREG(utcb_mem + 256, L4_TCR_MYGLOBALID) = t->id;
 		*(L4_Word_t *)(utcb_mem + 256 + TCR_UTCB_PTR * 4) = start + 256;
+
+		assert(thread_get_utcb(t) == utcb_mem + 256);
 	}
 
-	t->utcb_pos = new_pos;
 	assert(start == L4_Address(sp->utcb_area) + UTCB_SIZE * t->utcb_pos);
 	if(likely(sp != kernel_space)) {
 		assert(t->utcb_ptr_seg == 0);
@@ -518,11 +530,15 @@ void *thread_get_utcb(struct thread *t)
 
 	int page_ix = t->utcb_pos / UTCB_PER_PAGE,
 		offset = t->utcb_pos & (UTCB_PER_PAGE - 1);
-	struct page *p = t->space->utcb_pages[page_ix];
+	struct utcb_page *up = t->utcb_page;
+	assert(up->pos == page_ix);
+	assert(CHECK_FLAG(up->occmap, 1 << offset));
+	struct page *p = up->pg;
 	assert(p != NULL);
 	assert(p->vm_addr != NULL);
-	/* the UTCB pointer starts with the kernel-defined MR0 slot, and has at
-	 * least 200 bytes available at negative offsets.
+
+	/* TODO: change the "256" that appears all over UTCB-related code to
+	 * UTCB_SIZE / 2, which it properly is.
 	 */
 	return p->vm_addr + offset * UTCB_SIZE + 256;
 }
@@ -1168,7 +1184,9 @@ SYSCALL L4_Word_t sys_threadcontrol(
 			if(new_space) space_free(sp);
 			goto out_of_mem;
 		}
-		space_add_thread(sp, dest);
+		dest->space = sp;
+		assert(dest->utcb_pos < 0);
+		assert(dest->utcb_page == NULL);
 
 		/* resolves local TID, avoids second call to resolve_tid_spec() */
 		dest->scheduler.raw = sched->id;

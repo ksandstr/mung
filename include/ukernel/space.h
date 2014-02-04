@@ -18,25 +18,46 @@
 /* space->flags */
 #define SF_PRIVILEGE 0x1	/* *Control syscall access */
 
+#define UTCB_SIZE 512
+#define UTCB_PER_PAGE (PAGE_SIZE / UTCB_SIZE)
+#define NUM_UTCB_PAGES(area) (L4_Size((area)) / UTCB_SIZE / UTCB_PER_PAGE)
+
 
 struct thread;
+
+
+/* allocated in space.c's utcb_page_slab, except for kernel_space, where
+ * they're allocated statically and only inserted into the hash table after
+ * the malloc heap has been initialized.
+ */
+struct utcb_page
+{
+	/* page position in UTCB area.
+	 *
+	 * this limits the number of thread slots to 64k * 8 = 512k on 32-bit
+	 * platforms, and half that on 64-bit ones. since each thread weighs over
+	 * 200 bytes, and the current kernel allocation is at most 256 MiB, the
+	 * limit won't be hit.
+	 */
+	uint16_t pos;
+	uint16_t occmap;		/* little-endian occupancy map */
+	struct page *pg;
+	struct thread *slots[UTCB_PER_PAGE];
+};
+
 
 struct space
 {
 	struct list_node link;		/* in the global space list */
-	struct list_head threads;	/* <struct thread> via space_link */
 
 	uint16_t flags;				/* SF_* */
 
-	/* pages for the UTCB area, allocated as threads are assigned UTCB
-	 * segments in the address space
-	 */
-	struct page **utcb_pages;
 	L4_Fpage_t utcb_area;
 	L4_Fpage_t kip_area;
 
 	L4_ThreadId_t redirector;
 
+	struct htable utcb_pages;	/* <struct utcb_page *>, by ->pos */
 	struct htable ptab_pages;	/* <struct page *>, by page.id */
 	struct map_db mapdb;
 
@@ -47,11 +68,6 @@ struct space
 	size_t tss_len;				/* total amount of RAM under "tss" */
 	struct tss *tss;			/* immediately followed by I/O bitmap memory */
 };
-
-
-#define UTCB_SIZE 512
-#define UTCB_PER_PAGE (PAGE_SIZE / UTCB_SIZE)
-#define NUM_UTCB_PAGES(area) (L4_Size((area)) / UTCB_SIZE / UTCB_PER_PAGE)
 
 
 /* kernel_space->mapdb contains mappings for all non-reserved memory seen by
@@ -68,8 +84,7 @@ extern struct space *sigma0_space;
 
 extern struct space *space_new(void);
 extern void space_free(struct space *sp);
-extern void space_add_thread(struct space *sp, struct thread *t);
-extern void space_remove_thread(struct space *sp, struct thread *t);
+extern L4_ThreadId_t space_name(struct space *sp);
 extern void space_switch(struct space *sp);
 /* (this only finds spaces that've got at least one thread associated with
  * them.)
@@ -81,6 +96,15 @@ extern int space_set_kip_area(struct space *sp, L4_Fpage_t area);
 extern struct thread *space_find_local_thread(
 	struct space *sp,
 	L4_LthreadId_t ltid);
+
+/* adds page to UTCB area iff utcb_pos & utcb_page are set */
+extern void space_add_thread(struct space *sp, struct thread *t);
+/* kicks the thread's UTCB page if it becomes empty. */
+extern void space_remove_thread(struct space *sp, struct thread *t);
+/* looks an utcb page up, or allocates one. returns NULL when ppos is outside
+ * sp->utcb_area.
+ */
+extern struct utcb_page *space_get_utcb_page(struct space *sp, uint16_t ppos);
 
 /* use 0 for @page_id to erase a page. */
 extern void space_put_page(
@@ -135,11 +159,13 @@ extern SYSCALL L4_Word_t sys_spacecontrol(
 
 
 /* pages reserved before htable_add() can be used, are added to the list.
- * later kmain() calls space_add_resv_pages().
+ * later kmain() calls space_finalize_kernel() to add those to kernel_space's
+ * ptab_pages hash.
  */
 extern void init_spaces(struct list_head *resv_list);
-extern void space_add_resv_pages(
-	struct space *sp,
+
+extern void space_finalize_kernel(
+	struct space *sp,		/* must be kernel_space */
 	struct list_head *resv_list);
 
 

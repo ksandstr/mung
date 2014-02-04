@@ -28,10 +28,14 @@
 #include <ukernel/space.h>
 
 
+#define NUM_KERN_UTCB_PAGES ((UTCB_SIZE * NUM_KERNEL_THREADS \
+	+ PAGE_SIZE - 1) / PAGE_SIZE)
+
+
 struct space *kernel_space = NULL;
 static struct space kernel_space_mem;
 
-static struct kmem_cache *space_slab = NULL;
+static struct kmem_cache *space_slab = NULL, *utcb_page_slab = NULL;
 static struct list_head space_list = LIST_HEAD_INIT(space_list);
 static struct space *current_space = NULL;
 
@@ -48,6 +52,19 @@ static size_t hash_page_by_id(const void *page_ptr, void *priv)
 {
 	const struct page *p = page_ptr;
 	return int_hash(p->id);
+}
+
+
+/* hash & cmp functions for utcb_pages */
+static size_t hash_utcb_page(const void *ptr, void *priv) {
+	const struct utcb_page *p = ptr;
+	return int_hash(p->pos);
+}
+
+
+static bool cmp_utcb_page(const void *cand, void *key) {
+	const struct utcb_page *p = cand;
+	return p->pos == *(uint16_t *)key;
 }
 
 
@@ -82,18 +99,9 @@ static bool check_space(int opt, struct space *sp)
 #ifdef DEBUG_ME_HARDER
 	INV_CTX;
 
-	L4_ThreadId_t sp_tid = L4_nilthread;
-	if(!list_empty(&sp->threads)) {
-		sp_tid.raw = list_top(&sp->threads, struct thread, space_link)->id;
-		struct thread *t;
-		list_for_each(&sp->threads, t, space_link) {
-			if(TID_THREADNUM(sp_tid.raw) < TID_THREADNUM(t->id)) {
-				sp_tid.raw = t->id;
-			}
-		}
-	}
+	L4_ThreadId_t sp_tid = space_name(sp);
 	inv_push("space of mapdb %u (%lu:%lu)", sp->mapdb.ref_id,
-		TID_THREADNUM(sp_tid.raw), TID_VERSION(sp_tid.raw));
+		L4_ThreadNo(sp_tid), L4_Version(sp_tid));
 
 	inv_ok(!CHECK_FLAG_ANY(sp->flags, ~(uint16_t)(SF_PRIVILEGE)),
 		"no undefined flags");
@@ -126,12 +134,15 @@ static bool check_space(int opt, struct space *sp)
 	}
 
 	/* check that correct pages, or holes, are mapped for utcb_pages[]. */
-	if(sp->utcb_pages != NULL) {
+	if(sp->utcb_pages.elems > 0) {
 		inv_ok1(sp->utcb_area.raw != L4_Nilpage.raw);
 		for(int i=0; i < NUM_UTCB_PAGES(sp->utcb_area); i++) {
 			L4_Word_t page_addr = L4_Address(sp->utcb_area) + i * PAGE_SIZE;
 			inv_push("checking utcb page %d/%d at %#lx:", i,
 				(int)NUM_UTCB_PAGES(sp->utcb_area), page_addr);
+			uint16_t page_pos = i;
+			struct utcb_page *up = htable_get(&sp->utcb_pages,
+				int_hash(page_pos), &cmp_utcb_page, &page_pos);
 
 			/* (this just accesses the page tables.) */
 			const uint32_t *ptab_mem;
@@ -147,16 +158,24 @@ static bool check_space(int opt, struct space *sp)
 				ptab_mem = NULL;
 			}
 
-			if(sp->utcb_pages[i] == NULL) {
+			if(up == NULL) {
 				uint32_t ent = ptab_mem != NULL ? ptab_mem[pg_ix] : 0;
 				inv_log("no utcb page; ptab_mem is %p, entry %d is %#x",
 					ptab_mem, pg_ix, ent);
 				inv_ok1(ptab_mem == NULL || !CHECK_FLAG(ent, PT_PRESENT));
 			} else {
 				inv_log("utcb page present; entry %d is %#x (want id %u)",
-					pg_ix, ptab_mem[pg_ix], sp->utcb_pages[i]->id);
+					pg_ix, ptab_mem[pg_ix], up->pg->id);
 				inv_ok1(!CHECK_FLAG(ptab_mem[pg_ix], PT_PRESENT)
-					|| (ptab_mem[pg_ix] >> 12) == sp->utcb_pages[i]->id);
+					|| (ptab_mem[pg_ix] >> 12) == up->pg->id);
+
+				inv_ok1(up->pg != NULL);
+				for(int j=0; j < UTCB_PER_PAGE; j++) {
+					inv_ok1(!CHECK_FLAG(up->occmap, 1 << j)
+						|| up->slots[j] != NULL);
+					inv_ok1(CHECK_FLAG(up->occmap, 1 << j)
+						|| up->slots[j] == NULL);
+				}
 			}
 			inv_pop();
 		}
@@ -234,10 +253,9 @@ static void space_init(struct space *sp, struct list_head *resv_list)
 {
 	sp->kip_area = L4_Nilpage;
 	sp->utcb_area = L4_Nilpage;
-	sp->utcb_pages = NULL;
 
-	list_head_init(&sp->threads);
 	htable_init(&sp->ptab_pages, &hash_page_by_id, NULL);
+	htable_init(&sp->utcb_pages, &hash_utcb_page, NULL);
 
 	sp->pdirs = get_kern_page(0);
 	if(unlikely(resv_list != NULL)) list_add(resv_list, &sp->pdirs->link);
@@ -258,6 +276,28 @@ static void space_init(struct space *sp, struct list_head *resv_list)
 }
 
 
+/* spaces without threads are nameless. this is also used to check whether
+ * there's at least one active thread in the address space, active being
+ * defined as having an UTCB slot.
+ */
+L4_ThreadId_t space_name(struct space *sp)
+{
+	struct htable_iter it;
+	for(struct utcb_page *up = htable_first(&sp->utcb_pages, &it);
+		up != NULL;
+		up = htable_next(&sp->utcb_pages, &it))
+	{
+		int slot = ffsl(up->occmap) - 1;
+		if(slot >= 0) {
+			assert(up->slots[slot] != NULL);
+			return (L4_ThreadId_t){ .raw = up->slots[slot]->id };
+		}
+	}
+
+	return L4_nilthread;
+}
+
+
 struct space *space_new(void)
 {
 	assert(space_slab != NULL);
@@ -275,19 +315,26 @@ struct space *space_new(void)
 }
 
 
+static void clear_utcb_pages(struct space *sp)
+{
+	assert(sp != kernel_space);
+	struct htable_iter it;
+	for(struct utcb_page *up = htable_first(&sp->utcb_pages, &it);
+		up != NULL;
+		up = htable_next(&sp->utcb_pages, &it))
+	{
+		assert(up->occmap == 0);
+		free_kern_page(up->pg);
+		kmem_cache_free(utcb_page_slab, up);
+	}
+	htable_clear(&sp->utcb_pages);
+}
+
+
 void space_free(struct space *sp)
 {
-	assert(list_empty(&sp->threads));
-
 	mapdb_destroy(&sp->mapdb);
-
-	if(sp->utcb_pages != NULL) {
-		for(int i=0; i < NUM_UTCB_PAGES(sp->utcb_area); i++) {
-			if(sp->utcb_pages[i] == NULL) continue;
-			free_kern_page(sp->utcb_pages[i]);
-		}
-		free(sp->utcb_pages);
-	}
+	clear_utcb_pages(sp);
 
 	struct htable_iter it;
 	for(struct page *p = htable_first(&sp->ptab_pages, &it);
@@ -312,20 +359,84 @@ void space_free(struct space *sp)
 
 void space_add_thread(struct space *sp, struct thread *t)
 {
-	assert(t->space == NULL);
+	assert(t->space == sp);
+	assert(t->utcb_pos >= 0);
+	assert(t->utcb_page != NULL);
 
-	list_add(&sp->threads, &t->space_link);
-	t->space = sp;
+	int page = t->utcb_pos / UTCB_PER_PAGE,
+		slot = t->utcb_pos % UTCB_PER_PAGE;
+	assert(t->utcb_page->pos == page);
+	assert(!CHECK_FLAG(t->utcb_page->occmap, 1 << slot));
+	assert(t->utcb_page->slots[slot] == NULL);
+
+	t->utcb_page->slots[slot] = t;
+	t->utcb_page->occmap |= 1 << slot;
 }
 
 
 void space_remove_thread(struct space *sp, struct thread *t)
 {
 	assert(t->space == sp);
-	list_del_from(&sp->threads, &t->space_link);
-	t->space = NULL;
+	assert(t->utcb_pos >= 0);
+	assert(t->utcb_page != NULL);
 
-	if(list_empty(&sp->threads)) space_free(sp);
+	int page = t->utcb_pos / UTCB_PER_PAGE,
+		slot = t->utcb_pos % UTCB_PER_PAGE;
+	struct utcb_page *up = t->utcb_page;
+	assert(t->utcb_page->pos == page);
+	assert(CHECK_FLAG(t->utcb_page->occmap, 1 << slot));
+	assert(t->utcb_page->slots[slot] == t);
+
+	up->slots[slot] = NULL;
+	up->occmap &= ~(1 << slot);
+
+	if(up->occmap == 0) {
+		/* toss the UTCB page. */
+		L4_Fpage_t fp = L4_FpageLog2(L4_Address(sp->utcb_area)
+			+ up->pos * PAGE_SIZE, PAGE_BITS);
+		L4_Set_Rights(&fp, L4_FullyAccessible);
+		mapdb_unmap_fpage(&sp->mapdb, fp, true, true, false);
+		space_put_page(sp, L4_Address(fp), 0, 0);
+
+		free_kern_page(up->pg);
+		htable_del(&sp->utcb_pages, int_hash(up->pos), up);
+		kmem_cache_free(utcb_page_slab, up);
+
+		if(sp->utcb_pages.elems == 0) space_free(sp);
+	}
+
+	t->utcb_page = NULL;
+	t->utcb_pos = -1;
+}
+
+
+struct utcb_page *space_get_utcb_page(struct space *sp, uint16_t page_pos)
+{
+	struct utcb_page *up = htable_get(&sp->utcb_pages, int_hash(page_pos),
+		&cmp_utcb_page, &page_pos);
+	if(up == NULL) {
+		if(page_pos >= L4_Size(sp->utcb_area) / PAGE_SIZE) return NULL;
+
+		assert(sp != kernel_space);
+		up = kmem_cache_alloc(utcb_page_slab);
+		up->pos = page_pos;
+		up->occmap = 0;
+		up->pg = get_kern_page(0);
+		memset(up->pg->vm_addr, 0, PAGE_SIZE);
+		for(int i=0; i < UTCB_PER_PAGE; i++) up->slots[i] = NULL;
+		htable_add(&sp->utcb_pages, int_hash(page_pos), up);
+
+		if(likely(sp != kernel_space)) {
+			L4_Fpage_t u_page = L4_FpageLog2(L4_Address(sp->utcb_area)
+				+ page_pos * PAGE_SIZE, PAGE_BITS);
+			L4_Set_Rights(&u_page, L4_Readable | L4_Writable);
+			/* FIXME: catch error result from mapdb_add_map() */
+			mapdb_add_map(&sp->mapdb, 0, u_page, up->pg->id);
+			/* TODO: modify page table, too */
+		}
+	}
+
+	return up;
 }
 
 
@@ -375,14 +486,7 @@ int space_set_utcb_area(struct space *sp, L4_Fpage_t area)
 		return 6;
 	}
 
-	if(sp->utcb_pages != NULL) {
-		for(int i=0; i < NUM_UTCB_PAGES(sp->utcb_area); i++) {
-			free_kern_page(sp->utcb_pages[i]);
-		}
-		free(sp->utcb_pages);
-		sp->utcb_pages = NULL;
-	}
-
+	clear_utcb_pages(sp);
 	sp->utcb_area = area;
 
 	return 0;
@@ -418,20 +522,20 @@ struct thread *space_find_local_thread(
 {
 	assert(ltid.X.zeros == 0);
 
-	if(ltid.raw >= L4_Address(sp->utcb_area)
-		&& ltid.raw < L4_Address(sp->utcb_area) + L4_Size(sp->utcb_area))
-	{
-		L4_Word_t off = ltid.raw - L4_Address(sp->utcb_area) - 256;
-		int ix = off / UTCB_SIZE;
-		if(unlikely(L4_Address(sp->utcb_area) + 256 + ix * UTCB_SIZE
-			!= ltid.raw))
-		{
-			/* malformed local TID. */
-			return NULL;
-		}
-		struct thread *t;
-		list_for_each(&sp->threads, t, space_link) {
-			if(t->utcb_pos == ix) return t;
+	intptr_t off = (intptr_t)ltid.raw - L4_Address(sp->utcb_area) - 256;
+	if((off & (UTCB_SIZE - 1)) != 0) return NULL;	/* malformed LTID */
+
+	uint16_t page_pos = off / PAGE_SIZE;
+	struct utcb_page *up = htable_get(&sp->utcb_pages, int_hash(page_pos),
+		&cmp_utcb_page, &page_pos);
+	if(up != NULL) {
+		int slot = (off / UTCB_SIZE) % UTCB_PER_PAGE;
+		if(CHECK_FLAG(up->occmap, 1 << slot)) {
+			struct thread *t = up->slots[slot];
+			assert(t != NULL);
+			assert(t->utcb_pos == off / UTCB_SIZE);
+			assert(t->space == sp);
+			return t;
 		}
 	}
 
@@ -505,11 +609,9 @@ int space_probe_pt_access(
 	struct page *ptab_page = htable_get(&sp->ptab_pages, int_hash(pt_id),
 		&cmp_page_id_to_key, &pt_id);
 	if(unlikely(ptab_page == NULL)) {
-		struct thread *t = list_top(&sp->threads, struct thread,
-			space_link);
+		L4_ThreadId_t name = space_name(sp);
 		printf("warning: page table for address %#lx in space %lu:%lu not found\n",
-			address, t != NULL ? TID_THREADNUM(t->id) : 0,
-			t != NULL ? TID_VERSION(t->id) : 0);
+			address, L4_ThreadNo(name), L4_Version(name));
 		*skip_to = 0;
 		return -ENOENT;
 	}
@@ -785,16 +887,7 @@ SYSCALL L4_Word_t sys_spacecontrol(
 		}
 	}
 
-	/* is there at least one active thread in this space? */
-	bool t_active = false;
-	struct thread *t;
-	list_for_each(&sp->threads, t, space_link) {
-		/* active being defined as "has UTCB slot" */
-		if(t->utcb_pos >= 0) {
-			t_active = true;
-			break;
-		}
-	}
+	bool t_active = !L4_IsNilThread(space_name(sp));
 	if(!t_active) {
 		/* consider the pie. */
 		const L4_KernelInterfacePage_t *kip = kip_mem;
@@ -877,30 +970,48 @@ COLD void init_spaces(struct list_head *resv_list)
 	if(ua_shift < PAGE_BITS) ua_shift = PAGE_BITS;
 	kernel_space->utcb_area = L4_FpageLog2(
 		ALIGN_TO_SHIFT(KERNEL_HEAP_TOP, ua_shift), ua_shift);
-	static struct page *kernel_utcb_pages[(UTCB_SIZE * NUM_KERNEL_THREADS + PAGE_SIZE - 1)
-		/ PAGE_SIZE];
-	int n_utcb_pages = sizeof(kernel_utcb_pages) / sizeof(kernel_utcb_pages[0]);
-	kernel_space->utcb_pages = kernel_utcb_pages;
-	for(int i=0; i < n_utcb_pages; i++) {
-		struct page *pg = get_kern_page(0);
+	static struct utcb_page kernel_utcb_pages[NUM_KERN_UTCB_PAGES];
+	const int n_ups = NUM_KERN_UTCB_PAGES;
+	/* keep pointer for finalize */
+	kernel_space->utcb_pages.priv = kernel_utcb_pages;
+	for(int i=0; i < n_ups; i++) {
+		struct utcb_page *up = &kernel_utcb_pages[i];
+		up->pg = get_kern_page(0);
 		/* TODO: map the pages to actually appear at the UTCB area? */
-		kernel_space->utcb_pages[i] = pg;
-		list_add(resv_list, &pg->link);
-		memset(pg->vm_addr, 0, PAGE_SIZE);
+		list_add(resv_list, &up->pg->link);
+		memset(up->pg->vm_addr, 0, PAGE_SIZE);
+		up->occmap = 0;
+		up->pos = i;
+		for(int j=0; j < UTCB_PER_PAGE; j++) up->slots[j] = NULL;
 	}
 
 	/* module inits */
 	space_slab = kmem_cache_create("space_slab", sizeof(struct space),
 		ALIGNOF(struct space), 0, NULL, NULL);
+	utcb_page_slab = kmem_cache_create("utcb_page_slab",
+		sizeof(struct utcb_page), ALIGNOF(struct utcb_page), 0, NULL, NULL);
 }
 
 
-COLD void space_add_resv_pages(
+/* the init_spaces() parts that require the malloc heap, i.e. htable
+ * operations.
+ */
+COLD void space_finalize_kernel(
 	struct space *sp,
 	struct list_head *resv_list)
 {
+	assert(sp == kernel_space);
+
 	struct page *p;
 	list_for_each(resv_list, p, link) {
 		htable_add(&sp->ptab_pages, int_hash(p->id), p);
 	}
+
+	assert(sp->utcb_pages.priv != NULL);
+	struct utcb_page *ups = sp->utcb_pages.priv;
+	sp->utcb_pages.priv = NULL;
+	for(int i=0; i < NUM_KERN_UTCB_PAGES; i++) {
+		htable_add(&sp->utcb_pages, int_hash(ups[i].pos), &ups[i]);
+	}
+	/* FIXME: set kernel threads' UTCB page pointers, too? */
 }
