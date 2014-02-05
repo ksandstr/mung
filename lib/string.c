@@ -36,18 +36,18 @@
 
 static void *memcpy_forward(void *dst, const void *src, size_t len)
 {
-	uint32_t *d = dst;
-	const uint32_t *s = src;
+	uintptr_t *d = dst;
+	const uintptr_t *s = src;
 	size_t i = 0;
-	while(len >= 4) {
+	while(len >= sizeof(uintptr_t)) {
 		d[i] = s[i];
-		len -= 4;
 		i++;
+		len -= sizeof(uintptr_t);
 	}
 
 	uint8_t *d8 = (uint8_t *)d;
 	const uint8_t *s8 = (const uint8_t *)s;
-	i *= 4;
+	i *= sizeof(uintptr_t);
 	while(len > 0) {
 		d8[i] = s8[i];
 		i++;
