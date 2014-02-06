@@ -1118,7 +1118,9 @@ SYSCALL L4_Word_t sys_ipc(
 	}
 	if(unlikely(L4_IsGlobalId(from)
 		&& L4_ThreadNo(from) > last_int_threadno()
-		&& L4_ThreadNo(from) < first_user_threadno()))
+		&& L4_ThreadNo(from) < first_user_threadno()
+		&& likely(current->space != sigma0_space
+			|| from.raw != s0_pager->id)))
 	{
 		set_ipc_error(utcb, 5);		/* non-existing partner, receive phase */
 		return L4_nilthread.raw;
