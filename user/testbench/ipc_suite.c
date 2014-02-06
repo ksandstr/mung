@@ -1004,19 +1004,28 @@ END_TEST
  */
 START_TEST(tid_spec_from_fail)
 {
-	plan_tests(2);
+	plan_tests(1);
 
 	L4_KernelInterfacePage_t *kip = L4_GetKernelInterface();
-	int last_kern = kip->ThreadInfo.X.UserBase - 1;
 
-	L4_LoadMR(0, 0);
-	L4_MsgTag_t tag = L4_Receive_Timeout(L4_GlobalId(last_kern, 17),
-		L4_ZeroTime);
-	L4_Word_t ec = L4_ErrorCode();
-	if(!ok(L4_IpcFailed(tag), "last_kern shouldn't be valid Ipc.from")) {
-		diag("tag.raw=%#lx", tag.raw);
+	bool all_ok = true;
+	for(int i = kip->ThreadInfo.X.SystemBase;
+		i < kip->ThreadInfo.X.UserBase;
+		i++)
+	{
+		/* version hardwired to 1, because mung does that for actual kernel
+		 * threads also.
+		 */
+		L4_ThreadId_t tid = L4_GlobalId(i, 1);
+		L4_LoadMR(0, 0);
+		L4_MsgTag_t tag = L4_Receive_Timeout(tid, L4_ZeroTime);
+		L4_Word_t ec = L4_ErrorCode();
+		if(L4_IpcSucceeded(tag) || ec != 5) {
+			diag("tid=%#lx, tag=%#lx, ec=%#lx", tid.raw, tag.raw, ec);
+			all_ok = false;
+		}
 	}
-	if(!ok1(ec == 5)) diag("ec=%#lx", ec);
+	ok(all_ok, "can't give system range in FromSpec");
 }
 END_TEST
 
