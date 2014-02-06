@@ -142,9 +142,11 @@ static int sigma0_ipc_loop(void *kip_base)
 				L4_Word_t req_attr;
 				L4_StoreMR(1, &req_fpage.raw);
 				L4_StoreMR(2, &req_attr);
+#ifdef DEBUG_ME_HARDER
 				printf("roottask (tid %d:%d) requested page %#lx:%#lx attr %#lx\n",
 					sender.global.X.thread_no, sender.global.X.version,
 					L4_Address(req_fpage), L4_Size(req_fpage), req_attr);
+#endif
 				void *ptr;
 				if((req_fpage.raw & (~0u << PAGE_BITS)) == (~0u << PAGE_BITS)) {
 					ptr = get_free_page(L4_SizeLog2(req_fpage));
@@ -189,9 +191,9 @@ static int sigma0_ipc_loop(void *kip_base)
 				L4_LoadMR(1, map.raw[0]);
 				L4_LoadMR(2, map.raw[1]);
 			} else {
-				printf("unknown IPC label %#lx (u %d, t %d) from %u:%u\n",
-					(L4_Word_t)tag.X.label, tag.X.u, tag.X.t, from.global.X.thread_no,
-					from.global.X.version);
+				printf("unknown IPC label %#lx (u %d, t %d) from %lu:%lu\n",
+					(L4_Word_t)tag.X.label, tag.X.u, tag.X.t,
+					L4_ThreadNo(from), L4_Version(from));
 				break;
 			}
 
@@ -366,7 +368,9 @@ static void build_heap(void *kip_base)
 	L4_Word_t meminfo = *(L4_Word_t *)(kip_base + 0x54),
 		num_mds = meminfo & 0xffff;
 	L4_MemoryDesc_t *mds = kip_base + (meminfo >> 16);
+#ifdef DEBUG_ME_HARDER
 	printf("%d memory descriptors at %p\n", (int)num_mds, mds);
+#endif
 
 	/* discover system memory.
 	 *
@@ -398,9 +402,11 @@ static void build_heap(void *kip_base)
 		v_end = 0xc0000000ul - 1;
 	}
 	for(int i = v_at + 1; i < num_mds; i++) {
+#ifdef DEBUG_ME_HARDER
 		printf("range %#lx .. %#lx: type %lu, virtual %d\n",
 			L4_MemoryDescLow(&mds[i]), L4_MemoryDescHigh(&mds[i]),
 			L4_MemoryDescType(&mds[i]), L4_IsMemoryDescVirtual(&mds[i]));
+#endif
 
 		if(L4_MemoryDescType(&mds[i]) != L4_ConventionalMemoryType
 			|| L4_IsMemoryDescVirtual(&mds[i]))
