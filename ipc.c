@@ -410,6 +410,7 @@ static bool has_redir_chain(struct thread *base, struct thread *tip)
 static bool ipc_send_half(
 	struct thread *self,
 	void *self_utcb,
+	struct thread *dest,
 	bool *preempt_p)
 {
 	assert(preempt_p != NULL);
@@ -428,12 +429,11 @@ static bool ipc_send_half(
 	int err_code = 0;
 	L4_MsgTag_t *tag = (void *)&L4_VREG(self_utcb, L4_TCR_MR(0));
 
-	if(tag->raw == 0
-		&& CHECK_FLAG(self->flags, TF_INTR)
-		&& is_interrupt(self->ipc_to)
-		/* redirected tasks can never reply to interrupts. */
-		&& self->space->redirector.raw == L4_anythread.raw)
-	{
+	if(dest == NULL) {
+		assert(CHECK_FLAG(self->flags, TF_INTR));
+		assert(is_interrupt(self->ipc_to));
+		assert(self->space->redirector.raw == L4_anythread.raw);
+
 		/* eat an interrupt reply. */
 		err_code = int_clear(L4_ThreadNo(self->ipc_to), self);
 		if(err_code != 0) goto error;
@@ -441,14 +441,6 @@ static bool ipc_send_half(
 			*preempt_p = false;
 			return true;
 		}
-	}
-
-	struct thread *dest = resolve_tid_spec(self->space, self->ipc_to);
-	if(dest == NULL) {
-		TRACE("%s: can't find peer %lu:%lu\n", __func__,
-			TID_THREADNUM(self->ipc_to.raw), TID_VERSION(self->ipc_to.raw));
-		self->status = TS_READY;
-		goto no_partner;
 	}
 
 	bool redirected = false;
@@ -679,9 +671,6 @@ static bool ipc_send_half(
 	}
 	assert(false);
 
-no_partner:
-	err_code = 2;
-
 error:
 	set_ipc_error(self_utcb, (err_code << 1) | 0);
 	self->status = TS_READY;
@@ -705,7 +694,7 @@ void ipc_user(
 
 	void *from_utcb = thread_get_utcb(from);
 	bool preempt = false;
-	if(ipc_send_half(from, from_utcb, &preempt)
+	if(ipc_send_half(from, from_utcb, to, &preempt)
 		&& !preempt
 		&& from->status == TS_R_RECV)
 	{
@@ -1042,19 +1031,28 @@ L4_MsgTag_t kipc(
 
 	L4_MsgTag_t tag = { .raw = 0 };		/* "no error" */
 	bool preempt = false;
-	if(likely(!L4_IsNilThread(to)) && !ipc_send_half(current, utcb, &preempt)) {
-		if(current->status == TS_SEND_WAIT) {
-			/* passive send. */
-			thread_sleep(current, current->send_timeout);
-			TRACE("%s: passive send, scheduling\n", __func__);
-			schedule();
-		}
-		tag.raw = L4_VREG(utcb, L4_TCR_MR(0));
-		if(L4_IpcFailed(tag)) {
-			assert(current->status == TS_RUNNING);
-			TRACE("%s: error %#lx\n",
-				__func__, L4_VREG(utcb, L4_TCR_ERRORCODE));
+	if(likely(!L4_IsNilThread(to))) {
+		struct thread *dest = resolve_tid_spec(current->space, to);
+		if(dest == NULL) {
+			set_ipc_error(utcb, 4);		/* send: no partner */
+			tag.raw = L4_VREG(utcb, L4_TCR_MR(0));
 			return tag;
+		}
+
+		if(!ipc_send_half(current, utcb, dest, &preempt)) {
+			if(current->status == TS_SEND_WAIT) {
+				/* passive send. */
+				thread_sleep(current, current->send_timeout);
+				TRACE("%s: passive send, scheduling\n", __func__);
+				schedule();
+			}
+			tag.raw = L4_VREG(utcb, L4_TCR_MR(0));
+			if(L4_IpcFailed(tag)) {
+				assert(current->status == TS_RUNNING);
+				TRACE("%s: error %#lx\n",
+					__func__, L4_VREG(utcb, L4_TCR_ERRORCODE));
+				return tag;
+			}
 		}
 	}
 	assert(!preempt);		/* kthreads aren't preemptable (TODO) */
@@ -1083,39 +1081,6 @@ L4_MsgTag_t kipc(
 	TRACE("%s: returning\n", __func__);
 
 	return tag;
-}
-
-
-static void ipc(struct thread *current, void *utcb, bool *preempt_p)
-{
-	assert(utcb != NULL);
-	assert(preempt_p != NULL);
-
-	*preempt_p = false;
-
-	/* send phase. */
-	if(!L4_IsNilThread(current->ipc_to)) {
-		TRACE("%s: IPC send phase.\n", __func__);
-		if(!ipc_send_half(current, utcb, preempt_p)) {
-			/* error case. */
-			goto end;
-		}
-	}
-	if(!L4_IsNilThread(current->ipc_from)
-		&& current->status != TS_SEND_WAIT
-		&& !*preempt_p)
-	{
-		/* receive phase. */
-		TRACE("%s: IPC receive phase.\n", __func__);
-		ipc_recv_half(current, utcb, preempt_p);
-		assert(current->status == TS_READY
-			|| current->status == TS_RECV_WAIT);
-	}
-
-end:
-	if(current->status == TS_READY && !*preempt_p) {
-		current->status = TS_RUNNING;
-	}
 }
 
 
@@ -1154,7 +1119,49 @@ SYSCALL L4_Word_t sys_ipc(
 	current->ipc_from = from;
 	current->send_timeout.raw = timeouts >> 16;
 	current->recv_timeout.raw = timeouts & 0xffff;
-	ipc(current, utcb, &preempt);
+
+	struct thread *dest = NULL;
+	if(!L4_IsNilThread(to)
+		&& (!CHECK_FLAG(current->flags, TF_INTR)
+			|| !is_interrupt(to)
+			/* redirected tasks can never reply to interrupts. */
+			|| current->space->redirector.raw != L4_anythread.raw))
+	{
+		/* resolve to an actual thread (not an interrupt). or fail if not
+		 * associated with an interrupt.
+		 */
+		dest = resolve_tid_spec(current->space, to);
+		if(unlikely(dest == NULL)) {
+			TRACE("%s: can't find %s peer %lu:%lu\n", __func__,
+				L4_IsGlobalId(to) ? "global" : "local",
+				L4_ThreadNo(to), L4_Version(to));
+			set_ipc_error(utcb, 4);	/* no partner, send phase */
+			assert(current->status == TS_RUNNING
+				|| current->status == TS_READY);
+			current->status = TS_RUNNING;
+			return L4_nilthread.raw;
+		}
+	}
+	if(!L4_IsNilThread(to)) {
+		/* send phase. */
+		TRACE("%s: IPC send phase.\n", __func__);
+		if(!ipc_send_half(current, utcb, dest, &preempt)) {
+			/* didn't complete. either SEND_WAIT, STOPPED, or XFER. */
+			if(current->status == TS_READY) {
+				current->status = TS_RUNNING;
+			}
+			from = L4_nilthread;	/* disable instant receive phase. */
+		}
+	}
+
+	if(!L4_IsNilThread(from) && current->status != TS_SEND_WAIT && !preempt) {
+		/* receive phase. */
+		TRACE("%s: IPC receive phase.\n", __func__);
+		ipc_recv_half(current, utcb, &preempt);
+		assert(current->status == TS_READY
+			|| current->status == TS_RECV_WAIT);
+	}
+
 	if(preempt && IS_READY(current->status)) {
 		/* would return, but was pre-empted */
 		assert(!IS_KERNEL_THREAD(current));		/* >implying */
@@ -1171,6 +1178,12 @@ SYSCALL L4_Word_t sys_ipc(
 	} else {
 		/* return from IPC at once. */
 		TRACE("%s: returning to caller\n", __func__);
+		/* TODO: remove this check. ipc_send_half() should put the thread
+		 * in TS_SEND_WAIT or TS_XFER, or retain TS_RUNNING.
+		 */
+		if(current->status == TS_READY) {
+			current->status = TS_RUNNING;
+		}
 		assert(current->status == TS_RUNNING);
 		assert(!IS_KERNEL_THREAD(current));
 	}
