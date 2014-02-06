@@ -903,12 +903,11 @@ START_TEST(tid_spec_to_fail)
 	} invalid_cases[] = {
 		{ L4_anythread, "anythread" },
 		{ L4_anylocalthread, "anylocalthread" },
-		{ L4_GlobalId(last_kern, 11), "tno=last_kern" },
 		/* the interrupt range is tested in interrupt_suite.c, (TODO: or
 		 * should be, anyway)
 		 */
 	};
-	plan_tests(2 * NUM_ELEMENTS(invalid_cases));
+	plan_tests(2 * NUM_ELEMENTS(invalid_cases) + 1);
 
 	/* part 1: invalid @to. */
 	for(int i=0; i < NUM_ELEMENTS(invalid_cases); i++) {
@@ -923,6 +922,22 @@ START_TEST(tid_spec_to_fail)
 		}
 		ok1(code == 2);
 	}
+
+	/* part 2: the whole kernel range, version hardwired to 1 because it'd
+	 * take a while to cover all 14 bits.
+	 */
+	bool all_ok = true;
+	for(int i = kip->ThreadInfo.X.SystemBase; i <= last_kern; i++) {
+		L4_ThreadId_t tid = L4_GlobalId(i, 1);
+		L4_LoadMR(0, 0);
+		L4_MsgTag_t tag = L4_Reply(tid);
+		L4_Word_t ec = L4_ErrorCode(), code = ec >> 1;
+		if(L4_IpcSucceeded(tag) || code != 2) {
+			all_ok = false;
+			diag("tid=%#lx: tag=%#lx, ec=%#lx", tid.raw, tag.raw, ec);
+		}
+	}
+	ok(all_ok, "kernel range wasn't IPCable [version=1]");
 }
 END_TEST
 
