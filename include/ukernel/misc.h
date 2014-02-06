@@ -20,12 +20,16 @@
 #define SYSCALL __attribute__((regparm(3)))
 
 
+struct thread;
+
+
 /* from kmain.c */
 
 extern uint8_t syscall_stack[];
 /* should only be read with interrupts disabled! */
 extern uint64_t global_timer_count;		/* timer ticks */
 extern uint64_t *systemclock_p;			/* microseconds */
+extern struct thread *s0_pager;
 
 extern void NORETURN panic(const char *message);
 

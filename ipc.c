@@ -1095,13 +1095,23 @@ SYSCALL L4_Word_t sys_ipc(
 		__func__, TID_THREADNUM(current->id), TID_VERSION(current->id),
 		to.raw, from.raw, timeouts);
 
-	/* parameter validation.
-	 *
-	 * TODO: catch attempts to IPC to a kernel thread from within a
-	 * non-privileged space.
-	 */
-	if(unlikely(to.raw == L4_anythread.raw
-		|| to.raw == L4_anylocalthread.raw))
+	/* parameter validation. */
+	if(!L4_IsNilThread(to)
+#ifdef ENABLE_SELFTEST
+		/* special permission for the root task for kernel self-tests. */
+		&& (!CHECK_FLAG(current->space->flags, SF_PRIVILEGE)
+			|| to.raw != s0_pager->id)
+#endif
+		&& unlikely(to.raw == L4_anythread.raw
+			|| to.raw == L4_anylocalthread.raw
+			/* only sigma0 may IPC to the kth range, and then only to its pager
+			 * thread.
+			 */
+			|| (!L4_IsLocalId(to)
+				&& L4_ThreadNo(to) < first_user_threadno()
+				&& L4_ThreadNo(to) > last_int_threadno()
+				&& likely(current->space != sigma0_space
+					|| to.raw != s0_pager->id))))
 	{
 		set_ipc_error(utcb, 4);		/* non-existing partner, send phase */
 		return L4_nilthread.raw;

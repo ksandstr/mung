@@ -33,6 +33,7 @@
 
 struct tss kernel_tss;
 struct space *sigma0_space = NULL;
+struct thread *s0_pager = NULL;
 
 struct pic_ops global_pic;
 
@@ -540,13 +541,14 @@ void kmain(void *bigp, unsigned int magic)
 	 * segfaults, so that's OK.
 	 */
 	int next_user_tno = first_user_threadno();
-	struct thread *sigma0_pager = kth_start(&pager_thread, NULL),
-		*s0_thread = spawn_kernel_server(THREAD_ID(next_user_tno++, 1),
-			&s0_mod, sigma0_pager, PAGE_BITS, true),
-		*roottask = NULL;
+	s0_pager = kth_start(&pager_thread, NULL);
+	struct thread *s0_thread = spawn_kernel_server(
+		THREAD_ID(next_user_tno++, 1), &s0_mod, s0_pager,
+		PAGE_BITS, true);
 	sigma0_space = s0_thread->space;
 	/* (burn one TID for sigma1, which is missing from the spec.) */
 	next_user_tno++;
+	struct thread *roottask = NULL;
 	if(roottask_mod.high >= PAGE_SIZE) {
 		roottask = spawn_kernel_server(THREAD_ID(next_user_tno++, 1),
 			&roottask_mod, s0_thread, 16, false);
