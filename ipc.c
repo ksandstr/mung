@@ -406,7 +406,12 @@ static bool has_redir_chain(struct thread *base, struct thread *tip)
 }
 
 
-/* postcond: !@retval || @self->status \in {READY, R_RECV, STOPPED} */
+/* returns true for instant success, and false for error condition, or IPC in
+ * progress (sleep, string transfer fault).
+ *
+ * postcond: @retval -> @self->status \in {READY, R_RECV, STOPPED}
+ *           !@retval -> @self->status \in {SEND_WAIT, XFER, READY, STOPPED}
+ */
 static bool ipc_send_half(
 	struct thread *self,
 	void *self_utcb,
@@ -622,16 +627,6 @@ static bool ipc_send_half(
 			btos(*preempt_p), dest->pri, sched_status_str(dest),
 			self->pri, sched_status_str(self));
 
-		if(L4_IsNilThread(self->ipc_from)) {
-			/* send-only, and done. */
-			self->status = TS_READY;
-		} else {
-			/* indicate active receive. set wakeup time from right now. */
-			self->status = TS_R_RECV;
-			self->wakeup_time = wakeup_at(self->recv_timeout);
-			sq_update_thread(self);
-		}
-		assert(IS_READY(self->status));
 		return true;
 	} else if(self->send_timeout.raw != L4_ZeroTime.raw) {
 		/* passive send */
@@ -665,6 +660,7 @@ static bool ipc_send_half(
 	} else {
 		/* instant timeout. */
 		set_ipc_error(self_utcb, (1 << 1) | 0);
+		/* TODO: is this required? instant return would indicate "no". */
 		set_ipc_return_thread(self, self_utcb);
 		self->status = TS_READY;
 		return false;
@@ -694,10 +690,8 @@ void ipc_user(
 
 	void *from_utcb = thread_get_utcb(from);
 	bool preempt = false;
-	if(ipc_send_half(from, from_utcb, to, &preempt)
-		&& !preempt
-		&& from->status == TS_R_RECV)
-	{
+	if(ipc_send_half(from, from_utcb, to, &preempt)) {
+		/* FIXME: check preemption due to recipient */
 		ipc_recv_half(from, from_utcb, &preempt);
 		/* NOTE: preempt is discarded. if @from is the currently running
 		 * thread, this can have the effect of failing to pre-empt @from when
@@ -1158,47 +1152,71 @@ SYSCALL L4_Word_t sys_ipc(
 		/* send phase. */
 		TRACE("%s: IPC send phase.\n", __func__);
 		if(!ipc_send_half(current, utcb, dest, &preempt)) {
-			/* didn't complete. either SEND_WAIT, STOPPED, or XFER. */
-			if(current->status == TS_READY) {
-				current->status = TS_RUNNING;
+			/* didn't complete. either READY, SEND_WAIT, STOPPED, or XFER. */
+			assert(current->status != TS_STOPPED);	/* (would be weird.) */
+			if(IS_IPC(current->status)) {
+				/* ongoing IPC. */
+				return_to_scheduler();
+			} else {
+				/* error condition in send phase. */
+				goto err_exit;
 			}
-			from = L4_nilthread;	/* disable instant receive phase. */
+		} else if(preempt) {
+			/* TODO: do partner scheduling before preemption checks.
+			 *
+			 * TODO: move the "preempt" variable into a global thing that's
+			 * observed by return_from_exn() at exn end, and with a static
+			 * inline function in other places (e.g. between IPC phases).
+			 */
+			assert(IS_READY(current->status) || current->status == TS_RUNNING);
+			if(!L4_IsNilThread(from)) {
+				/* must step off due to preemption. indicate a need for active
+				 * receive through the scheduler.
+				 */
+				current->status = TS_R_RECV;
+				current->wakeup_time = wakeup_at(current->recv_timeout);
+				sq_update_thread(current);
+			} else {
+				/* preemption before Ipc exit. */
+				current->status = TS_READY;
+				set_ipc_return_regs(&current->ctx, current, utcb);
+			}
+			return_to_scheduler();
 		}
 	}
 
-	if(!L4_IsNilThread(from) && current->status != TS_SEND_WAIT && !preempt) {
+	if(!L4_IsNilThread(from) && current->status != TS_SEND_WAIT) {
 		/* receive phase. */
 		TRACE("%s: IPC receive phase.\n", __func__);
-		ipc_recv_half(current, utcb, &preempt);
-		assert(current->status == TS_READY
-			|| current->status == TS_RECV_WAIT);
-	}
+		if(ipc_recv_half(current, utcb, &preempt)) {
+			if(preempt && IS_READY(current->status)) {
+				/* TODO: replace this with return_from_exn() handling */
+				set_ipc_return_regs(&current->ctx, current, utcb);
+				return_to_scheduler();
+			}
 
-	if(preempt && IS_READY(current->status)) {
-		/* would return, but was pre-empted */
-		assert(!IS_KERNEL_THREAD(current));		/* >implying */
-		TRACE("%s: scheduling (pre-empted)\n", __func__);
-		set_ipc_return_regs(&current->ctx, current, utcb);
-		return_to_scheduler();
-		assert(false);
-	} else if(IS_IPC(current->status)) {
-		/* IPC ongoing. */
-		TRACE("%s: scheduling (ongoing IPC)\n", __func__);
-		/* TODO: schedule the waitee */
-		return_to_scheduler();
-		assert(false);
-	} else {
-		/* return from IPC at once. */
-		TRACE("%s: returning to caller\n", __func__);
-		/* TODO: remove this check. ipc_send_half() should put the thread
-		 * in TS_SEND_WAIT or TS_XFER, or retain TS_RUNNING.
-		 */
-		if(current->status == TS_READY) {
+			/* TODO: alter ipc_recv_half() to not change status to TS_READY
+			 * when about to return true
+			 */
 			current->status = TS_RUNNING;
+		} else if(IS_IPC(current->status)) {
+			/* ongoing IPC. */
+			assert(current->status != TS_R_RECV);
+			return_to_scheduler();
+		} else {
+			/* error condition in receive phase. */
+			goto err_exit;
 		}
-		assert(current->status == TS_RUNNING);
-		assert(!IS_KERNEL_THREAD(current));
 	}
 
+	/* successful exit. */
+	assert(current->status == TS_RUNNING);
+	assert(!IS_KERNEL_THREAD(current));
 	return current->ipc_from.raw;
+
+err_exit:
+	assert(CHECK_FLAG(L4_VREG(utcb, L4_TCR_MR(0)), 0x8000));
+	assert(L4_VREG(utcb, L4_TCR_ERRORCODE) != 0);
+	current->status = TS_RUNNING;
+	return L4_nilthread.raw;
 }
