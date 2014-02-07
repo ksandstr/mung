@@ -58,6 +58,8 @@ thread.o: thread.c threadmgr-defs.h
 # (common dependency between forkserv and testbench, so it takes care of
 # forkserv-defs.h for both in the proper order.)
 heap.o: heap.c forkserv-defs.h common-defs.h
+benchmark.o: benchmark.c benchmark-defs.h
+testbench.o: testbench.c common-defs.h
 
 
 # NOTE: use of the same heap.o as in testbench
@@ -77,10 +79,25 @@ forkserv: forkserv.ld crt0.o forkserv.o syscalls.o heap.o dlmalloc.o \
 	@$(CC) -c -o $@ $< $(CFLAGS) -DUSE_LOCKS=1 -Wno-unused
 
 
-# muidl outputs
-%-service.s %-client.s %-common.s %-defs.h: idl/%.idl
-	@echo "  IDL $<"
-	@$(MUIDL) $(MUIDLFLAGS) --service --client --common --defs $<
+# muidl outputs.
+# TODO: we don't really need to hear first about the services being generated,
+# and then the common bit, the client, and then the defs. there's AS chatter
+# about the first three too.
+%-service.s: idl/%.idl
+	@echo "  IDL $< <service>"
+	@$(MUIDL) $(MUIDLFLAGS) --service $<
+
+%-client.s: idl/%.idl
+	@echo "  IDL $< <client>"
+	@$(MUIDL) $(MUIDLFLAGS) --client $<
+
+%-common.s: idl/%.idl
+	@echo "  IDL $< <common>"
+	@$(MUIDL) $(MUIDLFLAGS) --common $<
+
+%-defs.h: idl/%.idl
+	@echo "  IDL $< <defs>"
+	@$(MUIDL) $(MUIDLFLAGS) --defs $<
 
 
 include $(wildcard .deps/*.d)
