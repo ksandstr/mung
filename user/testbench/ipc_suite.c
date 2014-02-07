@@ -707,8 +707,10 @@ end:
 
 
 /* tests that a send from a lower to higher priority thread causes a
- * scheduling preemption. also tests that a send to a same-priority thread
- * causes no preemption.
+ * scheduling preemption. also tests that a send to a lower-priority thread
+ * causes no preemption. (sending to a same-priority thread may cause the IPC
+ * to be active-received by the peer, which correctly doesn't pre-empt it; the
+ * test's experiment would be inconclusive.)
  *
  * FIXME: see comment at r_recv_timeout_case; same applies here
  */
@@ -730,10 +732,9 @@ START_LOOP_TEST(send_preempt, iter, 0, 1)
 	fail_if(L4_IsNilThread(other));
 	L4_ThreadSwitch(other);
 
-	if(p_preempt) {
-		L4_Word_t ret = L4_Set_Priority(L4_Myself(), start_pri - 11);
-		fail_if(ret == 0, "ret %lu, ec %#lx", ret, L4_ErrorCode());
-	}
+	L4_Word_t ret = L4_Set_Priority(p_preempt ? L4_Myself() : other,
+		start_pri - 11);
+	fail_if(ret == 0, "ret %lu, ec %#lx", ret, L4_ErrorCode());
 
 	L4_Clock_t start = L4_SystemClock();
 	L4_LoadMR(0, 0);
