@@ -36,35 +36,6 @@ jmp_buf catch_pf_env;
 volatile bool catch_pf_ok = false;
 
 
-/* this must be the last line of an exception handler that doesn't call one of
- * the return_to_*() family of kernel exits. it tests for and handles latent
- * interrupts, restoring the interrupt flag from saved user context. (the
- * reason why return_to_*() callers don't need it is that return_to_*() family
- * already does this, as they must.)
- *
- * NOTE: this'll likely be expanded to a more general, preemption-handling ISR
- * exit path.
- *
- * NOTE: exported in <ukernel/sched.h> .
- */
-void return_from_exn(void)
-{
-	assert(x86_irq_is_enabled());
-	x86_irq_disable();
-	if(unlikely(kernel_irq_deferred)) {
-		do {
-			x86_irq_enable();
-			if(int_latent()) {
-				/* TODO: cause preemption before exit */
-				printf("%s: preemption! (caller %p)\n", __func__,
-					__builtin_return_address(0));
-			}
-			x86_irq_disable();
-		} while(kernel_irq_deferred);
-	}
-}
-
-
 void isr_exn_de_bottom(struct x86_exregs *regs)
 {
 	printf("#DE(0x%lx) at eip 0x%lx, esp 0x%lx\n", regs->error,

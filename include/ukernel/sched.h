@@ -9,6 +9,7 @@
 #include <ukernel/x86.h>
 #include <ukernel/misc.h>
 #include <ukernel/thread.h>
+#include <ukernel/interrupt.h>
 
 
 /* global data from sched.c */
@@ -20,6 +21,10 @@ extern int preempt_task_pri;
 extern bool preempt_delayed;
 /* set per CPU rather early, used to signal preemption scheduling */
 extern L4_Word_t *scheduler_mr1;
+
+/* set from thread_sleep() */
+extern bool kernel_preempt_pending;
+extern struct thread *kernel_preempt_to;
 
 
 /* initializes the scheduler.
@@ -38,6 +43,9 @@ extern NORETURN void return_to_scheduler(void);
  */
 extern NORETURN void return_to_ipc(struct thread *target);
 
+/* returns on failure. caller should fall back to return_to_scheduler(). */
+extern void return_to_other(struct thread *next);
+
 /* very rare; invoked in thread self-deletion after the current thread has
  * been destroyed. basically a variant of return_to_scheduler() but doesn't
  * reference current at all.
@@ -49,6 +57,16 @@ extern NORETURN void return_from_dead(void);
  * reloaded by IRET.
  */
 extern void return_from_exn(void);
+
+/* see comment for check_preempt() */
+extern void return_to_preempt(void);
+
+/* returns true when it's useful for the caller to prepare the current thread
+ * for scheduling out of, and then call return_to_preempt(). unless preemption
+ * was delayed, the latter will do a non-local exit.
+ */
+extern bool check_preempt(void);
+
 
 /* distinct function for easier transition to SMP. (it'll be under
  * per-processor %fs then.)
@@ -75,6 +93,11 @@ static inline void sq_update_thread(struct thread *t) {
 	sq_remove_thread(t);
 	sq_insert_thread(t);
 }
+
+/* called from thread_sleep()'s wake branch, and the ->R_RECV Ipc state
+ * transition.
+ */
+extern void might_preempt(struct thread *t);
 
 extern const char *sched_status_str(struct thread *t);
 

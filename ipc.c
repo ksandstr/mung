@@ -970,6 +970,7 @@ bool ipc_recv_half(
 				from->status = TS_R_RECV;
 				from->wakeup_time = wakeup_at(from->recv_timeout);
 				sq_update_thread(from);
+				might_preempt(from);
 			}
 		}
 		if(!post_exn_ok(self)) {

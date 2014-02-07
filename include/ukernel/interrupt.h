@@ -58,8 +58,8 @@ extern int int_clear(int intnum, struct thread *sender);
 
 extern int int_poll(struct thread *t, int intnum);
 
-/* returns true on preempt, clears kernel_irq_deferred */
-extern bool int_latent(void);
+/* clears kernel_irq_deferred, may set kernel_preempt_pending */
+extern void int_latent(void);
 
 extern volatile bool kernel_irq_ok, kernel_irq_deferred;
 

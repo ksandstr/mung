@@ -476,16 +476,22 @@ void thread_sleep(struct thread *t, L4_Time_t period)
 			if(t->status != TS_XFER) t->status = TS_READY;
 			t->wakeup_time = 0;
 			sq_update_thread(t);
+
+			if(t->status == TS_READY) {
+				might_preempt(t);
+			}
 		}
 	} else {
+#if 0
 #ifndef NDEBUG
 		if(!IS_IPC_WAIT(t->status) && t->status != TS_XFER) {
 			printf("%s: thread %lu:%lu status is %s\n", __func__,
 				TID_THREADNUM(t->id), TID_VERSION(t->id),
 				sched_status_str(t));
 		}
-		assert(IS_IPC_WAIT(t->status) || t->status == TS_XFER);
 #endif
+#endif
+		assert(IS_IPC_WAIT(t->status) || t->status == TS_XFER);
 
 		t->wakeup_time = wakeup_at(period);
 		sq_update_thread(t);
@@ -947,7 +953,7 @@ static bool send_int_ipc(int ivec, struct thread *t, bool kernel_irq)
 }
 
 
-bool int_latent(void)
+void int_latent(void)
 {
 	assert(x86_irq_is_enabled());
 	assert(kernel_irq_deferred);
@@ -977,20 +983,15 @@ bool int_latent(void)
 	kernel_irq_deferred = false;
 	x86_irq_enable();
 
-	bool preempt = false;
 	if(num_vecs > 0) {
 		int no_deliver = 0;
-		struct thread *current = get_current_thread();
 		for(int i=0; i < num_vecs; i++) {
 			if(ts[i] == NULL) continue;
-			if(send_int_ipc(vecs[i], ts[i], false)) {
-				if(ts[i]->pri > current->pri) preempt = true;
-			} else {
+			if(!send_int_ipc(vecs[i], ts[i], false)) {
 				no_deliver++;
 				ts[i] = NULL;
 			}
 		}
-		if(IS_KERNEL_THREAD(current)) preempt = false;
 
 		if(no_deliver > 0) {
 			/* go clear the delivery bits for the ones that failed. */
@@ -1001,8 +1002,6 @@ bool int_latent(void)
 			x86_irq_enable();
 		}
 	}
-
-	return preempt;
 }
 
 

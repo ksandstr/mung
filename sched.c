@@ -42,6 +42,10 @@ L4_Word_t *scheduler_mr1 = NULL;
 int preempt_task_pri = 0;
 bool preempt_delayed = false;
 
+/* pre-emption of threads while inside the kernel. */
+bool kernel_preempt_pending = false;
+struct thread *kernel_preempt_to = NULL;
+
 
 COLD void init_sched(struct thread *current)
 {
@@ -147,6 +151,19 @@ void sq_remove_thread(struct thread *t)
 }
 
 
+void might_preempt(struct thread *t)
+{
+	struct thread *current = get_current_thread();
+	if(t->pri > current->pri
+		&& (!kernel_preempt_pending
+			|| t->pri > kernel_preempt_to->pri))
+	{
+		kernel_preempt_pending = true;
+		kernel_preempt_to = t;
+	}
+}
+
+
 /* simple IPC timeout. signaled to exactly one thread. */
 static void timeout_ipc(struct thread *t)
 {
@@ -234,13 +251,12 @@ static void entering_thread(struct thread *next)
 
 	/* write parameters used by the irq0 handler */
 	preempt_at = (preempt_at + 999) / 1000;
-	assert(x86_irq_is_enabled());
-	x86_irq_disable();
+	x86_irq_disable_push();
 	current_thread = next;
 	preempt_timer_count = preempt_at;
 	preempt_task_pri = preempt_pri;
 	preempt_delayed = false;
-	x86_irq_enable();
+	x86_irq_restore();
 }
 
 
@@ -465,11 +481,14 @@ NORETURN void scheduler_loop(struct thread *self)
 		*scheduler_mr1 = L4_nilthread.raw;
 		self->status = TS_READY;
 		if(kernel_irq_deferred) int_latent();
+		kernel_preempt_pending = false;
+		kernel_preempt_to = NULL;
 		if(!schedule()) {
 			kernel_irq_ok = true;
 			asm volatile ("hlt" ::: "memory");
 			kernel_irq_ok = false;
 		} else if(*scheduler_mr1 != L4_nilthread.raw) {
+			/* FIXME: move this into return_from_exn()! */
 			L4_ThreadId_t prev_tid = { .raw = *scheduler_mr1 };
 			assert(L4_IsGlobalId(prev_tid));
 			struct thread *prev = thread_find(*scheduler_mr1);
@@ -516,13 +535,8 @@ NORETURN void scheduler_loop(struct thread *self)
 }
 
 
-/* this function must always perform a nonlocal exit, because it'll always
- * represent an intra-privilege control transfer (user thread in kernel mode
- * to kernel thread). so it's a stack exiting thing.
- *
- * FIXME: the above is bullshit. iret_to_scheduler() isn't required: we're
- * already in kernel space. in truth it'd suffice just to jump to the
- * scheduler context sans the IRET.
+/* this function is a NORETURN due to non-local exit. it'll always either go
+ * into the scheduler (syscall stack to kth) or do a preemption (in r_f_e()).
  */
 void return_to_scheduler(void)
 {
@@ -544,7 +558,6 @@ void return_to_scheduler(void)
 	next->status = TS_RUNNING;
 	current_thread = next;
 
-	if(!x86_irq_is_enabled()) x86_irq_enable();		/* for r_f_e() */
 	return_from_exn();
 	assert((next->ctx.eflags & (1 << 14)) == 0);
 	iret_to_scheduler(&next->ctx);
@@ -562,17 +575,113 @@ COLD void return_from_dead(void)
 	next->status = TS_RUNNING;
 	current_thread = next;
 
-	if(!x86_irq_is_enabled()) x86_irq_enable();		/* for r_f_e() */
 	return_from_exn();
 	assert((next->ctx.eflags & (1 << 14)) == 0);
 	iret_to_scheduler(&next->ctx);
 }
 
 
-/* returns on failure. caller should fall back to return_to_scheduler(). */
-static void return_to_other(struct thread *current, struct thread *other)
+/* this must be the last line of an exception handler that doesn't call one of
+ * the return_to_*() family of kernel exits. it tests for and handles latent
+ * interrupts. (the reason why return_to_*() callers don't need it is that
+ * return_to_*() family already does this before the kernel exit or
+ * user-to-kth switch.)
+ */
+void return_from_exn(void)
 {
+	x86_irq_disable();
+	if(unlikely(kernel_irq_deferred)) {
+		do {
+			x86_irq_enable();
+			int_latent();
+			x86_irq_disable();
+		} while(kernel_irq_deferred);
+	}
+
+	if(kernel_preempt_pending) {
+		struct thread *current = get_current_thread(),
+			*next = kernel_preempt_to;
+		kernel_preempt_pending = false;
+		kernel_preempt_to = NULL;
+#if 0
+		L4_ThreadId_t dest = { .raw = next->id };
+		printf("%s: preempt %lu:%lu -> %lu:%lu!\n", __func__,
+			TID_THREADNUM(current->id), TID_VERSION(current->id),
+			L4_ThreadNo(dest), L4_Version(dest));
+#endif
+		if(IS_KERNEL_THREAD(next)) {
+			/* FIXME: handle kth-on-user preemptions by scheduler entry
+			 * TODO: and maybe later a direct iret_to_scheduler()-alike
+			 */
+			printf("%s: target is kth, not preempting\n", __func__);
+		} else if(current == next) {
+			/* an unlikely occurrence: the preemptor would've been switched to
+			 * anyway. skip the preemption altogether and (most likely) return
+			 * to userspace.
+			 *
+			 * TODO: this happens under poorly-understood circumstances which
+			 * should be investigated properly. in general, preemptions should
+			 * always involve a different non-kernel thread.
+			 */
+		} else {
+			assert(current->status == TS_RUNNING);
+			current->status = TS_READY;
+
+			if(current != scheduler_thread) {
+				assert(current->wakeup_time == 0);
+				leaving_thread(current);
+			}
+
+			if(next->quantum <= 0) {
+				/* the idea here is that the preemptor is the only ready
+				 * thread in its priority band, and thus schedule()'s
+				 * timeslice-adding loop would do this exact same thing.
+				 */
+				if(next->ts_len.raw == L4_Never.raw) {
+					next->quantum = ~(uint32_t)0;
+				} else {
+					uint64_t ts = time_in_us(next->ts_len);
+					do {
+						next->quantum += ts;
+					} while(next->quantum <= 0);
+				}
+			}
+			entering_thread(next);
+			switch_thread_u2u(next);
+		}
+	}
+}
+
+
+/* like return_from_exn(), but allows for continuation of in-kernel processing
+ * with interrupts enabled when pre-emption delay kicks in instead.
+ */
+void return_to_preempt(void)
+{
+	return_from_exn();
+	x86_irq_enable();
+}
+
+
+bool check_preempt(void)
+{
+	if(kernel_preempt_pending) {
+		return true;
+	} else if(kernel_irq_deferred) {
+		int_latent();
+		return kernel_preempt_pending;
+	} else {
+		return false;
+	}
+}
+
+
+void return_to_other(struct thread *other)
+{
+	struct thread *current = get_current_thread();
+
 	assert(other != current);
+	/* TODO: resolve R_RECV first */
 	if(other->status != TS_READY) return;
 
 	TRACE("%s: %c-%c: %lu:%lu -> %lu:%lu\n", __func__,
@@ -632,7 +741,7 @@ SYSCALL void sys_threadswitch(L4_ThreadId_t target)
 		/* on failure (i.e. other not TS_READY), return to caller. also return
 		 * if other isn't.
 		 */
-		if(other != current) return_to_other(current, other);
+		if(other != current) return_to_other(other);
 	} else {
 		current->status = TS_READY;
 		/* the thread gets a new quantum once other threads have run. */
