@@ -428,8 +428,8 @@ bool schedule(void)
 
 	if(next->status == TS_XFER) {
 		assert(!IS_KERNEL_THREAD(next));
-		bool preempt = false, done = ipc_resume(next, &preempt);
-		if(!done || preempt) return schedule();
+		bool done = ipc_resume(next);
+		if(!done || check_preempt()) return schedule();
 	}
 	/* not exclusive with previous, as ipc_resume() sets @next to TS_R_RECV
 	 * when it was the sender of a call
@@ -440,9 +440,10 @@ bool schedule(void)
 		 */
 		assert(!IS_KERNEL_THREAD(next));
 		assert(!L4_IsNilThread(next->ipc_from));
-		bool preempt = false,
-			r_done = ipc_recv_half(next, thread_get_utcb(next), &preempt);
-		if((!r_done && next->status == TS_RECV_WAIT) || (r_done && preempt)) {
+		bool r_done = ipc_recv_half(next, thread_get_utcb(next));
+		if((!r_done && next->status == TS_RECV_WAIT)
+			|| (r_done && check_preempt()))
+		{
 			/* either entered passive receive (and not eligible to run
 			 * anymore), or preempted by the sender. try again.
 			 */

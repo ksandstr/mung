@@ -75,13 +75,13 @@ extern SYSCALL L4_Word_t sys_ipc(
  *
  * on error, @t's ErrorCode will be set.
  *
- * when ipc_{recv,send}_half() succeeds and *preempt_p is true, the caller
- * should preempt the current receiver thread if it is currently executing.
+ * ipc_recv_half() may cause thread_wake() to be called, which can alter the
+ * scheduling queue or cause a preemption.
  */
-extern bool ipc_recv_half(struct thread *t, void *t_utcb, bool *preempt_p);
+extern bool ipc_recv_half(struct thread *t, void *t_utcb);
 
 /* as ipc_recv_half(), but requires @peer->state == TS_XFER */
-extern bool ipc_resume(struct thread *peer, bool *preempt_p);
+extern bool ipc_resume(struct thread *peer);
 
 /* partner thread of a thread in TS_XFER. accessor of struct ipc_state. */
 extern struct thread *ipc_partner(struct thread *t);

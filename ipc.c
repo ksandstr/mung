@@ -165,7 +165,7 @@ void ipc_xfer_timeout(struct ipc_state *st)
  * a paused string transfer are ready to proceed. it should write both sides'
  * IPC return registers.
  */
-bool ipc_resume(struct thread *t, bool *preempt_p)
+bool ipc_resume(struct thread *t)
 {
 	assert(t->status == TS_XFER);
 	assert(t->ipc != NULL);
@@ -192,7 +192,6 @@ bool ipc_resume(struct thread *t, bool *preempt_p)
 	int n = do_typed_transfer(source, s_utcb, dest, d_utcb, tag);
 	if(n < 0) {
 		assert(n == -EFAULT);
-		*preempt_p = false;
 		return false;
 	}
 	assert(dest->ipc == NULL);
@@ -232,7 +231,6 @@ bool ipc_resume(struct thread *t, bool *preempt_p)
 	sq_update_thread(source);
 	sq_update_thread(dest);
 
-	*preempt_p = false;		/* FIXME */
 	return true;
 }
 
@@ -415,10 +413,8 @@ static bool has_redir_chain(struct thread *base, struct thread *tip)
 static bool ipc_send_half(
 	struct thread *self,
 	void *self_utcb,
-	struct thread *dest,
-	bool *preempt_p)
+	struct thread *dest)
 {
-	assert(preempt_p != NULL);
 	/* must look this alive to attempt active send */
 	assert(!CHECK_FLAG(self->flags, TF_HALT));
 	assert(self->status != TS_STOPPED);
@@ -441,11 +437,7 @@ static bool ipc_send_half(
 
 		/* eat an interrupt reply. */
 		err_code = int_clear(L4_ThreadNo(self->ipc_to), self);
-		if(err_code != 0) goto error;
-		else {
-			*preempt_p = false;
-			return true;
-		}
+		if(err_code == 0) return true; else goto error;
 	}
 
 	bool redirected = false;
@@ -572,9 +564,6 @@ static bool ipc_send_half(
 					set_ipc_error_thread(dest, error | 1);
 				}
 				thread_wake(dest);
-				*preempt_p = dest->pri > self->pri;
-			} else {
-				*preempt_p = false;
 			}
 			set_ipc_error(self_utcb, error & ~1ul);
 			assert(self->status == TS_RUNNING);
@@ -586,7 +575,6 @@ static bool ipc_send_half(
 			 * pager; and xfer, waiting for partner's pager thing.)
 			 */
 			assert(IS_IPC(self->status));
-			*preempt_p = false;
 			return false;
 		}
 
@@ -622,10 +610,6 @@ static bool ipc_send_half(
 				|| dest->ipc->xferto_at == 0
 				|| dest->ipc->xferto_at > ksystemclock());
 		}
-		*preempt_p = dest->pri > self->pri && IS_READY(dest->status);
-		TRACE("%s: preempt=%s; d %d/%s, s %d/%s\n", __func__,
-			btos(*preempt_p), dest->pri, sched_status_str(dest),
-			self->pri, sched_status_str(self));
 
 		return true;
 	} else if(self->send_timeout.raw != L4_ZeroTime.raw) {
@@ -670,7 +654,6 @@ static bool ipc_send_half(
 error:
 	set_ipc_error(self_utcb, (err_code << 1) | 0);
 	self->status = TS_READY;
-	*preempt_p = false;
 	return false;
 }
 
@@ -689,14 +672,11 @@ void ipc_user(
 	from->recv_timeout = L4_Never;
 
 	void *from_utcb = thread_get_utcb(from);
-	bool preempt = false;
-	if(ipc_send_half(from, from_utcb, to, &preempt)) {
-		/* FIXME: check preemption due to recipient */
-		ipc_recv_half(from, from_utcb, &preempt);
-		/* NOTE: preempt is discarded. if @from is the currently running
-		 * thread, this can have the effect of failing to pre-empt @from when
-		 * the IPC from @to is satisfied by a propagated passive send.
+	if(ipc_send_half(from, from_utcb, to)) {
+		/* TODO: this can only succeed with a propagated passive send, so put
+		 * @from in R_RECV and return to partner instead.
 		 */
+		ipc_recv_half(from, from_utcb);
 	}
 
 	if(xferto_at > 0 && IS_IPC(from->status)) {
@@ -805,13 +785,8 @@ static struct ipc_wait *find_local_sender(bool *valid_p, struct thread *self)
 
 
 /* postcond: !@retval || @self->status \in {READY, R_RECV, STOPPED} */
-bool ipc_recv_half(
-	struct thread *self,
-	void *self_utcb,
-	bool *preempt_p)
+bool ipc_recv_half(struct thread *self, void *self_utcb)
 {
-	assert(preempt_p != NULL);
-
 	/* poll for interrupts where applicable. */
 	if(CHECK_FLAG(self->flags, TF_INTR)
 		&& (self->ipc_from.raw == L4_anythread.raw
@@ -830,7 +805,6 @@ bool ipc_recv_half(
 			set_ipc_return_regs(&self->ctx, self, utcb);
 			if(self->status == TS_RUNNING) self->status = TS_READY;
 			assert(IS_READY(self->status));
-			*preempt_p = false;
 			return true;
 		}
 	}
@@ -871,7 +845,6 @@ bool ipc_recv_half(
 				 */
 				ipc_xfer_timeout(self->ipc);
 				assert(IS_READY(self->status));
-				*preempt_p = false;
 				return true;
 			} else {
 				/* avoid L4_Time_t back-and-forth in thread_sleep() */
@@ -979,13 +952,6 @@ bool ipc_recv_half(
 			 */
 			assert(IS_READY(from->status));
 		}
-		*preempt_p = self == get_current_thread()
-			&& preempted_by(self, task_switch_time * 1000, from);
-		if(*preempt_p) {
-			assert(self->status == TS_RUNNING || self->status == TS_R_RECV
-				|| self->status == TS_READY);
-			self->status = TS_READY;
-		}
 
 		return true;
 	}
@@ -1025,7 +991,6 @@ L4_MsgTag_t kipc(
 	current->recv_timeout.raw = timeouts & 0xffff;
 
 	L4_MsgTag_t tag = { .raw = 0 };		/* "no error" */
-	bool preempt = false;
 	if(likely(!L4_IsNilThread(to))) {
 		struct thread *dest = resolve_tid_spec(current->space, to);
 		if(dest == NULL) {
@@ -1034,7 +999,7 @@ L4_MsgTag_t kipc(
 			return tag;
 		}
 
-		if(!ipc_send_half(current, utcb, dest, &preempt)) {
+		if(!ipc_send_half(current, utcb, dest)) {
 			if(current->status == TS_SEND_WAIT) {
 				/* passive send. */
 				thread_sleep(current, current->send_timeout);
@@ -1050,11 +1015,11 @@ L4_MsgTag_t kipc(
 			}
 		}
 	}
-	assert(!preempt);		/* kthreads aren't preemptable (TODO) */
+	/* TODO: check kth preemption? */
 	assert(current->status != TS_XFER);
 
-	if(likely(!L4_IsNilThread(current->ipc_from)) && !preempt) {
-		if(!ipc_recv_half(current, utcb, &preempt)) {
+	if(likely(!L4_IsNilThread(current->ipc_from))) {
+		if(!ipc_recv_half(current, utcb)) {
 			if(current->status == TS_RECV_WAIT) {
 				/* passive receive.
 				 *
@@ -1065,8 +1030,7 @@ L4_MsgTag_t kipc(
 				schedule();
 			}
 		}
-		/* TODO: kernel threads aren't preemptable quite yet. */
-		assert(!preempt);
+		/* TODO: check kth preemption? */
 		tag.raw = L4_VREG(utcb, L4_TCR_MR(0));
 		if(likely(L4_IpcSucceeded(tag))) *from_p = current->ipc_from;
 	}
@@ -1121,7 +1085,6 @@ SYSCALL L4_Word_t sys_ipc(
 		return L4_nilthread.raw;
 	}
 
-	bool preempt = false;
 	current->ipc_to = to;
 	current->ipc_from = from;
 	current->send_timeout.raw = timeouts >> 16;
@@ -1152,7 +1115,7 @@ SYSCALL L4_Word_t sys_ipc(
 	if(!L4_IsNilThread(to)) {
 		/* send phase. */
 		TRACE("%s: IPC send phase.\n", __func__);
-		if(!ipc_send_half(current, utcb, dest, &preempt)) {
+		if(!ipc_send_half(current, utcb, dest)) {
 			/* didn't complete. either READY, SEND_WAIT, STOPPED, or XFER. */
 			assert(current->status != TS_STOPPED);	/* (would be weird.) */
 			if(IS_IPC(current->status)) {
@@ -1162,13 +1125,8 @@ SYSCALL L4_Word_t sys_ipc(
 				/* error condition in send phase. */
 				goto err_exit;
 			}
-		} else if(preempt) {
-			/* TODO: do partner scheduling before preemption checks.
-			 *
-			 * TODO: move the "preempt" variable into a global thing that's
-			 * observed by return_from_exn() at exn end, and with a static
-			 * inline function in other places (e.g. between IPC phases).
-			 */
+		} else if(check_preempt()) {
+			/* TODO: do partner scheduling before preemption checks. */
 			assert(IS_READY(current->status) || current->status == TS_RUNNING);
 			if(!L4_IsNilThread(from)) {
 				/* must step off due to preemption. indicate a need for active
@@ -1189,9 +1147,8 @@ SYSCALL L4_Word_t sys_ipc(
 	if(!L4_IsNilThread(from) && current->status != TS_SEND_WAIT) {
 		/* receive phase. */
 		TRACE("%s: IPC receive phase.\n", __func__);
-		if(ipc_recv_half(current, utcb, &preempt)) {
-			if(preempt && IS_READY(current->status)) {
-				/* TODO: replace this with return_from_exn() handling */
+		if(ipc_recv_half(current, utcb)) {
+			if(check_preempt() && IS_READY(current->status)) {
 				set_ipc_return_regs(&current->ctx, current, utcb);
 				return_to_scheduler();
 			}
