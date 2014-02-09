@@ -324,6 +324,7 @@ static void switch_thread(struct thread *prev, struct thread *next)
 
 	space_switch(next->space);
 	cop_switch(next);
+	assert(current_thread == next);
 
 	/* load the new context */
 	int gs_sel = !IS_KERNEL_THREAD(next) ? next->utcb_ptr_seg << 3 | 3 : 0;
@@ -340,16 +341,18 @@ static void switch_thread(struct thread *prev, struct thread *next)
 		next->flags &= ~TF_SYSCALL;
 		swap_to_ring3(&prev->ctx, &next->ctx, gs_sel);
 	}
+
+	assert(current_thread == prev);
 }
 
 
 NORETURN void switch_thread_u2u(struct thread *next)
 {
-	assert(!IS_KERNEL_THREAD(get_current_thread()));
 	assert(!IS_KERNEL_THREAD(next));
 
 	space_switch(next->space);
 	cop_switch(next);
+	assert(current_thread == next);
 
 	assert(next->utcb_ptr_seg != 0);
 	int utcb_sel = next->utcb_ptr_seg << 3 | 3;
@@ -362,7 +365,6 @@ NORETURN void switch_thread_u2u(struct thread *next)
 		next->flags &= ~TF_SYSCALL;
 		struct x86_exregs dummy;
 		swap_to_ring3(&dummy, &next->ctx, utcb_sel);
-		panic("u2u swap_to_ring3() shouldn't return!");
 	}
 
 	assert(false);
