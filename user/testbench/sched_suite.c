@@ -261,15 +261,6 @@ START_TEST(kip_sysclock_step)
 END_TEST
 
 
-static void next_tick(void)
-{
-	L4_Clock_t start = L4_SystemClock();
-	do {
-		/* sit & spin */
-	} while(start.raw == L4_SystemClock().raw);
-}
-
-
 /* test that returning from a L4_Sleep() (i.e. no send phase, receive from
  * self with timeout) happens within +-SchedulePrecision of the specified
  * time, regardless of where the sleep starts.

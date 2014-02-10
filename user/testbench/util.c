@@ -153,3 +153,12 @@ void xjoin_thread(L4_ThreadId_t other)
 		kill_thread(other);
 	}
 }
+
+
+void next_tick(void)
+{
+	L4_Clock_t start = L4_SystemClock();
+	do {
+		/* sit & spin */
+	} while(start.raw == L4_SystemClock().raw);
+}
