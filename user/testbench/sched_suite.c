@@ -823,7 +823,7 @@ END_TEST
  *   - whether the spinner thread's quantum runs out during the preemption
  *     delay time, or not
  *
- * observe: times when preemptions occur. these should cover:
+ * observe times when preemptions occur. these should cover:
  *   1) whether preemption by higher-priority thread occurs
  *   2) time until preempted by higher-priority thread
  *   3) whether preemption by quantum works despite delay on priority
@@ -835,30 +835,24 @@ END_TEST
  * such as for checking against sens_pri, may not result in a switch to the
  * preemptor thread until after the higher-or-equal priority exception handler
  * has switched off.
+ *
+ * FIXME: preemption IPC should only be sent once the preempted thread
+ * resumes. thus the test cannot rely on this.
  */
-START_LOOP_TEST(delay_preempt, t, 0, 0xf)
+START_LOOP_TEST(delay_preempt, iter, 0, 15)
 {
-	const bool delay_pe = (t & 0x1) != 0,
-		high_sens_pri = (t & 0x2) != 0,
-		polite = (t & 0x4) != 0,
-		small_ts = (t & 0x8) != 0;
-
-#if 0
-	diag("delay %s, high_sens_pri %s, polite %s, small_ts %s",
-		delay_pe ? "true" : "false",
-		high_sens_pri ? "true" : "false",
-		polite ? "true" : "false",
-		small_ts ? "true" : "false");
-#endif
+	const bool delay_pe = CHECK_FLAG(iter, 1),
+		high_sens_pri = CHECK_FLAG(iter, 2),
+		polite = CHECK_FLAG(iter, 4),
+		small_ts = CHECK_FLAG(iter, 8);
+	diag("delay_pe=%s, high_sens_pri=%s, polite=%s, small_ts=%s",
+		btos(delay_pe), btos(high_sens_pri), btos(polite), btos(small_ts));
 
 	struct list_head preempts = LIST_HEAD_INIT(preempts);
 	L4_Clock_t start_time;
 	bool ok = delay_preempt_case(&preempts, &start_time,
 		delay_pe, high_sens_pri, polite, small_ts);
-	if(!ok) {
-		plan_skip_all("experiment failed");
-		return;
-	}
+	fail_unless(ok, "experiment failed");
 
 	struct preempt_wakeup *wu = list_top(&preempts, struct preempt_wakeup,
 		result_link);
@@ -944,8 +938,7 @@ START_LOOP_TEST(delay_preempt, t, 0, 0xf)
 				"preemption by quantum while polite");
 		skip_end;
 	} else {
-		diag("unhandled case %d", t);
-		plan_skip_all("case not handled");
+		fail_if(true, "unhandled iter=%d", iter);
 	}
 
 	/* FIXME: free wakeup structs in "preempts" */
