@@ -714,14 +714,21 @@ end:
  *
  * FIXME: see comment at r_recv_timeout_case; same applies here
  */
-START_LOOP_TEST(send_preempt, iter, 0, 1)
+START_LOOP_TEST(send_preempt, iter, 0, 15)
 {
-	plan_tests(2);
+	plan_tests(4);
 
-	const bool p_preempt = CHECK_FLAG(iter, 1);
-	diag("p_preempt=%s", btos(p_preempt));
+	const bool p_preempt = CHECK_FLAG(iter, 1), p_delay = CHECK_FLAG(iter, 2),
+		p_highsens = CHECK_FLAG(iter, 4), p_lowmax = CHECK_FLAG(iter, 8);
+	diag("p_preempt=%s, p_delay=%s, p_highsens=%s, p_lowmax=%s",
+		btos(p_preempt), btos(p_delay), btos(p_highsens), btos(p_lowmax));
+
+	const bool full_delay = p_delay && p_highsens && !p_lowmax,
+		short_delay = p_delay && p_highsens && p_lowmax;
 	const int start_pri = find_own_priority(),
 		spin_us = 5000;	/* 5 ms */
+	diag("full_delay=%s, short_delay=%s, start_pri=%d, spin_us=%d",
+		btos(full_delay), btos(short_delay), start_pri, spin_us);
 	fail_unless(start_pri >= 12,
 		"need start_pri at least 12, got %d", start_pri);
 
@@ -732,22 +739,53 @@ START_LOOP_TEST(send_preempt, iter, 0, 1)
 	fail_if(L4_IsNilThread(other));
 	L4_ThreadSwitch(other);
 
-	L4_Word_t ret = L4_Set_Priority(p_preempt ? L4_Myself() : other,
-		start_pri - 11);
+	L4_Word_t ret = L4_Set_PreemptionDelay(L4_Myself(),
+		p_highsens ? start_pri : start_pri - 2,
+		p_lowmax ? spin_us - 2000 : spin_us * 2);
+	fail_if(ret == 0, "set_ped: ret=%lu, ec=%#lx", ret, L4_ErrorCode());
+	if(p_delay) L4_DisablePreemption();
+
+	ret = L4_Set_Priority(p_preempt ? L4_Myself() : other, start_pri - 11);
 	fail_if(ret == 0, "ret %lu, ec %#lx", ret, L4_ErrorCode());
 
+	next_tick();
 	L4_Clock_t start = L4_SystemClock();
 	L4_LoadMR(0, 0);
 	L4_MsgTag_t tag = L4_Send(other);
 	fail_if(L4_IpcFailed(tag), "ec %#lx", L4_ErrorCode());
 	L4_Clock_t end = L4_SystemClock();
+	bool pend_before = L4_PreemptionPending();
+	usleep(spin_us);
+	bool pend_after = L4_PreemptionPending();
+	if(p_delay) {
+		if(pend_before || pend_after) L4_ThreadSwitch(L4_nilthread);
+		L4_DisablePreemption();
+	}
 	uint64_t diff_us = end.raw - start.raw;
-	ok1(!p_preempt || diff_us >= spin_us);
-	ok1(p_preempt || diff_us < 2000);
 
-	diag("diff_us=%lu", (unsigned long)diff_us);
+	diag("diff_us=%lu, pend_before=%s, pend_after=%s",
+		(unsigned long)diff_us, btos(pend_before), btos(pend_after));
 
-	join_thread(other);
+	if(diff_us == spin_us - 1000) {
+		/* to counter measurement jitter due to shitty timers and whatnot */
+		diag("FUDGING: diff_us += 1000");
+		diff_us += 1000;
+	}
+
+	/* check that return from the send-only Ipc happens immediately when
+	 * preemption doesn't occur or is delayed, and after the other thread
+	 * completes spinning otherwise.
+	 */
+	imply_ok1(!p_preempt || (p_delay && p_highsens), diff_us < 2000);
+	imply_ok1(p_preempt && (!p_delay || !p_highsens), diff_us >= spin_us);
+
+	/* preemption due to max delay running out should cause a "pending before,
+	 * not pending after" condition.
+	 */
+	iff_ok1(p_preempt && short_delay, pend_before && !pend_after);
+	iff_ok1(p_preempt && full_delay, pend_before && pend_after);
+
+	xjoin_thread(other);
 }
 END_TEST
 
