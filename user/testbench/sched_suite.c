@@ -1068,12 +1068,14 @@ Suite *sched_suite(void)
 {
 	Suite *s = suite_create("sched");
 
-	TCase *api_case = tcase_create("api");
-	tcase_set_fork(api_case, false);
-	tcase_add_test(api_case, single_as_errors);
-	tcase_add_test(api_case, syscall_access);
-	tcase_add_test(api_case, range_errors);
-	suite_add_tcase(s, api_case);
+	{
+		TCase *tc = tcase_create("api");
+		tcase_set_fork(tc, false);
+		tcase_add_test(tc, single_as_errors);
+		tcase_add_test(tc, syscall_access);
+		tcase_add_test(tc, range_errors);
+		suite_add_tcase(s, tc);
+	}
 
 	{
 		TCase *tc = tcase_create("kip");
@@ -1087,26 +1089,36 @@ Suite *sched_suite(void)
 		suite_add_tcase(s, tc);
 	}
 
-	TCase *ipc_case = tcase_create("ipc");
-	tcase_set_fork(ipc_case, false);
-	tcase_add_test(ipc_case, r_recv_timeout_test);
-	suite_add_tcase(s, ipc_case);
+	/* TODO: this should be moved into ipc:timeout. */
+	{
+		TCase *tc = tcase_create("ipc");
+		tcase_set_fork(tc, false);
+		tcase_add_test(tc, r_recv_timeout_test);
+		suite_add_tcase(s, tc);
+	}
 
-	/* TODO: fix forkserv's new_thread() call to support all of the timeslice
+	/* tests regarding preemption. currently only ones that're due to thread
+	 * quantums, but should be expanded with ones from ipc:preempt.
+	 *
+	 * TODO: fix forkserv's new_thread() call to support all of the timeslice
 	 * etc. bits from start_thread_long(), then remove the no-fork attribute
 	 */
-	TCase *preempt_case = tcase_create("preempt");
-	tcase_set_fork(preempt_case, false);
-	tcase_add_test(preempt_case, simple_preempt_test);
-	tcase_add_test(preempt_case, preempt_exn_test);
-	tcase_add_test(preempt_case, delay_preempt);
-	suite_add_tcase(s, preempt_case);
+	{
+		TCase *tc = tcase_create("preempt");
+		tcase_set_fork(tc, false);
+		tcase_add_test(tc, simple_preempt_test);
+		tcase_add_test(tc, preempt_exn_test);
+		tcase_add_test(tc, delay_preempt);
+		suite_add_tcase(s, tc);
+	}
 
 	/* TODO: see above */
-	TCase *yield_case = tcase_create("yield");
-	tcase_set_fork(yield_case, false);
-	tcase_add_test(yield_case, yield_timeslice_test);
-	suite_add_tcase(s, yield_case);
+	{
+		TCase *tc = tcase_create("yield");
+		tcase_set_fork(tc, false);
+		tcase_add_test(tc, yield_timeslice_test);
+		suite_add_tcase(s, tc);
+	}
 
 	return s;
 }
