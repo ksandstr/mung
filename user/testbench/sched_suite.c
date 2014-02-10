@@ -387,113 +387,6 @@ START_TEST(syscall_access)
 END_TEST
 
 
-/* test case for the correct ipc error result in threads that time out in the
- * TS_R_RECV state.
- *
- * two cases: with an incoming message, and without. the former tests whether
- * the TS_R_RECV timeout is handled correctly in the receive override case,
- * which isn't implemented as of 2012-05-06.
- *
- * FIXME: this should be moved into ipc_suite.
- * FIXME: and verified.
- */
-static void r_recv_timeout_fn(void *param_ptr)
-{
-	/* in-parameters: [0] = partner TID, [1] = timeout (L4_Time_t) */
-	L4_Word_t *param = param_ptr;
-	L4_ThreadId_t partner = { .raw = param[0] };
-	L4_Time_t timeout = { .raw = param[1] };
-#if 0
-	diag("in helper %lu:%lu; partner=%lu:%lu, timeout=%u µs",
-		L4_ThreadNo(L4_Myself()), L4_Version(L4_Myself()),
-		L4_ThreadNo(partner), L4_Version(partner),
-		(unsigned)L4_PeriodUs_NP(timeout));
-#endif
-
-	L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 1 }.raw);
-	L4_LoadMR(1, 0xfedcba98);
-	L4_ThreadId_t dummy;
-	L4_MsgTag_t tag = L4_Ipc(partner, partner,
-		L4_Timeouts(L4_Never, timeout), &dummy);
-	if(L4_IpcSucceeded(tag)) param[0] = 0; else param[0] = L4_ErrorCode();
-
-	L4_LoadMR(0, 0);
-	L4_Send(partner);
-}
-
-
-/* FIXME: change thread.c, forkserv to set scheduler for forked processes'
- * threads like it is in the root task's threads, i.e. that the creator can
- * schedule its own threads.
- *
- * for now the test runs without fork.
- */
-static L4_Word_t r_recv_timeout_case(int priority, bool spin, bool send)
-{
-	const int timeout_ms = 20;
-
-	L4_Word_t *param = malloc(sizeof(*param) * 2);
-	fail_if(param == NULL);
-	param[0] = L4_Myself().raw;
-	param[1] = L4_TimePeriod(timeout_ms * 1000).raw;
-	L4_ThreadId_t helper = start_thread(&r_recv_timeout_fn, param);
-	fail_unless(!L4_IsNilThread(helper));
-
-	L4_Word_t res = L4_Set_Priority(helper, priority);
-	fail_unless((res & 0xff) != 0, "res=%#lx, ec=%#lx",
-		res, L4_ErrorCode());
-
-	L4_MsgTag_t tag = L4_Receive(helper);
-	fail_unless(L4_IpcSucceeded(tag), "ec=%#lx", L4_ErrorCode());
-
-	if(spin) {
-		L4_Clock_t start = L4_SystemClock();
-		do {
-			delay_loop(iters_per_tick / 100);
-		} while(start.raw == L4_SystemClock().raw);
-
-		start = L4_SystemClock();
-		do {
-			/* ishygddt */
-			delay_loop(iters_per_tick);
-		} while(start.raw + timeout_ms * 1000 > L4_SystemClock().raw);
-	}
-
-	if(send) {
-		L4_LoadMR(0, 0);
-		L4_Reply(helper);
-	}
-
-	/* get sync */
-	tag = L4_Receive_Timeout(helper, L4_TimePeriod(150 * 1000));
-	IPC_FAIL(tag);
-
-	join_thread(helper);
-	L4_Word_t ret = param[0];
-	free(param);
-
-	return ret;
-}
-
-
-START_TEST(r_recv_timeout_test)
-{
-	plan_tests(4);
-	const int own_pri = find_own_priority(), test_pri = own_pri - 2;
-	diag("test_pri=%d, own_pri=%d", test_pri, own_pri);
-
-	ok(r_recv_timeout_case(test_pri, false, false) == 0x3,
-		"timeout in immediate nosend");
-	ok(r_recv_timeout_case(test_pri, false, true) == 0,
-		"successful immediate send");
-	ok(r_recv_timeout_case(test_pri, true, false) == 0x3,
-		"timeout in spin, nosend");
-	ok(r_recv_timeout_case(test_pri, true, true) == 0x3,
-		"timeout in spin, send");
-}
-END_TEST
-
-
 struct spinner_param
 {
 	L4_ThreadId_t parent;
@@ -1086,14 +979,6 @@ Suite *sched_suite(void)
 		 *   - another for timeslice exhaustion
 		 */
 		tcase_add_test(tc, kip_schedprec_wait);
-		suite_add_tcase(s, tc);
-	}
-
-	/* TODO: this should be moved into ipc:timeout. */
-	{
-		TCase *tc = tcase_create("ipc");
-		tcase_set_fork(tc, false);
-		tcase_add_test(tc, r_recv_timeout_test);
 		suite_add_tcase(s, tc);
 	}
 
