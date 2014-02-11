@@ -751,7 +751,7 @@ START_LOOP_TEST(send_preempt, iter, 0, 15)
 	next_tick();
 	L4_Clock_t start = L4_SystemClock();
 	L4_LoadMR(0, 0);
-	L4_MsgTag_t tag = L4_Send(other);
+	L4_MsgTag_t tag = L4_Send_Timeout(other, TEST_IPC_DELAY);
 	fail_if(L4_IpcFailed(tag), "ec %#lx", L4_ErrorCode());
 	L4_Clock_t end = L4_SystemClock();
 	bool pend_before = L4_PreemptionPending();
@@ -789,6 +789,141 @@ START_LOOP_TEST(send_preempt, iter, 0, 15)
 }
 END_TEST
 
+
+/* helper of recv_preempt */
+static void send_spin_fn(void *param_ptr)
+{
+	const L4_Word_t *ps = param_ptr;
+	unsigned int sleep_us = ps[0];
+	bool p_sendwait = ps[1];
+	L4_ThreadId_t dest = { .raw = ps[2] };
+	free(param_ptr);
+
+	L4_ThreadId_t from;
+	L4_MsgTag_t tag;
+	L4_LoadMR(0, 0);
+	if(p_sendwait) {
+		tag = L4_Ipc(dest, L4_anythread,
+			L4_Timeouts(TEST_IPC_DELAY, TEST_IPC_DELAY), &from);
+	} else {
+		tag = L4_Send_Timeout(dest, TEST_IPC_DELAY);
+		from = L4_nilthread;
+	}
+	if(L4_IpcFailed(tag)) {
+		printf("%s: ipc failed, ec %#lx\n", __func__, L4_ErrorCode());
+		return;
+	}
+
+	if(sleep_us > 0) usleep(sleep_us);
+}
+
+
+/* basically the same thing as send_preempt, but for preemptions due to active
+ * receive, and covers also preemptions due to immediately subsequent active
+ * receive by the peer.
+ */
+START_LOOP_TEST(recv_preempt, iter, 0, 31)
+{
+	plan_tests(4);
+
+	const bool p_preempt = CHECK_FLAG(iter, 1), p_delay = CHECK_FLAG(iter, 2),
+		p_highsens = CHECK_FLAG(iter, 4), p_lowmax = CHECK_FLAG(iter, 8),
+		p_sendwait = CHECK_FLAG(iter, 16);
+	diag("p_preempt=%s, p_delay=%s, p_highsens=%s, p_lowmax=%s, p_sendwait=%s",
+		btos(p_preempt), btos(p_delay), btos(p_highsens), btos(p_lowmax),
+		btos(p_sendwait));
+
+	const bool full_delay = p_delay && p_highsens && !p_lowmax,
+		short_delay = p_delay && p_highsens && p_lowmax;
+	const int start_pri = find_own_priority(),
+		spin_us = 5000;	/* 5 ms */
+	diag("full_delay=%s, short_delay=%s, start_pri=%d, spin_us=%d",
+		btos(full_delay), btos(short_delay), start_pri, spin_us);
+	fail_unless(start_pri >= 12,
+		"need start_pri at least 12, got %d", start_pri);
+
+	L4_Word_t *param = malloc(sizeof(L4_Word_t) * 3);
+	param[0] = spin_us;
+	param[1] = p_sendwait;
+	param[2] = L4_Myself().raw;
+	L4_ThreadId_t other = start_thread_long(&send_spin_fn, param,
+		-1, L4_TimePeriod(50 * 1000), L4_Never);
+	fail_if(L4_IsNilThread(other));
+
+	L4_ThreadId_t other2 = L4_nilthread;
+	if(p_sendwait) {
+		param = malloc(sizeof(L4_Word_t) * 3);
+		param[0] = 0;
+		param[1] = false;
+		param[2] = other.raw;
+		other2 = start_thread_long(&send_spin_fn, param, -1,
+			L4_TimePeriod(20 * 1000), L4_Never);
+		fail_if(L4_IsNilThread(other2));
+		L4_ThreadSwitch(other2);
+	}
+
+	L4_ThreadSwitch(other);
+
+	L4_Word_t ret = L4_Set_PreemptionDelay(L4_Myself(),
+		p_highsens ? start_pri : start_pri - 2,
+		p_lowmax ? spin_us - 2000 : spin_us * 2);
+	fail_if(ret == 0, "set_ped: ret=%lu, ec=%#lx", ret, L4_ErrorCode());
+	if(p_delay) L4_DisablePreemption();
+
+	ret = L4_Set_Priority(p_preempt ? L4_Myself() : other, start_pri - 11);
+	fail_if(ret == 0, "ret %lu, ec %#lx", ret, L4_ErrorCode());
+#if 0
+	/* NOTE: this segment makes sure that other2 won't preempt the testing
+	 * thread. it's uncertain whether this breaks the test, or if the kernel's
+	 * lack of delay handling in active-receive preempts does that instead.
+	 */
+	if(!L4_IsNilThread(other2) && p_preempt) {
+		ret = L4_Set_Priority(other2, start_pri - 11);
+		fail_if(ret == 0, "ret %lu, ec %#lx", ret, L4_ErrorCode());
+	}
+#endif
+
+	next_tick();
+	L4_Clock_t start = L4_SystemClock();
+	L4_LoadBR(0, 0);
+	L4_MsgTag_t tag = L4_Receive_Timeout(other, TEST_IPC_DELAY);
+	fail_if(L4_IpcFailed(tag), "ec %#lx", L4_ErrorCode());
+	L4_Clock_t end = L4_SystemClock();
+	bool pend_before = L4_PreemptionPending();
+	usleep(spin_us);
+	bool pend_after = L4_PreemptionPending();
+	if(p_delay) {
+		if(pend_before || pend_after) L4_ThreadSwitch(L4_nilthread);
+		L4_DisablePreemption();
+	}
+	uint64_t diff_us = end.raw - start.raw;
+
+	diag("diff_us=%lu, pend_before=%s, pend_after=%s",
+		(unsigned long)diff_us, btos(pend_before), btos(pend_after));
+
+	if(diff_us == spin_us - 1000) {
+		/* to counter measurement jitter due to shitty timers and whatnot */
+		diag("FUDGING: diff_us += 1000");
+		diff_us += 1000;
+	}
+
+	/* check that return from the recv-only Ipc happens immediately when
+	 * preemption doesn't occur or is delayed, and after the other thread
+	 * completes spinning otherwise.
+	 */
+	imply_ok1(!p_preempt || (p_delay && p_highsens), diff_us < 2000);
+	imply_ok1(p_preempt && (!p_delay || !p_highsens), diff_us >= spin_us);
+
+	/* preemption due to max delay running out should cause a "pending before,
+	 * not pending after" condition.
+	 */
+	iff_ok1(p_preempt && short_delay, pend_before && !pend_after);
+	iff_ok1(p_preempt && full_delay, pend_before && pend_after);
+
+	xjoin_thread(other);
+	if(!L4_IsNilThread(other2)) xjoin_thread(other2);
+}
+END_TEST
 
 START_LOOP_TEST(recv_timeout_from_send, iter, 0, 3)
 {
@@ -2111,7 +2246,7 @@ Suite *ipc_suite(void)
 		TCase *tc = tcase_create("preempt");
 		tcase_set_fork(tc, false);
 		tcase_add_test(tc, send_preempt);
-		/* TODO: also one for receive */
+		tcase_add_test(tc, recv_preempt);
 		suite_add_tcase(s, tc);
 	}
 
