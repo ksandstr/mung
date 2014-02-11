@@ -389,6 +389,9 @@ NORETURN void switch_thread_u2u(struct thread *next)
 
 bool schedule(void)
 {
+	kernel_preempt_pending = false;
+	kernel_preempt_to = NULL;
+
 	/* "self" is the kthread that calls schedule(). */
 	struct thread *self = get_current_thread();
 	assert(IS_KERNEL_THREAD(self));
@@ -429,23 +432,18 @@ bool schedule(void)
 	if(next->status == TS_XFER) {
 		assert(!IS_KERNEL_THREAD(next));
 		bool done = ipc_resume(next);
-		if(!done || check_preempt()) return schedule();
+		if(done || !IS_READY(next->status)) return schedule();
 	}
 	/* not exclusive with previous, as ipc_resume() sets @next to TS_R_RECV
 	 * when it was the sender of a call
 	 */
 	if(next->status == TS_R_RECV) {
-		/* FIXME: handle halted threads properly; they should leave the
-		 * scheduling queue after the receive phase.
-		 */
 		assert(!IS_KERNEL_THREAD(next));
 		assert(!L4_IsNilThread(next->ipc_from));
-		bool r_done = ipc_recv_half(next, thread_get_utcb(next));
-		if((!r_done && next->status == TS_RECV_WAIT)
-			|| (r_done && check_preempt()))
-		{
+		ipc_recv_half(next, thread_get_utcb(next));
+		if(next->status != TS_READY) {
 			/* either entered passive receive (and not eligible to run
-			 * anymore), or preempted by the sender. try again.
+			 * anymore), or preempted by sender. try again.
 			 */
 			return schedule();
 		}
@@ -482,8 +480,6 @@ NORETURN void scheduler_loop(struct thread *self)
 		*scheduler_mr1 = L4_nilthread.raw;
 		self->status = TS_READY;
 		if(kernel_irq_deferred) int_latent();
-		kernel_preempt_pending = false;
-		kernel_preempt_to = NULL;
 		if(!schedule()) {
 			kernel_irq_ok = true;
 			asm volatile ("hlt" ::: "memory");
