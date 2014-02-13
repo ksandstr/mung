@@ -19,6 +19,8 @@
 
 #define SYSCALL __attribute__((regparm(3)))
 
+#define NOT_REACHED __not_reached(__FILE__, __LINE__, __func__)
+
 
 struct thread;
 
@@ -32,6 +34,10 @@ extern uint64_t *systemclock_p;			/* microseconds */
 extern struct thread *s0_pager;
 
 extern void NORETURN panic(const char *message);
+extern void NORETURN __not_reached(
+	const char *file,
+	int line,
+	const char *func);
 
 /* return the values of global_timer_count, and *systemclock_p, disabling
  * interrupts around the read operation.
