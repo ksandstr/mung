@@ -708,10 +708,7 @@ SYSCALL L4_Word_t sys_schedule(
 	 * (also: this and @pri should be compared to the higher of the actual
 	 * scheduler thread's and @current's priorities.)
 	 */
-	if((sens_pri != 0xff && sens_pri > current->pri)
-		|| (max_delay != 0xffff
-			&& L4_IsTimePoint_NP((L4_Time_t){ .raw = max_delay })))
-	{
+	if(sens_pri != 0xff && sens_pri > current->pri) {
 		goto inv_param;
 	}
 
@@ -772,7 +769,7 @@ SYSCALL L4_Word_t sys_schedule(
 
 	/* preemptctl */
 	if(sens_pri != 0xff) dest->sens_pri = sens_pri;
-	dest->max_delay = max_delay;
+	if(max_delay != 0xffff) dest->max_delay = max_delay;
 
 end:
 	if(dest != NULL && dest->status != TS_STOPPED) {
