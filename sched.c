@@ -151,6 +151,16 @@ void sq_remove_thread(struct thread *t)
 }
 
 
+/* TODO: this should clearly be somewhere else. */
+static bool closed_wait(struct thread *waiter, struct thread *sender)
+{
+	return (!L4_IsLocalId(waiter->ipc_from)
+			&& waiter->ipc_from.raw == sender->id)
+		|| (waiter->space == sender->space
+			&& waiter->ipc_from.raw == get_local_id(sender).raw);
+}
+
+
 void might_preempt(struct thread *t)
 {
 	assert(x86_irq_is_enabled());
@@ -158,7 +168,9 @@ void might_preempt(struct thread *t)
 	struct thread *current = get_current_thread();
 	if(t->pri > current->pri
 		&& (!kernel_preempt_pending
-			|| t->pri > kernel_preempt_to->pri))
+			|| t->pri > kernel_preempt_to->pri)
+		/* don't let a closed waiter pre-empt its waitee */
+		&& (t->status != TS_R_RECV || !closed_wait(t, current)))
 	{
 		/* check the delay-preemption flag */
 		L4_Word_t *ctl;
