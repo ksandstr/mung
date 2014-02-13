@@ -153,13 +153,53 @@ void sq_remove_thread(struct thread *t)
 
 void might_preempt(struct thread *t)
 {
+	assert(x86_irq_is_enabled());
+
 	struct thread *current = get_current_thread();
 	if(t->pri > current->pri
 		&& (!kernel_preempt_pending
 			|| t->pri > kernel_preempt_to->pri))
 	{
-		kernel_preempt_pending = true;
-		kernel_preempt_to = t;
+		/* check the delay-preemption flag */
+		L4_Word_t *ctl;
+		if(current->max_delay > 0 && current->sens_pri >= t->pri
+			&& (ctl = &L4_VREG(thread_get_utcb(current), L4_TCR_COP_PREEMPT),
+				CHECK_FLAG(*ctl, 0x40)))
+		{
+			/* delay preemption. */
+			uint64_t now = ksystemclock();
+			int q_rem = MAX(int, 0,
+					current->quantum - (now - task_switch_time * 1000)),
+				pe_after = MIN(int, current->max_delay, q_rem);
+
+			/* only set this delayed task switch if a previous preemptor's
+			 * delay target is further out than this one's. this can happen
+			 * iff current->max_delay or current->quantum becomes larger in
+			 * between; the former may happen because of an opportune Schedule
+			 * call and the latter due to timeslice borrowing.
+			 */
+			if(pe_after > 0
+				&& (preempt_timer_count <= task_switch_time
+					|| t->pri > preempt_task_pri
+					|| preempt_timer_count * 1000 - now > pe_after))
+			{
+				*ctl |= 0x80;
+				uint64_t ct = (now + pe_after) / 1000;
+				x86_irq_disable();
+				preempt_task_pri = t->pri;
+				preempt_timer_count = ct;
+				preempt_delayed = true;
+				x86_irq_enable();
+			} else {
+				assert(pe_after == 0 || preempt_task_pri >= 0);
+				assert(pe_after == 0 || preempt_timer_count * 1000 > now);
+			}
+			kernel_preempt_pending = false;
+		} else {
+			/* make it snappy. */
+			kernel_preempt_pending = true;
+			kernel_preempt_to = t;
+		}
 	}
 }
 
