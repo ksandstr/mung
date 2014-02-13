@@ -754,17 +754,16 @@ START_LOOP_TEST(send_preempt, iter, 0, 15)
 	L4_MsgTag_t tag = L4_Send_Timeout(other, TEST_IPC_DELAY);
 	fail_if(L4_IpcFailed(tag), "ec %#lx", L4_ErrorCode());
 	L4_Clock_t end = L4_SystemClock();
-	bool pend_before = L4_PreemptionPending();
 	usleep(spin_us);
-	bool pend_after = L4_PreemptionPending();
+	bool was_pending = L4_PreemptionPending(),
+		was_disabled = L4_DisablePreemption();
 	if(p_delay) {
-		if(pend_before || pend_after) L4_ThreadSwitch(L4_nilthread);
-		L4_DisablePreemption();
+		if(was_pending) L4_ThreadSwitch(L4_nilthread);
 	}
 	uint64_t diff_us = end.raw - start.raw;
 
-	diag("diff_us=%lu, pend_before=%s, pend_after=%s",
-		(unsigned long)diff_us, btos(pend_before), btos(pend_after));
+	diag("diff_us=%lu, was_pending=%s, was_disabled=%s",
+		(unsigned long)diff_us, btos(was_pending), btos(was_disabled));
 
 	if(diff_us == spin_us - 1000) {
 		/* to counter measurement jitter due to shitty timers and whatnot */
@@ -779,11 +778,9 @@ START_LOOP_TEST(send_preempt, iter, 0, 15)
 	imply_ok1(!p_preempt || (p_delay && p_highsens), diff_us < 2000);
 	imply_ok1(p_preempt && (!p_delay || !p_highsens), diff_us >= spin_us);
 
-	/* preemption due to max delay running out should cause a "pending before,
-	 * not pending after" condition.
-	 */
-	iff_ok1(p_preempt && short_delay, pend_before && !pend_after);
-	iff_ok1(p_preempt && full_delay, pend_before && pend_after);
+	/* see comment in recv_preempt */
+	imply_ok1(p_preempt && short_delay, !was_pending && !was_disabled);
+	imply_ok1(p_preempt && full_delay, was_pending && was_disabled);
 
 	xjoin_thread(other);
 }
@@ -889,17 +886,16 @@ START_LOOP_TEST(recv_preempt, iter, 0, 31)
 	L4_MsgTag_t tag = L4_Receive_Timeout(other, TEST_IPC_DELAY);
 	fail_if(L4_IpcFailed(tag), "ec %#lx", L4_ErrorCode());
 	L4_Clock_t end = L4_SystemClock();
-	bool pend_before = L4_PreemptionPending();
 	usleep(spin_us);
-	bool pend_after = L4_PreemptionPending();
+	bool was_pending = L4_PreemptionPending(),
+		was_disabled = L4_DisablePreemption();
 	if(p_delay) {
-		if(pend_before || pend_after) L4_ThreadSwitch(L4_nilthread);
-		L4_DisablePreemption();
+		if(was_pending) L4_ThreadSwitch(L4_nilthread);
 	}
 	uint64_t diff_us = end.raw - start.raw;
 
-	diag("diff_us=%lu, pend_before=%s, pend_after=%s",
-		(unsigned long)diff_us, btos(pend_before), btos(pend_after));
+	diag("diff_us=%lu, was_pending=%s, was_disabled=%s",
+		(unsigned long)diff_us, btos(was_pending), btos(was_disabled));
 
 	if(diff_us == spin_us - 1000) {
 		/* to counter measurement jitter due to shitty timers and whatnot */
@@ -914,11 +910,15 @@ START_LOOP_TEST(recv_preempt, iter, 0, 31)
 	imply_ok1(!p_preempt || (p_delay && p_highsens), diff_us < 2000);
 	imply_ok1(p_preempt && (!p_delay || !p_highsens), diff_us >= spin_us);
 
-	/* preemption due to max delay running out should cause a "pending before,
-	 * not pending after" condition.
+	/* preemption due to max delay running out should cause the "preemption
+	 * pending" bit to read clear after our spin. its absence should cause it
+	 * to read set.
+	 *
+	 * furthermore, a preemption of the delay segment should clear the delay
+	 * flag.
 	 */
-	iff_ok1(p_preempt && short_delay, pend_before && !pend_after);
-	iff_ok1(p_preempt && full_delay, pend_before && pend_after);
+	imply_ok1(p_preempt && short_delay, !was_pending && !was_disabled);
+	imply_ok1(p_preempt && full_delay, was_pending && was_disabled);
 
 	xjoin_thread(other);
 	if(!L4_IsNilThread(other2)) xjoin_thread(other2);
