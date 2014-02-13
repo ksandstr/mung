@@ -73,10 +73,9 @@ START_TEST(single_as_errors)
 			| L4_Never.raw,
 		ref_pectl = (ref_pri - 1) << 8 | L4_Never.raw;
 
-	plan_tests(1 + 2*2 + 1 + 1 + 1);
+	plan_tests(1 + 2*2 + 1 + 1);
 
-	L4_ThreadId_t other = start_thread(&starvin_marvin, NULL);
-	fail_if(L4_IsNilThread(other));
+	L4_ThreadId_t other = xstart_thread(&starvin_marvin, NULL);
 
 	/* base case: pass (unexcitingly) */
 	L4_Word_t timectl_out, ret = L4_Schedule(other, ref_timectl, 0, ref_pri,
@@ -136,20 +135,8 @@ START_TEST(single_as_errors)
 		diag("ret=%lu, ec=%#lx", ret, ec);
 	}
 
-	/* part 4: pork maximum_delay in a very uncomfortable place. */
-	L4_Time_t point = L4_TimePoint((L4_Clock_t){
-		.raw = L4_SystemClock().raw + 10 * 1000 });
-	ret = L4_Schedule(other, ref_timectl, 0, ref_pri,
-		(ref_pectl & 0xff0000) | point.raw, &timectl_out);
-	ec = L4_ErrorCode();
-	if(!ok(ret == L4_SCHEDRESULT_ERROR && ec == 5,
-		"reject timepoint value for maximum_delay"))
-	{
-		diag("ret=%lu, ec=%#lx", ret, ec);
-	}
-
 	send_quit(other);
-	join_thread(other);
+	xjoin_thread(other);
 }
 END_TEST
 
