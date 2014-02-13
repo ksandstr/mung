@@ -660,6 +660,15 @@ void return_from_exn(void)
 			 * should be investigated properly. in general, preemptions should
 			 * always involve a different non-kernel thread.
 			 */
+		} else if(next->status == TS_R_RECV) {
+			if(current == scheduler_thread) {
+				/* just fall out without preempting. it'd be completely
+				 * unacceptable to run ipc_recv_half() from an
+				 * interrupt-disabled section.
+				 */
+			} else {
+				return_to_scheduler();
+			}
 		} else {
 			assert(current->status == TS_RUNNING);
 			current->status = TS_READY;
