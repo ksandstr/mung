@@ -100,21 +100,22 @@ static struct page *find_page_by_id(uint32_t id)
 }
 
 
-uint64_t read_global_timer(void)
+static inline uint64_t read_64bit_timer(void *ptr)
 {
-	x86_irq_disable_push();
-	uint64_t value = global_timer_count;
-	x86_irq_restore();
-	return value;
+	volatile uint32_t *half = ptr;
+	uint32_t high = half[1], low = half[0];
+	if(high != half[1]) return read_64bit_timer(ptr);
+	return (uint64_t)high << 32 | low;
 }
 
 
-uint64_t ksystemclock(void)
-{
-	x86_irq_disable_push();
-	uint64_t value = *systemclock_p;
-	x86_irq_restore();
-	return value;
+uint64_t read_global_timer(void) {
+	return read_64bit_timer(&global_timer_count);
+}
+
+
+uint64_t ksystemclock(void) {
+	return read_64bit_timer(systemclock_p);
 }
 
 
