@@ -199,14 +199,13 @@ static L4_ThreadId_t send_from_thread(L4_Word_t payload, L4_Time_t delay)
 	*param = (struct sender_param){
 		.parent = L4_MyGlobalId(), .payload = payload, .delay = delay,
 	};
-	L4_ThreadId_t tid = start_thread(&sender_thread_fn, param);
-	return tid;
+	return xstart_thread(&sender_thread_fn, param);
 }
 
 
 static L4_ThreadId_t send_from_fork(L4_Word_t payload, L4_Time_t delay)
 {
-	L4_ThreadId_t child_tid, parent_tid = L4_MyGlobalId();
+	L4_ThreadId_t child_tid = L4_nilthread, parent_tid = L4_MyGlobalId();
 	int pid = fork_tid(&child_tid);
 	if(pid == 0) {
 		struct sender_param *param = malloc(sizeof(*param));
@@ -234,6 +233,7 @@ static void close_sender(L4_ThreadId_t sender)
 		join_thread_long(sender, TEST_IPC_DELAY, &ec);
 		if(ec != 0) {
 			diag("%s: join_thread_long(): ec %#lx", __func__, ec);
+			kill_thread(sender);
 		}
 	} else {
 		int status = 0, id = wait(&status);
@@ -1066,8 +1066,7 @@ static L4_Word_t r_recv_timeout_case(int priority, bool spin, bool send)
 	fail_if(param == NULL);
 	param[0] = L4_Myself().raw;
 	param[1] = L4_TimePeriod(timeout_ms * 1000).raw;
-	L4_ThreadId_t helper = start_thread(&r_recv_timeout_fn, param);
-	fail_unless(!L4_IsNilThread(helper));
+	L4_ThreadId_t helper = xstart_thread(&r_recv_timeout_fn, param);
 
 	L4_Word_t res = L4_Set_Priority(helper, priority);
 	fail_unless((res & 0xff) != 0, "res=%#lx, ec=%#lx",
@@ -1098,7 +1097,7 @@ static L4_Word_t r_recv_timeout_case(int priority, bool spin, bool send)
 	tag = L4_Receive_Timeout(helper, L4_TimePeriod(150 * 1000));
 	IPC_FAIL(tag);
 
-	join_thread(helper);
+	xjoin_thread(helper);
 	L4_Word_t ret = param[0];
 	free(param);
 
@@ -1244,10 +1243,9 @@ START_LOOP_TEST(tid_spec_to_ok, iter, 0, MUTATE_NUM_WAYS * 2 - 1)
 	const char *kind = local ? "local" : "global";
 	const int mut_way = iter >> 1;
 
-	L4_ThreadId_t gtid = start_thread(&receive_once, NULL),
+	L4_ThreadId_t gtid = xstart_thread(&receive_once, NULL),
 		test_tid = local ? L4_LocalIdOf(gtid) : gtid,
 		wrong_tid = mutate_tid(test_tid, mut_way);
-	fail_if(L4_IsNilThread(gtid));
 
 	L4_LoadMR(0, 0);
 	L4_MsgTag_t tag = L4_Send_Timeout(test_tid, TEST_IPC_DELAY);
@@ -1261,7 +1259,7 @@ START_LOOP_TEST(tid_spec_to_ok, iter, 0, MUTATE_NUM_WAYS * 2 - 1)
 	ok(L4_IpcFailed(tag), "send to wrong %s TID", kind);
 	if(!ok1(ec == 4)) diag("ec=%#lx", ec);
 
-	join_thread(gtid);
+	xjoin_thread(gtid);
 
 	L4_LoadMR(0, 0);
 	tag = L4_Send_Timeout(test_tid, TEST_IPC_DELAY);
@@ -1337,10 +1335,9 @@ START_LOOP_TEST(tid_spec_from_ok, iter, 0, MUTATE_NUM_WAYS * 4 - 1)
 	const char *kind = local ? "local" : "global";
 
 	L4_ThreadId_t parent_id = pass_local ? L4_MyLocalId() : L4_MyGlobalId(),
-		gtid = start_thread(&send_once_fn, (void *)(uintptr_t)parent_id.raw),
+		gtid = xstart_thread(&send_once_fn, (void *)(uintptr_t)parent_id.raw),
 		test_tid = local ? L4_LocalIdOf(gtid) : gtid,
 		wrong_tid = mutate_tid(test_tid, mut_way);
-	fail_if(L4_IsNilThread(gtid));
 	diag("parent_id=%#lx, test_tid=%#lx, wrong_tid=%#lx",
 		parent_id.raw, test_tid.raw, wrong_tid.raw);
 
@@ -1354,7 +1351,7 @@ START_LOOP_TEST(tid_spec_from_ok, iter, 0, MUTATE_NUM_WAYS * 4 - 1)
 	ok(L4_IpcFailed(tag), "recv from wrong %s TID", kind);
 	if(!ok1(ec == 5)) diag("ec=%#lx", ec);
 
-	join_thread(gtid);
+	xjoin_thread(gtid);
 
 	tag = L4_Receive_Timeout(test_tid, TEST_IPC_DELAY);
 	ec = L4_ErrorCode();
@@ -1378,8 +1375,7 @@ struct prop_param {
 static void prop_peer_fn(void *param)
 {
 	struct prop_param *p = param;
-	L4_ThreadId_t orig = start_thread(&exit_thread, NULL);
-	fail_if(L4_IsNilThread(orig));
+	L4_ThreadId_t orig = xstart_thread(&exit_thread, NULL);
 	if(p->use_ltid) orig = L4_LocalIdOf(orig);
 	else orig = L4_GlobalIdOf(orig);
 
@@ -1395,7 +1391,7 @@ static void prop_peer_fn(void *param)
 	tag = L4_Call(p->dest);
 	p->dest.raw = L4_IpcFailed(tag) ? L4_ErrorCode() : 0;
 
-	join_thread(orig);
+	xjoin_thread(orig);
 }
 
 
@@ -1413,9 +1409,9 @@ START_LOOP_TEST(propagation, iter, 0, 15)
 	param->use_ltid = use_ltid;
 	param->dest = L4_MyGlobalId();
 	int child = -1;
-	L4_ThreadId_t peer_tid;
+	L4_ThreadId_t peer_tid = L4_nilthread;
 	if(same_as) {
-		peer_tid = start_thread(&prop_peer_fn, param);
+		peer_tid = xstart_thread(&prop_peer_fn, param);
 	} else {
 		child = fork_tid(&peer_tid);
 		if(child == 0) {
@@ -1424,10 +1420,8 @@ START_LOOP_TEST(propagation, iter, 0, 15)
 		}
 	}
 	if(!passive) {
-		/* hackiest thing ever.
-		 * TODO: come up with a better way to force active/passive receive.
-		 */
-		L4_Sleep(L4_TimePeriod(2 * 1000));
+		/* hackiest thing ever. */
+		L4_Sleep(A_SHORT_NAP);
 	}
 
 	/* receive and examine the entrails. */
@@ -1459,7 +1453,7 @@ START_LOOP_TEST(propagation, iter, 0, 15)
 	}
 
 	if(same_as) {
-		join_thread(peer_tid);
+		xjoin_thread(peer_tid);
 	} else {
 		assert(child >= 0);
 		int st, dead = wait(&st);
@@ -1526,11 +1520,8 @@ START_LOOP_TEST(propagation_alter_wait, iter, 0, 1)
 	struct test_serv_param *t = malloc(sizeof(*t));
 
 	memset(t, '\0', sizeof(*t));
-	L4_ThreadId_t serv_tid = start_thread(&test_serv_fn, t);
-	fail_if(L4_IsNilThread(serv_tid));
-	L4_ThreadId_t call_tid = start_thread(&call_serv_fn,
-		(void *)L4_MyGlobalId().raw);
-	fail_if(L4_IsNilThread(call_tid));
+	L4_ThreadId_t serv_tid = xstart_thread(&test_serv_fn, t),
+		call_tid = xstart_thread(&call_serv_fn, (void *)L4_MyGlobalId().raw);
 
 	L4_ThreadId_t sender;
 	L4_MsgTag_t tag = L4_Wait_Timeout(TEST_IPC_DELAY, &sender);
@@ -1545,6 +1536,7 @@ START_LOOP_TEST(propagation_alter_wait, iter, 0, 1)
 	L4_Word_t join_ec;
 	if(join_thread_long(serv_tid, TEST_IPC_DELAY, &join_ec) == NULL) {
 		diag("join(serv_tid) failed, ec=%#lx", join_ec);
+		kill_thread(serv_tid);
 	}
 	if(L4_IpcFailed(t->reply_tag)) {
 		L4_LoadMR(0, 0);
@@ -1552,6 +1544,7 @@ START_LOOP_TEST(propagation_alter_wait, iter, 0, 1)
 	}
 	if(join_thread_long(call_tid, TEST_IPC_DELAY, &join_ec) == NULL) {
 		diag("join(call_tid) failed, ec=%#lx", join_ec);
+		kill_thread(call_tid);
 	}
 
 	fail_unless(!p_bit || L4_SameThreads(t->as, L4_Myself()),
@@ -1688,9 +1681,8 @@ static void redir_do(
 		 * IntendedReceiver.
 		 */
 		L4_Word_t v; L4_StoreMR(1, &v);
-		L4_ThreadId_t asst = start_thread(&redir_asst_fn,
+		L4_ThreadId_t asst = xstart_thread(&redir_asst_fn,
 			(void *)OTHER_VALUE);
-		fail_if(L4_IsNilThread(asst));
 		diag("ASSISTANT %lu:%lu EES ZE VERY BOTHERED YOU SEE",
 			L4_ThreadNo(asst), L4_Version(asst));
 
@@ -1698,7 +1690,7 @@ static void redir_do(
 		L4_LoadMR(1, v);
 		tag = L4_Send(asst);
 
-		join_thread(asst);
+		xjoin_thread(asst);
 	} else {
 		/* a plain redirection. */
 		L4_LoadMR(0, tag.raw);
