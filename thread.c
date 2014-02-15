@@ -208,14 +208,24 @@ struct thread *thread_new(thread_id tid)
 {
 	/* keep thread_new() calls after init_threading() */
 	assert(thread_slab != NULL);
+	assert(TID_THREADNUM(tid) > last_int_threadno());
 
 	/* must be a currently not-existing thread number */
 	assert(thread_find(tid) == NULL);
 
-	struct thread *t = list_pop(&dead_thread_list,
-		struct thread, u0.dead_link);
-	if(t == NULL) t = kmem_cache_alloc(thread_slab);
+	struct thread *t;
+	if(unlikely(TID_THREADNUM(tid) < first_user_threadno())) {
+		t = list_pop(&dead_thread_list, struct thread, u0.dead_link);
+		if(t == NULL) t = kmem_cache_alloc(thread_slab);
+	} else {
+		t = kmem_cache_alloc(thread_slab);
+	}
 
+	/* TODO: spin the rest off as thread_ctor(), so that kth_start() can pull
+	 * threads off dead_thread_list by itself and initialize them, and only
+	 * call thread_new() (which combines the slab alloc and ctor) when the
+	 * dead list is empty.
+	 */
 	*t = (struct thread){
 		.id = tid,
 		.status = TS_STOPPED,
