@@ -168,8 +168,6 @@ struct thread
 
 /* keyed by int_hash(thread->id), members are <struct thread *> */
 extern struct htable thread_hash;
-/* kernel threads thru dead_link */
-extern struct list_head dead_thread_list;
 
 /* allocates <struct thread> after init_threading() */
 extern struct kmem_cache *thread_slab;
@@ -200,6 +198,11 @@ extern SYSCALL L4_Word_t sys_threadcontrol(
  * ThreadControl semantics.
  */
 extern struct thread *thread_new(thread_id tid);
+
+/* (re)constructs a thread. initializes all fields and adds it to thread_hash.
+ * return value is true when the latter succeeds.
+ */
+extern bool thread_ctor(struct thread *t, thread_id tid);
 
 extern void thread_set_spip(struct thread *t, L4_Word_t sp, L4_Word_t ip);
 /* returns false on some error (generally when out of GDT slots). */

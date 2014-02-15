@@ -11,6 +11,7 @@
 #include <stdlib.h>
 #include <assert.h>
 #include <ccan/compiler/compiler.h>
+#include <ccan/list/list.h>
 #include <ccan/htable/htable.h>
 #include <ccan/likely/likely.h>
 
@@ -23,6 +24,7 @@
 
 
 static int next_kthread_num = -1;
+static struct list_head dead_thread_list = LIST_HEAD_INIT(dead_thread_list);
 
 
 static COLD void init_kthread_ctx(struct thread *t, L4_Word_t sp, L4_Word_t ip)
@@ -75,18 +77,27 @@ struct thread *kth_start(void (*function)(void *), void *parameter)
 	assert(L4_ThreadNo(tid) > last_int_threadno());
 	assert(L4_ThreadNo(tid) < first_user_threadno());	/* out of kthreads */
 
-	struct thread *t = thread_new(tid.raw);
-	if(t->u1.stack_page == NULL) {
+	struct thread *t = list_pop(&dead_thread_list, struct thread,
+		u0.dead_link);
+	if(t != NULL) {
+		if(!thread_ctor(t, tid.raw)) {
+			printf("%s: ctor failed for %lu:%lu\n", __func__,
+				L4_ThreadNo(tid), L4_Version(tid));
+			return NULL;
+		}
+		assert(t->u1.stack_page != NULL);
+		if(t->u1.stack_page->vm_addr == NULL) {
+			/* TODO: map it in somewhere */
+			panic("arrrrrgggghhhh!");
+		}
+	} else {
+		t = thread_new(tid.raw);
+		assert(t->u1.stack_page == NULL);
 		/* TODO: account for this somehow? */
 		t->u1.stack_page = get_kern_page(0);
-	} else {
-		/* TODO: make t->u1.stack_page->vm_addr valid
-		 *
-		 * FIXME: ... this panic() is valid because as of right now, kthreads
-		 * never exit. which means end_kthread() is completely untested, too.
-		 */
-		panic("arrrrrgggghhhh!");
 	}
+	assert(t->u1.stack_page->vm_addr != NULL);
+
 	t->space = kernel_space;
 	bool ok = thread_set_utcb(t, L4_Address(kernel_space->utcb_area)
 		+ (TID_THREADNUM(tid.raw) - 1 - last_int_threadno()) * UTCB_SIZE);

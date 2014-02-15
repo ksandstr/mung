@@ -7,7 +7,6 @@
 
 #include <ccan/alignof/alignof.h>
 #include <ccan/likely/likely.h>
-#include <ccan/list/list.h>
 #include <ccan/htable/htable.h>
 #include <ccan/compiler/compiler.h>
 
@@ -66,10 +65,6 @@ volatile bool kernel_irq_ok = false, kernel_irq_deferred = false;
 struct htable thread_hash = HTABLE_INITIALIZER(thread_hash,
 	hash_thread_by_id, NULL);
 
-/* NOTE: is dead_thread_list referenced by any other module? it's only for
- * dead kthreads after all.
- */
-struct list_head dead_thread_list = LIST_HEAD_INIT(dead_thread_list);
 struct kmem_cache *thread_slab = NULL;
 
 
@@ -208,24 +203,22 @@ struct thread *thread_new(thread_id tid)
 {
 	/* keep thread_new() calls after init_threading() */
 	assert(thread_slab != NULL);
+
+	struct thread *t = kmem_cache_alloc(thread_slab);
+	if(thread_ctor(t, tid)) {
+		return t;
+	} else {
+		kmem_cache_free(thread_slab, t);
+		return NULL;
+	}
+}
+
+
+bool thread_ctor(struct thread *t, thread_id tid)
+{
+	assert(thread_find(tid) == NULL);
 	assert(TID_THREADNUM(tid) > last_int_threadno());
 
-	/* must be a currently not-existing thread number */
-	assert(thread_find(tid) == NULL);
-
-	struct thread *t;
-	if(unlikely(TID_THREADNUM(tid) < first_user_threadno())) {
-		t = list_pop(&dead_thread_list, struct thread, u0.dead_link);
-		if(t == NULL) t = kmem_cache_alloc(thread_slab);
-	} else {
-		t = kmem_cache_alloc(thread_slab);
-	}
-
-	/* TODO: spin the rest off as thread_ctor(), so that kth_start() can pull
-	 * threads off dead_thread_list by itself and initialize them, and only
-	 * call thread_new() (which combines the slab alloc and ctor) when the
-	 * dead list is empty.
-	 */
 	*t = (struct thread){
 		.id = tid,
 		.status = TS_STOPPED,
@@ -252,9 +245,7 @@ struct thread *thread_new(thread_id tid)
 	GUARD_INIT(t, sched_rb_0);
 	GUARD_INIT(t, sched_rb_1);
 	hook_init(&t->post_exn_call, NULL);
-	htable_add(&thread_hash, int_hash(TID_THREADNUM(t->id)), t);
-
-	return t;
+	return htable_add(&thread_hash, int_hash(TID_THREADNUM(t->id)), t);
 }
 
 
@@ -262,6 +253,7 @@ static void thread_destroy(struct thread *t)
 {
 	assert(t->status == TS_DEAD || t->status == TS_STOPPED);
 	assert(hook_empty(&t->post_exn_call));
+	assert(!IS_KERNEL_THREAD(t));
 
 	struct space *sp = t->space;
 	if(t->utcb_ptr_seg != 0) {
@@ -273,12 +265,6 @@ static void thread_destroy(struct thread *t)
 	if(t->utcb_pos >= 0) {
 		assert(t->space != NULL);
 		space_remove_thread(sp, t);
-	}
-
-	if(unlikely(t->u1.stack_page != NULL)) {
-		assert(IS_KERNEL_THREAD(t));
-		free_kern_page(t->u1.stack_page);
-		t->u1.stack_page = NULL;
 	}
 
 	cop_killa(t);
