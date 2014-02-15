@@ -265,10 +265,10 @@ static void thread_destroy(struct thread *t)
 		space_remove_thread(sp, t);
 	}
 
-	if(unlikely(t->stack_page != NULL)) {
+	if(unlikely(t->u1.stack_page != NULL)) {
 		assert(IS_KERNEL_THREAD(t));
-		free_kern_page(t->stack_page);
-		t->stack_page = NULL;
+		free_kern_page(t->u1.stack_page);
+		t->u1.stack_page = NULL;
 	}
 
 	cop_killa(t);

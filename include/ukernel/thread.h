@@ -141,7 +141,9 @@ struct thread
 	int utcb_ptr_seg;			/* segment descriptor index for %gs */
 	L4_ThreadId_t scheduler;
 
-	struct page *stack_page;
+	union {
+		struct page *stack_page;	/* kth stack page */
+	} u1;
 
 	void *fpu_context;
 	struct x86_exregs ctx;

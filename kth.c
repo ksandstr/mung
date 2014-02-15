@@ -76,11 +76,11 @@ struct thread *kth_start(void (*function)(void *), void *parameter)
 	assert(L4_ThreadNo(tid) < first_user_threadno());	/* out of kthreads */
 
 	struct thread *t = thread_new(tid.raw);
-	if(t->stack_page == NULL) {
+	if(t->u1.stack_page == NULL) {
 		/* TODO: account for this somehow? */
-		t->stack_page = get_kern_page(0);
+		t->u1.stack_page = get_kern_page(0);
 	} else {
-		/* TODO: make t->stack_page->vm_addr valid
+		/* TODO: make t->u1.stack_page->vm_addr valid
 		 *
 		 * FIXME: ... this panic() is valid because as of right now, kthreads
 		 * never exit. which means end_kthread() is completely untested, too.
@@ -91,13 +91,13 @@ struct thread *kth_start(void (*function)(void *), void *parameter)
 	bool ok = thread_set_utcb(t, L4_Address(kernel_space->utcb_area)
 		+ (TID_THREADNUM(tid.raw) - 1 - last_int_threadno()) * UTCB_SIZE);
 	if(!ok) {
-		/* TODO: free t->stack_page */
+		free_kern_page(t->u1.stack_page); t->u1.stack_page = NULL;
 		space_remove_thread(kernel_space, t);
 		kmem_cache_free(thread_slab, t);
 		return NULL;
 	}
 
-	void **stk_top = t->stack_page->vm_addr + PAGE_SIZE - 32;
+	void **stk_top = t->u1.stack_page->vm_addr + PAGE_SIZE - 32;
 	stk_top[0] = function;
 	stk_top[1] = parameter;
 	int dsel = (is_kernel_high ? SEG_KERNEL_DATA_HIGH : SEG_KERNEL_DATA) << 3,
@@ -142,7 +142,7 @@ COLD struct thread *kth_init(L4_ThreadId_t boot_tid)
 	boot->utcb_page = NULL;
 	boot->utcb_ptr_seg = 0;
 	thread_set_utcb(boot, L4_Address(kernel_space->utcb_area));
-	boot->stack_page = NULL;
+	boot->u1.stack_page = NULL;
 	boot->id = boot_tid.raw;
 	boot->status = TS_RUNNING;
 	boot->flags = 0;
