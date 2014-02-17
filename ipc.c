@@ -298,7 +298,12 @@ void cancel_ipc_to(L4_ThreadId_t with_tid, L4_Word_t errcode)
 		if(w->dest_tid.raw != with_tid.raw) continue;
 
 		struct thread *peer = w->thread;
-		assert(peer->ipc_to.raw == with_tid.raw);
+		assert(!L4_IsGlobalId(peer->ipc_to)
+			|| L4_ThreadNo(peer->ipc_to) == L4_ThreadNo(with_tid));
+		assert(!L4_IsLocalId(peer->ipc_to)
+			|| resolve_tid_spec(peer->space, peer->ipc_to) == NULL
+			|| TID_THREADNUM(resolve_tid_spec(peer->space, peer->ipc_to)->id)
+				== L4_ThreadNo(with_tid));
 		assert(peer->status == TS_SEND_WAIT || peer->status == TS_XFER
 			|| peer->status == TS_STOPPED);
 		if(!post_exn_fail(peer)) {
