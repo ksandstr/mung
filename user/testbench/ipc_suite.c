@@ -807,7 +807,7 @@ static void send_spin_fn(void *param_ptr)
 		from = L4_nilthread;
 	}
 	if(L4_IpcFailed(tag)) {
-		printf("%s: ipc failed, ec %#lx\n", __func__, L4_ErrorCode());
+		diag("%s: ipc failed, ec %#lx", __func__, L4_ErrorCode());
 		return;
 	}
 
@@ -924,6 +924,7 @@ START_LOOP_TEST(recv_preempt, iter, 0, 31)
 	if(!L4_IsNilThread(other2)) xjoin_thread(other2);
 }
 END_TEST
+
 
 START_LOOP_TEST(recv_timeout_from_send, iter, 0, 3)
 {
@@ -1119,6 +1120,128 @@ START_TEST(r_recv_timeout_test)
 		"timeout in spin, nosend");
 	ok(r_recv_timeout_case(test_pri, true, true) == 0x3,
 		"timeout in spin, send");
+}
+END_TEST
+
+
+/* cancel_sender's IPC partner which never picks up. */
+static void do_nothing_fn(void *param UNUSED) {
+	for(;;) L4_Sleep(L4_Never);
+}
+
+
+struct sar_param {
+	L4_ThreadId_t dest_tid;
+	L4_ThreadId_t prop_as;		/* propagatee, or nil */
+	L4_ThreadId_t parent_tid;	/* report target */
+};
+
+
+/* cancel_sender's test half. */
+static void send_and_report_fn(void *param_ptr)
+{
+	struct sar_param *p = param_ptr;
+	L4_MsgTag_t tag = { };
+	if(!L4_IsNilThread(p->prop_as)) {
+		L4_Set_VirtualSender(p->prop_as);
+		L4_Set_Propagation(&tag);
+	}
+	L4_LoadMR(0, tag.raw);
+	tag = L4_Send_Timeout(p->dest_tid, TEST_IPC_DELAY);
+	L4_Word_t ec = L4_IpcSucceeded(tag) ? 0 : L4_ErrorCode();
+
+	/* report back. */
+	L4_LoadMR(0, (L4_MsgTag_t){ .X.label = 0xfeed, .X.u = 2 }.raw);
+	L4_LoadMR(1, tag.raw);
+	L4_LoadMR(2, ec);
+	L4_Send_Timeout(p->parent_tid, TEST_IPC_DELAY);
+
+	free(p);
+}
+
+
+static L4_ThreadId_t start_sar(L4_ThreadId_t dest_tid, L4_ThreadId_t prop_as)
+{
+	struct sar_param *p = malloc(sizeof(*p));
+	*p = (struct sar_param){
+		.prop_as = prop_as,
+		.parent_tid = L4_MyGlobalId(),
+		.dest_tid = dest_tid,
+	};
+	return xstart_thread(&send_and_report_fn, p);
+}
+
+
+/* tests for correct error reporting when a passive send's destination is
+ * removed before timeout.
+ *
+ * NOTE: this test requires roottask privilege to rewrite the destination's
+ * version bits.
+ *
+ * TODO: add tests to validate send_and_report_fn() in its success and timeout
+ * parts.
+ */
+START_LOOP_TEST(cancel_sender, iter, 0, 7)
+{
+	plan_tests(3);
+	const bool is_local = CHECK_FLAG(iter, 1), is_propa = CHECK_FLAG(iter, 2),
+		is_rewrite = CHECK_FLAG(iter, 4);
+	diag("is_local=%s, is_propa=%s, is_rewrite=%s",
+		btos(is_local), btos(is_propa), btos(is_rewrite));
+
+	L4_ThreadId_t recv_tid = xstart_thread(&do_nothing_fn, NULL),
+		sink_tid = L4_nilthread, prop_tid = L4_nilthread;
+	if(is_propa) {
+		sink_tid = xstart_thread(&do_nothing_fn, NULL);
+		prop_tid = start_sar(sink_tid, L4_nilthread);
+	}
+	L4_ThreadId_t send_tid = start_sar(is_local ? L4_LocalIdOf(recv_tid)
+		: L4_GlobalIdOf(recv_tid), prop_tid);
+
+	L4_MsgTag_t tag = L4_Receive_Timeout(send_tid, A_SHORT_NAP);
+	ok(L4_IpcFailed(tag) && L4_ErrorCode() == 3, "sender didn't instafail");
+	if(is_rewrite) {
+		assert(L4_IsGlobalId(recv_tid));
+		L4_ThreadId_t new_tid = L4_GlobalId(L4_ThreadNo(recv_tid),
+			(L4_Version(recv_tid) * 2) | 3);
+		L4_Word_t ret = L4_ThreadControl(new_tid, L4_Myself(),
+			L4_nilthread, L4_nilthread, (void *)-1);
+		fail_if(ret != 1, "threadctl failed, ec=%#lx", L4_ErrorCode());
+	} else {
+		/* straight-up murder */
+		kill_thread(recv_tid);
+	}
+	tag = L4_Receive_Timeout(send_tid, TEST_IPC_DELAY);
+	IPC_FAIL(tag);
+	L4_StoreMR(1, &tag.raw);
+	L4_Word_t ec; L4_StoreMR(2, &ec);
+	if(!ok(L4_IpcFailed(tag) && ec == 4, "sender reports partner gone")) {
+		diag("tag=%#lx, ec=%#lx\n", tag.raw, ec);
+	}
+
+	/* analyze the propagatee also. it should return a send timeout. */
+	if(is_propa) {
+		tag = L4_Receive_Timeout(prop_tid, TEST_IPC_DELAY);
+		IPC_FAIL(tag);
+		L4_StoreMR(1, &tag.raw);
+		L4_StoreMR(2, &ec);
+	}
+	imply_ok(is_propa, L4_IpcFailed(tag) && ec == 2,
+		"virtual sender's own ipc wasn't cancelled");
+
+	/* cleanup */
+	xjoin_thread(send_tid);
+	if(is_propa) {
+		kill_thread(sink_tid);
+		xjoin_thread(prop_tid);
+	}
+	if(is_rewrite) {
+		/* restore the version bits first */
+		L4_Word_t ret = L4_ThreadControl(recv_tid, L4_Myself(),
+			L4_nilthread, L4_nilthread, (void *)-1);
+		fail_if(ret != 1, "threadctl failed, ec=%#lx", L4_ErrorCode());
+		kill_thread(recv_tid);
+	}
 }
 END_TEST
 
@@ -2242,8 +2365,10 @@ Suite *ipc_suite(void)
 		suite_add_tcase(s, tc);
 	}
 
+	/* error conditions reported for timeouts and cancellations. */
 	{
-		TCase *tc = tcase_create("timeout");
+		TCase *tc = tcase_create("error");
+		/* (required by cancel_sender, maybe others [TODO: look them up]) */
 		tcase_set_fork(tc, false);
 		ADD_IDL_FIXTURE_U(tc, helper);
 		ADD_IDL_FIXTURE_U(tc, other_helper);
@@ -2252,6 +2377,7 @@ Suite *ipc_suite(void)
 		tcase_add_test(tc, point_ipc_timeouts);
 		tcase_add_test(tc, point_xfer_timeouts);
 		tcase_add_test(tc, r_recv_timeout_test);
+		tcase_add_test(tc, cancel_sender);
 		suite_add_tcase(s, tc);
 	}
 
