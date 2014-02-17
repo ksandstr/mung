@@ -1141,6 +1141,9 @@ struct sar_param {
 static void send_and_report_fn(void *param_ptr)
 {
 	struct sar_param *p = param_ptr;
+	diag("%s: self=%lu:%lu, parent=%lu:%lu", __func__,
+		L4_ThreadNo(L4_MyGlobalId()), L4_Version(L4_MyGlobalId()),
+		L4_ThreadNo(p->parent_tid), L4_Version(p->parent_tid));
 	L4_MsgTag_t tag = { };
 	if(!L4_IsNilThread(p->prop_as)) {
 		L4_Set_VirtualSender(p->prop_as);
@@ -1160,16 +1163,22 @@ static void send_and_report_fn(void *param_ptr)
 }
 
 
-static L4_ThreadId_t start_sar(L4_ThreadId_t dest_tid, L4_ThreadId_t prop_as)
+static L4_ThreadId_t start_sar_long(
+	L4_ThreadId_t dest_tid,
+	L4_ThreadId_t prop_as,
+	L4_ThreadId_t parent_tid)
 {
 	struct sar_param *p = malloc(sizeof(*p));
 	*p = (struct sar_param){
 		.prop_as = prop_as,
-		.parent_tid = L4_MyGlobalId(),
+		.parent_tid = parent_tid,
 		.dest_tid = dest_tid,
 	};
 	return xstart_thread(&send_and_report_fn, p);
 }
+
+
+#define start_sar(dest, vs) start_sar_long((dest), (vs), L4_MyGlobalId())
 
 
 /* tests for correct error reporting when a passive send's destination is
@@ -1242,6 +1251,219 @@ START_LOOP_TEST(cancel_sender, iter, 0, 7)
 		fail_if(ret != 1, "threadctl failed, ec=%#lx", L4_ErrorCode());
 		kill_thread(recv_tid);
 	}
+}
+END_TEST
+
+
+/* see start_vs_pair() */
+struct vs_pair {
+	L4_ThreadId_t vs_tid, sender_tid;
+	int pid;				/* when forked, otherwise 0 */
+	L4_ThreadId_t ctl_tid;	/* when forked, otherwise nil */
+};
+
+
+static void end_vs_pair(struct vs_pair *p)
+{
+	if(p->pid == 0) {
+		kill_thread(p->vs_tid);
+		xjoin_thread(p->sender_tid);
+	} else {
+#if 0
+		diag("%s: syncing with ctl=%lu:%lu", __func__,
+			L4_ThreadNo(p->ctl_tid), L4_Version(p->ctl_tid));
+#endif
+		L4_LoadMR(0, 0);
+		L4_MsgTag_t tag = L4_Send(p->ctl_tid);
+		IPC_FAIL(tag);
+
+		int st = 0, pid = wait(&st);
+		if(pid != p->pid) {
+			diag("%s: unexpected dead child (got=%d, expected=%d)", __func__,
+				pid, p->pid);
+		}
+	}
+}
+
+
+/* part of cancel_virtualsender.
+ *
+ * starts two threads: one that's propagated on behalf of that does nothing
+ * until killed, and another that propagates on its behalf. the threads are
+ * created in the same address space, which is a forked process (PID returned,
+ * or zero) if @is_fork is true.
+ *
+ * if @is_vs_local is true, the virtual sender will be given to the propagator
+ * as a local ID and global otherwise; if @is_local && !@is_fork, the
+ * destination will be given as a local ID and global otherwise. (so @is_local
+ * is meaningless when @is_fork == true.)
+ *
+ * stores vs_tid, sender_tid into @ret. the pair should be shut down with
+ * end_vs_pair().
+ */
+static void start_vs_pair(
+	struct vs_pair *ret,
+	bool is_local,
+	bool is_vs_local,
+	bool is_fork)
+{
+	L4_ThreadId_t parent_tid = L4_nilthread;
+	if(is_fork) {
+		ret->pid = fork_tid(&ret->ctl_tid);
+		fail_if(ret->pid < 0);
+		if(ret->pid > 0) {
+			/* parent side */
+			L4_LoadMR(0, 0);
+			L4_MsgTag_t tag = L4_Call(ret->ctl_tid);
+			IPC_FAIL(tag);
+			L4_StoreMR(1, &ret->vs_tid.raw);
+			L4_StoreMR(2, &ret->sender_tid.raw);
+			return;
+		} else {
+			/* child side */
+			L4_MsgTag_t tag = L4_Wait(&parent_tid);
+			if(L4_IpcFailed(tag)) {
+				diag("%s: forked child: wait failed, ec=%#lx", __func__,
+					L4_ErrorCode());
+				exit(1);
+			}
+		}
+	} else {
+		ret->pid = 0;
+		ret->ctl_tid = L4_nilthread;
+	}
+
+	ret->vs_tid = xstart_thread(&do_nothing_fn, NULL);
+	ret->sender_tid = start_sar_long(
+		is_fork ? parent_tid
+			: (is_local ? L4_MyLocalId() : L4_MyGlobalId()),
+		is_vs_local ? L4_LocalIdOf(ret->vs_tid) : L4_GlobalIdOf(ret->vs_tid),
+		is_fork ? parent_tid : L4_MyGlobalId());
+
+	if(is_fork) {
+		assert(ret->pid == 0);
+		/* communicate vs_tid, sender_tid to parent */
+		ret->vs_tid = L4_GlobalIdOf(ret->vs_tid);
+		ret->sender_tid = L4_GlobalIdOf(ret->sender_tid);
+		L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 2 }.raw);
+		L4_LoadMR(1, ret->vs_tid.raw);
+		L4_LoadMR(2, ret->sender_tid.raw);
+		L4_MsgTag_t tag = L4_Reply(parent_tid);
+		if(L4_IpcFailed(tag)) {
+			diag("%s: child parent reply failed, ec=%#lx", __func__,
+				L4_ErrorCode());
+			exit(1);
+		}
+
+		/* sync once more, then dispose of children and exit. */
+#if 0
+		diag("pre-sync parent=%lu:%lu, ctl[self]=%lu:%lu",
+			L4_ThreadNo(parent_tid), L4_Version(parent_tid),
+			L4_ThreadNo(L4_MyGlobalId()), L4_Version(L4_MyGlobalId()));
+#endif
+		tag = L4_Receive(parent_tid);
+		if(L4_IpcFailed(tag)) {
+			diag("%s: final sync failed, ec=%#lx", __func__, L4_ErrorCode());
+		}
+		assert(ret->pid == 0);
+		end_vs_pair(ret);
+		exit(0);
+	}
+}
+
+
+/* tests for correct error propagation and ActualSender reporting when
+ * VirtualSender is removed before timeout.
+ *
+ * TODO: should also test with a nonexistent virtual sender.
+ * TODO: and global/local/anylocal/anythread reception.
+ *
+ * NOTE: also see cancel_sender's notes
+ */
+START_LOOP_TEST(cancel_virtualsender, iter, 0, 15)
+{
+	plan_tests(10);
+	const bool is_fork = CHECK_FLAG(iter, 1),
+		is_local = CHECK_FLAG(iter, 2),
+		is_vs_local = CHECK_FLAG(iter, 4),
+		is_rewrite = CHECK_FLAG(iter, 8);
+	diag("is_fork=%s, is_local=%s, is_vs_local=%s, is_rewrite=%s",
+		btos(is_fork), btos(is_local), btos(is_vs_local), btos(is_rewrite));
+
+	/* base case: correct propagation while vs_tid remains.
+	 * TODO: this should be in a different test altogether.
+	 */
+	struct vs_pair p;
+	start_vs_pair(&p, is_local, is_vs_local, is_fork);
+	L4_ThreadId_t vs_tid = p.vs_tid, sender_tid = p.sender_tid;
+
+	diag("base case:");
+	L4_ThreadId_t from;
+	L4_MsgTag_t tag = L4_Wait_Timeout(TEST_IPC_DELAY, &from);
+	IPC_FAIL(tag);
+	L4_ThreadId_t actual = L4_ActualSender();
+	ok1(L4_IpcPropagated(tag));
+	ok1(L4_SameThreads(actual, sender_tid));
+	ok1(L4_SameThreads(from, vs_tid));
+	iff_ok1(!is_fork, L4_IsLocalId(from));
+	iff_ok1(!is_fork, L4_IsLocalId(actual));
+
+	tag = L4_Receive_Timeout(sender_tid, TEST_IPC_DELAY);
+	IPC_FAIL(tag);
+	L4_StoreMR(1, &tag.raw);
+	L4_Word_t ec; L4_StoreMR(2, &ec);
+	if(!ok(L4_IpcSucceeded(tag) && ec == 0, "base case send ok")) {
+		diag("tag=%#lx, ec=%#lx\n", tag.raw, ec);
+	}
+
+	end_vs_pair(&p);
+
+	/* test case: kill vs_tid before receiving. */
+	diag("test case:");
+	start_vs_pair(&p, is_local, is_vs_local, is_fork);
+	vs_tid = p.vs_tid;
+	sender_tid = p.sender_tid;
+
+	if(is_rewrite) {
+		assert(L4_IsGlobalId(vs_tid));
+		L4_ThreadId_t new_tid = L4_GlobalId(L4_ThreadNo(vs_tid),
+			(L4_Version(vs_tid) * 2) | 3);
+		L4_Word_t ret = L4_ThreadControl(new_tid, sender_tid,
+			L4_nilthread, L4_nilthread, (void *)-1);
+		fail_if(ret != 1, "threadctl failed, ec=%#lx", L4_ErrorCode());
+	} else if(!is_fork) {
+		/* straight-up murder */
+		kill_thread(vs_tid);
+	} else {
+		/* it's what we call a global killer. the end of mankind. */
+		assert(L4_IsGlobalId(vs_tid));
+		L4_Word_t ret = L4_ThreadControl(vs_tid, L4_nilthread,
+			L4_nilthread, L4_nilthread, (void *)-1);
+		fail_if(ret != 1, "threadctl failed, ec=%#lx", L4_ErrorCode());
+	}
+
+	tag = L4_Wait_Timeout(TEST_IPC_DELAY, &from);
+	IPC_FAIL(tag);
+	ok1(!L4_IpcPropagated(tag));
+	ok1(L4_SameThreads(from, sender_tid));
+	iff_ok1(!is_fork, L4_IsLocalId(from));
+
+	tag = L4_Receive_Timeout(sender_tid, TEST_IPC_DELAY);
+	IPC_FAIL(tag);
+	L4_StoreMR(1, &tag.raw);
+	L4_StoreMR(2, &ec);
+	if(!ok(L4_IpcSucceeded(tag) && ec == 0, "test case send ok")) {
+		diag("tag=%#lx, ec=%#lx\n", tag.raw, ec);
+	}
+
+	if(is_rewrite) {
+		/* restore the version bits first */
+		L4_Word_t ret = L4_ThreadControl(vs_tid, sender_tid,
+			L4_nilthread, L4_nilthread, (void *)-1);
+		fail_if(ret != 1, "threadctl failed, ec=%#lx", L4_ErrorCode());
+	}
+
+	end_vs_pair(&p);
 }
 END_TEST
 
@@ -2378,6 +2600,7 @@ Suite *ipc_suite(void)
 		tcase_add_test(tc, point_xfer_timeouts);
 		tcase_add_test(tc, r_recv_timeout_test);
 		tcase_add_test(tc, cancel_sender);
+		tcase_add_test(tc, cancel_virtualsender);
 		suite_add_tcase(s, tc);
 	}
 
