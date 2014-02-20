@@ -675,9 +675,12 @@ void srunner_run_path(SRunner *sr, const char *path, int report_mode)
 
 	/* separate iteration count from full test name. */
 	int iter = 0;
-	char *sep = strrchr(copy, ':');
-	if(sep != NULL && (sep[1] == '-' || isdigit(sep[1]))) {
-		char *colon = sep++;
+	bool all_iters = false;
+	char *colon = strrchr(copy, ':');
+	if(colon != NULL && colon[1] == '*') {
+		all_iters = true;
+	} else if(colon != NULL && (colon[1] == '-' || isdigit(colon[1]))) {
+		char *sep = colon + 1;
 		bool neg = *sep == '-';
 		if(neg) sep++;
 		while(*sep != '\0') {
@@ -688,8 +691,8 @@ void srunner_run_path(SRunner *sr, const char *path, int report_mode)
 			iter = iter * 10 + *(sep++) - '0';
 		}
 		if(neg) iter = -iter;
-		*colon = '\0';
 	}
+	if(colon != NULL) *colon = '\0';
 
 	struct htable *tabs[] = { &sr->test_by_id, &sr->test_by_path };
 	struct test_entry *ent = NULL;
@@ -703,7 +706,14 @@ void srunner_run_path(SRunner *sr, const char *path, int report_mode)
 
 	begin_suite(ent->s);
 	begin_tcase(ent->tc);
-	run_test_in_case(ent->tc, ent->test, iter, report_mode);
+	if(!all_iters) {
+		iter += ent->test->low;
+		run_test_in_case(ent->tc, ent->test, iter, report_mode);
+	} else {
+		for(int i=ent->test->low; i <= ent->test->high; i++) {
+			run_test_in_case(ent->tc, ent->test, i, report_mode);
+		}
+	}
 	end_tcase(ent->tc);
 	end_suite(ent->s);
 }
