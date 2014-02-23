@@ -1195,12 +1195,7 @@ SYSCALL L4_Word_t sys_threadcontrol(
 			goto dead;
 		}
 
-		/* (could maintain dest->ipc_to to indicate if there's a waiting send
-		 * phase.)
-		 */
-		if(dest->status == TS_SEND_WAIT || dest->status == TS_STOPPED) {
-			cancel_ipc_from(dest);
-		}
+		cancel_ipc_from(dest);
 		if(!CHECK_FLAG(dest->flags, TF_HALT)) thread_halt(dest);
 		if(CHECK_FLAG(dest->flags, TF_INTR)) int_kick(dest);
 		post_exn_fail(dest);
@@ -1213,19 +1208,20 @@ SYSCALL L4_Word_t sys_threadcontrol(
 		cancel_ipc_to(dead_tid, 2 << 1);	/* "lost partner" */
 		goto dead;
 	} else if(!L4_IsNilThread(spacespec) && dest != NULL) {
-		/* modification only. (rest shared with creation.) */
+		/* modification only. (rest shared with creation, so the thread is
+		 * left at STOPPED and will await a starting ExchangeRegisters.)
+		 */
 		L4_ThreadId_t old_tid = { .raw = dest->id };
 		if(dest->id != dest_tid.raw) {
 			/* version field and IPC stomp */
 			assert(L4_ThreadNo(dest_tid) == TID_THREADNUM(dest->id));
 			assert(L4_Version(dest_tid) != TID_VERSION(dest->id));
-			if(dest->status == TS_SEND_WAIT) {
-				/* remove send-side waiter */
-				cancel_ipc_from(dest);
-			}
+			/* fail sends to the moribund TID & break propagation where it's
+			 * used for VirtualSender
+			 */
+			cancel_ipc_from(dest);
 			L4_ThreadId_t stale_tid = { .raw = dest->id };
 			dest->id = dest_tid.raw;
-			/* fail sends to the now-stale TID. */
 			cancel_ipc_to(stale_tid, 2 << 1);	/* "lost partner" */
 
 			if(CHECK_FLAG(dest->flags, TF_INTR)) int_kick(dest);

@@ -105,6 +105,17 @@ void set_ipc_error_thread(struct thread *t, L4_Word_t ec)
 }
 
 
+/* this is like resolve_tid_spec(), but in reverse. */
+static L4_ThreadId_t tid_return(struct thread *self, struct thread *t)
+{
+	if(self->space == t->space) {
+		return get_local_id(t);
+	} else {
+		return (L4_ThreadId_t){ .raw = t->id };
+	}
+}
+
+
 void ipc_xfer_timeout(struct ipc_state *st)
 {
 	assert(st->from->ipc == st);
@@ -342,11 +353,7 @@ void cancel_ipc_to(L4_ThreadId_t with_tid, L4_Word_t errcode)
 }
 
 
-/* called from thread_ipc_fail() and from the deleting ThreadControl. takes
- * care of the sendwait_hash entry. leaves errorcode setting to caller's
- * caller.
- */
-void cancel_ipc_from(struct thread *t)
+static void cancel_passive_send(struct thread *t)
 {
 	assert(t->status == TS_SEND_WAIT || t->status == TS_STOPPED);
 
@@ -378,14 +385,43 @@ void cancel_ipc_from(struct thread *t)
 }
 
 
-/* this is sort of like resolve_tid_spec(), but in reverse. */
-static L4_ThreadId_t tid_return(struct thread *self, struct thread *t)
+/* TODO: this function scales poorly. unlike cancel_passive_send() it does a
+ * brute-force loop over all the passive sends in the system, not just those
+ * for the IPC peer.
+ */
+static void rewrite_passive_vs_from(struct thread *t)
 {
-	if(self->space == t->space) {
-		return get_local_id(t);
-	} else {
-		return (L4_ThreadId_t){ .raw = t->id };
+	L4_ThreadId_t ltid = L4_nilthread;
+	/* inactive threads may be propagated on behalf of. */
+	if(likely(t->utcb_pos >= 0)) ltid = get_local_id(t);
+
+	struct htable_iter it;
+	for(struct ipc_wait *w = htable_first(&sendwait_hash, &it);
+		w != NULL;
+		w = htable_next(&sendwait_hash, &it))
+	{
+		if(w->send_tid.raw != t->id && w->send_tid.raw != ltid.raw) continue;
+
+		struct thread *dest = thread_find(w->dest_tid.raw);
+		assert(dest != NULL);
+		w->send_tid = tid_return(dest, w->thread);
+		L4_MsgTag_t *tag = (void *)&L4_VREG(
+			thread_get_utcb(w->thread), L4_TCR_MR(0));
+		tag->X.flags &= ~0x1;
 	}
+}
+
+
+/* called from thread_ipc_fail() and from the deleting/modifying
+ * ThreadControl. takes care of the sendwait_hash entry and disables passive
+ * propagated sends' propagation. leaves errorcode setting to caller's caller.
+ */
+void cancel_ipc_from(struct thread *t)
+{
+	if(t->status == TS_SEND_WAIT || t->status == TS_STOPPED) {
+		cancel_passive_send(t);
+	}
+	rewrite_passive_vs_from(t);
 }
 
 
