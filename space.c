@@ -432,7 +432,8 @@ struct utcb_page *space_get_utcb_page(struct space *sp, uint16_t page_pos)
 			L4_Set_Rights(&u_page, L4_Readable | L4_Writable);
 			/* FIXME: catch error result from mapdb_add_map() */
 			mapdb_add_map(&sp->mapdb, 0, u_page, up->pg->id);
-			/* TODO: modify page table, too */
+			space_put_page(sp, L4_Address(u_page), up->pg->id,
+				L4_Rights(u_page));
 		}
 	}
 

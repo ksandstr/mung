@@ -303,7 +303,7 @@ static void copy_tcrs(void *dst, const void *src)
 }
 
 
-/* FIXME: this is only atomic on space_get_utcb_area() failure, and not on
+/* FIXME: this is only atomic on space_get_utcb_page() failure, and not on
  * reserved_gdt_ptr_seg() failure. that's bad.
  */
 bool thread_set_utcb(struct thread *t, L4_Word_t start)
