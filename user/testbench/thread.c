@@ -460,8 +460,14 @@ void kill_thread(L4_ThreadId_t tid)
 {
 	tid = L4_GlobalIdOf(tid);
 	int t = L4_ThreadNo(tid) - base_tnum;
-	assert(t < MAX_THREADS);
+	if(t < 0 || t >= MAX_THREADS) {
+		printf("%s: tried to kill non-local TID %lu:%lu (base %d)\n",
+			__func__, L4_ThreadNo(tid), L4_Version(tid), base_tnum);
+	}
+	assert(t < MAX_THREADS && t >= 0);
 	assert(abs(threads[t].version) == L4_Version(tid));
+
+	if(!threads[t].alive) return;
 
 	int n = __tmgr_remove_thread(get_mgr_tid(), tid.raw);
 	if(n != 0) {
@@ -674,6 +680,7 @@ static void t_rm_thread(L4_Word_t arg_tid)
 		free(t);
 	}
 
+	/* FIXME: shouldn't this be inside the non-NULL test's block, above? */
 	mgrt_alive--;
 	assert(mgrt_alive > 0);
 	assert(mgrt_alive <= mgr_threads.elems);
