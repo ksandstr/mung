@@ -940,6 +940,7 @@ bool ipc_recv_half(struct thread *self, void *self_utcb)
 			/* userspace threads operate via a state machine. */
 			if(L4_IsNilThread(from->ipc_from)) {
 				/* no receive phase. */
+				set_ipc_return_thread(from, from_utcb);
 				thread_wake(from);
 			} else {
 				/* (the only special thread state transition in this
