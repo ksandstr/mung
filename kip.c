@@ -1,6 +1,7 @@
 
 #include <stdio.h>
 #include <stdint.h>
+#include <stdbool.h>
 #include <string.h>
 
 #include <l4/types.h>
@@ -12,14 +13,14 @@
 #include <ukernel/thread.h>
 #include <ukernel/cpu.h>
 #include <ukernel/kip.h>
-
-
-/* TODO: move this into config.h, to be generated from kernel configuration */
-#define USE_SYSENTER (cpu_has_sysenter())
+#include <ukernel/config.h>
 
 
 void *kip_mem = NULL;
+
+#ifdef CONFIG_X86_SYSENTER
 struct sysexit_offs sysexit_epilogs;
+#endif
 
 
 /* let's use interrupt 0x8f, for now.
@@ -62,6 +63,8 @@ static int make_int_sc_stub(uint8_t *mem, int interrupt)
 static int make_sysenter_stub(void *start, int sc_num, bool save_bees)
 {
 	int p = 0;
+
+#ifdef CONFIG_X86_SYSENTER
 	uint8_t *mem = start;
 	if(save_bees) {
 		mem[p++] = 0x55;	/* pushl %ebp */
@@ -77,6 +80,7 @@ static int make_sysenter_stub(void *start, int sc_num, bool save_bees)
 	mem[p++] = 0xb3; mem[p++] = sc_num;	/* movb $sc_num, %bl */
 	mem[p++] = 0x89; mem[p++] = 0xe5;	/* movl %esp, %ebp */
 	mem[p++] = 0x0f; mem[p++] = 0x34;	/* sysenter */
+#endif
 
 	return p;
 }
@@ -85,6 +89,7 @@ static int make_sysenter_stub(void *start, int sc_num, bool save_bees)
 static int make_sysexit_epilog(void *start, bool get_ecx, bool get_edx)
 {
 	int p = 0;
+#ifdef CONFIG_X86_SYSENTER
 	uint8_t *mem = start;
 	if(get_ecx) {
 		/* movl %gs:0, %ecx */
@@ -107,6 +112,7 @@ static int make_sysexit_epilog(void *start, bool get_ecx, bool get_edx)
 		mem[p++] = 0x8b; mem[p++] = 0x52; mem[p++] = 0xf8;
 	}
 	mem[p++] = 0xc3;		/* ret */
+#endif
 
 	return p;
 }
@@ -266,7 +272,7 @@ void make_kip(
 	};
 	const int num_syscalls = sizeof(syscalls) / sizeof(syscalls[0]);
 	int kip_pos = 0x100;
-	if(USE_SYSENTER) {
+	if(USE_SYSENTER && cpu_has_sysenter()) {
 		printf("using SYSENTER/SYSEXIT for syscalls\n");
 		/* FIXME: move this into cpu.c or somewhere; it should run for each
 		 * CPU, possibly per space if smallspaces are involved

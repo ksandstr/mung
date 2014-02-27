@@ -23,6 +23,7 @@
 #include <ukernel/bug.h>
 #include <ukernel/interrupt.h>
 #include <ukernel/cpu.h>
+#include <ukernel/config.h>
 #include <ukernel/sched.h>
 
 
@@ -399,7 +400,7 @@ static void switch_thread(struct thread *prev, struct thread *next)
 	if(IS_KERNEL_THREAD(next)) {
 		/* zomg optimized */
 		swap_context(&prev->ctx, &next->ctx);
-	} else if(use_sysenter && CHECK_FLAG(next->flags, TF_SYSCALL)) {
+	} else if(USE_SYSENTER && CHECK_FLAG(next->flags, TF_SYSCALL)) {
 		assert(ADDR_IN_FPAGE(next->space->kip_area, next->ctx.eip));
 		next->flags &= ~TF_SYSCALL;
 		sysexit_from_kth(&prev->ctx, &next->ctx, gs_sel);
@@ -424,8 +425,7 @@ NORETURN void switch_thread_u2u(struct thread *next)
 
 	assert(next->utcb_ptr_seg != 0);
 	int utcb_sel = next->utcb_ptr_seg << 3 | 3;
-	/* TODO: use a compiletime macro for use_sysenter */
-	if(use_sysenter && CHECK_FLAG(next->flags, TF_SYSCALL)) {
+	if(USE_SYSENTER && CHECK_FLAG(next->flags, TF_SYSCALL)) {
 		assert(ADDR_IN_FPAGE(next->space->kip_area, next->ctx.eip));
 		next->flags &= ~TF_SYSCALL;
 		sysexit_to_ring3(&next->ctx, utcb_sel);

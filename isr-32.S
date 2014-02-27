@@ -1,4 +1,5 @@
 #include <ukernel/gdt.h>
+#include <ukernel/config.h>
 
 	/* NOTE: when using the "regs" parameter for task switching, the callee
 	 * should also fill in the correct %fs and %gs selectors! this is not
@@ -128,6 +129,8 @@ isr_exn_\name\()_top:
 	ISR_EXN 0x8f, basic_sc, 0	# basic syscall
 
 
+#ifdef CONFIG_X86_SYSENTER
+
 # SYSENTER/SYSEXIT support
 #
 # after SYSENTER, the CPU will be in ring 0, with CS and SS set to the kernel
@@ -198,3 +201,4 @@ _sysenter_top:
 	popl %eax
 	popf
 	sysexit
+#endif

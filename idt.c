@@ -5,6 +5,7 @@
 #include <ukernel/gdt.h>
 #include <ukernel/idt.h>
 #include <ukernel/x86.h>
+#include <ukernel/config.h>
 
 
 static void set_int_gate(
@@ -81,12 +82,17 @@ void setup_idt(int code_seg, int max_irq)
 		/* FIXME: add the rest */
 	}
 
-	/* syscall ISRs; 0x80 .. 0x8f */
-	EXN_GATE(ints, code_sel, 0x8d, exregs_sc);	/* ExchangeRegisters */
-	EXN_GATE(ints, code_sel, 0x8e, memctl_sc);	/* MemoryControl */
-	EXN_GATE(ints, code_sel, 0x8f, basic_sc);	/* basic syscall */
-	/* (permit access to defined syscall interrupts for user code.) */
-	for(int i=0x8d; i <= 0x8f; i++) ints[i].type_attr |= 3 << 5;
+	/* softint vectors. disabled when unnecessary; the kernel interface is a
+	 * function call, not a bare mechanism.
+	 */
+	if(!USE_SYSENTER) {
+		/* syscall ISRs; 0x80 .. 0x8f */
+		EXN_GATE(ints, code_sel, 0x8d, exregs_sc);	/* ExchangeRegisters */
+		EXN_GATE(ints, code_sel, 0x8e, memctl_sc);	/* MemoryControl */
+		EXN_GATE(ints, code_sel, 0x8f, basic_sc);	/* basic syscall */
+		/* (permit access to defined syscall interrupts for user code.) */
+		for(int i=0x8d; i <= 0x8f; i++) ints[i].type_attr |= 3 << 5;
+	}
 
 	struct {
 		uint16_t limit;

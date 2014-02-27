@@ -122,7 +122,9 @@ COLD void scan_cpuid(void)
 		} while(++iter_id < id_iters);
 	}
 
+#ifdef CONFIG_X86_SYSENTER
 	use_sysenter = cpu_has_sysenter();
+#endif
 }
 
 

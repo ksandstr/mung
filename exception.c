@@ -22,6 +22,7 @@
 #include <ukernel/kip.h>
 #include <ukernel/util.h>
 #include <ukernel/misc.h>
+#include <ukernel/config.h>
 
 
 /* the thread the current FPU context belongs to. usually not NULL, but may
@@ -376,6 +377,7 @@ void isr_exn_memctl_sc_bottom(struct x86_exregs *regs)
 }
 
 
+#ifdef CONFIG_X86_SYSENTER
 /* NOTE: the sysenter top half is a good candidate for a rewrite in assembly.
  * it'd combine the functions of both with sys_*() functions that take the
  * right parameters on the stack instead of ad-hockery and glue as we have
@@ -459,6 +461,7 @@ void sysenter_bottom(struct x86_exregs *regs)
 		return_from_exn();
 	}
 }
+#endif
 
 
 static NORETURN void return_from_gp(struct thread *current, struct x86_exregs *regs)
