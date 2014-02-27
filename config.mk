@@ -33,7 +33,9 @@ ccan-%.o ::
 
 %.o: %-32.S
 	@echo "  AS $@"
-	@gcc -c -o $@ $< $(CFLAGS) -DIN_ASM_SOURCE
+	@gcc -c -o $@ $< $(CFLAGS) -DIN_ASM_SOURCE -MMD
+	@test -d .deps || mkdir -p .deps
+	@mv $(<:-32.S=.d) .deps/
 
 
 %.o: %.s
