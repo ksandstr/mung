@@ -257,7 +257,7 @@ static void glue_ipc(struct x86_exregs *regs)
 	void *utcb = thread_get_utcb(current);
 	L4_VREG(utcb, L4_TCR_MR(0)) = regs->esi;
 
-	/* preserve registers */
+	/* preserve registers. eip set by caller for return from scheduling. */
 	current->ctx.edi = regs->edi;
 	current->ctx.esp = regs->esp;
 
@@ -338,6 +338,9 @@ void isr_exn_basic_sc_bottom(struct x86_exregs *regs)
 	assert(x86_irq_is_enabled());
 	assert(x86_frame_len(regs) == sizeof(*regs));
 
+	struct thread *current = get_current_thread();
+	current->ctx.eip = regs->eip;
+
 	switch(regs->ebx & 0xff) {
 		case SC_IPC:
 		case SC_LIPC:
@@ -350,7 +353,6 @@ void isr_exn_basic_sc_bottom(struct x86_exregs *regs)
 		case SC_THREADCONTROL: glue_threadcontrol(regs); break;
 		case SC_PROCESSORCONTROL: glue_processorcontrol(regs); break;
 		default: {
-			struct thread *current = get_current_thread();
 			printf("unknown basic syscall %lu (caller stopped)\n", regs->eax);
 			thread_halt(current);
 			assert(current->status == TS_STOPPED);
@@ -364,6 +366,9 @@ void isr_exn_basic_sc_bottom(struct x86_exregs *regs)
 
 void isr_exn_exregs_sc_bottom(struct x86_exregs *regs)
 {
+	/* a thread-starting ExchangeRegisters may cause preemption. */
+	get_current_thread()->ctx.eip = regs->eip;
+
 	glue_exregs(regs);
 	return_from_exn();
 }
