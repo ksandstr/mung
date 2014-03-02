@@ -795,12 +795,30 @@ static struct ipc_wait *find_local_sender(bool *valid_p, struct thread *self)
 		 * (FIXME: this is inelegant. fix it by finding the right thread using
 		 * a per-space thing.)
 		 */
+		L4_ThreadId_t loc_tid = get_local_id(loc);
 		for(w = htable_firstval(&sendwait_hash, &it, hash);
 			w != NULL;
 			w = htable_nextval(&sendwait_hash, &it, hash))
 		{
-			if(w->thread == loc && w->dest_tid.raw == self->id) {
+			if(w->dest_tid.raw != self->id) {
+				/* hash miss. */
+				continue;
+			}
+
+			if(w->thread == loc && w->send_tid.raw == loc_tid.raw) {
+				/* nonpropagated passive send. accept immediately. */
 				break;
+			}
+
+			if(w->send_tid.raw == self->ipc_from.raw) {
+				struct thread *vs = resolve_tid_spec(self->space,
+					w->send_tid);
+				if(vs != NULL) {
+					/* FIXME: check that the propagation predicate still
+					 * holds
+					 */
+					break;
+				}
 			}
 		}
 	} else {
