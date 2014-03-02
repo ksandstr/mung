@@ -1286,7 +1286,7 @@ static void end_vs_pair(struct vs_pair *p)
 }
 
 
-/* part of cancel_virtualsender.
+/* part of cancel_virtualsender and propagation_in_active_receive.
  *
  * starts two threads: one that's propagated on behalf of that does nothing
  * until killed, and another that propagates on its behalf. the threads are
@@ -1378,11 +1378,14 @@ static void start_vs_pair(
  * TODO: should also test with a nonexistent virtual sender.
  * TODO: and global/local/anylocal/anythread reception.
  *
+ * NOTE: this thread's positive case (i.e. where propagation succeeds under
+ * the given (is_fork, is_local, is_rewrite) triple) is covered by
+ * propagation_in_active_receive.
  * NOTE: also see cancel_sender's notes
  */
 START_LOOP_TEST(cancel_virtualsender, iter, 0, 15)
 {
-	plan_tests(10);
+	plan_tests(4);
 	const bool is_fork = CHECK_FLAG(iter, 1),
 		is_local = CHECK_FLAG(iter, 2),
 		is_vs_local = CHECK_FLAG(iter, 4),
@@ -1390,39 +1393,14 @@ START_LOOP_TEST(cancel_virtualsender, iter, 0, 15)
 	diag("is_fork=%s, is_local=%s, is_vs_local=%s, is_rewrite=%s",
 		btos(is_fork), btos(is_local), btos(is_vs_local), btos(is_rewrite));
 
-	/* base case: correct propagation while vs_tid remains.
-	 * TODO: this should be in a different test altogether.
+	/* experiment: propagation shouldn't happen when vs_tid is rendered
+	 * invalid after passive send, but before active receive.
 	 */
 	struct vs_pair p;
 	start_vs_pair(&p, is_local, is_vs_local, is_fork);
 	L4_ThreadId_t vs_tid = p.vs_tid, sender_tid = p.sender_tid;
 
-	diag("base case:");
-	L4_ThreadId_t from;
-	L4_MsgTag_t tag = L4_Wait_Timeout(TEST_IPC_DELAY, &from);
-	IPC_FAIL(tag);
-	L4_ThreadId_t actual = L4_ActualSender();
-	ok1(L4_IpcPropagated(tag));
-	ok1(L4_SameThreads(actual, sender_tid));
-	ok1(L4_SameThreads(from, vs_tid));
-	iff_ok1(!is_fork, L4_IsLocalId(from));
-	iff_ok1(!is_fork, L4_IsLocalId(actual));
-
-	tag = L4_Receive_Timeout(sender_tid, TEST_IPC_DELAY);
-	IPC_FAIL(tag);
-	L4_StoreMR(1, &tag.raw);
-	L4_Word_t ec; L4_StoreMR(2, &ec);
-	if(!ok(L4_IpcSucceeded(tag) && ec == 0, "base case send ok")) {
-		diag("tag=%#lx, ec=%#lx\n", tag.raw, ec);
-	}
-
-	end_vs_pair(&p);
-
-	/* test case: kill vs_tid before receiving. */
-	diag("test case:");
-	start_vs_pair(&p, is_local, is_vs_local, is_fork);
-	vs_tid = p.vs_tid;
-	sender_tid = p.sender_tid;
+	L4_Sleep(A_SHORT_NAP);
 
 	if(is_rewrite) {
 		assert(L4_IsGlobalId(vs_tid));
@@ -1442,7 +1420,8 @@ START_LOOP_TEST(cancel_virtualsender, iter, 0, 15)
 		fail_if(ret != 1, "threadctl failed, ec=%#lx", L4_ErrorCode());
 	}
 
-	tag = L4_Wait_Timeout(TEST_IPC_DELAY, &from);
+	L4_ThreadId_t from = L4_nilthread;
+	L4_MsgTag_t tag = L4_Wait_Timeout(TEST_IPC_DELAY, &from);
 	IPC_FAIL(tag);
 	ok1(!L4_IpcPropagated(tag));
 	ok1(L4_SameThreads(from, sender_tid));
@@ -1451,7 +1430,7 @@ START_LOOP_TEST(cancel_virtualsender, iter, 0, 15)
 	tag = L4_Receive_Timeout(sender_tid, TEST_IPC_DELAY);
 	IPC_FAIL(tag);
 	L4_StoreMR(1, &tag.raw);
-	L4_StoreMR(2, &ec);
+	L4_Word_t ec; L4_StoreMR(2, &ec);
 	if(!ok(L4_IpcSucceeded(tag) && ec == 0, "test case send ok")) {
 		diag("tag=%#lx, ec=%#lx\n", tag.raw, ec);
 	}
@@ -1901,6 +1880,74 @@ START_LOOP_TEST(propagation_alter_wait, iter, 0, 1)
 	if(!imply_ok1(!p_bit, t->ec == 2)) diag("t->ec=%#lx", t->ec);
 
 	free(t);
+}
+END_TEST
+
+
+/* test that propagated passive sends can be received with all applicable
+ * forms of FromSpec.
+ */
+START_LOOP_TEST(propagation_in_active_receive, iter, 0, 7)
+{
+	plan_tests(4);
+	const bool is_fork = CHECK_FLAG(iter, 1),
+		is_local = CHECK_FLAG(iter, 2),
+		is_vs_local = CHECK_FLAG(iter, 4);
+	diag("is_fork=%s, is_local=%s, is_vs_local=%s",
+		btos(is_fork), btos(is_local), btos(is_vs_local));
+
+	/* iterate through different ways to receive, skipping local modes when
+	 * is_fork.
+	 */
+	static const char *fs_mode[] = {
+		"local", "anylocal", "global", "anythread",
+	};
+	for(int i=0; i < 4; i++) {
+		if(i < 2 && is_fork) {
+			skip(1, "mode `%s' not applicable when is_fork=%s",
+				fs_mode[i], btos(is_fork));
+			continue;
+		}
+
+		subtest_start("FromSpec=%s", fs_mode[i]);
+		plan_tests(7);
+
+		struct vs_pair p;
+		start_vs_pair(&p, is_local, is_vs_local, is_fork);
+		L4_ThreadId_t vs_tid = p.vs_tid, sender_tid = p.sender_tid;
+		L4_Sleep(A_SHORT_NAP);
+
+		L4_ThreadId_t from;
+		switch(i) {
+			case 0: from = L4_LocalIdOf(vs_tid); break;
+			case 1: from = L4_anylocalthread; break;
+			case 2: from = L4_GlobalIdOf(vs_tid); break;
+			case 3: from = L4_anythread; break;
+		}
+		L4_MsgTag_t tag = L4_Ipc(L4_nilthread, from,
+			L4_Timeouts(L4_Never, TEST_IPC_DELAY), &from);
+		L4_Word_t ec = L4_ErrorCode();
+		if(!ok1(L4_IpcSucceeded(tag))) {
+			diag("ec=%#lx", ec);
+		}
+		L4_ThreadId_t actual = L4_ActualSender();
+		ok1(L4_IpcPropagated(tag));
+		ok1(L4_SameThreads(actual, sender_tid));
+		ok1(L4_SameThreads(from, vs_tid));
+		iff_ok1(!is_fork, L4_IsLocalId(from));
+		iff_ok1(!is_fork, L4_IsLocalId(actual));
+
+		tag = L4_Receive_Timeout(sender_tid, TEST_IPC_DELAY);
+		IPC_FAIL(tag);
+		L4_StoreMR(1, &tag.raw);
+		L4_StoreMR(2, &ec);
+		if(!ok(L4_IpcSucceeded(tag) && ec == 0, "sender ok")) {
+			diag("tag=%#lx, ec=%#lx\n", tag.raw, ec);
+		}
+
+		end_vs_pair(&p);
+		subtest_end();
+	}
 }
 END_TEST
 
@@ -2568,6 +2615,7 @@ Suite *ipc_suite(void)
 		TCase *tc = tcase_create("propagate");
 		tcase_add_test(tc, propagation);
 		tcase_add_test(tc, propagation_alter_wait);
+		tcase_add_test(tc, propagation_in_active_receive);
 		suite_add_tcase(s, tc);
 	}
 
