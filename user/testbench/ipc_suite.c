@@ -1372,15 +1372,31 @@ static void start_vs_pair(
 }
 
 
+static const char *fromspec_name[] = {
+	"local", "anylocal", "global", "any",
+};
+
+
+/* see fromspec_name[] */
+static L4_ThreadId_t fromspec_class(int n, L4_ThreadId_t tid)
+{
+	switch(n) {
+		case 0: return L4_LocalIdOf(tid);
+		case 1: return L4_anylocalthread;
+		case 2: return L4_GlobalIdOf(tid);
+		case 3: return L4_anythread;
+		default: assert(false); return L4_nilthread;
+	}
+}
+
+
 /* tests for correct error propagation and ActualSender reporting when
  * VirtualSender is removed before timeout.
  *
- * TODO: should also test with a nonexistent virtual sender.
- * TODO: and global/local/anylocal/anythread reception.
- *
- * NOTE: this thread's positive case (i.e. where propagation succeeds under
- * the given (is_fork, is_local, is_rewrite) triple) is covered by
+ * NOTE: this test's positive case (i.e. where propagation succeeds under the
+ * given (is_fork, is_local, is_rewrite) triple) is covered by
  * propagation_in_active_receive.
+ *
  * NOTE: also see cancel_sender's notes
  */
 START_LOOP_TEST(cancel_virtualsender, iter, 0, 15)
@@ -1394,55 +1410,94 @@ START_LOOP_TEST(cancel_virtualsender, iter, 0, 15)
 		btos(is_fork), btos(is_local), btos(is_vs_local), btos(is_rewrite));
 
 	/* experiment: propagation shouldn't happen when vs_tid is rendered
-	 * invalid after passive send, but before active receive.
+	 * invalid after passive send, but before active receive. @i varies the
+	 * FromSpec class.
+	 *
+	 * TODO: particularly interesting is the iteration when is_rewrite &&
+	 * !is_fork, on the definite local ID iteration. it's not specified what
+	 * should happen with regard to whether propagation succeeds; i.e. whether
+	 * the virtual sender's thread pointer is saved at IPC rendezvous or at
+	 * the actual sender's Ipc syscall.
+	 *
+	 * the difference is that in the former reading, it depends on whether the
+	 * sender specifies the virtualsender as a local or global thread ID
+	 * (local succeeding after version rewrite, but global not), and in the
+	 * latter the recipient's LTID identifies the right thread regardless.
+	 *
+	 * TODO: tests for either behaviour should be implemented in another test
+	 * after further analysis.
 	 */
-	struct vs_pair p;
-	start_vs_pair(&p, is_local, is_vs_local, is_fork);
-	L4_ThreadId_t vs_tid = p.vs_tid, sender_tid = p.sender_tid;
+	for(int i=0; i < 4; i++) {
+		if(i < 2 && is_fork) {
+			skip(1, "mode `%s' not applicable when is_fork=%s",
+				fromspec_name[i], btos(is_fork));
+			continue;
+		}
 
-	L4_Sleep(A_SHORT_NAP);
+		subtest_start("FromSpec=%s", fromspec_name[i]);
+		plan_tests(8);
+		const bool is_wild = (i == 1 || i == 3);
+		diag("is_wild=%s", btos(is_wild));
 
-	if(is_rewrite) {
-		assert(L4_IsGlobalId(vs_tid));
-		L4_ThreadId_t new_tid = L4_GlobalId(L4_ThreadNo(vs_tid),
-			(L4_Version(vs_tid) * 2) | 3);
-		L4_Word_t ret = L4_ThreadControl(new_tid, sender_tid,
-			L4_nilthread, L4_nilthread, (void *)-1);
-		fail_if(ret != 1, "threadctl failed, ec=%#lx", L4_ErrorCode());
-	} else if(!is_fork) {
-		/* straight-up murder */
-		kill_thread(vs_tid);
-	} else {
-		/* it's what we call a global killer. the end of mankind. */
-		assert(L4_IsGlobalId(vs_tid));
-		L4_Word_t ret = L4_ThreadControl(vs_tid, L4_nilthread,
-			L4_nilthread, L4_nilthread, (void *)-1);
-		fail_if(ret != 1, "threadctl failed, ec=%#lx", L4_ErrorCode());
+		struct vs_pair p;
+		start_vs_pair(&p, is_local, is_vs_local, is_fork);
+		L4_ThreadId_t vs_tid = p.vs_tid, sender_tid = p.sender_tid;
+		L4_ThreadId_t fromspec = fromspec_class(i, vs_tid), from;
+
+		L4_Sleep(A_SHORT_NAP);
+
+		if(is_rewrite) {
+			assert(L4_IsGlobalId(vs_tid));
+			L4_ThreadId_t new_tid = L4_GlobalId(L4_ThreadNo(vs_tid),
+				(L4_Version(vs_tid) * 2) | 3);
+			L4_Word_t ret = L4_ThreadControl(new_tid, sender_tid,
+				L4_nilthread, L4_nilthread, (void *)-1);
+			fail_if(ret != 1, "threadctl failed, ec=%#lx", L4_ErrorCode());
+		} else if(!is_fork) {
+			/* straight-up murder */
+			kill_thread(vs_tid);
+		} else {
+			/* it's what we call a global killer. the end of mankind. */
+			assert(L4_IsGlobalId(vs_tid));
+			L4_Word_t ret = L4_ThreadControl(vs_tid, L4_nilthread,
+				L4_nilthread, L4_nilthread, (void *)-1);
+			fail_if(ret != 1, "threadctl failed, ec=%#lx", L4_ErrorCode());
+		}
+
+		L4_MsgTag_t tag = L4_Ipc(L4_nilthread, fromspec,
+			L4_Timeouts(L4_Never, L4_ZeroTime), &from);
+		L4_Word_t ec = L4_IpcFailed(tag) ? L4_ErrorCode() : 0;
+		if(L4_IpcFailed(tag)) diag("ec=%#lx", ec);
+
+		iff_ok1(is_wild, L4_IpcSucceeded(tag));
+		imply_ok1(!is_wild && is_fork, ec == 5);
+		/* (it can be found with the LTID, but doesn't transmit.) */
+		imply_ok1(!is_wild && L4_IsLocalId(vs_tid), ec == 2);
+		skip_start(L4_IpcFailed(tag), 4, "Ipc receive failed (ec=%#lx)", ec) {
+			ok1(!L4_IpcPropagated(tag));
+			ok1(L4_SameThreads(from, sender_tid));
+			ok1(!L4_SameThreads(from, vs_tid));
+			iff_ok1(!is_fork, L4_IsLocalId(from));
+		} skip_end;
+
+		tag = L4_Receive_Timeout(sender_tid, TEST_IPC_DELAY);
+		IPC_FAIL(tag);
+		L4_StoreMR(1, &tag.raw);
+		L4_StoreMR(2, &ec);
+		if(!ok(L4_IpcSucceeded(tag), "sender ipc ok")) {
+			diag("tag=%#lx, ec=%#lx\n", tag.raw, ec);
+		}
+
+		if(is_rewrite) {
+			/* restore the version bits first */
+			L4_Word_t ret = L4_ThreadControl(vs_tid, sender_tid,
+				L4_nilthread, L4_nilthread, (void *)-1);
+			fail_if(ret != 1, "threadctl failed, ec=%#lx", L4_ErrorCode());
+		}
+
+		end_vs_pair(&p);
+		subtest_end();
 	}
-
-	L4_ThreadId_t from = L4_nilthread;
-	L4_MsgTag_t tag = L4_Wait_Timeout(TEST_IPC_DELAY, &from);
-	IPC_FAIL(tag);
-	ok1(!L4_IpcPropagated(tag));
-	ok1(L4_SameThreads(from, sender_tid));
-	iff_ok1(!is_fork, L4_IsLocalId(from));
-
-	tag = L4_Receive_Timeout(sender_tid, TEST_IPC_DELAY);
-	IPC_FAIL(tag);
-	L4_StoreMR(1, &tag.raw);
-	L4_Word_t ec; L4_StoreMR(2, &ec);
-	if(!ok(L4_IpcSucceeded(tag) && ec == 0, "test case send ok")) {
-		diag("tag=%#lx, ec=%#lx\n", tag.raw, ec);
-	}
-
-	if(is_rewrite) {
-		/* restore the version bits first */
-		L4_Word_t ret = L4_ThreadControl(vs_tid, sender_tid,
-			L4_nilthread, L4_nilthread, (void *)-1);
-		fail_if(ret != 1, "threadctl failed, ec=%#lx", L4_ErrorCode());
-	}
-
-	end_vs_pair(&p);
 }
 END_TEST
 
@@ -1899,17 +1954,14 @@ START_LOOP_TEST(propagation_in_active_receive, iter, 0, 7)
 	/* iterate through different ways to receive, skipping local modes when
 	 * is_fork.
 	 */
-	static const char *fs_mode[] = {
-		"local", "anylocal", "global", "anythread",
-	};
 	for(int i=0; i < 4; i++) {
 		if(i < 2 && is_fork) {
 			skip(1, "mode `%s' not applicable when is_fork=%s",
-				fs_mode[i], btos(is_fork));
+				fromspec_name[i], btos(is_fork));
 			continue;
 		}
 
-		subtest_start("FromSpec=%s", fs_mode[i]);
+		subtest_start("FromSpec=%s", fromspec_name[i]);
 		plan_tests(7);
 
 		struct vs_pair p;
@@ -1917,15 +1969,9 @@ START_LOOP_TEST(propagation_in_active_receive, iter, 0, 7)
 		L4_ThreadId_t vs_tid = p.vs_tid, sender_tid = p.sender_tid;
 		L4_Sleep(A_SHORT_NAP);
 
-		L4_ThreadId_t from;
-		switch(i) {
-			case 0: from = L4_LocalIdOf(vs_tid); break;
-			case 1: from = L4_anylocalthread; break;
-			case 2: from = L4_GlobalIdOf(vs_tid); break;
-			case 3: from = L4_anythread; break;
-		}
+		L4_ThreadId_t from = fromspec_class(i, vs_tid);
 		L4_MsgTag_t tag = L4_Ipc(L4_nilthread, from,
-			L4_Timeouts(L4_Never, TEST_IPC_DELAY), &from);
+			L4_Timeouts(L4_Never, L4_ZeroTime), &from);
 		L4_Word_t ec = L4_ErrorCode();
 		if(!ok1(L4_IpcSucceeded(tag))) {
 			diag("ec=%#lx", ec);
@@ -2612,10 +2658,15 @@ Suite *ipc_suite(void)
 	}
 
 	{
+		/* TODO: should also have a distinct test for VirtualSender values
+		 * that don't exist.
+		 */
 		TCase *tc = tcase_create("propagate");
+		tcase_set_fork(tc, false);
 		tcase_add_test(tc, propagation);
 		tcase_add_test(tc, propagation_alter_wait);
 		tcase_add_test(tc, propagation_in_active_receive);
+		tcase_add_test(tc, cancel_virtualsender);
 		suite_add_tcase(s, tc);
 	}
 
@@ -2648,7 +2699,6 @@ Suite *ipc_suite(void)
 		tcase_add_test(tc, point_xfer_timeouts);
 		tcase_add_test(tc, r_recv_timeout_test);
 		tcase_add_test(tc, cancel_sender);
-		tcase_add_test(tc, cancel_virtualsender);
 		suite_add_tcase(s, tc);
 	}
 
