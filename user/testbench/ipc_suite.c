@@ -251,16 +251,20 @@ static void close_sender(L4_ThreadId_t sender)
  *   3) two threads, one local & one foreign, should receive from local, and
  *      then timeout.
  *
- * due to the test harness being somewhat less than featureful wrt looped
- * tests, there's a loop around parts 2 and 3 to introduce delays, hopefully
- * triggering both active send and receive.
+ * test iteration varies between active send and active receive.
  */
-START_TEST(receive_from_anylocalthread)
+START_LOOP_TEST(receive_from_anylocalthread, iter, 0, 1)
 {
-	plan_tests(1 + 2 * 4);
+	plan_tests(5);
 
 	const int delay_ms = 3;
 	const L4_Time_t delay = L4_TimePeriod(delay_ms * 1000);
+	const bool d_self = !CHECK_FLAG(iter, 1);	/* i.e. active receive */
+	diag("d_self=%s", btos(d_self));
+
+	const L4_Time_t d = d_self ? L4_ZeroTime : delay;
+	diag("delay_ms=%d applies to %s", delay_ms,
+		d_self ? "receiver" : "sender");
 
 	/* flush immediate senders first with vanilla IPC. */
 	bool timed_out = false;
@@ -274,62 +278,54 @@ START_TEST(receive_from_anylocalthread)
 	}
 	fail_unless(timed_out, "palate-cleansing didn't take");
 
-
 	/* part 1 */
 	L4_ThreadId_t from;
 	L4_MsgTag_t tag = L4_WaitLocal_Timeout(TEST_IPC_DELAY, &from);
 	ok(L4_IpcFailed(tag) && (L4_ErrorCode() & 0xf) == 3,
 		"recv timeout in no-sender");
 
-	for(int i=0; i <= 1; i++) {
-		const bool d_self = !CHECK_FLAG(i, 1);
-		const L4_Time_t d = d_self ? L4_ZeroTime : delay;
-		diag("delay_ms=%d applies to %s", delay_ms,
-			d_self ? "receiver" : "sender");
+	/* part 2a */
+	L4_ThreadId_t sender = send_from_fork(0xdeadbeef, d);
+	if(d_self) L4_Sleep(delay);
+	tag = L4_WaitLocal_Timeout(TEST_IPC_DELAY, &from);
+	/* (no diag(), receive phase timeout is expected) */
+	ok(L4_IpcFailed(tag) && (L4_ErrorCode() & 0xf) == 3,
+		"recv timeout in foreign sender");
+	/* (clear it, though.) */
+	do {
+		tag = L4_Wait(&from);
+		fail_if(L4_IpcFailed(tag));
+	} while(from.raw != sender.raw);
+	close_sender(sender);
 
-		/* part 2a */
-		L4_ThreadId_t sender = send_from_fork(0xdeadbeef, d);
-		if(d_self) L4_Sleep(delay);
-		tag = L4_WaitLocal_Timeout(TEST_IPC_DELAY, &from);
-		/* (no diag(), receive phase timeout is expected) */
-		ok(L4_IpcFailed(tag) && (L4_ErrorCode() & 0xf) == 3,
-			"recv timeout in foreign sender");
-		/* (clear it, though.) */
-		do {
-			tag = L4_Wait(&from);
-			fail_if(L4_IpcFailed(tag));
-		} while(from.raw != sender.raw);
-		close_sender(sender);
+	/* part 2b */
+	L4_ThreadId_t fork_sender = send_from_thread(0xf00bdead, d);
+	if(d_self) L4_Sleep(delay);
+	tag = L4_WaitLocal_Timeout(TEST_IPC_DELAY, &from);
+	if(L4_IpcFailed(tag)) diag("ec %#lx", L4_ErrorCode());
+	L4_Word_t payload;
+	L4_StoreMR(1, &payload);
+	ok(L4_IpcSucceeded(tag) && payload == 0xf00bdead,
+		"recv success in local sender");
+	close_sender(fork_sender);
 
-		/* part 2b */
-		L4_ThreadId_t fork_sender = send_from_thread(0xf00bdead, d);
-		if(d_self) L4_Sleep(delay);
-		tag = L4_WaitLocal_Timeout(TEST_IPC_DELAY, &from);
-		if(L4_IpcFailed(tag)) diag("ec %#lx", L4_ErrorCode());
-		L4_Word_t payload;
-		L4_StoreMR(1, &payload);
-		ok(L4_IpcSucceeded(tag) && payload == 0xf00bdead,
-			"recv success in local sender");
-		close_sender(fork_sender);
+	/* part 3 */
+	fork_sender = send_from_fork(0xbaddcafe, d);
+	sender = send_from_thread(0xb0a7face, d);
+	if(d_self) L4_Sleep(delay);
+	tag = L4_WaitLocal_Timeout(TEST_IPC_DELAY, &from);
+	if(L4_IpcFailed(tag)) diag("ec %#lx", L4_ErrorCode());
+	L4_StoreMR(1, &payload);
+	ok(L4_IpcSucceeded(tag) && payload == 0xb0a7face,
+		"received from thread, first");
+	close_sender(sender);	/* must catch its death gurgle first */
 
-		/* part 3 */
-		fork_sender = send_from_fork(0xbaddcafe, d);
-		sender = send_from_thread(0xb0a7face, d);
-		if(d_self) L4_Sleep(delay);
-		tag = L4_WaitLocal_Timeout(TEST_IPC_DELAY, &from);
-		if(L4_IpcFailed(tag)) diag("ec %#lx", L4_ErrorCode());
-		L4_StoreMR(1, &payload);
-		ok(L4_IpcSucceeded(tag) && payload == 0xb0a7face,
-			"received from thread, first");
-		close_sender(sender);	/* must catch its death gurgle first */
-
-		tag = L4_Wait_Timeout(TEST_IPC_DELAY, &from);
-		if(L4_IpcFailed(tag)) diag("ec %#lx", L4_ErrorCode());
-		L4_StoreMR(1, &payload);
-		ok(L4_IpcSucceeded(tag) && payload == 0xbaddcafe,
-			"received from fork, after");
-		close_sender(fork_sender);
-	}
+	tag = L4_Wait_Timeout(TEST_IPC_DELAY, &from);
+	if(L4_IpcFailed(tag)) diag("ec %#lx", L4_ErrorCode());
+	L4_StoreMR(1, &payload);
+	ok(L4_IpcSucceeded(tag) && payload == 0xbaddcafe,
+		"received from fork, after");
+	close_sender(fork_sender);
 }
 END_TEST
 
@@ -1182,7 +1178,7 @@ static L4_ThreadId_t start_sar_long(
 
 
 /* tests for correct error reporting when a passive send's destination is
- * removed before timeout.
+ * removed before timeout. covers both ordinary and propagated sends.
  *
  * NOTE: this test requires roottask privilege to rewrite the destination's
  * version bits.
@@ -2630,30 +2626,13 @@ Suite *ipc_suite(void)
 {
 	Suite *s = suite_create("ipc");
 
-	/* tests written to hit a panic() in ipc.c, which haven't been sorted
-	 * elsewhere yet
-	 */
 	{
-		TCase *tc = tcase_create("panic");
-		tcase_add_test(tc, receive_from_anylocalthread);
-		tcase_add_test(tc, map_into_large_acceptor);
-		tcase_add_test(tc, map_into_small_acceptor);
-		suite_add_tcase(s, tc);
-	}
-
-	/* bug-provocation tests */
-	{
-		TCase *tc = tcase_create("bug");
-		tcase_add_test(tc, big_pf_stomp);
-		suite_add_tcase(s, tc);
-	}
-
-	{
-		TCase *tc = tcase_create("tid");
+		TCase *tc = tcase_create("api");
 		tcase_add_test(tc, tid_spec_to_fail);
 		tcase_add_test(tc, tid_spec_to_ok);
 		tcase_add_test(tc, tid_spec_from_fail);
 		tcase_add_test(tc, tid_spec_from_ok);
+		tcase_add_test(tc, receive_from_anylocalthread);
 		suite_add_tcase(s, tc);
 	}
 
@@ -2706,6 +2685,23 @@ Suite *ipc_suite(void)
 		TCase *tc = tcase_create("typed");
 		tcase_add_test(tc, c_bit_in_typed_words);
 		tcase_add_test(tc, mapgrant_address);
+		suite_add_tcase(s, tc);
+	}
+
+	/* bug-provocation tests */
+	{
+		TCase *tc = tcase_create("bug");
+		tcase_add_test(tc, big_pf_stomp);
+		suite_add_tcase(s, tc);
+	}
+
+	/* tests written to hit a panic() in ipc.c, which haven't been sorted
+	 * elsewhere yet
+	 */
+	{
+		TCase *tc = tcase_create("panic");
+		tcase_add_test(tc, map_into_large_acceptor);
+		tcase_add_test(tc, map_into_small_acceptor);
 		suite_add_tcase(s, tc);
 	}
 
