@@ -234,6 +234,7 @@ static void thread_wrapper(L4_ThreadId_t parent)
 	L4_Set_UserDefinedHandle(0);
 	L4_Set_ExceptionHandler(parent);
 
+	L4_LoadBR(0, 0);
 	L4_MsgTag_t tag = L4_Receive(parent);
 	if(L4_IpcFailed(tag)) {
 		printf("%s: initial IPC failed (ec %#lx), doing early exit\n",
