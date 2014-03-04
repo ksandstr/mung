@@ -271,6 +271,45 @@ START_LOOP_TEST(receive_from_local, iter, 0, 7)
 END_TEST
 
 
+/* receive from a foreign sender specified by TID. both active and passive
+ * receive, and with a different sender either before or after the proper one.
+ */
+START_LOOP_TEST(receive_from_foreign, iter, 0, 3)
+{
+	plan_tests(3);
+	const bool send_passive = CHECK_FLAG(iter, 1),
+		fake_after = CHECK_FLAG(iter, 2);
+	diag("send_passive=%s, fake_after=%s",
+		btos(send_passive), btos(fake_after));
+
+	L4_ThreadId_t fake_tid = L4_nilthread;
+	if(!fake_after) fake_tid = send_from_fork(0xabcadada, L4_ZeroTime);
+	L4_ThreadId_t sender_tid = send_from_fork(0xdeafbabe,
+		send_passive ? L4_ZeroTime : A_SHORT_NAP);
+	assert(L4_IsGlobalId(sender_tid));
+	if(fake_after) fake_tid = send_from_fork(0xdadad0d0, L4_ZeroTime);
+	assert(!L4_IsNilThread(fake_tid));
+	if(send_passive) L4_Sleep(A_SHORT_NAP);
+
+	L4_LoadBR(0, 0);
+	L4_MsgTag_t tag = L4_Receive_Timeout(sender_tid, TEST_IPC_DELAY);
+	L4_Word_t payload; L4_StoreMR(1, &payload);
+	L4_Word_t ec = L4_ErrorCode();
+	ok1(L4_IpcSucceeded(tag));
+	skip_start(L4_IpcFailed(tag), 2, "IPC failed (ec=%#lx)", ec) {
+		ok1(L4_Label(tag) == 0xd00d && L4_UntypedWords(tag) == 1);
+		if(!ok1(payload == 0xdeafbabe)) {
+			diag("payload=%#lx", payload);
+		}
+	} skip_end;
+
+	close_sender(sender_tid);
+	L4_Receive_Timeout(fake_tid, TEST_IPC_DELAY);
+	close_sender(fake_tid);
+}
+END_TEST
+
+
 /* test four things about the L4_anylocalthread FromSpecifier:
  *   1) that when no thread at all is sending, L4_anylocalthread should cause
  *      a timeout (base case);
@@ -2661,6 +2700,7 @@ Suite *ipc_suite(void)
 		tcase_add_test(tc, tid_spec_from_fail);
 		tcase_add_test(tc, tid_spec_from_ok);
 		tcase_add_test(tc, receive_from_local);
+		tcase_add_test(tc, receive_from_foreign);
 		tcase_add_test(tc, receive_from_anylocalthread);
 		suite_add_tcase(s, tc);
 	}
