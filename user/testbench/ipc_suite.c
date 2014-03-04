@@ -223,24 +223,52 @@ static L4_ThreadId_t send_from_fork(L4_Word_t payload, L4_Time_t delay)
 
 static void close_sender(L4_ThreadId_t sender)
 {
-#if 0
-	diag("%lu:%lu is %slocal", L4_ThreadNo(sender), L4_Version(sender),
-		IS_LOCAL_TID(sender) ? "" : "not ");
-#endif
-
 	if(IS_LOCAL_TID(sender)) {
-		L4_Word_t ec = 0;
-		join_thread_long(sender, TEST_IPC_DELAY, &ec);
-		if(ec != 0) {
-			diag("%s: join_thread_long(): ec %#lx", __func__, ec);
-			kill_thread(sender);
-		}
+		xjoin_thread(sender);
 	} else {
 		int status = 0, id = wait(&status);
 		if(id < 0) diag("wait failed");
 		else if(status != 0) diag("status from wait = %d", status);
 	}
 }
+
+
+/* receive from a local sender specified by TID. both active and passive
+ * receive, with a local and global FromSpec, and with a different sender
+ * either before or after the proper one.
+ */
+START_LOOP_TEST(receive_from_local, iter, 0, 7)
+{
+	plan_tests(3);
+	const bool send_passive = CHECK_FLAG(iter, 1),
+		is_local_id = CHECK_FLAG(iter, 2),
+		fake_after = CHECK_FLAG(iter, 4);
+	diag("send_passive=%s, is_local_id=%s, fake_after=%s",
+		btos(send_passive), btos(is_local_id), btos(fake_after));
+
+	L4_ThreadId_t fake_tid;
+	if(!fake_after) fake_tid = send_from_thread(0xbeefb055, L4_ZeroTime);
+	L4_ThreadId_t sender_tid = send_from_thread(0xfaceb0a7,
+		send_passive ? L4_ZeroTime : A_SHORT_NAP);
+	if(fake_after) fake_tid = send_from_thread(0xcafeb055, L4_ZeroTime);
+	L4_ThreadId_t recv_tid = is_local_id ? L4_LocalIdOf(sender_tid)
+		: L4_GlobalIdOf(sender_tid);
+	if(send_passive) L4_Sleep(A_SHORT_NAP);
+
+	L4_LoadBR(0, 0);
+	L4_MsgTag_t tag = L4_Receive_Timeout(recv_tid, TEST_IPC_DELAY);
+	L4_Word_t payload; L4_StoreMR(1, &payload);
+	ok1(L4_IpcSucceeded(tag));
+	ok1(L4_Label(tag) == 0xd00d && L4_UntypedWords(tag) == 1);
+	if(!ok1(payload == 0xfaceb0a7)) {
+		diag("payload=%#lx", payload);
+	}
+
+	close_sender(sender_tid);
+	L4_Receive_Timeout(fake_tid, TEST_IPC_DELAY);
+	close_sender(fake_tid);
+}
+END_TEST
 
 
 /* test four things about the L4_anylocalthread FromSpecifier:
@@ -2632,6 +2660,7 @@ Suite *ipc_suite(void)
 		tcase_add_test(tc, tid_spec_to_ok);
 		tcase_add_test(tc, tid_spec_from_fail);
 		tcase_add_test(tc, tid_spec_from_ok);
+		tcase_add_test(tc, receive_from_local);
 		tcase_add_test(tc, receive_from_anylocalthread);
 		suite_add_tcase(s, tc);
 	}
