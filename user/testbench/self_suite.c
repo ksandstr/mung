@@ -286,6 +286,81 @@ START_TEST(deeper_fork)
 END_TEST
 
 
+/* do fork_tid() three times. have each child call to the parent.
+ *
+ * this teases out the bug where fork_tid() discovers the child process TID by
+ * a wildcard receive, breaking other IPC flows.
+ */
+START_TEST(multi_fork_tid)
+{
+	plan_tests(3);
+
+	int childs[3];
+	L4_ThreadId_t tids[3], parent = L4_MyGlobalId();
+	for(int i=0; i < 3; i++) {
+		childs[i] = fork_tid(&tids[i]);
+		if(childs[i] == 0) {
+			L4_LoadBR(0, 0);
+			L4_LoadMR(0, 0);
+			L4_Clock_t start = L4_SystemClock();
+			L4_MsgTag_t tag = L4_Call_Timeouts(parent,
+				TEST_IPC_DELAY, TEST_IPC_DELAY);
+			L4_Clock_t end = L4_SystemClock();
+			if(L4_IpcFailed(tag)) {
+				diag("i=%d: child-to-parent call failed, ec=%#lx", i, L4_ErrorCode());
+				diag("... start=%lu, end=%lu, diff=%lu",
+					(unsigned long)start.raw, (unsigned long)end.raw,
+					(unsigned long)(end.raw - start.raw));
+			}
+			exit(L4_IpcFailed(tag) ? 1 : 0);
+		}
+	}
+
+	int n_replied = 0;
+	for(int i=0; i < 3; i++) {
+		L4_LoadBR(0, 0);
+		L4_ThreadId_t sender;
+		L4_MsgTag_t tag = L4_Wait_Timeout(TEST_IPC_DELAY, &sender);
+		if(L4_IpcFailed(tag)) {
+			diag("wait failed on i=%d, ec=%#lx", i, L4_ErrorCode());
+			break;
+		}
+		L4_LoadMR(0, 0);
+		tag = L4_Reply(sender);
+		if(L4_IpcFailed(tag)) {
+			diag("reply to %lu:%lu failed",
+				L4_ThreadNo(sender), L4_Version(sender));
+		} else {
+			n_replied++;
+		}
+	}
+
+	ok(childs[0] != childs[1] && childs[0] != childs[2]
+		&& childs[1] != childs[2],
+		"PIDs are different");
+	ok(!L4_SameThreads(tids[0], tids[1])
+		&& !L4_SameThreads(tids[0], tids[2])
+		&& !L4_SameThreads(tids[1], tids[2]),
+		"TIDs are different");
+	if(!ok(n_replied == 3, "replied to all children")) {
+		diag("n_replied=%d", n_replied);
+	}
+
+	if(exit_status() != 0) {
+		for(int i=0; i < 3; i++) {
+			diag("childs[%d]=%d, tids[%d]=%lu:%lu", i, childs[i],
+				i, L4_ThreadNo(tids[i]), L4_Version(tids[i]));
+		}
+	}
+
+	for(int i=0; i < 3; i++) {
+		int st = 0, dead = wait(&st);
+		if(dead < 0) diag("wait i=%d: dead=%d, st=%d", i, dead, st);
+	}
+}
+END_TEST
+
+
 L4_Word_t __attribute__((noinline)) get_utcb_noinline(void) {
 	return (L4_Word_t)__L4_Get_UtcbAddress();
 }
@@ -708,16 +783,19 @@ Suite *self_suite(void)
 		suite_add_tcase(s, tc);
 	}
 
-	TCase *fork_case = tcase_create("fork");
-	tcase_set_fork(fork_case, false);
-	tcase_add_test(fork_case, basic_fork_and_wait);
-	tcase_add_test(fork_case, copy_on_write);
-	tcase_add_test(fork_case, return_exit_status);
-	tcase_add_test(fork_case, ipc_with_child);
-	tcase_add_test(fork_case, deep_fork);
-	tcase_add_test(fork_case, multi_fork_and_wait);
-	tcase_add_test(fork_case, deeper_fork);
-	suite_add_tcase(s, fork_case);
+	{
+		TCase *tc = tcase_create("fork");
+		tcase_set_fork(tc, false);
+		tcase_add_test(tc, basic_fork_and_wait);
+		tcase_add_test(tc, copy_on_write);
+		tcase_add_test(tc, return_exit_status);
+		tcase_add_test(tc, ipc_with_child);
+		tcase_add_test(tc, deep_fork);
+		tcase_add_test(tc, multi_fork_and_wait);
+		tcase_add_test(tc, deeper_fork);
+		tcase_add_test(tc, multi_fork_tid);
+		suite_add_tcase(s, tc);
+	}
 
 	TCase *pagers = tcase_create("pg");
 	tcase_add_checked_fixture(pagers, &stats_setup, &stats_teardown);
