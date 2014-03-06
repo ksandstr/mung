@@ -366,17 +366,41 @@ child_fail:
 }
 
 
+static void child_tid_bounce_fn(void *param)
+{
+	L4_ThreadId_t parent = *(L4_ThreadId_t *)param, child = L4_nilthread;
+	L4_MsgTag_t tag = L4_Wait(&child);
+	if(L4_IpcFailed(tag)) goto ipc_fail;
+	L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 2 }.raw);
+	L4_LoadMR(1, tag.raw);
+	L4_LoadMR(2, child.raw);
+	tag = L4_Send(parent);
+	if(L4_IpcSucceeded(tag)) return;
+
+ipc_fail:
+	printf("%s: ipc failed, ec=%#lx\n", __func__, L4_ErrorCode());
+}
+
+
 int fork_tid(L4_ThreadId_t *tid_p)
 {
 	L4_MsgTag_t tag;
-	L4_ThreadId_t parent = L4_MyGlobalId();
+	L4_ThreadId_t parent = L4_MyGlobalId(),
+		bouncer = start_thread(&child_tid_bounce_fn, &parent);
 	int pid = fork();
 	if(pid != 0) {
-		tag = L4_Wait(tid_p);
+		tag = L4_Receive(bouncer);
+		if(L4_IpcSucceeded(tag)) {
+			L4_StoreMR(1, &tag.raw);
+			L4_StoreMR(2, &tid_p->raw);
+		} else {
+			printf("%s: error in bouncer receive\n", __func__);
+		}
+		join_thread(bouncer);
 	} else {
 		*tid_p = L4_nilthread;
 		L4_LoadMR(0, 0);
-		tag = L4_Send(parent);
+		tag = L4_Send(bouncer);
 	}
 	if(L4_IpcFailed(tag)) {
 		printf("%s: ec %#lx\n", __func__, L4_ErrorCode());
