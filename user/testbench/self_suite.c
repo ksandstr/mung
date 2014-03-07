@@ -371,21 +371,8 @@ START_TEST(ipc_with_child)
 	plan_tests(2);
 
 	L4_ThreadId_t parent_tid = L4_Myself();
-#if 0
-	diag("parent (%lu:%lu) UTCB base is %p",
-		L4_ThreadNo(parent_tid), L4_Version(parent_tid),
-		__L4_Get_UtcbAddress());
-#endif
 	int spid = fork();
 	if(spid == 0) {
-#if 0
-		diag("child UTCB looks like %p", __L4_Get_UtcbAddress());
-		diag("real UTCB base is %#lx", get_utcb_noinline());
-
-		L4_ThreadId_t ctid = L4_Myself();
-		diag("child %#lx sending to parent %#lx", ctid.raw, parent_tid.raw);
-#endif
-
 		L4_LoadMR(0, (L4_MsgTag_t){ .X.label = 0x2323, .X.u = 1 }.raw);
 		L4_LoadMR(1, L4_Myself().raw);
 		L4_MsgTag_t tag = L4_Call(parent_tid);
