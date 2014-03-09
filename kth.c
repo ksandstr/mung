@@ -53,7 +53,6 @@ static NORETURN void end_kthread(void)
 
 	space_remove_thread(self->space, self);
 	htable_del(&thread_hash, int_hash(TID_THREADNUM(self->id)), self);
-	assert(self->u0.regs == NULL);
 	list_add(&dead_thread_list, &self->u0.dead_link);
 	self->status = TS_DEAD;
 	sq_remove_thread(self);

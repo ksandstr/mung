@@ -132,9 +132,9 @@ static void restore_saved_regs(struct hook *hook, uintptr_t code, void *priv)
 	assert(t->utcb_pos >= 0 && !IS_KERNEL_THREAD(t));
 	void *utcb = thread_get_utcb(t);
 
-	struct saved_regs *sr = t->u0.regs;
+	struct saved_regs *sr = t->regs;
 	assert(sr != NULL);
-	t->u0.regs = NULL;
+	t->regs = NULL;
 	L4_VREG(utcb, L4_TCR_BR(0)) = sr->br0;
 	L4_VREG(utcb, L4_TCR_VA_SENDER) = sr->va_sender.raw;
 	L4_VREG(utcb, L4_TCR_INTENDEDRECEIVER) = sr->ir.raw;
@@ -151,7 +151,7 @@ void save_ipc_regs(struct thread *t, void *utcb, int n_regs)
 	assert(n_regs >= 0 && n_regs <= 64);
 	assert(t->utcb_pos >= 0 && !IS_KERNEL_THREAD(t));
 
-	struct saved_regs *sr = t->u0.regs;
+	struct saved_regs *sr = t->regs;
 	if(sr == NULL) {
 		/* create */
 		hook_push_back(&t->post_exn_call, &restore_saved_regs, NULL);
@@ -161,7 +161,7 @@ void save_ipc_regs(struct thread *t, void *utcb, int n_regs)
 		sr->ir.raw = L4_VREG(utcb, L4_TCR_INTENDEDRECEIVER);
 		sr->size = n_regs;
 		sr->length = 0;
-		t->u0.regs = sr;
+		t->regs = sr;
 	} else if(sr->size < n_regs) {
 		/* enlarge */
 		int n_alloc = 1 << size_to_shift(n_regs);
@@ -172,7 +172,7 @@ void save_ipc_regs(struct thread *t, void *utcb, int n_regs)
 			/* and i don't know what it is */
 		}
 		sr->size = n_alloc;
-		t->u0.regs = sr;
+		t->regs = sr;
 	}
 
 	if(sr->length < n_regs) {

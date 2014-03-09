@@ -131,6 +131,8 @@ struct thread
 	 * can only be scheduled when this is true.
 	 */
 	struct hook post_exn_call;
+	/* TCRs and MRs saved under exception IPC. */
+	struct saved_regs *regs;
 
 	/* inactive threads have space != NULL && utcb_pos < 0, and haven't been
 	 * added with space_add_thread().
@@ -149,7 +151,6 @@ struct thread
 	struct x86_exregs ctx;
 
 	union {
-		struct saved_regs *regs;	/* under exception IPC */
 		L4_ThreadId_t pager;		/* before activation */
 		struct list_node dead_link;	/* kth after termination */
 	} u0;
