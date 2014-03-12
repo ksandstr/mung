@@ -725,6 +725,8 @@ SYSCALL L4_Word_t sys_exregs(
 		result.global.raw = dest_thread->id;
 		assert(result.local.X.zeros != 0);
 	}
+	/* fast exit for L4_{Local,Global}IdOf() */
+	if(*control_p == 0) goto end;
 
 	if(unlikely(CHECK_FLAG_ANY(*control_p, CTL_XFER_MASK))) {
 		TRACE("%s: control transfer items are not supported by this microkernel\n",
