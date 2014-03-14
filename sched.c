@@ -828,7 +828,7 @@ SYSCALL L4_Word_t sys_schedule(
 {
 	struct thread *current = get_current_thread();
 
-	L4_Word_t result = L4_SCHEDRESULT_ERROR, ec = 0, timectl = *timectl_p;
+	L4_Word_t result, ec = 0, timectl = *timectl_p;
 
 	/* test for user TID range */
 	if(unlikely(L4_ThreadNo(dest_tid) < first_user_threadno())) {
@@ -951,6 +951,7 @@ end_noupdate:
 	return result;
 
 inv_param:
+	result = L4_SCHEDRESULT_ERROR;
 	ec = L4_ERROR_INVALID_PARAM;
 	goto end;
 }
