@@ -230,7 +230,7 @@ static inline L4_Time_t L4_TimePeriod(L4_Word64_t microseconds)
 
 
 /* contrary to the spec as of 20120601, the maximum representable interval is
- * about 33½ minutes, or 0x3ff << 15 microseconds.
+ * about 33½ seconds, or 0x3ff << 15 microseconds.
  *
  * or I've miscomprehended something along the way.
  *
@@ -286,8 +286,7 @@ static inline L4_Clock_t L4_PointClock_NP(L4_Clock_t base, L4_Time_t t)
 /* (clearly a relative of Incontinentia's...) */
 static inline L4_Word64_t L4_PeriodUs_NP(L4_Time_t t) {
 	_L4_ASSERT(L4_IsTimePeriod_NP(t));
-	if(t.raw == L4_ZeroTime.raw) return 0;
-	else return (L4_Word64_t)t.period.m << t.period.e;
+	return (L4_Word64_t)t.period.m << t.period.e;
 }
 
 
