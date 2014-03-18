@@ -504,6 +504,58 @@ static void bench_exregs(void)
 }
 
 
+/* fork @n_children times into a process that exits immediately, then wait for
+ * all of these. measure clock cycles taken by the whole ordeal.
+ */
+void bench_fork_wait(const size_t n_children)
+{
+	const size_t n_iters = 200;
+	printf("%s[n_children=%d]:\n", __func__, (int)n_children);
+
+	struct tally *t = tally_new(256);
+	for(size_t i=0; i < n_iters; i++) {
+		int cpids[n_children];
+		uint64_t start = x86_rdtsc();
+		for(int j=0; j < n_children; j++) {
+			int child = fork();
+			if(child == 0) {
+				exit(0);
+			}
+			cpids[j] = child;
+		}
+		int dead_pids[n_children];
+		for(int j=0; j < n_children; j++) {
+			int st = 0;
+			dead_pids[j] = wait(&st);
+		}
+		uint64_t end = x86_rdtsc();
+
+		/* verify that all children are dead. */
+		int n_dead = 0;
+		for(int j=0; j < n_children; j++) {
+			for(int k=0; k < n_children; k++) {
+				if(dead_pids[k] == cpids[j]) {
+					n_dead++;
+					break;
+				}
+			}
+		}
+		if(n_dead < n_children) {
+			printf("ERROR: i=%d: n_dead=%d, n_children=%d\n",
+				(int)i, n_dead, (int)n_children);
+			break;
+		}
+
+		if(i < 8) continue;
+		tally_add(t, (ssize_t)end - start);
+	}
+
+	printf("  fork-and-wait: "); print_tally(t); printf("\n");
+
+	free(t);
+}
+
+
 void run_benchmarks(void)
 {
 	L4_ThreadId_t local_tid, remote_tid;
@@ -532,4 +584,9 @@ void run_benchmarks(void)
 	bench_schedule();
 	bench_kernelinterface();
 	bench_exregs();
+
+	/* application-ey benchmarks. */
+	bench_fork_wait(1);
+	bench_fork_wait(4);
+	bench_fork_wait(8);
 }
