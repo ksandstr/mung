@@ -113,6 +113,19 @@ extern void space_put_page(
 	uint32_t page_id,
 	int access);
 
+/* removes page table entries within @fp. ignores L4_Rights(@fp). */
+extern void space_clear_range(struct space *sp, L4_Fpage_t fp);
+
+/* sets access for a range. if @fp.rights doesn't include Readable, the entry
+ * is removed altogether to enforce non-readability.
+ */
+extern void space_set_range_access(struct space *sp, L4_Fpage_t fp);
+
+extern void space_set_range(
+	struct space *sp,
+	L4_Fpage_t range,
+	uint32_t first_pgid);
+
 /* probe and reset the access bits of a page. if the probed address is in a
  * hole, the function returns -ENOENT; also, if next_addr_p != NULL, then
  * *next_addr_p will be set to a following address that might not be in the

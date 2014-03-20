@@ -837,6 +837,7 @@ int mapdb_add_map(
 			panic("shrimp case not implemented");
 		}
 	}
+	space_set_range(db->space, fpage, first_page_id);
 
 #ifndef NDEBUG
 	/* postcondition: the mapping database must contain the indicated
@@ -1003,15 +1004,6 @@ int mapdb_map_pages(
 	if(first == NULL) {
 		/* no pages; it's a no-op. */
 		return 0;
-	}
-
-	/* TODO: modify the page tables in mapdb_add_map() at some future time.
-	 * right now it leaves them out of sync, i.e. potentially pointing to
-	 * other pages entirely, so clear the page tables out and let the pf
-	 * handler fill them in.
-	 */
-	for(L4_Word_t a = 0; a < L4_Size(map_page); a += PAGE_SIZE) {
-		space_put_page(to_db->space, dest_addr + a, 0, 0);
 	}
 
 	if(L4_SizeLog2(map_page) <= L4_SizeLog2(first->range)
@@ -1621,16 +1613,7 @@ int mapdb_unmap_fpage(
 				L4_Set_Rights(&e->range, new_access);
 				if(new_access == 0) drop = true;
 				else if(new_access < old_access) {
-					/* TODO: move into a function */
-					for(L4_Word_t a = L4_Address(e->range),
-								  pgid = e->first_page_id;
-						a < L4_Address(e->range) + L4_Size(e->range);
-						a += PAGE_SIZE, pgid++)
-					{
-						TRACE("setting page at %#lx to pgid %lu, access %#x in ref_id %d\n",
-							a, pgid, (unsigned)new_access, (int)db->ref_id);
-						space_put_page(db->space, a, pgid, new_access);
-					}
+					space_set_range_access(db->space, e->range);
 					db_changed = true;
 				}
 			}
@@ -1653,15 +1636,7 @@ int mapdb_unmap_fpage(
 					return -ENOMEM;
 				}
 
-				/* TODO: move into a function */
-				for(L4_Word_t a = L4_Address(e->range);
-					a < L4_Address(e->range) + L4_Size(e->range);
-					a += PAGE_SIZE)
-				{
-					TRACE("dropping page at %#lx in ref_id %d\n",
-						a, (int)db->ref_id);
-					space_put_page(db->space, a, 0, 0);
-				}
+				space_clear_range(db->space, e->range);
 				db_changed = true;
 
 				int pos = e - g->entries;
