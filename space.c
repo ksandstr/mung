@@ -812,22 +812,45 @@ SYSCALL void sys_unmap(L4_Word_t control, void *utcb)
 		L4_Set_Rights(&fp, mapdb_unmap_fpage(mdb, fp, flush, true, true));
 		L4_VREG(utcb, L4_TCR_MR(i)) = fp.raw;
 
-		if(remove != 0) {
-			/* make the unmap take effect in the caller's address space.
-			 *
-			 * TODO: use space_put_page() to modify the page table's access
-			 * bits instead using an and/or mask pair. this current solution
-			 * causes minor refaults over the entire range later on.
-			 */
-			for(L4_Word_t addr = FPAGE_LOW(fp);
-				addr < FPAGE_HIGH(fp);
-				addr += PAGE_SIZE)
-			{
-				space_put_page(current->space, addr, 0, 0);
+#ifndef NDEBUG
+		if(remove != 0 && flush) {
+			/* flush must take effect in the caller's space. */
+			const L4_Word_t grp_step = MAX_ENTRIES_PER_GROUP * PAGE_SIZE;
+			uint32_t *pdir_mem = current->space->pdirs->vm_addr,
+				*ptab_mem = NULL, ptab_id = 0;
+			assert(pdir_mem != NULL);
+			L4_Word_t addr = FPAGE_LOW(fp);
+			while(addr <= FPAGE_HIGH(fp)) {
+				if(!CHECK_FLAG(pdir_mem[addr >> 22], PDIR_PRESENT)) {
+					addr = (addr + grp_step) & ~(grp_step - 1);
+					continue;
+				} else if(ptab_id != pdir_mem[addr >> 22] >> 12) {
+					ptab_id = pdir_mem[addr >> 22] >> 12;
+					struct page *pg = htable_get(&current->space->ptab_pages,
+						int_hash(ptab_id), &cmp_page_id_to_key, &ptab_id);
+					assert(pg != NULL);
+					ptab_mem = pg->vm_addr;
+					assert(ptab_mem != NULL);
+				}
+
+				int ix = (addr >> 12) & 0x3ff;
+				int present = CHECK_FLAG(ptab_mem[ix], PT_PRESENT)
+					? L4_Readable : 0;
+				present |= CHECK_FLAG_ALL(ptab_mem[ix], PT_PRESENT | PT_RW)
+					? L4_Writable : 0;
+				if(CHECK_FLAG_ANY(remove, present)) {
+					printf("%s: removed %#x, but %#x present at addr=%#lx\n",
+						__func__, remove, present, addr);
+					printf("  ... fp=%#lx:%#lx (rights=%#lx)\n",
+						L4_Address(fp), L4_Size(fp), L4_Rights(fp));
+				}
+				assert(!CHECK_FLAG_ANY(remove, present));
+				addr += PAGE_SIZE;
 			}
 		}
+#endif
 	}
-	if(remove_agg != 0) space_commit(current->space);
+	if(flush && remove_agg != 0) space_commit(current->space);
 
 	assert(check_all_spaces(0));
 }
