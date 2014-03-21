@@ -681,6 +681,66 @@ START_LOOP_TEST(uncaught_segv_test, iter, 0, 3)
 END_TEST
 
 
+static L4_MsgTag_t send_fault(
+	L4_ThreadId_t pager,
+	L4_Word_t addr,
+	L4_Word_t eip,
+	L4_Word8_t access)
+{
+	L4_LoadBR(0, L4_CompleteAddressSpace.raw);
+	L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 2,
+		.X.label = ((-2) & 0xfff) << 4 | (access & 0xf) }.raw);
+	L4_LoadMR(1, addr);
+	L4_LoadMR(2, eip);
+	return L4_Call(pager);
+}
+
+
+static void send_fault_at_fn(void *param_ptr)
+{
+	L4_Word_t addr = (L4_Word_t)param_ptr;
+	diag("%s: addr=%#lx", __func__, addr);
+	L4_MsgTag_t tag = send_fault(L4_Pager(), addr,
+		(L4_Word_t)&send_fault_at_fn, L4_Readable | L4_Writable);
+	diag("%s: returned, tag=%#lx, ec=%#lx", __func__, tag.raw,
+		L4_ErrorCode());
+	exit_thread(NULL);
+}
+
+
+/* test that a segfault is generated when a child process faults to forkserv
+ * in the UTCB or KIP range. this is used to detect the microkernel unwisely
+ * permitting a client process to unmap its UTCB or KIP range.
+ *
+ * this test only checks the positive case, i.e. that faults on UTCB and KIP
+ * ranges cause segv signaling, because segv_test validates nonfaulting on
+ * valid memory and faulting on invalid memory.
+ */
+START_TEST(segv_on_special_fault)
+{
+	const L4_Word_t special_addrs[] = {
+		(L4_Word_t)L4_GetKernelInterface() + 255,
+		(L4_Word_t)L4_MyLocalId().raw + 31,
+	};
+	plan_tests(2 * NUM_ELEMENTS(special_addrs));
+
+	for(int i=0; i < NUM_ELEMENTS(special_addrs); i++) {
+		const L4_Word_t addr = special_addrs[i];
+		L4_ThreadId_t tid = xstart_thread(&send_fault_at_fn, (void *)addr);
+
+		L4_Word_t ec = 0;
+		void *ret = join_thread_long(tid, TEST_IPC_DELAY, &ec);
+		if(!ok(ret != NULL || ec == 0, "faulted at addr=%#lx", addr)) {
+			diag("ret=%p, ec=%#lx", ret, ec);
+		}
+		if(!ok1(ret == (void *)addr)) {
+			diag("ret=%p", ret);
+		}
+	}
+}
+END_TEST
+
+
 static void ping_fn(void *param_ptr UNUSED)
 {
 	L4_ThreadId_t sender;
@@ -729,6 +789,7 @@ static void add_thread_tests(TCase *tc)
 	tcase_add_test(tc, exit_with_thread_test);
 	tcase_add_test(tc, segv_test);
 	tcase_add_test(tc, uncaught_segv_test);
+	tcase_add_test(tc, segv_on_special_fault);
 	tcase_add_test(tc, many_threads_test);
 }
 
