@@ -15,6 +15,7 @@
 #include <ccan/container_of/container_of.h>
 
 #include <ukernel/guard.h>
+#include <ukernel/util.h>
 
 #include <l4/types.h>
 #include <l4/ipc.h>
@@ -476,10 +477,14 @@ static void handle_pf(
 		goto no_reply;
 	}
 
+	const bool in_special = ADDR_IN_FPAGE(sp->utcb_area, addr)
+		|| ADDR_IN_FPAGE(sp->kip_area, addr);
 	L4_Word_t page_addr = addr & ~PAGE_MASK;
 	struct fs_vpage *page = htable_get(&sp->pages,
 		int_hash(page_addr), &word_cmp, &page_addr);
-	if(page == NULL && page_addr > 0xf000 && page_addr < sp->prog_brk) {
+	if(page == NULL && page_addr > 0xf000 && page_addr < sp->prog_brk
+		&& !in_special)
+	{
 		/* moar ramz pls */
 		page = malloc(sizeof(*page));
 		page->address = page_addr;
@@ -490,7 +495,7 @@ static void handle_pf(
 			page->page->local_addr, page->address, sp->prog_brk);
 #endif
 		htable_add(&sp->pages, int_hash(page_addr), &page->address);
-	} else if(page == NULL || page_addr > max_vaddr) {
+	} else if(page == NULL || page_addr > max_vaddr || in_special) {
 		/* illegal address, or some such. the print should be retained for
 		 * debugging.
 		 */
