@@ -333,6 +333,9 @@ extern void flush_byte_range(
 	L4_Word_t size,
 	L4_Word_t access);
 
+/* from self_suite.c (TODO: move elsewhere!) */
+extern void access_memory_fn(void *ptr);
+
 
 /* from pg_stats.c */
 

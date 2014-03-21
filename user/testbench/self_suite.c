@@ -636,7 +636,7 @@ START_LOOP_TEST(exit_with_thread_test, iter, 0, 1)
 END_TEST
 
 
-static void access_memory_fn(void *ptr)
+void access_memory_fn(void *ptr)
 {
 	diag("accessing %p", ptr);
 	uint8_t *p = ptr;

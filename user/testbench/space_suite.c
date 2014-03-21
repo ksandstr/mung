@@ -10,6 +10,7 @@
 #include <assert.h>
 #include <ctype.h>
 #include <ccan/compiler/compiler.h>
+#include <ccan/crc/crc.h>
 
 #include <l4/types.h>
 #include <l4/ipc.h>
@@ -560,6 +561,83 @@ START_TEST(large_flush)
 END_TEST
 
 
+START_TEST(no_unmap_kip_utcb)
+{
+	const L4_Word_t test_addrs[] = {
+		(L4_Word_t)L4_GetKernelInterface(),
+		L4_MyLocalId().raw,
+	};
+	plan_tests(1 + 2 * NUM_ELEMENTS(test_addrs));
+
+	L4_Fpage_t fp[NUM_ELEMENTS(test_addrs)];
+	for(int i=0; i < NUM_ELEMENTS(test_addrs); i++) {
+		fp[i] = L4_FpageLog2(test_addrs[i] & ~PAGE_MASK, 12);
+		L4_Set_Rights(&fp[i], L4_FullyAccessible);
+	}
+	diag("calling L4_UnmapFpages()");
+	L4_UnmapFpages(2, fp);
+
+	ok(true, "didn't die");
+	for(int i=0; i < NUM_ELEMENTS(test_addrs); i++) {
+		diag("i=%d, fp[i]=%#lx", i, fp[i].raw);
+		if(!ok1(L4_Address(fp[i]) == (test_addrs[i] & ~PAGE_MASK))) {
+			diag("got %#lx, expected %#lx", L4_Address(fp[i]),
+				test_addrs[i] & ~PAGE_MASK);
+		}
+		ok1(L4_Rights(fp[i]) == 0);
+	}
+}
+END_TEST
+
+
+START_TEST(no_flush_kip_utcb)
+{
+	void *kip_addr = L4_GetKernelInterface();
+
+	const L4_Word_t test_addrs[] = {
+		(L4_Word_t)kip_addr,
+		L4_MyLocalId().raw,
+	};
+	const size_t kip_crc_len = 0xff;
+	plan_tests(4 + 2 * NUM_ELEMENTS(test_addrs));
+
+	uint32_t kip_crc = crc32c(0, kip_addr, kip_crc_len);
+
+	L4_Fpage_t fp[NUM_ELEMENTS(test_addrs)];
+	for(int i=0; i < NUM_ELEMENTS(test_addrs); i++) {
+		fp[i] = L4_FpageLog2(test_addrs[i] & ~PAGE_MASK, PAGE_BITS);
+		L4_Set_Rights(&fp[i], L4_FullyAccessible);
+	}
+	diag("calling L4_FlushFpages()");
+	L4_FlushFpages(2, fp);
+
+	ok(true, "didn't die");
+	uint32_t kip_crc_after = crc32c(0, kip_addr, kip_crc_len);
+	ok1(kip_crc_after == kip_crc);
+
+	for(int i=0; i < NUM_ELEMENTS(test_addrs); i++) {
+		diag("i=%d, fp[i]=%#lx", i, fp[i].raw);
+		if(!ok1(L4_Address(fp[i]) == (test_addrs[i] & ~PAGE_MASK))) {
+			diag("got %#lx, expected %#lx", L4_Address(fp[i]),
+				test_addrs[i] & ~PAGE_MASK);
+		}
+		ok1(L4_Rights(fp[i]) == 0);
+	}
+
+	L4_ThreadId_t tid = xstart_thread(&access_memory_fn,
+		kip_addr + 0x40);
+	L4_Word_t ec = 0;
+	void *ret = join_thread_long(tid, TEST_IPC_DELAY, &ec);
+	if(!ok(ret != NULL || ec == 0, "illegal KIP access ok")) {
+		diag("ret=%p, ec=%#lx", ret, ec);
+	}
+	if(!ok1(ret == kip_addr + 0x40)) {
+		diag("ret=%p", ret);
+	}
+}
+END_TEST
+
+
 Suite *space_suite(void)
 {
 	Suite *s = suite_create("space");
@@ -583,6 +661,16 @@ Suite *space_suite(void)
 	tcase_add_test(unmap_case, partial_flush);
 	tcase_add_test(unmap_case, large_flush);
 	suite_add_tcase(s, unmap_case);
+
+	/* tests concerning the specialness of the kernel special ranges, i.e. the
+	 * UTCB and KIP areas.
+	 */
+	{
+		TCase *tc = tcase_create("special");
+		tcase_add_test(tc, no_unmap_kip_utcb);
+		tcase_add_test(tc, no_flush_kip_utcb);
+		suite_add_tcase(s, tc);
+	}
 
 	return s;
 }
