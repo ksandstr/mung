@@ -352,7 +352,7 @@ static struct thread *spawn_kernel_server(
 	const L4_KernelRootServer_t *s0,
 	struct thread *pager,
 	int utcb_size_log2,
-	bool premap)
+	bool premap)	/* may only be true while sigma0_space == NULL */
 {
 	assert(utcb_size_log2 >= PAGE_BITS);
 

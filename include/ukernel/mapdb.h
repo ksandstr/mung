@@ -39,8 +39,21 @@ struct space;
 struct map_entry
 {
 	L4_Fpage_t range;		/* incl. L4 permission bits */
-	L4_Word_t parent;		/* parent space id, range start in parent */
 	uint32_t first_page_id;
+
+	/* addr = address in parent space, may be in the middle of a larger range.
+	 * space = parent space ID.
+	 *
+	 * special values:
+	 *   - when space == 0 (i.e. !defined), there is no parent. this appears
+	 *   at boot in sigma0, and entries whose immediate last parent has been
+	 *   granted away (e.g. as granted by sigma0)
+	 *   - when space == 1, the entry represents a kernel special range such
+	 *   as the UTCB or KIP area, and is not subject to unmapping, access
+	 *   querying, mapping on top of, or map/granting out of.
+	 */
+	L4_Word_t parent;
+
 	/* this field is OR'd with the page table queries to give the access bits
 	 * returned by Unmap. it's written to when a parent recursively
 	 * queries-and-resets the page table's access bits, and when a child
@@ -132,6 +145,12 @@ extern int mapdb_map_pages(
  * examination of page tables is compensated by storing access bits in struct
  * map_entry as appropriate to recursion. (see comment above the field
  * declaration.)
+ *
+ * special mappings (KIP, UTCB pages) aren't affected by mapdb_unmap_fpage()
+ * when @recursive. when !@recursive && @fpage.rights == full, special
+ * mappings are removed if they overlap at all with @fpage. regardless of this
+ * setting, the access bits of special mappings don't contribute to the return
+ * value. (FIXME: this is entirely untested.)
  *
  * if @clear_stored_access is set, the stored access bits retrieved for @fpage
  * will be cleared in the immediate entry. for recursion it is always passed

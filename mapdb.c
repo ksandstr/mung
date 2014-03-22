@@ -141,27 +141,42 @@ static bool check_mapdb(struct map_db *db, int opts)
 		 *   - it references a valid entry (one that exists)
 		 *   - it is at most as large as the parent
 		 *   - the parent has a child reference to it
+		 *   - if it's special, check that space=0 appears only in sigma0 and
+		 *   that space=1 has no children.
 		 */
 		for(int i=0; i < grp->num_entries; i++) {
 			const struct map_entry *e = &grp->entries[i];
 			inv_ok1(L4_Rights(e->range) != 0);
 
-			if(!REF_DEFINED(e->parent)) continue;
 			inv_push("check entry %#lx:%#lx in ref_id %u; ->parent %#lx",
 				L4_Address(e->range), L4_Size(e->range), db->ref_id,
 				e->parent);
+
 			struct map_db *p_db = find_map_db(REF_SPACE(e->parent));
-			inv_ok1(p_db != NULL);
+			inv_iff1(REF_DEFINED(e->parent), p_db != NULL);
 
-			const struct map_entry *p_e = mapdb_probe(p_db,
-				REF_ADDR(e->parent));
-			inv_ok1(p_e != NULL);
-			inv_log("parent entry %#lx:%#lx in ref_id %u",
-				L4_Address(p_e->range), L4_Size(p_e->range), p_db->ref_id);
-			inv_ok1(ADDR_IN_FPAGE(p_e->range, REF_ADDR(e->parent)));
-			inv_ok1(L4_SizeLog2(e->range) <= L4_SizeLog2(p_e->range));
+			inv_iff1(REF_SPACE(e->parent) == 1, p_db == &kernel_space->mapdb);
+			inv_imply1(REF_SPACE(e->parent) == 1, e->num_children == 0);
+			inv_imply1(REF_SPACE(e->parent) == 1, REF_ADDR(e->parent) == 0);
 
-			if(!CHECK_FLAG(opts, MOD_NO_CHILD_REFS)) {
+			const struct map_entry *p_e;
+			if(!REF_DEFINED(e->parent)) {
+				inv_log("  ... is parentless entry");
+				p_e = NULL;
+			} else if(REF_SPACE(e->parent) == 1) {
+				inv_log("  ... is special entry (parent=%#lx)", e->parent);
+				p_e = NULL;
+			} else {
+				inv_ok1(p_db != NULL);
+				p_e = mapdb_probe(p_db, REF_ADDR(e->parent));
+				inv_ok1(p_e != NULL);
+				inv_log("parent entry %#lx:%#lx in ref_id %u",
+					L4_Address(p_e->range), L4_Size(p_e->range), p_db->ref_id);
+				inv_ok1(ADDR_IN_FPAGE(p_e->range, REF_ADDR(e->parent)));
+				inv_ok1(L4_SizeLog2(e->range) <= L4_SizeLog2(p_e->range));
+			}
+
+			if(!CHECK_FLAG(opts, MOD_NO_CHILD_REFS) && p_e != NULL) {
 				bool found = false;
 				int n_push = 0;
 				const L4_Word_t *p_cs = p_e->num_children > 1
@@ -732,6 +747,14 @@ int mapdb_add_map(
 		CHECK_FLAG(L4_Rights(fpage), L4_Writable) ? 'w' : '-',
 		CHECK_FLAG(L4_Rights(fpage), L4_eXecutable) ? 'x' : '-',
 		parent);
+	TRACE("... called from %p\n", __builtin_return_address(0));
+
+	/* unparented entries may only be created with mapdb_add_map() into
+	 * sigma0_space, or while sigma0_space isn't defined. other causes of such
+	 * entries are nonrecursive flushes: grants and mappings on top of.
+	 */
+	assert(REF_DEFINED(parent) || db->space == sigma0_space
+		|| sigma0_space == NULL);
 
 	/* x86 no-NX hack. this lets the pagefault exception handler do
 	 * pre-existing maps correctly.
@@ -1262,6 +1285,9 @@ static int split_entry(
 /* render a map_group's map_entries discontiguous in such a way that entries
  * covered by "range" fit inside it exactly. returns the first entry covered
  * by "range".
+ *
+ * punts when a special range is hit. this allows things like multi-page KIPs,
+ * hugepage UTCB mappings, and so forth.
  */
 static struct map_entry *discontiguate(
 	struct map_db *db,
@@ -1276,6 +1302,8 @@ static struct map_entry *discontiguate(
 	 */
 	struct map_entry *e = probe_group_range(g, range);
 	if(e == NULL) return NULL;
+	else if(REF_SPACE(e->parent) == 1) return e;
+
 	bool new_e = false;
 	L4_Word_t r_start = L4_Address(range);
 	if(L4_Address(e->range) < r_start
@@ -1460,37 +1488,47 @@ int mapdb_unmap_fpage(
 		} else {
 			e = probe_group_range(g, range);
 		}
-		if(e == NULL) continue;
+		if(e == NULL || (recursive && REF_SPACE(e->parent) == 1)) {
+			/* nonexistents are skipped. specials can't be influenced by Unmap
+			 * and don't contribute to @rwx_seen.
+			 */
+			continue;
+		}
 
 		do {
-			/* check each native page.
-			 *
-			 * TODO: extend to support big pages as specified in the related
-			 * KIP field.
-			 *
-			 * TODO: only do this if the caller provides a location for the
-			 * out-parameter.
-			 */
-			L4_Word_t r_pos = L4_Address(e->range);
-			int e_mask = 0;
-			do {
-				L4_Word_t next = 0;
-				int pmask = space_probe_pt_access(&next, db->space, r_pos);
-				r_pos += PAGE_SIZE;
-				if(pmask >= 0) {
-					e_mask |= pmask;
-				} else {
-					assert(pmask == -ENOENT);
-					if(next > r_pos) r_pos = next;
+			if(REF_SPACE(e->parent) != 1) {
+				/* check each native page.
+				 *
+				 * TODO: move into a function!
+				 *
+				 * TODO: extend to support big pages as specified in the
+				 * related KIP field.
+				 *
+				 * TODO: only do this if the caller provides a location for
+				 * the out-parameter.
+				 */
+				L4_Word_t r_pos = L4_Address(e->range);
+				int e_mask = 0;
+				do {
+					L4_Word_t next = 0;
+					int pmask = space_probe_pt_access(&next,
+						db->space, r_pos);
+					r_pos += PAGE_SIZE;
+					if(pmask >= 0) {
+						e_mask |= pmask;
+					} else {
+						assert(pmask == -ENOENT);
+						if(next > r_pos) r_pos = next;
+					}
+				} while(r_pos < L4_Address(e->range) + L4_Size(e->range)
+					&& e_mask != L4_FullyAccessible);
+
+				if(e_mask != 0 && REF_DEFINED(e->parent)) {
+					/* FIXME: propagate e_mask to parent */
 				}
-			} while(r_pos < L4_Address(e->range) + L4_Size(e->range)
-				&& e_mask != L4_FullyAccessible);
 
-			if(e_mask != 0 && REF_DEFINED(e->parent)) {
-				/* FIXME: propagate e_mask to parent */
+				rwx_seen |= (e_mask | e->access);
 			}
-
-			rwx_seen |= (e_mask | e->access);
 
 			/* dereference children, and call mapdb_unmap_fpage() on them when
 			 * their address in @db fits within @range.
@@ -1535,8 +1573,10 @@ int mapdb_unmap_fpage(
 				rwx_seen |= pass_rwx;
 			}
 
-			bool drop = false;
-			if(modify) {
+			const bool special = REF_SPACE(e->parent) == 1;
+			bool drop = modify && special
+				&& unmap_rights == L4_FullyAccessible;
+			if(modify && !special) {
 				/* ensured by discontiguate() */
 				assert(FPAGE_LOW(e->range) >= FPAGE_LOW(range));
 				assert(FPAGE_LOW(e->range) < r_end);
@@ -1636,7 +1676,9 @@ int mapdb_unmap_fpage(
 			addr += PAGE_SIZE)
 		{
 			struct map_entry *e = mapdb_probe(db, addr);
-			assert(e == NULL || !CHECK_FLAG_ALL(L4_Rights(e->range), unmap_rights));
+			assert(e == NULL
+				|| REF_SPACE(e->parent) == 1	/* (cop-out) */
+				|| !CHECK_FLAG_ALL(L4_Rights(e->range), unmap_rights));
 		}
 	}
 #endif
