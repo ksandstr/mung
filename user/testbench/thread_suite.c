@@ -716,6 +716,107 @@ START_LOOP_TEST(suicide, iter, 0, 1)
 END_TEST
 
 
+/* thread that may be queried wrt the global ID it sees for itself. it'll also
+ * report roughly where its stack frame is.
+ *
+ * TODO: should also return Pager, ExceptionHandler, UserDefinedHandle, etc.
+ * to see that they weren't affected.
+ */
+static void stomp_thread_fn(void *param_ptr UNUSED)
+{
+	diag("%s: running", __func__);
+
+	L4_ThreadId_t sender;
+	L4_LoadBR(0, 0);
+	L4_MsgTag_t tag = L4_WaitLocal_Timeout(L4_Never, &sender);
+	if(L4_IpcFailed(tag)) {
+		printf("%s: waitlocal failed, ec=%#lx\n", __func__, L4_ErrorCode());
+		return;
+	}
+	L4_Word_t fall_asleep; L4_StoreMR(1, &fall_asleep);
+
+	L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 2 }.raw);
+	L4_LoadMR(1, L4_MyGlobalId().raw);
+	L4_LoadMR(2, (L4_Word_t)&sender);
+	tag = L4_Reply(sender);
+	if(L4_IpcFailed(tag)) {
+		printf("%s: reply failed, ec=%#lx\n", __func__, L4_ErrorCode());
+	}
+
+	if(fall_asleep) {
+		/* this might fail immediately when the thread's global ID isn't what
+		 * the UTCB indicates. which may happen because of things.
+		 */
+		L4_Sleep(L4_TimePeriod(60 * 1000 * 1000));
+
+		/* so for an encore, pop off into never-never land in an unportable
+		 * manner.
+		 */
+		L4_Set_ExceptionHandler(L4_nilthread);
+		asm volatile ("int $123");
+	}
+}
+
+
+/* test whether a version-overwriting ThreadControl's effect is seen in the
+ * UTCB also.
+ */
+START_TEST(version_stomp)
+{
+	plan_tests(3);
+
+	L4_ThreadId_t orig_tid = xstart_thread(&stomp_thread_fn, NULL);
+	L4_LoadBR(0, 0);
+	L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 1 }.raw);
+	L4_LoadMR(1, 0);
+	L4_MsgTag_t tag = L4_Call(orig_tid);
+	fail_if(L4_IpcFailed(tag), "ec=%#lx", L4_ErrorCode());
+	L4_ThreadId_t report_tid; L4_StoreMR(1, &report_tid.raw);
+	L4_Word_t report_stk; L4_StoreMR(2, &report_stk);
+	ok(L4_SameThreads(report_tid, orig_tid), "base case TID report");
+
+	/* step on its version bits, then restart it. */
+	L4_ThreadId_t new_tid = L4_GlobalId(L4_ThreadNo(orig_tid),
+		L4_Version(orig_tid) ^ 0x120);
+	assert(new_tid.raw != orig_tid.raw);
+	L4_Word_t res = L4_ThreadControl(new_tid, orig_tid,
+		L4_nilthread, L4_nilthread, (void *)-1);
+	fail_if(res == 0, "threadctl ec=%#lx", L4_ErrorCode());
+	assert(thr_exists(new_tid));
+	assert(!thr_exists(orig_tid));
+	L4_Start_SpIp(new_tid, report_stk & ~0xf, (L4_Word_t)&stomp_thread_fn);
+	/* measure again. */
+	L4_LoadBR(0, 0);
+	L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 1 }.raw);
+	L4_LoadMR(1, 1);
+	tag = L4_Call_Timeouts(new_tid, TEST_IPC_DELAY, TEST_IPC_DELAY);
+	L4_StoreMR(1, &report_tid.raw);
+	L4_StoreMR(2, &report_stk);
+	ok1(L4_IpcSucceeded(tag));
+	skip_start(L4_IpcFailed(tag), 1, "ipc failed, ec=%#lx", L4_ErrorCode()) {
+		if(!ok(L4_SameThreads(report_tid, new_tid),
+			"modified case TID report"))
+		{
+			diag("report_tid=%lu:%lu, new_tid=%lu:%lu",
+				L4_ThreadNo(report_tid), L4_Version(report_tid),
+				L4_ThreadNo(new_tid), L4_Version(new_tid));
+		}
+	} skip_end;
+
+	/* restore version bits, clean up */
+	res = L4_ThreadControl(orig_tid, new_tid, L4_nilthread,
+		L4_nilthread, (void *)-1);
+	if(res == 0) {
+		diag("2nd threadctl ec=%#lx", L4_ErrorCode());
+	}
+	assert(!thr_exists(new_tid));
+	assert(thr_exists(orig_tid));
+
+	kill_thread(orig_tid);
+}
+END_TEST
+
+
 /* actually tests whether a thread is dead, or inactive. these states are
  * entered when e.g. a thread raises an exception but the exception handler
  * thread is either not set or cannot be found.
@@ -1222,6 +1323,7 @@ Suite *thread_suite(void)
 		tcase_add_test(tc, relocate_utcb);
 		tcase_add_test(tc, deletion);
 		tcase_add_test(tc, suicide);
+		tcase_add_test(tc, version_stomp);
 		suite_add_tcase(s, tc);
 	}
 
