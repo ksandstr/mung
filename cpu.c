@@ -103,7 +103,9 @@ COLD void scan_cpuid(void)
 		/* intel page 02h */
 		printf("page 02h:\n");
 		x86_cpuid(&id, 2, 0, 0, 0);
-		int id_iters = CHECK_FLAG(id.eax, 0x80000000u) ? 1 : id_iters, iter_id = 0;
+		/* (the first word is undefined when b31 is set.) */
+		int id_iters = CHECK_FLAG(id.eax, 0x80000000u) ? 1 : (id.eax & 0xff),
+			iter_id = 0;
 		do {
 			uint32_t descs[3] = { id.ebx, id.ecx, id.edx };
 			for(int i=0; i < 3; i++) {
