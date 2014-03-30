@@ -498,15 +498,17 @@ END_TEST
 /* "large" meaning "multiple pages" */
 START_TEST(large_flush)
 {
-	const size_t test_size = 24 * 1024;
+	const size_t test_size = 32 * 1024;
 
 	plan_tests(2);
 
-	char *mem = valloc(test_size);
-	fail_unless(mem != NULL);
+	void *mem_base = malloc(test_size * 2);
+	fail_unless(mem_base != NULL);
+	char *mem = (void *)(((uintptr_t)mem_base + test_size - 1) & ~(test_size - 1));
 	uint32_t boring_seed = 0x81be0a94;
 	random_string(mem, test_size, &boring_seed);
-	diag("mem is %#x..%#x", (uintptr_t)mem, (uintptr_t)mem + test_size - 1);
+	diag("mem is %#x..%#x (base %p)",
+		(uintptr_t)mem, (uintptr_t)mem + test_size - 1, mem_base);
 
 	/* should cause no faults before the flush. */
 	fail_unless(pg_stats->n_faults == 0);
@@ -552,6 +554,8 @@ START_TEST(large_flush)
 	diag("%d faults, r %d, w %d", pg_stats->n_faults,
 		pg_stats->n_read, pg_stats->n_write);
 	ok1(pg_stats->n_faults >= expected);
+
+	free(mem_base);
 }
 END_TEST
 
