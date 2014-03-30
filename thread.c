@@ -1224,6 +1224,10 @@ SYSCALL L4_Word_t sys_threadcontrol(
 			cancel_ipc_from(dest);
 			L4_ThreadId_t stale_tid = { .raw = dest->id };
 			dest->id = dest_tid.raw;
+			if(dest->utcb_pos >= 0) {
+				void *utcb = thread_get_utcb(dest);
+				L4_VREG(utcb, L4_TCR_MYGLOBALID) = dest->id;
+			}
 			cancel_ipc_to(stale_tid, 2 << 1);	/* "lost partner" */
 
 			if(CHECK_FLAG(dest->flags, TF_INTR)) int_kick(dest);
@@ -1231,6 +1235,9 @@ SYSCALL L4_Word_t sys_threadcontrol(
 			if(dest->status > 1) sq_remove_thread(dest);
 			dest->status = TS_STOPPED;
 			dest->flags = 0;
+
+			assert(resolve_tid_spec(get_current_thread()->space,
+				dest_tid) == dest);
 		}
 
 		if(spacespec.raw != dest_tid.raw
