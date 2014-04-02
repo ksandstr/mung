@@ -556,6 +556,80 @@ void bench_fork_wait(const size_t n_children)
 }
 
 
+static void tsc_child_fn(void *param_ptr)
+{
+	uint64_t start = x86_rdtsc();
+	L4_LoadBR(0, 0);
+	L4_ThreadId_t sender;
+	L4_MsgTag_t tag = L4_Wait(&sender);
+	if(L4_IpcFailed(tag)) {
+		printf("%s: failed, ec=%#lx\n", __func__, L4_ErrorCode());
+		exit_thread(NULL);
+	}
+	L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 2 }.raw);
+	L4_LoadMR(1, (uint32_t)start);
+	L4_LoadMR(2, start >> 32);
+	L4_Reply(sender);
+
+	uint64_t *end_at = malloc(sizeof(*end_at));
+	*end_at = start;
+	L4_Sleep(L4_TimePeriod(2 * 1000));
+
+	*end_at = x86_rdtsc();
+	exit_thread(end_at);
+}
+
+
+void bench_thread_lifecycle(void)
+{
+	const size_t n_iters = 500;
+	printf("%s[n_iters=%d]:\n", __func__, (int)n_iters);
+
+	struct tally *t_create = tally_new(256),
+		*t_join = tally_new(256);
+	for(size_t i=0; i < n_iters; i++) {
+		uint64_t start = x86_rdtsc();
+		L4_ThreadId_t child_tid = start_thread(&tsc_child_fn, NULL);
+		L4_LoadBR(0, 0);
+		L4_LoadMR(0, 0);
+		L4_MsgTag_t tag = L4_Call(child_tid);
+		if(L4_IpcFailed(tag)) {
+			printf("child call failed, ec=%#lx\n", L4_ErrorCode());
+			kill_thread(child_tid);
+			continue;
+		}
+
+		L4_Word_t lo; L4_StoreMR(1, &lo);
+		L4_Word_t hi; L4_StoreMR(2, &hi);
+		uint64_t child_start_at = (uint64_t)hi << 32 | lo;
+		ssize_t s_create = (ssize_t)child_start_at - start;
+
+		L4_Word_t ec = 0;
+		void *ptr = join_thread_long(child_tid,
+			L4_TimePeriod(25 * 1000), &ec);
+		if(ptr == NULL && ec != 0) {
+			printf("child join failed, ec=%#lx\n", L4_ErrorCode());
+			kill_thread(child_tid);
+			continue;
+		}
+		assert(ptr != NULL);
+		ssize_t s_join = (ssize_t)x86_rdtsc() - *(uint64_t *)ptr;
+		free(ptr);
+
+		if(i >= 8) {
+			tally_add(t_create, s_create);
+			tally_add(t_join, s_join);
+		}
+	}
+
+	printf("  create-to-start: "); print_tally(t_create); printf("\n");
+	printf("  sync-to-join: "); print_tally(t_join); printf("\n");
+
+	free(t_create);
+	free(t_join);
+}
+
+
 void run_benchmarks(void)
 {
 	L4_ThreadId_t local_tid, remote_tid;
@@ -586,6 +660,7 @@ void run_benchmarks(void)
 	bench_exregs();
 
 	/* application-ey benchmarks. */
+	bench_thread_lifecycle();
 	bench_fork_wait(1);
 	bench_fork_wait(4);
 	bench_fork_wait(8);
