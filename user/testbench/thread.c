@@ -550,10 +550,6 @@ static void t_add_thread(L4_Word_t arg_tid)
 
 	L4_ThreadId_t tid = { .raw = arg_tid };
 	tid = L4_GlobalIdOf(tid);
-#if 0
-	printf("%s: adding %lu:%lu\n", __func__,
-		L4_ThreadNo(tid), L4_Version(tid));
-#endif
 
 	struct mgrt *t = malloc(sizeof(*t));
 	if(t == NULL) {
@@ -572,10 +568,6 @@ static void t_end_thread(L4_ThreadId_t tid, int status, L4_Word_t result)
 {
 	tid = L4_GlobalIdOf(tid);
 	assert(L4_ThreadNo(tid) - base_tnum < MAX_THREADS);
-#if 0
-	printf("%s: for %lu:%lu\n", __func__,
-		L4_ThreadNo(tid), L4_Version(tid));
-#endif
 	size_t hash = int_hash(tid.raw);
 	struct mgrt *t = htable_get(&mgr_threads, hash, &mgrt_cmp, &tid);
 	if(t == NULL) {
@@ -748,10 +740,6 @@ static void mgr_thread_fn(L4_ThreadId_t first_client)
 		.join_thread = &t_join_thread,
 		.segv = &t_segv,
 	};
-#if 0
-	printf("%s: entered! first_client %lu:%lu\n", __func__,
-		L4_ThreadNo(first_client), L4_Version(first_client));
-#endif
 
 	/* reset state (discard & release fork parent's things) */
 	htable_clear(&mgr_threads);

@@ -1,10 +1,4 @@
 
-/* TODO: all sampling should be fed to the CCAN tally module. plain averaging,
- * as is done right now, does a very bad job of disregarding outliers; and
- * those can happen due to VM host scheduling, its interrupts, or whatever
- * else besides.
- */
-
 #define IDLBENCH_IMPL_SOURCE 1
 
 #include <stdio.h>
