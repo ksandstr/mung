@@ -824,6 +824,11 @@ SYSCALL void sys_unmap(L4_Word_t control, void *utcb)
 				if(!CHECK_FLAG(pdir_mem[addr >> 22], PDIR_PRESENT)) {
 					addr = (addr + grp_step) & ~(grp_step - 1);
 					continue;
+				} else if(ADDR_IN_FPAGE(current->space->utcb_area, addr)
+					|| ADDR_IN_FPAGE(current->space->kip_area, addr))
+				{
+					addr += PAGE_SIZE;
+					continue;
 				} else if(ptab_id != pdir_mem[addr >> 22] >> 12) {
 					ptab_id = pdir_mem[addr >> 22] >> 12;
 					struct page *pg = htable_get(&current->space->ptab_pages,
