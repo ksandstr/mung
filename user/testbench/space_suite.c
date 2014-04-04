@@ -643,19 +643,19 @@ Suite *space_suite(void)
 	Suite *s = suite_create("space");
 
 	{
+		TCase *tc = tcase_create("api");
+		tcase_set_fork(tc, false);
+		tcase_add_test(tc, spacectl_basic);
+		tcase_add_test(tc, spacectl_iface);
+		suite_add_tcase(s, tc);
+	}
+
+	{
 		TCase *tc = tcase_create("pager");
 		tcase_add_checked_fixture(tc, &pager_setup, &pager_teardown);
 		tcase_add_test(tc, poke_peek_nofault_test);
 		tcase_add_test(tc, poke_peek_fault_test);
 		tcase_add_test(tc, illegal_access_test);
-		suite_add_tcase(s, tc);
-	}
-
-	{
-		TCase *tc = tcase_create("ctl");
-		tcase_set_fork(tc, false);
-		tcase_add_test(tc, spacectl_basic);
-		tcase_add_test(tc, spacectl_iface);
 		suite_add_tcase(s, tc);
 	}
 

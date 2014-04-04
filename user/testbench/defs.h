@@ -23,9 +23,9 @@
 #define UTCB_SIZE 512
 
 /* (alters the way thread.c allocates thread slots. keep synced with
- * forkserv's THREAD_PER_SPACE.)
+ * forkserv's THREADS_PER_SPACE.)
  */
-#define MAX_THREADS 32	/* NB: keep sync'd with forkserv THREADS_PER_SPACE */
+#define MAX_THREADS 64
 
 /* the appropriate delay for IPC reception before failure. applied wherever
  * it's necessary to let the other get scheduled first.

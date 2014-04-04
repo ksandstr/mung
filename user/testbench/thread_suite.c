@@ -1274,12 +1274,7 @@ START_LOOP_TEST(err_on_lost_peer, iter, 0, 8)
 END_TEST
 
 
-/* create a non-activated thread and overwrite its version bits.
- *
- * (the real API test would start an actual thread, overwrite version, restart
- * it on another stack, overwrite that again with the previous bits, then
- * clean up with join_thread(). TODO: implement this.)
- */
+/* create a non-activated thread and overwrite its version bits. */
 START_TEST(tid_stomp)
 {
 	plan_tests(1);
@@ -1295,6 +1290,73 @@ START_TEST(tid_stomp)
 	if(!ok1(res == 1)) diag("ec=%#lx", L4_ErrorCode());
 
 	del_thread(after_tid);
+}
+END_TEST
+
+
+START_TEST(reuse_utcb_pages)
+{
+	plan_tests(4);
+
+	L4_KernelInterfacePage_t *kip = L4_GetKernelInterface();
+	const int utcb_size = L4_UtcbSize(kip),
+		n_threads = (4 * PAGE_SIZE) / utcb_size;
+	diag("utcb_size=%d, n_threads=%d", utcb_size, n_threads);
+
+	/* start a bunch of threads, then join them. this should cause recycling
+	 * of at least two UTCB pages.
+	 */
+	L4_ThreadId_t tids[n_threads];
+	int not_started = 0;
+	for(int i=0; i < n_threads; i++) {
+		tids[i] = start_thread(&exit_thread, &tids[i]);
+		if(L4_IsNilThread(tids[i])) {
+			diag("i=%d: couldn't start thread", i);
+			not_started++;
+			continue;
+		}
+	}
+
+	int not_joined = 0;
+	for(int i=0; i < n_threads; i++) {
+		if(L4_IsNilThread(tids[i])) continue;
+		L4_Word_t ec = 0;
+		void *ptr = join_thread_long(tids[i], L4_TimePeriod(3 * 1000), &ec);
+		if(ptr != &tids[i]) {
+			diag("join_thread_long: ptr=%p, ec=%#lx", ptr, ec);
+			not_joined++;
+		}
+	}
+
+	ok(not_joined == 0, "all setup threads joined");
+	ok(not_started < n_threads / 3, "enough setup threads created");
+
+	/* now do it again. presumably the previously-released UTCB pages will be
+	 * reused.
+	 */
+	not_started = 0;
+	for(int i=0; i < n_threads; i++) {
+		tids[i] = start_thread(&exit_thread, &tids[i]);
+		if(L4_IsNilThread(tids[i])) {
+			diag("i=%d: couldn't start thread", i);
+			not_started++;
+			continue;
+		}
+	}
+
+	not_joined = 0;
+	for(int i=0; i < n_threads; i++) {
+		if(L4_IsNilThread(tids[i])) continue;
+		L4_Word_t ec = 0;
+		void *ptr = join_thread_long(tids[i], L4_TimePeriod(3 * 1000), &ec);
+		if(ptr != &tids[i]) {
+			diag("join_thread_long: ptr=%p, ec=%#lx", ptr, ec);
+			not_joined++;
+		}
+	}
+
+	ok(not_joined == 0, "all re-use threads joined");
+	ok(not_started < n_threads / 3, "enough re-use threads created");
 }
 END_TEST
 
@@ -1343,6 +1405,13 @@ Suite *thread_suite(void)
 		TCase *tc = tcase_create("panic");
 		tcase_set_fork(tc, false);
 		tcase_add_test(tc, tid_stomp);
+		suite_add_tcase(s, tc);
+	}
+
+	/* tests suggested by implementation details. */
+	{
+		TCase *tc = tcase_create("impl");
+		tcase_add_test(tc, reuse_utcb_pages);
 		suite_add_tcase(s, tc);
 	}
 
