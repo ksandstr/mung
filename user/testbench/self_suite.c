@@ -198,6 +198,55 @@ START_TEST(return_exit_status)
 END_TEST
 
 
+/* provoke two kinds of segfault in as many children. the first is when the
+ * ordinary process dies, and the second causes the process manager thread to
+ * segfault. both segfaults will occur as writes on the kernel interface page.
+ */
+START_LOOP_TEST(report_child_segfault, iter, 0, 1)
+{
+	L4_KernelInterfacePage_t *kip = L4_GetKernelInterface();
+
+	plan_tests(2);
+
+	int child = fork();
+	if(child == 0) {
+		if(iter == 0) {
+			memset(kip, 0, 100);	/* boomqvist! */
+		} else {
+			/* coax the manager thread into a snafu: cancel its IPC and send
+			 * it to a function that attempts to write the KIP. and just to be
+			 * extra effective, set SP to the middle of the KIP.
+			 * (control = 0x1e = {isSR})
+			 */
+			L4_Word_t dummy;
+			L4_ThreadId_t dummy_tid, out_tid;
+			diag("setting mgr to sp=%#lx, ip=%#lx",
+				(L4_Word_t)kip + PAGE_SIZE / 2, (L4_Word_t)&exit_thread);
+			out_tid = L4_ExchangeRegisters(get_mgr_tid(), 0x1e,
+				(L4_Word_t)kip + PAGE_SIZE / 2, (L4_Word_t)&exit_thread,
+				0, 0, L4_nilthread,
+				&dummy, &dummy, &dummy, &dummy, &dummy, &dummy_tid);
+			if(L4_IsNilThread(out_tid)) {
+				diag("exregs failed, ec=%#lx", L4_ErrorCode());
+			}
+			/* let the manager crash. */
+			L4_Sleep(A_SHORT_NAP);
+		}
+		diag("child exiting normally when it shouldn't");
+		exit(0);
+	}
+
+	int st = 0, dead = wait(&st);
+	fail_if(dead != child, "different dead child: expected=%d, got=%d",
+		child, dead);
+	diag("child=%d, dead=%d, st=%#lx", child, dead, (unsigned long)st);
+	ok((st & 0xf) == 7, "segfault was indicated");
+	ok((st & ~PAGE_MASK) == ((L4_Word_t)kip & ~PAGE_MASK),
+		"segfault was at correct address");
+}
+END_TEST
+
+
 /* fork a child process, and fork another child process from inside that. wait
  * on one, and then the other.
  */
@@ -838,6 +887,7 @@ Suite *self_suite(void)
 		tcase_add_test(tc, basic_fork_and_wait);
 		tcase_add_test(tc, copy_on_write);
 		tcase_add_test(tc, return_exit_status);
+		tcase_add_test(tc, report_child_segfault);
 		tcase_add_test(tc, ipc_with_child);
 		tcase_add_test(tc, deep_fork);
 		tcase_add_test(tc, multi_fork_and_wait);
