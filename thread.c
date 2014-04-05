@@ -845,7 +845,13 @@ SYSCALL L4_Word_t sys_exregs(
 			dest_thread->ctx.eflags = x86_clean_eflags(
 				dest_thread->ctx.eflags, flags_in);
 		}
-		if(CHECK_FLAG(ctl_in, CTL_i)) dest_thread->ctx.eip = ip_in;
+		if(CHECK_FLAG(ctl_in, CTL_i)) {
+			/* no longer returning from a simple system call, so must use full
+			 * context reload.
+			 */
+			dest_thread->flags &= ~TF_SYSCALL;
+			dest_thread->ctx.eip = ip_in;
+		}
 		if(CHECK_FLAG(ctl_in, CTL_s)) dest_thread->ctx.esp = sp_in;
 
 		ctl_in &= ~regset_mask;
