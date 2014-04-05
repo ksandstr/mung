@@ -507,7 +507,9 @@ static void handle_pf(
 			printf("  addr %#lx, ip %#lx\n", addr, ip);
 		}
 		int n;
-		if(!L4_IsNilThread(sp->mgr_tid)) {
+		if(!L4_IsNilThread(sp->mgr_tid)
+			&& !L4_SameThreads(from, sp->mgr_tid))
+		{
 			/* we'll be somewhat more persistent with the root task, because
 			 * it cannot reasonably be killed. (it can end up in a pager loop
 			 * though, so until the helper thread starts sending these things

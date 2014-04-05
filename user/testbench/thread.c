@@ -645,7 +645,8 @@ static void t_segv(L4_Word_t a_dead_tid, L4_Word_t fault_addr)
 		L4_ThreadNo(dead_tid), L4_Version(dead_tid), fault_addr);
 #endif
 
-	t_end_thread(dead_tid, 1, fault_addr);
+	/* must provide both process exit status and thread join result */
+	t_end_thread(dead_tid, (fault_addr & ~15) | 7, fault_addr);
 }
 
 

@@ -638,7 +638,7 @@ END_TEST
  */
 START_LOOP_TEST(uncaught_segv_test, iter, 0, 3)
 {
-	plan_tests(4);
+	plan_tests(3);
 	const bool handle_segv = !CHECK_FLAG(iter, 1),
 		indirect = CHECK_FLAG(iter, 2);
 	diag("handle_segv=%s, indirect=%s", btos(handle_segv), btos(indirect));
@@ -663,19 +663,20 @@ START_LOOP_TEST(uncaught_segv_test, iter, 0, 3)
 		}
 		exit(666);
 	} else {
+		const bool should_fault = !handle_segv || !indirect;
 		int st, dead = wait(&st);
 		fail_if(dead != child, "wait returned pid=%d, wanted %d",
 			dead, child);
 		diag("st=%#lx", (unsigned long)st);
-		iff_ok1(!handle_segv, (st & 15) == 7);
+		iff_ok1(should_fault, (st & 15) == 7);
+
 		uintptr_t f_addr = st & ~15,
 			trunc_ill = (uintptr_t)ill & ~15;
-		if(!imply_ok1(!handle_segv, f_addr == trunc_ill)) {
+		if(!imply_ok1(should_fault, f_addr == trunc_ill)) {
 			diag("f_addr=%#lx, trunc_ill=%#lx", f_addr, trunc_ill);
 		}
 
-		iff_ok1(handle_segv && !indirect, st == 1);
-		iff_ok1(handle_segv && indirect, st == 666);
+		iff_ok1(!should_fault, st == 666);
 	}
 }
 END_TEST
