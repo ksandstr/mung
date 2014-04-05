@@ -407,12 +407,13 @@ static void map_receiver_thread(void *param_ptr)
 {
 	const struct map_receiver_param *param = param_ptr;
 	size_t acc_size = 1 << param->range_shift;
-	void *acc_mem = malloc(acc_size * 2);
+	void *acc_base = NULL,
+		*acc_mem = alloc_aligned(&acc_base, acc_size, acc_size);
 	fail_if(acc_mem == NULL);
-	L4_Fpage_t acc_page = L4_FpageLog2(
-		((L4_Word_t)acc_mem + acc_size - 1) & ~(acc_size - 1),
+	L4_Fpage_t acc_page = L4_FpageLog2((L4_Word_t)acc_mem,
 		param->range_shift);
-	diag("acc_page %#lx:%#lx", L4_Address(acc_page), L4_Size(acc_page));
+	diag("acc_page %#lx:%#lx, acc_base=%p",
+		L4_Address(acc_page), L4_Size(acc_page), acc_base);
 	L4_Acceptor_t acc = L4_MapGrantItems(acc_page);
 
 	bool running = true;
@@ -441,8 +442,8 @@ static void map_receiver_thread(void *param_ptr)
 				if(CHECK_FLAG(L4_Rights(fp), L4_Writable)) {
 					char *ptr = (char *)(L4_Address(acc_page) + offset);
 					diag("ptr=%p", ptr);
-					assert(ptr > (char *)acc_mem);
-					if(ptr < (char *)acc_mem + acc_size * 2) *ptr = 123;
+					assert(ptr >= (char *)acc_mem);
+					if(ptr < (char *)acc_mem + acc_size) *ptr = 123;
 				}
 			}
 		}
@@ -452,7 +453,7 @@ static void map_receiver_thread(void *param_ptr)
 	}
 
 	L4_FlushFpage(acc_page);
-	free(acc_mem);
+	free(acc_base);
 }
 
 
@@ -494,11 +495,10 @@ START_LOOP_TEST(map_into_large_acceptor, iter, 0, 1)
 	}
 
 	/* base case: SndBase 0. */
-	const size_t two_pages = 0x2000;
-	void *mem_base = malloc(two_pages * 2);
-	diag("mem_base=%p", mem_base);
-	char *mem = (char *)(((L4_Word_t)mem_base + two_pages - 1) & ~(two_pages - 1));
-	diag("mem=%p", mem);
+	const size_t two_pages = PAGE_SIZE * 2;
+	void *mem_base = NULL;
+	char *mem = alloc_aligned(&mem_base, two_pages, two_pages);
+	diag("mem_base=%p, mem=%p", mem_base, mem);
 	memset(mem, 0, two_pages);
 	L4_Fpage_t fp = L4_Fpage((L4_Word_t)mem, two_pages);
 	L4_Set_Rights(&fp, L4_FullyAccessible);
@@ -571,8 +571,8 @@ START_LOOP_TEST(map_into_small_acceptor, iter, 0, 1)
 
 	/* base case: SndBase 0. */
 	const size_t big = (1 << param->range_shift) * 4;
-	char *mem_base = malloc(big * 2),
-		*mem = (char *)(((L4_Word_t)mem_base + big - 1) & ~(big - 1));
+	void *mem_base = NULL;
+	char *mem = alloc_aligned(&mem_base, big, big);
 	memset(mem, 0, big);
 	L4_Fpage_t fp = L4_Fpage((L4_Word_t)mem, big);
 	L4_Set_Rights(&fp, L4_FullyAccessible);
@@ -2523,10 +2523,9 @@ START_LOOP_TEST(mapgrant_address, iter, 0, 3)
 		free(map_mem);
 	}
 
-	uint8_t *accept_base = valloc(accept_size * 2);
-	uintptr_t aligned = ((uintptr_t)accept_base + accept_size - 1)
-		& ~(accept_size - 1);
-	uint8_t *accept_mem = (uint8_t *)aligned;
+	void *accept_base = NULL;
+	uint8_t *accept_mem = alloc_aligned(&accept_base, accept_size,
+		accept_size);
 	diag("accept_base=%p, accept_mem=%p", accept_base, accept_mem);
 	memset(accept_mem, 0xff, accept_size);
 	assert(accept_mem[0] == 0xff);
@@ -2580,10 +2579,10 @@ START_TEST(forbid_map_from_special)
 		L4_ThreadId_t child_tid;
 		int child = fork_tid(&child_tid);
 		if(child == 0) {
-			void *mem_base = malloc(recv_max * 2);
-			diag("mem_base=%p", mem_base);
-			uint8_t *mem = (uint8_t *)(((uintptr_t)mem_base + recv_max - 1) & ~(recv_max - 1));
-			diag("mem=%p, recv_max=%lu", mem, (unsigned long)recv_max);
+			void *mem_base = NULL;
+			uint8_t *mem = alloc_aligned(&mem_base, recv_max, recv_max);
+			diag("mem_base=%p, mem=%p, recv_max=%lu", mem_base, mem,
+				(unsigned long)recv_max);
 			memset(mem, 0xf0, recv_max);
 			L4_Fpage_t acc_range = L4_Fpage((L4_Word_t)mem, recv_max);
 			L4_Set_Rights(&acc_range, L4_FullyAccessible);

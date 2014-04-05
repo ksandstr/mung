@@ -7,6 +7,8 @@
 #include <l4/types.h>
 #include <l4/ipc.h>
 
+#include <ukernel/util.h>
+
 #include "defs.h"
 
 
@@ -161,4 +163,20 @@ void next_tick(void)
 	do {
 		/* sit & spin */
 	} while(start.raw == L4_SystemClock().raw);
+}
+
+
+void *alloc_aligned(void **base_p, size_t size, size_t alignment)
+{
+	assert(POPCOUNT(alignment) == 1);
+	if(size == PAGE_SIZE && alignment <= PAGE_SIZE) {
+		*base_p = valloc(PAGE_SIZE);
+		return *base_p;
+	}
+
+	*base_p = malloc(size + alignment);
+	if(*base_p == NULL) return NULL;
+
+	uintptr_t ret = ((uintptr_t)*base_p + alignment - 1) & ~(alignment - 1);
+	return (void *)ret;
 }

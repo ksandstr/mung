@@ -310,6 +310,9 @@ extern void xjoin_thread(L4_ThreadId_t other);
 
 extern void next_tick(void);
 
+/* alignment must be a power of two. */
+extern void *alloc_aligned(void **base_p, size_t size, size_t alignment);
+
 
 /* (actually in sched_suite.c) */
 extern int find_own_priority(void);
