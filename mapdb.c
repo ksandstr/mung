@@ -964,6 +964,19 @@ int mapdb_map_pages(
 {
 	assert(check_mapdb_module(0));
 
+	/* FIXME: achieve this by running into REF_SPACE(e->parent) == 1 during a
+	 * lookup, instead. as it stands this is a huge lump of usually-false
+	 * shifts and masks.
+	 */
+	L4_Fpage_t dest_fpage = L4_FpageLog2(dest_addr, L4_SizeLog2(map_page));
+	if(fpage_overlap(from_db->space->utcb_area, map_page)
+		|| fpage_overlap(from_db->space->kip_area, map_page)
+		|| fpage_overlap(to_db->space->utcb_area, dest_fpage)
+		|| fpage_overlap(to_db->space->kip_area, dest_fpage))
+	{
+		return 0;
+	}
+
 	struct map_entry *first = NULL;
 	struct map_group *grp;
 	L4_Word_t first_addr = L4_Address(map_page),
@@ -979,6 +992,7 @@ int mapdb_map_pages(
 		/* no pages; it's a no-op. */
 		return 0;
 	}
+	assert(REF_SPACE(first->parent) != 1);
 
 	/* TODO: modify the page tables in mapdb_add_map() at some future time.
 	 * right now it leaves them out of sync, i.e. potentially pointing to

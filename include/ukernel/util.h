@@ -93,6 +93,13 @@ static inline bool pt_is_valid(L4_Clock_t base, L4_Time_t t)
 }
 
 
+static inline bool fpage_overlap(L4_Fpage_t a, L4_Fpage_t b)
+{
+	L4_Word_t mask = ~((1ul << MAX(int, L4_SizeLog2(a), L4_SizeLog2(b))) - 1);
+	return ((a.raw ^ b.raw) & mask) == 0;
+}
+
+
 /* from hash.c */
 extern uint32_t int_hash(uint32_t key);
 extern uint32_t ptr_hash(const void *ptr);

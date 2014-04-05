@@ -117,7 +117,8 @@ extern void mapdb_destroy(struct map_db *ptr);
 
 /* on success, returns OR mask of rights that would've been granted by this
  * mapping operation (which doesn't happen in the rights extension case, but
- * is ignored. [TODO: consider what difference this makes.])
+ * is ignored). special ranges may not be mapped from, or over, using this
+ * function; instead, such maps are ignored and the return value set to 0.
  *
  * on failure, returns negative errno.
  */
