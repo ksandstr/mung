@@ -2562,8 +2562,15 @@ END_TEST
 
 /* simple enough. fork, receive map in fork over initialized memory, check
  * if it still looks like that memory afterward, return observation.
+ *
+ * TODO: the is_large mode only attempts to map the forbidden page and
+ * anything possibly next to it. another test could be written that'd map
+ * actual data pages from a different forked child process next to the actual
+ * forbidden page, where possible, and then map that whole shebang with a
+ * larger fpage. the receiver should compute a checksum of all pages mapped,
+ * and return it.
  */
-START_TEST(forbid_map_from_special)
+START_LOOP_TEST(forbid_map_from_special, iter, 0, 7)
 {
 	L4_KernelInterfacePage_t *kip = L4_GetKernelInterface();
 	const L4_Word_t bad_addrs[] = {
@@ -2571,70 +2578,79 @@ START_TEST(forbid_map_from_special)
 		L4_MyLocalId().raw,
 	};
 
-	plan_tests(1 * NUM_ELEMENTS(bad_addrs));
-	const size_t recv_max = PAGE_SIZE * 2;
+	plan_tests(1);
+	const bool is_grant = CHECK_FLAG(iter, 1),
+		is_large = CHECK_FLAG(iter, 2);
+	iter >>= 2;
+	assert(iter < NUM_ELEMENTS(bad_addrs));
+	const L4_Word_t bad_addr = bad_addrs[iter];
+	const size_t recv_max = is_large ? 64 * 1024 : PAGE_SIZE * 2;
+	diag("is_grant=%s, is_large=%s, bad_addr=%#lx, recv_max=%#lx",
+		btos(is_grant), btos(is_large), bad_addr, (L4_Word_t)recv_max);
 
-	L4_ThreadId_t parent_tid = L4_MyGlobalId();
-	for(int i=0; i < NUM_ELEMENTS(bad_addrs); i++) {
-		L4_ThreadId_t child_tid;
-		int child = fork_tid(&child_tid);
-		if(child == 0) {
-			void *mem_base = NULL;
-			uint8_t *mem = alloc_aligned(&mem_base, recv_max, recv_max);
-			diag("mem_base=%p, mem=%p, recv_max=%lu", mem_base, mem,
-				(unsigned long)recv_max);
-			memset(mem, 0xf0, recv_max);
-			L4_Fpage_t acc_range = L4_Fpage((L4_Word_t)mem, recv_max);
-			L4_Set_Rights(&acc_range, L4_FullyAccessible);
-			L4_Accept(L4_MapGrantItems(acc_range));
-			L4_MsgTag_t tag = L4_Receive_Timeout(parent_tid, TEST_IPC_DELAY);
-			IPC_FAIL(tag);
-			if(tag.X.t >= 2) {
-				L4_MapItem_t mi;
-				L4_StoreMRs(tag.X.u + 1, 2, mi.raw);
-				if(L4_IsMapItem(mi)) {
-					L4_Fpage_t fp = L4_MapItemSndFpage(mi);
-					diag("  got mapitem: sndbase %#lx, fpage %#lx:%#lx",
-						L4_MapItemSndBase(mi), L4_Address(fp),
-						L4_Size(fp));
-				}
-			}
-			diag("received ipc had u=%lu,t=%lu", tag.X.u, tag.X.t);
-			bool changed = false;
-			for(int j=0; j < recv_max; j++) {
-				if(mem[j] != 0xf0) {
-					diag("deviation at j=%d: value=%#02x", j, mem[j]);
-					changed = true;
-					break;
-				}
-			}
-			L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 1 }.raw);
-			L4_LoadMR(1, changed ? 1 : 0);
-			tag = L4_Reply(parent_tid);
-			if(L4_IpcFailed(tag)) {
-				diag("child reply failed, ec=%#lx", L4_ErrorCode());
-			}
-			L4_FlushFpage(acc_range);
-			free(mem_base);
-			exit(0);
-		}
-
-		L4_Fpage_t fp = L4_FpageLog2(bad_addrs[i] & ~PAGE_MASK, PAGE_BITS);
-		L4_Set_Rights(&fp, L4_FullyAccessible);
-		diag("trying to map %#lx:%#lx", L4_Address(fp), L4_Size(fp));
-		L4_LoadMR(0, (L4_MsgTag_t){ .X.t = 2 }.raw);
-		L4_MapItem_t mi = L4_MapItem(fp, 0);
-		L4_LoadMR(1, mi.raw[0]);
-		L4_LoadMR(2, mi.raw[1]);
-		L4_MsgTag_t tag = L4_Call_Timeouts(child_tid, TEST_IPC_DELAY,
-			TEST_IPC_DELAY);
+	L4_ThreadId_t parent_tid = L4_MyGlobalId(), child_tid;
+	int child = fork_tid(&child_tid);
+	if(child == 0) {
+		void *mem_base = NULL;
+		uint8_t *mem = alloc_aligned(&mem_base, recv_max, recv_max);
+		diag("mem_base=%p, mem=%p, recv_max=%lu", mem_base, mem,
+			(unsigned long)recv_max);
+		memset(mem, 0xf0, recv_max);
+		L4_Fpage_t acc_range = L4_Fpage((L4_Word_t)mem, recv_max);
+		L4_Set_Rights(&acc_range, L4_FullyAccessible);
+		L4_Accept(L4_MapGrantItems(acc_range));
+		L4_MsgTag_t tag = L4_Receive_Timeout(parent_tid, TEST_IPC_DELAY);
 		IPC_FAIL(tag);
-		L4_Word_t changed = ~0ul; L4_StoreMR(1, &changed);
-		ok1(changed == 0);
-
-		int st = 0, dead = wait(&st);
-		fail_if(dead != child, "dead=%d, st=%d", dead, st);
+		if(tag.X.t >= 2) {
+			L4_MapItem_t mi;
+			L4_StoreMRs(tag.X.u + 1, 2, mi.raw);
+			if(L4_IsMapItem(mi) || L4_IsGrantItem(*(L4_GrantItem_t *)mi.raw)) {
+				L4_Fpage_t fp = L4_MapItemSndFpage(mi);
+				diag("  got map/grant item: sndbase %#lx, fpage %#lx:%#lx",
+					L4_MapItemSndBase(mi), L4_Address(fp),
+					L4_Size(fp));
+			}
+		}
+		diag("received ipc had u=%lu,t=%lu", tag.X.u, tag.X.t);
+		bool changed = false;
+		for(int j=0; j < recv_max; j++) {
+			if(mem[j] != 0xf0) {
+				diag("deviation at j=%d: value=%#02x", j, mem[j]);
+				changed = true;
+				break;
+			}
+		}
+		L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 1 }.raw);
+		L4_LoadMR(1, changed ? 1 : 0);
+		tag = L4_Reply(parent_tid);
+		if(L4_IpcFailed(tag)) {
+			diag("child reply failed, ec=%#lx", L4_ErrorCode());
+		}
+		L4_FlushFpage(acc_range);
+		free(mem_base);
+		exit(0);
 	}
+
+	L4_Fpage_t fp = L4_Fpage(bad_addr & ~PAGE_MASK,
+		is_large ? 32 * 1024 : PAGE_SIZE);
+	L4_Set_Rights(&fp, L4_FullyAccessible);
+	diag("trying to map %#lx:%#lx", L4_Address(fp), L4_Size(fp));
+	L4_LoadMR(0, (L4_MsgTag_t){ .X.t = 2 }.raw);
+	if(is_grant) {
+		L4_GrantItem_t gi = L4_GrantItem(fp, 0);
+		L4_LoadMRs(1, 2, gi.raw);
+	} else {
+		L4_MapItem_t mi = L4_MapItem(fp, 0);
+		L4_LoadMRs(1, 2, mi.raw);
+	}
+	L4_MsgTag_t tag = L4_Call_Timeouts(child_tid, TEST_IPC_DELAY,
+		TEST_IPC_DELAY);
+	IPC_FAIL(tag);
+	L4_Word_t changed = ~0ul; L4_StoreMR(1, &changed);
+	ok1(changed == 0);
+
+	int st = 0, dead = wait(&st);
+	fail_if(dead != child, "dead=%d, st=%d", dead, st);
 }
 END_TEST
 
@@ -2644,7 +2660,7 @@ END_TEST
  * fail, but if the KIP mapping succeeds, the child will abort and a reply
  * handshake will fail.
  */
-START_TEST(forbid_map_into_special)
+START_LOOP_TEST(forbid_map_into_special, iter, 0, 1)
 {
 	L4_KernelInterfacePage_t *kip = L4_GetKernelInterface();
 	const L4_Word_t bad_addrs[] = {
@@ -2652,72 +2668,72 @@ START_TEST(forbid_map_into_special)
 		L4_MyLocalId().raw,
 	};
 
-	plan_tests(4 * NUM_ELEMENTS(bad_addrs));
+	plan_tests(4);
+	assert(iter < NUM_ELEMENTS(bad_addrs));
+	const L4_Word_t bad_addr = bad_addrs[iter];
+	diag("bad_addr=%#lx", bad_addr);
 
-	L4_ThreadId_t parent_tid = L4_MyGlobalId();
-	for(int i=0; i < NUM_ELEMENTS(bad_addrs); i++) {
-		L4_ThreadId_t child_tid;
-		int child = fork_tid(&child_tid);
-		if(child == 0) {
-			uint8_t kip_copy[16];
-			memcpy(kip_copy, kip, sizeof(kip_copy));
-			L4_ThreadId_t self_before = L4_MyGlobalId();
+	L4_ThreadId_t parent_tid = L4_MyGlobalId(), child_tid;
+	int child = fork_tid(&child_tid);
+	if(child == 0) {
+		uint8_t kip_copy[16];
+		memcpy(kip_copy, kip, sizeof(kip_copy));
+		L4_ThreadId_t self_before = L4_MyGlobalId();
 
-			L4_Fpage_t acc_range = L4_FpageLog2(bad_addrs[i], PAGE_BITS);
-			L4_Set_Rights(&acc_range, L4_FullyAccessible);
-			diag("acc_range=%#lx:%#lx",
-				L4_Address(acc_range), L4_Size(acc_range));
-			L4_Accept(L4_MapGrantItems(acc_range));
-			L4_MsgTag_t tag = L4_Receive_Timeout(parent_tid, TEST_IPC_DELAY);
-			IPC_FAIL(tag);
-			bool tid_ok = L4_SameThreads(self_before, L4_MyGlobalId()),
-				kip_ok = memcmp(kip_copy, kip, sizeof(kip_copy)) == 0;
-			/* provoke segfaults on IPC (MR write, syscall entry in KIP) if
-			 * the mapping succeeded and a flushable page was mapped.
-			 */
-			L4_FlushFpage(acc_range);
-			L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 2 }.raw);
-			L4_LoadMR(1, tid_ok ? 1 : 0);
-			L4_LoadMR(2, kip_ok ? 1 : 0);
-			L4_Reply(parent_tid);
-			if(L4_IpcFailed(tag)) {
-				diag("child reply failed, ec=%#lx", L4_ErrorCode());
-			}
-
-			exit(tid_ok && kip_ok ? 0 : 1);
+		L4_Fpage_t acc_range = L4_FpageLog2(bad_addr, PAGE_BITS);
+		L4_Set_Rights(&acc_range, L4_FullyAccessible);
+		diag("acc_range=%#lx:%#lx",
+			L4_Address(acc_range), L4_Size(acc_range));
+		L4_Accept(L4_MapGrantItems(acc_range));
+		L4_MsgTag_t tag = L4_Receive_Timeout(parent_tid, TEST_IPC_DELAY);
+		IPC_FAIL(tag);
+		bool tid_ok = L4_SameThreads(self_before, L4_MyGlobalId()),
+			kip_ok = memcmp(kip_copy, kip, sizeof(kip_copy)) == 0;
+		/* provoke segfaults on IPC (MR write, syscall entry in KIP) if
+		 * the mapping succeeded and a flushable page was mapped.
+		 */
+		L4_FlushFpage(acc_range);
+		L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 2 }.raw);
+		L4_LoadMR(1, tid_ok ? 1 : 0);
+		L4_LoadMR(2, kip_ok ? 1 : 0);
+		L4_Reply(parent_tid);
+		if(L4_IpcFailed(tag)) {
+			diag("child reply failed, ec=%#lx", L4_ErrorCode());
 		}
 
-		/* map a page of frothy piss. */
-		char *mapz0r = valloc(PAGE_SIZE);
-		uint32_t seed = 0xbeefc0de;
-		random_string(mapz0r, PAGE_SIZE, &seed);
-		L4_Fpage_t map_page = L4_FpageLog2((L4_Word_t)mapz0r, PAGE_BITS);
-		L4_Set_Rights(&map_page, L4_FullyAccessible);
-		L4_MapItem_t mi = L4_MapItem(map_page, 0);
-		L4_LoadBR(0, 0);
-		L4_LoadMR(0, (L4_MsgTag_t){ .X.t = 2 }.raw);
-		L4_LoadMRs(1, 2, mi.raw);
-		L4_MsgTag_t tag = L4_Call_Timeouts(child_tid,
-			TEST_IPC_DELAY, TEST_IPC_DELAY);
-		L4_Word_t ec = L4_ErrorCode();
-		L4_Word_t tid_ok, kip_ok;
-		L4_StoreMR(1, &tid_ok);
-		L4_StoreMR(2, &kip_ok);
-		ok1(L4_IpcSucceeded(tag));
-		skip_start(L4_IpcFailed(tag), 2, "ec=%#lx", ec) {
-			ok1(tid_ok);
-			ok1(kip_ok);
-		} skip_end;
-
-		int st = 0, dead = wait(&st);
-		fail_if(dead != child, "dead=%d, st=%d", dead, st);
-		if(!ok((st & 15) != 7, "child didn't segfault")) {
-			diag("addr & ~0xf = %#lx", (unsigned long)st & ~0xful);
-		}
-
-		L4_FlushFpage(map_page);
-		free(mapz0r);
+		exit(tid_ok && kip_ok ? 0 : 1);
 	}
+
+	/* map a page of frothy piss. */
+	char *mapz0r = valloc(PAGE_SIZE);
+	uint32_t seed = 0xbeefc0de;
+	random_string(mapz0r, PAGE_SIZE, &seed);
+	L4_Fpage_t map_page = L4_FpageLog2((L4_Word_t)mapz0r, PAGE_BITS);
+	L4_Set_Rights(&map_page, L4_FullyAccessible);
+	L4_MapItem_t mi = L4_MapItem(map_page, 0);
+	L4_LoadBR(0, 0);
+	L4_LoadMR(0, (L4_MsgTag_t){ .X.t = 2 }.raw);
+	L4_LoadMRs(1, 2, mi.raw);
+	L4_MsgTag_t tag = L4_Call_Timeouts(child_tid,
+		TEST_IPC_DELAY, TEST_IPC_DELAY);
+	L4_Word_t ec = L4_ErrorCode();
+	L4_Word_t tid_ok, kip_ok;
+	L4_StoreMR(1, &tid_ok);
+	L4_StoreMR(2, &kip_ok);
+	ok1(L4_IpcSucceeded(tag));
+	skip_start(L4_IpcFailed(tag), 2, "ec=%#lx", ec) {
+		ok1(tid_ok);
+		ok1(kip_ok);
+	} skip_end;
+
+	int st = 0, dead = wait(&st);
+	fail_if(dead != child, "dead=%d, st=%d", dead, st);
+	if(!ok((st & 15) != 7, "child didn't segfault")) {
+		diag("addr & ~0xf = %#lx", (unsigned long)st & ~0xful);
+	}
+
+	L4_FlushFpage(map_page);
+	free(mapz0r);
 }
 END_TEST
 
