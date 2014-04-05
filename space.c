@@ -396,7 +396,7 @@ void space_remove_thread(struct space *sp, struct thread *t)
 			+ up->pos * PAGE_SIZE, PAGE_BITS);
 		L4_Set_Rights(&fp, L4_FullyAccessible);
 		mapdb_unmap_fpage(&sp->mapdb, fp, true, false, false);
-		/* TODO: remove this; mapdb syncs already. */
+		/* TODO: replace this with an assert */
 		space_put_page(sp, L4_Address(fp), 0, 0);
 
 		free_kern_page(up->pg);
@@ -432,7 +432,8 @@ struct utcb_page *space_get_utcb_page(struct space *sp, uint16_t page_pos)
 				+ page_pos * PAGE_SIZE, PAGE_BITS);
 			L4_Set_Rights(&u_page, L4_Readable | L4_Writable);
 			/* FIXME: catch error result from mapdb_add_map() */
-			mapdb_add_map(&sp->mapdb, MAPDB_REF(1, 0), u_page, up->pg->id);
+			mapdb_add_map(&sp->mapdb, REF_SPECIAL(0), u_page, up->pg->id);
+			/* TODO: replace this with an assert */
 			space_put_page(sp, L4_Address(u_page), up->pg->id,
 				L4_Rights(u_page));
 		}
@@ -497,6 +498,8 @@ int space_set_utcb_area(struct space *sp, L4_Fpage_t area)
 
 int space_set_kip_area(struct space *sp, L4_Fpage_t area)
 {
+	assert(sp->utcb_pages.elems == 0);
+
 	if(FPAGE_LOW(area) >= KERNEL_SEG_START
 		|| FPAGE_HIGH(area) >= KERNEL_SEG_START)
 	{
@@ -505,14 +508,23 @@ int space_set_kip_area(struct space *sp, L4_Fpage_t area)
 	}
 
 	if(!L4_IsNilFpage(sp->kip_area)) {
+		mapdb_unmap_fpage(&sp->mapdb, sp->kip_area, true, false, false);
+		/* TODO: replace this with asserts */
 		for(L4_Word_t pos = 0; pos < L4_Size(sp->kip_area); pos += PAGE_SIZE) {
 			space_put_page(sp, L4_Address(sp->kip_area) + pos, 0, 0);
 		}
 	}
 
 	sp->kip_area = area;
-	space_put_page(sp, L4_Address(sp->kip_area),
-		(L4_Word_t)kip_mem >> PAGE_BITS, L4_Readable | L4_eXecutable);
+	L4_Fpage_t k_page = L4_FpageLog2(L4_Address(area),
+		MIN(int, L4_SizeLog2(area), PAGE_BITS));
+	L4_Set_Rights(&k_page, L4_Readable);
+	/* FIXME: catch error result from mapdb_add_map() */
+	mapdb_add_map(&sp->mapdb, REF_SPECIAL(0), k_page,
+		(L4_Word_t)kip_mem >> PAGE_BITS);
+	/* TODO: replace this with an assert */
+	space_put_page(sp, L4_Address(k_page),
+		(L4_Word_t)kip_mem >> PAGE_BITS, L4_Readable);
 
 	return 0;
 }

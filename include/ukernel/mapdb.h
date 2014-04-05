@@ -17,6 +17,7 @@
 #define REF_DEFINED(ref) (REF_SPACE((ref)) != 0)
 #define REF_SPACE(ref) ((ref) & PAGE_MASK)
 #define REF_ADDR(ref) ((ref) & ~PAGE_MASK)
+#define REF_SPECIAL(addr) MAPDB_REF(1, addr)
 
 /* tombstone in map_entry->children */
 #define REF_TOMBSTONE MAPDB_REF(0, 1 << PAGE_BITS)
