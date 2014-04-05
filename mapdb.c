@@ -755,6 +755,9 @@ int mapdb_add_map(
 	 */
 	assert(REF_DEFINED(parent) || db->space == sigma0_space
 		|| sigma0_space == NULL);
+	/* TODO: assert that when @parent is defined and not special, then
+	 * @parent's parent isn't a special range
+	 */
 
 	/* x86 no-NX hack. this lets the pagefault exception handler do
 	 * pre-existing maps correctly.
@@ -785,7 +788,9 @@ int mapdb_add_map(
 		} else if(L4_SizeLog2(old->range) == L4_SizeLog2(fpage)) {
 			/* exact match with old entry's form. */
 			assert(L4_Address(old->range) == L4_Address(fpage));
-			replace_map_entry(db, g, old, parent, fpage, first_page_id);
+			if(likely(REF_SPACE(old->parent) != 1)) {
+				replace_map_entry(db, g, old, parent, fpage, first_page_id);
+			}
 		} else if(L4_SizeLog2(old->range) > L4_SizeLog2(fpage)) {
 			/* "contained" case. */
 			int page_offs = (L4_Address(fpage) - L4_Address(old->range)) >> PAGE_BITS;
@@ -795,8 +800,10 @@ int mapdb_add_map(
 				&& (REF_ADDR(old->parent) + page_offs * PAGE_SIZE) == REF_ADDR(parent))
 			{
 				/* contained no-op. the condition is hugely complex, but
-				 * should succeed entirely after the first two.
+				 * should succeed entirely after the first two terms.
 				 */
+			} else if(unlikely(REF_SPACE(old->parent) == 1)) {
+				/* won't touch a special range. */
 			} else {
 				/* break it up & replace. */
 				struct map_entry *ne = discontiguate(db, g, fpage);
@@ -833,7 +840,8 @@ int mapdb_add_map(
 
 		struct map_entry *e = mapdb_probe(db, addr);
 		assert(e != NULL);
-		assert(mapdb_page_id_in_entry(e, addr) == pg + first_page_id);
+		assert(mapdb_page_id_in_entry(e, addr) == pg + first_page_id
+			|| REF_SPACE(e->parent) == 1);
 		assert(mapdb_page_id_in_entry(p_e, p_addr) == pg + first_page_id);
 	}
 #endif
@@ -964,19 +972,6 @@ int mapdb_map_pages(
 {
 	assert(check_mapdb_module(0));
 
-	/* FIXME: achieve this by running into REF_SPACE(e->parent) == 1 during a
-	 * lookup, instead. as it stands this is a huge lump of usually-false
-	 * shifts and masks.
-	 */
-	L4_Fpage_t dest_fpage = L4_FpageLog2(dest_addr, L4_SizeLog2(map_page));
-	if(fpage_overlap(from_db->space->utcb_area, map_page)
-		|| fpage_overlap(from_db->space->kip_area, map_page)
-		|| fpage_overlap(to_db->space->utcb_area, dest_fpage)
-		|| fpage_overlap(to_db->space->kip_area, dest_fpage))
-	{
-		return 0;
-	}
-
 	struct map_entry *first = NULL;
 	struct map_group *grp;
 	L4_Word_t first_addr = L4_Address(map_page),
@@ -992,7 +987,6 @@ int mapdb_map_pages(
 		/* no pages; it's a no-op. */
 		return 0;
 	}
-	assert(REF_SPACE(first->parent) != 1);
 
 	/* TODO: modify the page tables in mapdb_add_map() at some future time.
 	 * right now it leaves them out of sync, i.e. potentially pointing to
@@ -1003,48 +997,41 @@ int mapdb_map_pages(
 		space_put_page(to_db->space, dest_addr + a, 0, 0);
 	}
 
-	if(L4_Address(first->range) == L4_Address(map_page)
-		&& L4_Size(first->range) >= L4_Size(map_page))
+	if(L4_SizeLog2(map_page) <= L4_SizeLog2(first->range)
+		&& fpage_overlap(map_page, first->range))
 	{
 		assert(first_addr == L4_Address(map_page));
-		/* the nice, common 1:1 case. (also works with a larger source range; it
-		 * just has to start at offset 0. this is a distinct case because it is
-		 * virtually always hit for 4-8 KiB pages.)
+		/* the simple case: a small fpage being mapped from inside larger or
+		 * equal-sized entry.
 		 */
+		if(unlikely(REF_SPACE(first->parent) == 1)) return 0;
 		L4_Fpage_t p = L4_FpageLog2(dest_addr, L4_SizeLog2(map_page));
 		L4_Set_Rights(&p, L4_Rights(first->range) & L4_Rights(map_page));
 		if(L4_Rights(p) != 0) {
-			mapdb_add_map(to_db,
-				MAPDB_REF(from_db->ref_id, L4_Address(first->range)),
-				p, first->first_page_id);
-			mapdb_add_child(first, MAPDB_REF(to_db->ref_id, L4_Address(p)));
-		}
-		return L4_Rights(p);
-	} else if(first_addr == L4_Address(map_page)
-		&& last_addr < L4_Address(first->range) + L4_Size(first->range))
-	{
-		/* the "entirely contained inside" case, common for 4KiB pages being
-		 * mapped from inside a hugepage
-		 */
-		L4_Fpage_t p = L4_FpageLog2(dest_addr, L4_SizeLog2(map_page));
-		L4_Set_Rights(&p, L4_Rights(first->range) & L4_Rights(map_page));
-		if(L4_Rights(p) != 0) {
-			int offset = (first_addr - L4_Address(first->range)) >> PAGE_BITS;
+			L4_Word_t off = L4_Address(map_page) - L4_Address(first->range);
 			mapdb_add_map(to_db, MAPDB_REF(from_db->ref_id, first_addr),
-				p, first->first_page_id + offset);
+				p, first->first_page_id + (off >> PAGE_BITS));
 			mapdb_add_child(first, MAPDB_REF(to_db->ref_id, L4_Address(p)));
 		}
 		return L4_Rights(p);
 	} else {
+		/* the complex case: the range is made up out of multiple smaller
+		 * entries.
+		 */
 		struct map_entry *ent = first;
 		L4_Word_t pos = MAX(L4_Word_t, L4_Address(ent->range), first_addr),
 			limit = last_addr + 1;
 		int given = L4_Rights(map_page);
 		while(pos < limit && ent != NULL && L4_Address(ent->range) < limit) {
+			L4_Word_t end = MIN(L4_Word_t, limit, FPAGE_HIGH(ent->range) + 1);
+
+			/* TODO: move the page-adding bit into a function, turn goto into
+			 * an if
+			 */
+			if(unlikely(REF_SPACE(ent->parent) == 1)) goto next_entry;
+
 			given &= L4_Rights(ent->range);
-			L4_Word_t start = MAX(L4_Word_t, pos, L4_Address(ent->range)),
-				end = MIN(L4_Word_t, limit,
-					L4_Address(ent->range) + L4_Size(ent->range));
+			L4_Word_t start = MAX(L4_Word_t, pos, L4_Address(ent->range));
 			int p_offs = (start - L4_Address(ent->range)) >> PAGE_BITS,
 				size_log2;
 			L4_Word_t r_addr;
@@ -1062,6 +1049,7 @@ int mapdb_map_pages(
 					L4_Set_Rights(&p, L4_Rights(ent->range) & L4_Rights(map_page));
 					if(L4_Rights(p) != 0) {
 						/* FIXME: audit both parent and child refs */
+						assert(REF_SPACE(ent->parent) != 1);
 						mapdb_add_map(to_db,
 							MAPDB_REF(from_db->ref_id,
 								L4_Address(ent->range) + p_offs * PAGE_SIZE),
@@ -1072,7 +1060,7 @@ int mapdb_map_pages(
 				}
 			}
 
-			/* next entry. */
+next_entry: /* next entry. */
 			if(ent < &grp->entries[grp->num_entries - 1]) ent++;
 			else {
 				/* next group, even */
@@ -1461,6 +1449,12 @@ int mapdb_unmap_fpage(
 	bool db_changed = false;		/* TODO: track elsewhere */
 	int rwx_seen = 0;
 
+	/* check "affect special ranges" form */
+	const bool drop_special = unlikely(!recursive)
+		&& L4_Rights(range) == L4_FullyAccessible
+		&& (L4_Address(range) & 0xc00) == 0x800;
+	assert(drop_special || (L4_Address(range) & 0xc00) == 0);
+
 	TRACE("%s: range %#lx:%#lx, %simmediate, %srecursive, ref_id %d\n",
 		__func__, L4_Address(range), L4_Size(range),
 		!immediate ? "non-" : "", !recursive ? "non-" : "",
@@ -1588,8 +1582,7 @@ int mapdb_unmap_fpage(
 			}
 
 			const bool special = REF_SPACE(e->parent) == 1;
-			bool drop = modify && special
-				&& unmap_rights == L4_FullyAccessible;
+			bool drop = special && drop_special;
 			if(modify && !special) {
 				/* ensured by discontiguate() */
 				assert(FPAGE_LOW(e->range) >= FPAGE_LOW(range));

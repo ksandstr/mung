@@ -149,10 +149,12 @@ extern int mapdb_map_pages(
  * declaration.)
  *
  * special mappings (KIP, UTCB pages) aren't affected by mapdb_unmap_fpage()
- * when @recursive. when !@recursive && @fpage.rights == full, special
- * mappings are removed if they overlap at all with @fpage. regardless of this
- * setting, the access bits of special mappings don't contribute to the return
- * value. (FIXME: this is entirely untested.)
+ * in its regular forms. however, when (@fpage.address & 0xc00) == 0x800 &&
+ * !@recursive && @fpage.rights == full, special mappings are removed if they
+ * overlap at all with @fpage. regardless of this setting, the access bits of
+ * special mappings don't contribute to the return value. (TODO: this needs
+ * more testing.) when the special form isn't used, the denormal bits in
+ * @fpage.address must be zero.
  *
  * if @clear_stored_access is set, the stored access bits retrieved for @fpage
  * will be cleared in the immediate entry. for recursion it is always passed
@@ -164,6 +166,12 @@ extern int mapdb_unmap_fpage(
 	bool immediate,
 	bool recursive,
 	bool clear_stored_access);
+
+static inline void mapdb_erase_special(struct map_db *db, L4_Fpage_t fpage) {
+	fpage = L4_FpageLog2(L4_Address(fpage) | 0x2000, L4_SizeLog2(fpage));
+	L4_Set_Rights(&fpage, L4_FullyAccessible);
+	mapdb_unmap_fpage(db, fpage, true, false, false);
+}
 
 
 /* access from the pagefault handler. returns NULL when the entry doesn't

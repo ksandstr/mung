@@ -392,10 +392,10 @@ void space_remove_thread(struct space *sp, struct thread *t)
 
 	if(up->occmap == 0) {
 		/* toss the UTCB page. */
-		L4_Fpage_t fp = L4_FpageLog2(L4_Address(sp->utcb_area)
-			+ up->pos * PAGE_SIZE, PAGE_BITS);
-		L4_Set_Rights(&fp, L4_FullyAccessible);
-		mapdb_unmap_fpage(&sp->mapdb, fp, true, false, false);
+		L4_Fpage_t fp = L4_FpageLog2(
+			L4_Address(sp->utcb_area) + up->pos * PAGE_SIZE,
+			PAGE_BITS);
+		mapdb_erase_special(&sp->mapdb, fp);
 		/* TODO: replace this with an assert */
 		space_put_page(sp, L4_Address(fp), 0, 0);
 
@@ -508,7 +508,7 @@ int space_set_kip_area(struct space *sp, L4_Fpage_t area)
 	}
 
 	if(!L4_IsNilFpage(sp->kip_area)) {
-		mapdb_unmap_fpage(&sp->mapdb, sp->kip_area, true, false, false);
+		mapdb_erase_special(&sp->mapdb, sp->kip_area);
 		/* TODO: replace this with asserts */
 		for(L4_Word_t pos = 0; pos < L4_Size(sp->kip_area); pos += PAGE_SIZE) {
 			space_put_page(sp, L4_Address(sp->kip_area) + pos, 0, 0);

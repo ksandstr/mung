@@ -274,6 +274,7 @@ static int apply_mapitem(
 		&dest->space->mapdb, map_page, L4_Address(wnd));
 	if(is_grant && given != 0) {
 		L4_Set_Rights(&map_page, given);
+		assert((L4_Address(map_page) & 0xc00) == 0);
 		mapdb_unmap_fpage(&source->space->mapdb, map_page, true, false,
 			false);
 	}
