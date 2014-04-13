@@ -270,6 +270,16 @@ static int apply_mapitem(
 		snd_base, L4_Address(map_page), L4_Size(map_page));
 	assert(L4_SizeLog2(map_page) == L4_SizeLog2(wnd));
 
+	if(unlikely(fpage_overlap(wnd, dest->space->utcb_area)
+		|| fpage_overlap(wnd, dest->space->kip_area)))
+	{
+		struct space *dsp = dest->space;
+		TRACE("  skipped due to overlap w/ utcb=%#lx:%#lx or kip=%#lx:%#lx\n",
+			L4_Address(dsp->utcb_area), L4_Size(dsp->utcb_area),
+			L4_Address(dsp->kip_area), L4_Size(dsp->kip_area));
+		goto noop;
+	}
+
 	int given = mapdb_map_pages(&source->space->mapdb,
 		&dest->space->mapdb, map_page, L4_Address(wnd));
 	if(is_grant && given != 0) {
