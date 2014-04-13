@@ -294,8 +294,7 @@ static bool deref_child(
 
 	/* a valid child refers to the home space, and into the home range. */
 	if(REF_SPACE(ce->parent) != home_db->ref_id
-		|| !BETWEEN(FPAGE_LOW(e->range), FPAGE_HIGH(e->range),
-				REF_ADDR(ce->parent)))
+		|| !ADDR_IN_FPAGE(e->range, REF_ADDR(ce->parent)))
 	{
 		TRACE("%s: backref %#lx mismatches space %u, or range %#lx .. %#lx\n",
 			__func__, ce->parent, home_db->ref_id,

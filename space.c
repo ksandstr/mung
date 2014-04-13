@@ -942,8 +942,8 @@ SYSCALL L4_Word_t sys_spacecontrol(
 		}
 		if(!L4_IsNilFpage(kip_area)
 			&& (L4_SizeLog2(kip_area) < kip->KipAreaInfo.X.s
-				|| RANGE_OVERLAP(FPAGE_LOW(kip_area), FPAGE_HIGH(kip_area),
-					FPAGE_LOW(utcb_area), FPAGE_HIGH(utcb_area))))
+				|| (!L4_IsNilFpage(utcb_area)
+					&& fpage_overlap(kip_area, utcb_area))))
 		{
 			*ec_p = 7;	/* invalid KIP area */
 			result = 0;
