@@ -120,6 +120,27 @@ static void pager_setup(void)
 	fail_unless(L4_IsGlobalId(pg_pager));
 	L4_Set_PagerOf(pg_poker, pg_pager);
 	assert(L4_PagerOf(pg_poker).raw == pg_pager.raw);
+
+	/* settle the poker and pager in. this aims to cause all the faults that
+	 * the poker is going to cause right off the bat, so it doesn't confuse
+	 * measurement.
+	 */
+	uint8_t *thing = malloc(PAGE_SIZE);
+	memset(thing, 0, PAGE_SIZE);
+	thing[1] = 0xb5;		/* all alone in the night */
+	uint8_t val = 0;
+	if(!peek(&val, pg_poker, (uintptr_t)&thing[1])) {
+		printf("%s: peek() failed, ec=%#lx\n", __func__,
+			L4_ErrorCode());
+	} else if(val != thing[1]) {
+		printf("%s: peek() returned wrong data %#x\n", __func__, val);
+	}
+	if(!send_reset(pg_pager)) {
+		printf("%s: send_reset() failed, ec=%#lx\n", __func__,
+			L4_ErrorCode());
+		/* TODO: should subsequently also fuck the pooch. */
+	}
+	free(thing);
 }
 
 
