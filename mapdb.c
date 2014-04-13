@@ -417,6 +417,19 @@ void mapdb_destroy(struct map_db *db)
 }
 
 
+/* used in postcondition asserts. brute force. */
+#ifndef NDEBUG
+static bool no_addr_in_group(struct map_group *g, uintptr_t addr)
+{
+	for(int i=0; i < g->num_entries; i++) {
+		assert(!ADDR_IN_FPAGE(g->entries[i].range, addr));
+	}
+
+	return true;
+}
+#endif
+
+
 static struct map_group *group_for_addr(struct map_db *db, uintptr_t addr)
 {
 	uintptr_t key = GROUP_ADDR(addr);
@@ -426,6 +439,9 @@ static struct map_group *group_for_addr(struct map_db *db, uintptr_t addr)
 
 static struct map_entry *probe_group_addr(struct map_group *g, uintptr_t addr)
 {
+	assert(BETWEEN(g->start,
+		g->start + MAX_ENTRIES_PER_GROUP * PAGE_SIZE - 1,
+		addr));
 	if(g->num_entries == 0) return NULL;
 
 	/* common binary search. */
@@ -445,11 +461,13 @@ static struct map_entry *probe_group_addr(struct map_group *g, uintptr_t addr)
 		} else if(addr >= L4_Address(ent->range) + L4_Size(ent->range)) {
 			imin = MAX(int, probe + 1, slide);
 		} else {
+			assert(ADDR_IN_FPAGE(ent->range, addr));
 			return ent;
 		}
 	}
 	assert(iters < 100);
 
+	assert(no_addr_in_group(g, addr));
 	return NULL;
 }
 
@@ -464,14 +482,12 @@ static struct map_entry *probe_group_range(struct map_group *g, L4_Fpage_t fpage
 	 * efficient version; instead, a range-to-range binary search operation
 	 * should be written.
 	 */
-	for(L4_Word_t addr = L4_Address(fpage), lim = addr + L4_Size(fpage);
-		addr < lim;
-		addr += PAGE_SIZE)
-	{
-		struct map_entry *e = probe_group_addr(g, addr);
-		if(e != NULL) return e;
+	for(int i=0; i < g->num_entries; i++) {
+		if(fpage_overlap(g->entries[i].range, fpage)) return &g->entries[i];
 	}
 
+	assert(no_addr_in_group(g, FPAGE_LOW(fpage)));
+	assert(no_addr_in_group(g, FPAGE_HIGH(fpage)));
 	return NULL;
 }
 
@@ -642,6 +658,11 @@ static int insert_map_entry(
 	L4_Fpage_t fpage,
 	uint32_t first_page_id)
 {
+	assert(!L4_IsNilFpage(fpage));
+	assert(g != NULL);
+	assert(group_for_addr(db, L4_Address(fpage)) == g);
+	assert(mapdb_probe(db, L4_Address(fpage)) == NULL);
+
 	/* [v1] TODO: use a clever binary hoppity-skip algorithm here, and recycle
 	 * that in the split-placement case in mapdb_add_map().
 	 *
@@ -652,8 +673,13 @@ static int insert_map_entry(
 	int prev = -1;
 	for(int i=0; i < g->num_entries; i++) {
 		L4_Fpage_t e = g->entries[i].range;
-		assert(L4_Address(e) + L4_Size(e) - 1 < L4_Address(fpage)
-			|| L4_Address(fpage) + L4_Size(fpage) - 1 < L4_Address(e));
+		if(fpage_overlap(e, fpage)) {
+			printf("%s: e=%#lx:%#lx, fpage=%#lx:%#lx\n", __func__,
+				L4_Address(e), L4_Size(e),
+				L4_Address(fpage), L4_Size(fpage));
+			printf("  called from %p\n", __builtin_return_address(0));
+		}
+		assert(!fpage_overlap(e, fpage));
 		if(L4_Address(e) < L4_Address(fpage)) prev = i; else break;
 	}
 	if(prev < 0 || !merge_entries(g, prev, parent,
@@ -1089,7 +1115,13 @@ static int make_pages_for_range(
 	L4_Word_t start,
 	L4_Word_t size)
 {
-	assert(((start | size) & 0xfff) == 0);
+	/* this assert blows when split_entry() was given an invalid size of
+	 * fpage.
+	 *
+	 * TODO: test for invalid fpages at the kernel interface, and then remove
+	 * this comment.
+	 */
+	assert(((start | size) & PAGE_MASK) == 0);
 
 	L4_Word_t addr;
 	int sizelog2, p = 0;
@@ -1216,6 +1248,8 @@ static int split_entry(
 	L4_Fpage_t pg_buf[23];
 	int p = 0;
 
+	assert(fpage_overlap(cut, e->range));
+
 	L4_Word_t r_first = L4_Address(cut);
 	if(L4_Address(e->range) < r_first) {
 		/* left side */
@@ -1296,6 +1330,8 @@ static struct map_entry *discontiguate(
 	struct map_group *g,
 	L4_Fpage_t range)
 {
+	assert(L4_Size(range) >= PAGE_SIZE);
+
 	int err;
 	TRACE("%s: group %#lx, range %#lx:%#lx\n", __func__, g->start,
 		L4_Address(range), L4_Size(range));
