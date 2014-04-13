@@ -23,6 +23,7 @@
 #include <muidl.h>
 
 #include "defs.h"
+#include "forkserv-defs.h"
 #include "test.h"
 
 #define IPCHELPER_IMPL_SOURCE
@@ -2660,7 +2661,7 @@ END_TEST
  * fail, but if the KIP mapping succeeds, the child will abort and a reply
  * handshake will fail.
  */
-START_LOOP_TEST(forbid_map_into_special, iter, 0, 1)
+START_LOOP_TEST(forbid_map_over_special, iter, 0, 1)
 {
 	L4_KernelInterfacePage_t *kip = L4_GetKernelInterface();
 	const L4_Word_t bad_addrs[] = {
@@ -2734,6 +2735,130 @@ START_LOOP_TEST(forbid_map_into_special, iter, 0, 1)
 
 	L4_FlushFpage(map_page);
 	free(mapz0r);
+}
+END_TEST
+
+
+/* access memory at an address, causing a segfault where applicable. */
+static void poke_addr_fn(void *addr)
+{
+	volatile uint8_t *p = addr;
+	(*p) ^= 0xff;
+	(*p) ^= 0xff;
+	exit_thread(NULL);
+}
+
+
+static bool segfaults_at(uintptr_t addr)
+{
+	L4_ThreadId_t poke_tid = xstart_thread(&poke_addr_fn, (void *)addr);
+	L4_Word_t ec = 0;
+	void *result = join_thread_long(poke_tid, A_SHORT_NAP, &ec);
+	bool fault = (uintptr_t)result == addr;
+	diag("addr=%#lx: fault=%s (ec=%#lx, result=%p)", addr,
+		btos(fault), ec, result);
+
+	return fault;
+}
+
+
+/* tests mapping into empty UTCB ranges. this should cause a fault before and
+ * after.
+ */
+START_TEST(forbid_map_into_utcb_range)
+{
+	/* scan the UTCB area to find a page that's not currently mapped. */
+	L4_Fpage_t utcb_area = L4_Nilpage;
+	int n = forkserv_get_utcb_area(L4_Pager(), &utcb_area);
+	fail_if(n != 0, "forkserv call failed, n=%d", n);
+
+	uintptr_t my_utcb_page = L4_MyLocalId().raw & ~PAGE_MASK,
+		missing_page = 0;
+	for(int i = L4_Size(utcb_area) / PAGE_SIZE - 1;
+		i >= 0;
+		i--)
+	{
+		uintptr_t addr = L4_Address(utcb_area) + i * PAGE_SIZE;
+		if(addr == my_utcb_page) continue;
+
+		/* probe it. there should be a segfault if the page isn't mapped. */
+		uintptr_t fault_addr = addr | 127;
+		if(segfaults_at(fault_addr)) {
+			missing_page = addr;
+			break;
+		}
+	}
+	if(missing_page == 0) {
+		plan_skip_all("can't find a missing UTCB area page");
+		return;
+	}
+
+	plan_tests(4);
+	diag("my_utcb_page=%#lx, missing_page=%#lx",
+		my_utcb_page, missing_page);
+
+	/* construct a page that the child will try to map in. */
+	void *map_base;
+	char *map_page = alloc_aligned(&map_base, PAGE_SIZE, PAGE_SIZE);
+	uint32_t seed = 0x1bfa5438;
+	random_string(map_page, PAGE_SIZE, &seed);
+
+	L4_ThreadId_t child_tid = L4_nilthread, parent_tid = L4_MyGlobalId();
+	int child = fork_tid(&child_tid);
+	if(child == 0) {
+		/* receive messages from parent_tid until QUIT_LABEL, reply with a
+		 * mapitem of `map_page'.
+		 */
+		for(;;) {
+			L4_LoadBR(0, 0);
+			L4_MsgTag_t tag = L4_Receive(parent_tid);
+			if(L4_IpcFailed(tag)) exit(1);
+			if(L4_Label(tag) == QUIT_LABEL) break;
+			*(volatile uint8_t *)map_page ^= 0xff;
+			L4_Fpage_t fp = L4_FpageLog2((uintptr_t)map_page, PAGE_BITS);
+			L4_Set_Rights(&fp, L4_Readable | L4_Writable);
+			L4_MapItem_t mi = L4_MapItem(fp, 0);
+			L4_LoadMR(0, (L4_MsgTag_t){ .X.t = 2 }.raw);
+			L4_LoadMRs(1, 2, mi.raw);
+			tag = L4_Reply(parent_tid);
+			if(L4_IpcFailed(tag)) exit(2);
+		}
+		diag("child done");
+		exit(0);
+	}
+
+	/* first, map the child's page somewhere to verify its mechanism. */
+	void *wnd_base;
+	uint8_t *wnd_mem = alloc_aligned(&wnd_base, PAGE_SIZE, PAGE_SIZE);
+	memset(wnd_mem, 0, PAGE_SIZE);
+	L4_Fpage_t wnd = L4_FpageLog2((uintptr_t)wnd_mem, PAGE_BITS);
+	diag("wnd=%#lx:%#lx", L4_Address(wnd), L4_Size(wnd));
+	L4_Accept(L4_MapGrantItems(wnd));
+	L4_LoadMR(0, 0);
+	L4_MsgTag_t tag = L4_Call_Timeouts(child_tid,
+		TEST_IPC_DELAY, TEST_IPC_DELAY);
+	IPC_FAIL(tag);
+	ok(*wnd_mem == map_page[0] || *wnd_mem == (map_page[0] ^ 0xff),
+		"page received into normal range OK");
+	ok1(!segfaults_at((uintptr_t)wnd_mem | 0x7f));
+	L4_Set_Rights(&wnd, L4_FullyAccessible);
+	L4_FlushFpage(wnd);
+	free(wnd_base);
+
+	/* then, map it into a known hole in the UTCB range. */
+	ok1(segfaults_at(missing_page | 0x7f));		/* for consistency */
+	wnd = L4_FpageLog2(missing_page, PAGE_BITS);
+	L4_Accept(L4_MapGrantItems(wnd));
+	L4_LoadMR(0, 0);
+	tag = L4_Call_Timeouts(child_tid, TEST_IPC_DELAY, TEST_IPC_DELAY);
+	IPC_FAIL(tag);
+	ok1(segfaults_at(missing_page | 0x7f));
+
+	send_quit(child_tid);
+	free(map_base);
+	int st = 0, dead = wait(&st);
+	fail_if(dead != child, "expected %d, got dead=%d, st=%d",
+		child, dead, st);
 }
 END_TEST
 
@@ -2931,8 +3056,12 @@ Suite *ipc_suite(void)
 		TCase *tc = tcase_create("typed");
 		tcase_add_test(tc, c_bit_in_typed_words);
 		tcase_add_test(tc, mapgrant_address);
+		/* NOTE: these must be run from within a fork; otherwise there's a
+		 * chance they screw with testbench's UTCB or KIP pages.
+		 */
 		tcase_add_test(tc, forbid_map_from_special);
-		tcase_add_test(tc, forbid_map_into_special);
+		tcase_add_test(tc, forbid_map_over_special);
+		tcase_add_test(tc, forbid_map_into_utcb_range);
 		suite_add_tcase(s, tc);
 	}
 
