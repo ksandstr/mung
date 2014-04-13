@@ -30,6 +30,7 @@ interface ForkServ: L4X2::FaultHandler
 	[Label(0x6154)]		/* "aT" */
 	void add_tid(in long space_id, in L4X2::word tid);
 
+	/* non-init calls. */
 	[Label(0x664f)]		/* "fO" */
 	long fork();
 
@@ -45,6 +46,9 @@ interface ForkServ: L4X2::FaultHandler
 	void sbrk(
 		out L4X2::word start,
 		in long increment);
+
+	[Label(0x6755)]		/* "gU" */
+	void get_utcb_area(out L4X2::Fpage utcb_area);
 
 	[Label(0x7a54), StubSendTimeout]	/* "zT" */
 	void exit_thread(in L4X2::word dest_tid)

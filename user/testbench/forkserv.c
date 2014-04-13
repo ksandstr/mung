@@ -656,6 +656,13 @@ static void handle_sbrk(
 }
 
 
+static void handle_get_utcb_area(L4_Fpage_t *output)
+{
+	struct fs_space *sp = get_space_by_tid(muidl_get_sender());
+	*output = sp != NULL ? sp->utcb_area : L4_Nilpage;
+}
+
+
 /* returns 1 on success, 0 on syscall failure, and L4_IpcFailed(*tag_out),
  * L4_ErrorCode() on ipc failure.
  */
@@ -1318,6 +1325,7 @@ static void forkserv_dispatch_loop(void)
 		.add_tid = &handle_add_tid,
 		.fork = &handle_fork,
 		.sbrk = &handle_sbrk,
+		.get_utcb_area = &handle_get_utcb_area,
 		.exit_thread = &handle_exit_thread,
 		.exit = &handle_exit,
 		.wait = &handle_wait,
