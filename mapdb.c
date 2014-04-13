@@ -672,12 +672,6 @@ static int insert_map_entry(
 	int prev = -1;
 	for(int i=0; i < g->num_entries; i++) {
 		L4_Fpage_t e = g->entries[i].range;
-		if(fpage_overlap(e, fpage)) {
-			printf("%s: e=%#lx:%#lx, fpage=%#lx:%#lx\n", __func__,
-				L4_Address(e), L4_Size(e),
-				L4_Address(fpage), L4_Size(fpage));
-			printf("  called from %p\n", __builtin_return_address(0));
-		}
 		assert(!fpage_overlap(e, fpage));
 		if(L4_Address(e) < L4_Address(fpage)) prev = i; else break;
 	}

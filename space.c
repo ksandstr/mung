@@ -856,12 +856,6 @@ SYSCALL void sys_unmap(L4_Word_t control, void *utcb)
 					? L4_Readable : 0;
 				present |= CHECK_FLAG_ALL(ptab_mem[ix], PT_PRESENT | PT_RW)
 					? L4_Writable : 0;
-				if(CHECK_FLAG_ANY(remove, present)) {
-					printf("%s: removed %#x, but %#x present at addr=%#lx\n",
-						__func__, remove, present, addr);
-					printf("  ... fp=%#lx:%#lx (rights=%#lx)\n",
-						L4_Address(fp), L4_Size(fp), L4_Rights(fp));
-				}
 				assert(!CHECK_FLAG_ANY(remove, present));
 				addr += PAGE_SIZE;
 			}

@@ -37,8 +37,6 @@ static struct trace_item *add_trace_item(int id)
 		}
 		trace_status = repl;
 		trace_status_size = id + 1;
-
-		printf("trace_status_size=%u\n", (unsigned)trace_status_size);
 	}
 
 	return &trace_status[id];
