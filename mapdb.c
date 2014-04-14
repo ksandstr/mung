@@ -1812,7 +1812,7 @@ COLD void mapdb_init_range(
 			 */
 			L4_Fpage_t page = L4_FpageLog2(range_pos, mag);
 			assert((range_pos & (L4_Size(page) - 1)) == 0);
-			L4_Set_Rights(&page, L4_FullyAccessible);
+			L4_Set_Rights(&page, entry_flags & L4_FullyAccessible);
 			if(mapdb_add_map(db, 0, page, page_ids[id_offset]) < 0) {
 				panic("mapdb_init_range() [early boot call] mapdb_add_map() failed");
 			}

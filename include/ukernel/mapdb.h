@@ -206,6 +206,7 @@ extern void mapdb_init_range(
 	uintptr_t start_addr,
 	const uint32_t *page_ids,
 	unsigned int num_pages,
-	int entry_flags);
+	int entry_flags);		/* L4 Fpage access bits */
+
 
 #endif
