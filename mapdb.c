@@ -417,7 +417,6 @@ void mapdb_destroy(struct map_db *db)
 
 
 /* used in postcondition asserts. brute force. */
-#ifndef NDEBUG
 static bool no_addr_in_group(struct map_group *g, uintptr_t addr)
 {
 	for(int i=0; i < g->num_entries; i++) {
@@ -426,7 +425,6 @@ static bool no_addr_in_group(struct map_group *g, uintptr_t addr)
 
 	return true;
 }
-#endif
 
 
 static struct map_group *group_for_addr(struct map_db *db, uintptr_t addr)
