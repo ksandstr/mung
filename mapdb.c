@@ -17,6 +17,7 @@
 #include <ukernel/slab.h>
 #include <ukernel/trace.h>
 #include <ukernel/space.h>
+#include <ukernel/ptab.h>
 #include <ukernel/bug.h>
 #include <ukernel/mapdb.h>
 
@@ -750,6 +751,32 @@ static void replace_map_entry(
 }
 
 
+static bool add_map_postcond(
+	struct map_db *db,
+	L4_Fpage_t map_area,
+	uint32_t first_page_id)
+{
+	/* TODO: check that all probes into @map_area return the correct page IDs */
+	assert(true);
+
+	/* check that where map_area is present in @db's page tables, it contains
+	 * either blanks or hits along the run from @first_page_id .
+	 */
+	struct pt_iter it;
+	pt_iter_init(&it, db->space);
+	for(L4_Word_t addr = FPAGE_LOW(map_area), exp_pgid = first_page_id;
+		addr < FPAGE_HIGH(map_area);
+		addr += PAGE_SIZE, exp_pgid++)
+	{
+		uint32_t pgid = pt_get_pgid(&it, NULL, addr);
+		assert(pgid == 0 || pgid == exp_pgid);
+	}
+	pt_iter_destroy(&it);
+
+	return true;
+}
+
+
 int mapdb_add_map(
 	struct map_db *db,
 	L4_Word_t parent,
@@ -864,6 +891,7 @@ int mapdb_add_map(
 	}
 #endif
 
+	assert(add_map_postcond(db, fpage, first_page_id));
 	assert(check_mapdb_module(MOD_NO_CHILD_REFS));
 
 	return 0;

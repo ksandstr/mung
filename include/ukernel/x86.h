@@ -53,6 +53,8 @@
 
 
 struct thread;
+struct space;
+struct page;
 
 /* courtesy of L4Ka::pistachio */
 struct x86_exregs {
@@ -360,6 +362,12 @@ static inline void mm_orl(uintptr_t address, uint32_t mask) {
 		:: "r" (mask), "m" (*(uint32_t *)address));
 }
 
+
+/* from arch_x86.c (being the True and Proper module for this header to
+ * describe)
+ */
+
+extern struct page *x86_get_ptab(struct space *sp, uintptr_t ptab_addr);
 
 
 /* from cpu.c (should be in x86.c or some such, or in an ia32 directory
