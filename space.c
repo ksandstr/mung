@@ -26,6 +26,7 @@
 #include <ukernel/sched.h>
 #include <ukernel/mapdb.h>
 #include <ukernel/kip.h>
+#include <ukernel/ptab.h>
 
 
 #define NUM_KERN_UTCB_PAGES ((UTCB_SIZE * NUM_KERNEL_THREADS \
@@ -695,6 +696,22 @@ void space_set_range_access(struct space *sp, L4_Fpage_t fp)
 void space_clear_range(struct space *sp, L4_Fpage_t fp)
 {
 	space_modify_range(sp, fp, ACT_ACCESS_AND, 0, 0);
+}
+
+
+bool space_prefill_upper(struct space *space, L4_Word_t fault_addr)
+{
+	bool ret;
+
+	struct pt_iter it;
+	pt_iter_init(&it, space);
+	if(pt_upper_present(&it, fault_addr)) ret = false;
+	else {
+		ret = mapdb_fill_page_table(&space->mapdb, fault_addr) > 0;
+	}
+	pt_iter_destroy(&it);
+
+	return ret;
 }
 
 

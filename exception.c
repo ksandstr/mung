@@ -14,6 +14,7 @@
 #include <ukernel/thread.h>
 #include <ukernel/sched.h>
 #include <ukernel/space.h>
+#include <ukernel/ptab.h>
 #include <ukernel/slab.h>
 #include <ukernel/ipc.h>
 #include <ukernel/interrupt.h>
@@ -803,9 +804,7 @@ void isr_exn_pf_bottom(struct x86_exregs *regs)
 
 	assert(x86_irq_is_enabled());
 
-	if(unlikely(!CHECK_FLAG(regs->error, 4))
-		&& fault_addr >= KERNEL_SEG_START)
-	{
+	if(unlikely(!CHECK_FLAG(regs->error, 4))) {
 		printf("KERNEL #PF (%s, %s, %s) @ %#lx (eip %#lx); current thread %lu:%lu\n",
 			CHECK_FLAG(regs->error, 4) ? "user" : "super",
 			CHECK_FLAG(regs->error, 2) ? "write" : "read",
@@ -841,30 +840,49 @@ void isr_exn_pf_bottom(struct x86_exregs *regs)
 	}
 #endif
 
+	struct pt_iter it;
+	pt_iter_init(&it, current->space);
+	if(fault_addr < KERNEL_SEG_START && !pt_upper_present(&it, fault_addr)) {
+		if(space_prefill_upper(current->space, fault_addr)) {
+			assert(pt_upper_present(&it, fault_addr));
+			pt_iter_destroy(&it);
+			space_commit(current->space);
+			return_from_exn();
+			return;
+		} else {
+			/* fall out into the fault-generating part. */
+			assert(!pt_upper_present(&it, fault_addr));
+		}
+	}
+
+#ifndef NDEBUG
 	const struct map_entry *e = mapdb_probe(&current->space->mapdb,
 		fault_addr);
 	if(e != NULL && CHECK_FLAG_ALL(L4_Rights(e->range), fault_access)) {
-		space_put_page(current->space, fault_addr,
-			mapdb_page_id_in_entry(e, fault_addr), L4_Rights(e->range));
-		space_commit(current->space);
-		return_from_exn();
-	} else {
-#ifndef NDEBUG
-		repeat_count = 0;	/* sufficiently userspacey. */
+		printf("#PF fault_addr=%#lx, eip=%#lx\n", fault_addr, regs->eip);
+		printf("    mapdb_id=%u, ptab_id=%u\n",
+			mapdb_page_id_in_entry(e, fault_addr),
+			pt_get_pgid(&it, NULL, fault_addr));
+
+		panic("inconsistent mapping database or page table");
+	}
+
+	repeat_count = 0;
 #endif
 
-		thread_save_ctx(current, regs);
-		void *utcb = thread_get_utcb(current);
-		struct thread *pager = thread_get_pager(current, utcb);
-		if(unlikely(pager == NULL)) {
-			thread_halt(current);
-			assert(current->status == TS_STOPPED);
-			return_to_scheduler();
-		} else {
-			set_pf_msg(current, utcb, fault_addr, regs->eip, fault_access);
-			hook_push_back(&current->post_exn_call, &receive_pf_reply, NULL);
-			return_to_ipc(pager);
-		}
+	pt_iter_destroy(&it);
+
+	thread_save_ctx(current, regs);
+	void *utcb = thread_get_utcb(current);
+	struct thread *pager = thread_get_pager(current, utcb);
+	if(unlikely(pager == NULL)) {
+		thread_halt(current);
+		assert(current->status == TS_STOPPED);
+		return_to_scheduler();
+	} else {
+		set_pf_msg(current, utcb, fault_addr, regs->eip, fault_access);
+		hook_push_back(&current->post_exn_call, &receive_pf_reply, NULL);
+		return_to_ipc(pager);
 	}
 }
 

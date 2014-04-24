@@ -42,6 +42,17 @@ static inline uint32_t pt_get_pgid(
 	bool *upper_present_p,		/* optional */
 	uintptr_t addr);
 
+/* write a pagetable entry. rights mask per L4_Rights().
+ *
+ * allocates an upper-level table entry where required iff @force is true.
+ */
+static inline void pt_set_page(
+	struct pt_iter *iter,
+	uintptr_t addr,
+	uint32_t pgid,
+	int rights,
+	bool force);
+
 /* test whether an upper-level directory entry is present. */
 static inline bool pt_upper_present(
 	const struct pt_iter *iter,

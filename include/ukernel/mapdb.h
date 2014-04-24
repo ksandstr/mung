@@ -190,6 +190,13 @@ static inline uint32_t mapdb_page_id_in_entry(
 	return m->first_page_id + ((addr - L4_Address(m->range)) >> PAGE_BITS);
 }
 
+/* writes 1 << PT_UPPER_WIDTH entries into the page table using pt_*()
+ * primitives. sets @force to true, but doesn't allocate memory if no entries
+ * are found for the range.
+ */
+extern int mapdb_fill_page_table(struct map_db *db, uintptr_t addr);
+
+
 /* NOTE: this doesn't communicate whether the affected address range should be
  * flushed or not. a simple 0/1 boolean thing would suffice.
  */

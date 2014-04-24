@@ -126,6 +126,11 @@ extern void space_set_range(
 	L4_Fpage_t range,
 	uint32_t first_pgid);
 
+/* generate and prefill a second-level page table. if one is already present,
+ * no-op and return false.
+ */
+extern bool space_prefill_upper(struct space *sp, L4_Word_t addr);
+
 /* probe and reset the access bits of a page. if the probed address is in a
  * hole, the function returns -ENOENT; also, if next_addr_p != NULL, then
  * *next_addr_p will be set to a following address that might not be in the

@@ -685,8 +685,8 @@ static int insert_map_entry(
 		} else {
 			if(g->num_entries + 1 >= g->num_alloc) {
 				int next_size = g->num_alloc > 0 ? g->num_alloc * 2 : 2;
-				TRACE("resizing group at %p from %d to %d entries\n",
-					g, g->num_alloc, next_size);
+				TRACE("resizing group[%#lx] at %p from %d to %d entries\n",
+					g->start, g, g->num_alloc, next_size);
 				struct map_entry *new_ents = realloc(g->entries,
 					next_size * sizeof(struct map_entry));
 				if(unlikely(new_ents == NULL)) return -ENOMEM;
@@ -753,11 +753,33 @@ static void replace_map_entry(
 
 static bool add_map_postcond(
 	struct map_db *db,
+	L4_Word_t parent,
 	L4_Fpage_t map_area,
 	uint32_t first_page_id)
 {
-	/* TODO: check that all probes into @map_area return the correct page IDs */
-	assert(true);
+	/* the mapping database must contain the indicated range if it existed in
+	 * the parent. (could be stricter.)
+	 */
+	int n_pages = L4_Size(map_area) / PAGE_SIZE;
+	struct map_db *p_db = REF_DEFINED(parent) && !REF_SPECIAL(parent)
+		? get_map_db(REF_SPACE(parent)) : NULL;
+	for(L4_Word_t addr = L4_Address(map_area), pg = 0;
+		REF_DEFINED(parent) && !REF_SPECIAL(parent) && pg < n_pages;
+		addr += PAGE_SIZE, pg++)
+	{
+		L4_Word_t p_addr = REF_ADDR(parent) + pg * PAGE_SIZE;
+		struct map_entry *p_e = mapdb_probe(p_db, p_addr);
+		if(p_e == NULL) {
+			TRACE("%s: no parent entry\n", __func__);
+			continue;
+		}
+
+		struct map_entry *e = mapdb_probe(db, addr);
+		assert(e != NULL);
+		assert(mapdb_page_id_in_entry(e, addr) == pg + first_page_id
+			|| REF_SPACE(e->parent) == 1);
+		assert(mapdb_page_id_in_entry(p_e, p_addr) == pg + first_page_id);
+	}
 
 	/* check that where map_area is present in @db's page tables, it contains
 	 * either blanks or hits along the run from @first_page_id .
@@ -768,8 +790,12 @@ static bool add_map_postcond(
 		addr < FPAGE_HIGH(map_area);
 		addr += PAGE_SIZE, exp_pgid++)
 	{
-		uint32_t pgid = pt_get_pgid(&it, NULL, addr);
-		assert(pgid == 0 || pgid == exp_pgid);
+		/* that one can't be tested for, though. */
+		if(exp_pgid == 0) continue;
+
+		bool upper_present;
+		uint32_t pgid = pt_get_pgid(&it, &upper_present, addr);
+		assert(!upper_present || pgid == exp_pgid);
 	}
 	pt_iter_destroy(&it);
 
@@ -785,13 +811,12 @@ int mapdb_add_map(
 {
 	assert(check_mapdb_module(0));
 
-	TRACE("%s: adding fpage at %#lx, size %#lx, access [%c%c%c], parent %#lx\n",
+	TRACE("%s: adding fpage=%#lx:%#lx, access=%c%c%c, parent=%#lx\n",
 		__func__, L4_Address(fpage), L4_Size(fpage),
 		CHECK_FLAG(L4_Rights(fpage), L4_Readable) ? 'r' : '-',
 		CHECK_FLAG(L4_Rights(fpage), L4_Writable) ? 'w' : '-',
 		CHECK_FLAG(L4_Rights(fpage), L4_eXecutable) ? 'x' : '-',
 		parent);
-	TRACE("... called from %p\n", __builtin_return_address(0));
 
 	/* unparented entries may only be created with mapdb_add_map() into
 	 * sigma0_space, or while sigma0_space isn't defined. other causes of such
@@ -866,32 +891,7 @@ int mapdb_add_map(
 	}
 	space_set_range(db->space, fpage, first_page_id);
 
-#ifndef NDEBUG
-	/* postcondition: the mapping database must contain the indicated
-	 * range if it existed in the parent. (could be stricter.)
-	 */
-	struct map_db *p_db = REF_DEFINED(parent)
-		? get_map_db(REF_SPACE(parent)) : NULL;
-	for(L4_Word_t addr = L4_Address(fpage), pg = 0;
-		REF_DEFINED(parent) && addr < L4_Address(fpage) + L4_Size(fpage);
-		addr += PAGE_SIZE, pg++)
-	{
-		L4_Word_t p_addr = REF_ADDR(parent) + pg * PAGE_SIZE;
-		struct map_entry *p_e = mapdb_probe(p_db, p_addr);
-		if(p_e == NULL) {
-			TRACE("%s/postcond: no parent entry\n", __func__);
-			continue;
-		}
-
-		struct map_entry *e = mapdb_probe(db, addr);
-		assert(e != NULL);
-		assert(mapdb_page_id_in_entry(e, addr) == pg + first_page_id
-			|| REF_SPACE(e->parent) == 1);
-		assert(mapdb_page_id_in_entry(p_e, p_addr) == pg + first_page_id);
-	}
-#endif
-
-	assert(add_map_postcond(db, fpage, first_page_id));
+	assert(add_map_postcond(db, parent, fpage, first_page_id));
 	assert(check_mapdb_module(MOD_NO_CHILD_REFS));
 
 	return 0;
@@ -1734,6 +1734,37 @@ struct map_entry *mapdb_probe(
 	assert(addr >= g->start);
 	assert(addr < g->start + GROUP_SIZE);
 	return probe_group_addr(g, addr);
+}
+
+
+
+/* TODO: flick the directory entry out to optimize for VMs that use shadowed
+ * page tables; restore it when done.
+ */
+int mapdb_fill_page_table(struct map_db *db, uintptr_t addr)
+{
+	addr &= ~PT_UPPER_MASK;
+
+	/* TODO: force this in mapdb.h */
+	assert(MAX_ENTRIES_PER_GROUP == 1 << PT_UPPER_WIDTH);
+	struct map_group *g = group_for_addr(db, addr);
+	if(g == NULL) return 0;
+
+	int n_set = 0;
+	struct pt_iter it;
+	pt_iter_init(&it, db->space);
+	for(int i=0; i < g->num_entries; i++) {
+		struct map_entry *e = &g->entries[i];
+		int n_pages = L4_Size(e->range) / PAGE_SIZE;
+		for(int j=0; j < n_pages; j++) {
+			pt_set_page(&it, L4_Address(e->range) + j * PAGE_SIZE,
+				e->first_page_id + j, L4_Rights(e->range), true);
+			n_set++;
+		}
+	}
+	pt_iter_destroy(&it);
+
+	return n_set;
 }
 
 

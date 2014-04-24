@@ -41,7 +41,7 @@ static inline void pt_iter_init(struct pt_iter *it, struct space *sp)
 static inline void pt_iter_destroy(struct pt_iter *it)
 {
 #ifndef NDEBUG
-	memset(it, 0, sizeof(*it));
+	memset(it, 0xbd, sizeof(*it));
 #endif
 }
 
@@ -66,6 +66,32 @@ static inline uint32_t pt_get_pgid(
 	uint32_t pte = ptab_mem[(addr >> 12) & 0x3ff];
 
 	return CHECK_FLAG(pte, PT_PRESENT) ? pte >> 12 : 0;
+}
+
+
+static inline void pt_set_page(
+	struct pt_iter *it,
+	uintptr_t addr,
+	uint32_t pgid,
+	int rights,
+	bool force)
+{
+	if((addr & ~_PTAB_MASK) != it->ptab_addr
+		|| (force && it->cur_ptab == NULL))
+	{
+		it->ptab_addr = addr & ~_PTAB_MASK;
+		if(force && !pt_upper_present(it, addr)) {
+			it->cur_ptab = x86_alloc_ptab(it->sp, addr);
+		} else {
+			it->cur_ptab = x86_get_ptab(it->sp, addr);
+		}
+	}
+	assert(it->cur_ptab != NULL);
+
+	uint32_t *ptab_mem = it->cur_ptab->vm_addr;
+	assert(ptab_mem != NULL);
+	ptab_mem[(addr >> 12) & 0x3ff] = pgid << 12 | PT_USER | PT_PRESENT
+		| (CHECK_FLAG(rights, L4_Writable) ? PT_RW : 0);
 }
 
 
