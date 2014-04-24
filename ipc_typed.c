@@ -755,20 +755,17 @@ static int copy_intraspace_stritem(L4_Fpage_t *fault_p, struct ipc_state *st)
 			uncatch_pf();
 		}
 
-		/* try to repair it from mapdb */
+#ifndef NDEBUG
+		/* enforce consistency wrt mapdb */
 		struct map_entry *e = mapdb_probe(&sp->mapdb, fault_addr);
-		if(e != NULL && CHECK_FLAG(L4_Rights(e->range),
-			is_write ? L4_Writable : L4_Readable))
-		{
-			space_put_page(sp, fault_addr,
-				mapdb_page_id_in_entry(e, fault_addr), L4_Rights(e->range));
-			space_commit(sp);
-			return copy_intraspace_stritem(fault_p, st);
-		} else {
-			*fault_p = L4_FpageLog2(fault_addr & ~PAGE_MASK, PAGE_BITS);
-			L4_Set_Rights(fault_p, L4_Readable | (is_write ? L4_Writable : 0));
-			return -EFAULT;
-		}
+		assert(e == NULL
+			|| !CHECK_FLAG(L4_Rights(e->range),
+				is_write ? L4_Writable : L4_Readable));
+#endif
+
+		*fault_p = L4_FpageLog2(fault_addr & ~PAGE_MASK, PAGE_BITS);
+		L4_Set_Rights(fault_p, L4_Readable | (is_write ? L4_Writable : 0));
+		return -EFAULT;
 	}
 
 	int s_off = st->s_off, d_off = st->d_off;

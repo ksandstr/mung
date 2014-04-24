@@ -785,13 +785,21 @@ void isr_exn_pf_bottom(struct x86_exregs *regs)
 	L4_Word_t fault_addr;
 	asm volatile ("movl %%cr2, %0": "=r" (fault_addr));
 
-	if(unlikely(!CHECK_FLAG(regs->error, 4)) && catch_pf_ok) {
-		catch_pf_ok = false;
-		longjmp(catch_pf_env, fault_addr);
-		assert(false);
-	}
-
 	struct thread *current = get_current_thread();
+
+	if(unlikely(!CHECK_FLAG(regs->error, 4)) && catch_pf_ok) {
+		if(likely(fault_addr < KERNEL_SEG_START)
+			&& space_prefill_upper(current->space, fault_addr))
+		{
+			/* lazy-mode kernel pf repair */
+			space_commit(current->space);
+			return;
+		} else {
+			catch_pf_ok = false;
+			longjmp(catch_pf_env, fault_addr);
+			assert(false);
+		}
+	}
 
 #if 0
 	printf("#PF (%s, %s, %s) @ %#lx (eip %#lx); current thread %lu:%lu\n",
