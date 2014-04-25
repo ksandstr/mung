@@ -1785,7 +1785,7 @@ COLD void mapdb_init_range(
 {
 	assert(check_mapdb_module(0));
 
-	TRACE("%s: start_addr %#lx, num_pages %u (%#x bytes)\n", __func__,
+	TRACE("%s: start_addr %#lx, num_pages %u (%#lx bytes)\n", __func__,
 		(L4_Word_t)start_addr, num_pages, num_pages * PAGE_SIZE);
 	unsigned int done = 0;
 	for(uintptr_t g_addr = GROUP_ADDR(start_addr),

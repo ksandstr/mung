@@ -7,9 +7,9 @@
 #include <ccan/list/list.h>
 
 
-#define PAGE_SIZE 4096
 #define PAGE_BITS 12
-#define PAGE_MASK 0xfff
+#define PAGE_SIZE (L4_Word_t)(1 << PAGE_BITS)
+#define PAGE_MASK (PAGE_SIZE - 1)
 
 #define PAGE_ALIGN __attribute__((aligned(4096)))
 
