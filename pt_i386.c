@@ -46,22 +46,30 @@ static inline void pt_iter_destroy(struct pt_iter *it)
 }
 
 
-static inline uint32_t pt_get_pgid(
-	struct pt_iter *it,
-	bool *upper_present_p,
-	uintptr_t addr)
+static inline struct page *_pt_ptab(struct pt_iter *it, uintptr_t addr)
 {
 	if((addr & ~_PTAB_MASK) != it->ptab_addr) {
 		it->ptab_addr = addr & ~_PTAB_MASK;
 		it->cur_ptab = x86_get_ptab(it->sp, addr);
 	}
+
+	return it->cur_ptab;
+}
+
+
+static inline uint32_t pt_get_pgid(
+	struct pt_iter *it,
+	bool *upper_present_p,
+	uintptr_t addr)
+{
+	struct page *ptab = _pt_ptab(it, addr);
 	if(upper_present_p != NULL) {
-		*upper_present_p = it->cur_ptab != NULL;
+		*upper_present_p = ptab != NULL;
 		assert(*upper_present_p == pt_upper_present(it, it->ptab_addr));
 	}
-	if(it->cur_ptab == NULL) return 0;
+	if(ptab == NULL) return 0;
 
-	uint32_t *ptab_mem = it->cur_ptab->vm_addr;
+	uint32_t *ptab_mem = ptab->vm_addr;
 	assert(ptab_mem != NULL);
 	uint32_t pte = ptab_mem[(addr >> 12) & 0x3ff];
 
@@ -95,7 +103,7 @@ static inline void pt_set_page(
 }
 
 
-static inline bool pt_upper_present(const struct pt_iter *it, uintptr_t addr)
+static inline bool pt_upper_present(struct pt_iter *it, uintptr_t addr)
 {
 	const uint32_t *pdir_mem = it->sp->pdirs->vm_addr;
 	assert(pdir_mem != NULL);
@@ -103,4 +111,18 @@ static inline bool pt_upper_present(const struct pt_iter *it, uintptr_t addr)
 	assert(!ret || x86_get_ptab(it->sp, addr) != NULL);
 	assert(ret  || x86_get_ptab(it->sp, addr) == NULL);
 	return ret;
+}
+
+
+static inline bool pt_page_present(
+	struct pt_iter *it,
+	uintptr_t addr)
+{
+	struct page *ptab = _pt_ptab(it, addr);
+	if(ptab == NULL) return false;
+
+	const uint32_t *ptab_mem = ptab->vm_addr;
+	assert(ptab_mem != NULL);
+	uint32_t pte = ptab_mem[(addr >> 12) & 0x3ff];
+	return CHECK_FLAG(pte, PT_PRESENT);
 }

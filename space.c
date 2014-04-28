@@ -397,8 +397,13 @@ void space_remove_thread(struct space *sp, struct thread *t)
 			L4_Address(sp->utcb_area) + up->pos * PAGE_SIZE,
 			PAGE_BITS);
 		mapdb_erase_special(&sp->mapdb, fp);
-		/* TODO: replace this with an assert */
-		space_put_page(sp, L4_Address(fp), 0, 0);
+
+#ifndef NDEBUG
+		struct pt_iter it;
+		pt_iter_init(&it, sp);
+		assert(!pt_page_present(&it, L4_Address(fp)));
+		pt_iter_destroy(&it);
+#endif
 
 		free_kern_page(up->pg);
 		htable_del(&sp->utcb_pages, int_hash(up->pos), up);
@@ -434,9 +439,13 @@ struct utcb_page *space_get_utcb_page(struct space *sp, uint16_t page_pos)
 			L4_Set_Rights(&u_page, L4_Readable | L4_Writable);
 			/* FIXME: catch error result from mapdb_add_map() */
 			mapdb_add_map(&sp->mapdb, REF_SPECIAL(0), u_page, up->pg->id);
-			/* TODO: replace this with an assert */
-			space_put_page(sp, L4_Address(u_page), up->pg->id,
-				L4_Rights(u_page));
+
+#ifndef NDEBUG
+			struct pt_iter it;
+			pt_iter_init(&it, sp);
+			assert(pt_get_pgid(&it, NULL, L4_Address(u_page)) == up->pg->id);
+			pt_iter_destroy(&it);
+#endif
 		}
 	}
 
