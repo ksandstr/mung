@@ -168,7 +168,7 @@ extern int mapdb_unmap_fpage(
 	bool clear_stored_access);
 
 static inline void mapdb_erase_special(struct map_db *db, L4_Fpage_t fpage) {
-	fpage = L4_FpageLog2(L4_Address(fpage) | 0x2000, L4_SizeLog2(fpage));
+	fpage = L4_FpageLog2(L4_Address(fpage) | 0x800, L4_SizeLog2(fpage));
 	L4_Set_Rights(&fpage, L4_FullyAccessible);
 	mapdb_unmap_fpage(db, fpage, true, false, false);
 }

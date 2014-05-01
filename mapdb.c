@@ -1479,7 +1479,7 @@ int mapdb_unmap_fpage(
 	/* check "affect special ranges" form */
 	const bool drop_special = unlikely(!recursive)
 		&& L4_Rights(range) == L4_FullyAccessible
-		&& (L4_Address(range) & 0xc00) == 0x800;
+		&& (range.raw & 0xc00) == 0x800;
 	assert(drop_special || (L4_Address(range) & 0xc00) == 0);
 
 	TRACE("%s: range %#lx:%#lx, %simmediate, %srecursive, ref_id %d\n",
