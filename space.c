@@ -834,6 +834,17 @@ size_t space_memcpy_from(
 
 /* x86/amd64 bits */
 
+
+/* FIXME: this function is somewhat awful. the goal is that regardless of
+ * @size, the TSS structure should be allocated in such a way that the TSS
+ * before the I/O bitmap falls within a single memory page. most reasonably
+ * this'd happen with straight-up valloc(), and if that proves to be
+ * inefficient, a number of smaller trash allocations first without success.
+ *
+ * also the static analyzer from clang screams potential memory leak about
+ * this code, twice, in both cases spuriously -- it mistakenly regards the two
+ * "p0 < p1" expressions as orthogonal.
+ */
 static void *alloc_tss(size_t size)
 {
 	assert(size >= sizeof(struct tss));
@@ -962,14 +973,17 @@ SYSCALL void sys_unmap(L4_Word_t control, void *utcb)
 				{
 					addr += PAGE_SIZE;
 					continue;
-				} else if(ptab_id != pdir_mem[addr >> 22] >> 12) {
+				} else if(ptab_id != pdir_mem[addr >> 22] >> 12
+					|| ptab_mem == NULL)
+				{
 					ptab_id = pdir_mem[addr >> 22] >> 12;
 					struct page *pg = htable_get(&current->space->ptab_pages,
 						int_hash(ptab_id), &cmp_page_id_to_key, &ptab_id);
 					assert(pg != NULL);
+					assert(pg->vm_addr != NULL);
 					ptab_mem = pg->vm_addr;
-					assert(ptab_mem != NULL);
 				}
+				assert(ptab_mem != NULL);
 
 				int ix = (addr >> 12) & 0x3ff;
 				int present = CHECK_FLAG(ptab_mem[ix], PT_PRESENT)
