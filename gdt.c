@@ -75,7 +75,7 @@ static struct htable gdt_addr_hash = HTABLE_INITIALIZER(
 
 COLD void dump_gdt(struct gdt_desc *gd)
 {
-	struct gdt_desc foo;
+	struct gdt_desc foo = { };
 	if(gd == NULL) {
 		asm volatile ("sgdt %0" :: "m" (foo));
 		gd = &foo;

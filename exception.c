@@ -651,7 +651,7 @@ static void receive_exn_reply(struct hook *hook, uintptr_t code, void *priv)
 
 	void *utcb = thread_get_utcb(t);
 	struct x86_exregs *regs = &t->ctx;
-	L4_Word_t eflags;
+	L4_Word_t eflags = 0;
 	L4_Word_t *exvarptrs[] = {
 		&regs->eip,
 		&eflags,

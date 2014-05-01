@@ -102,7 +102,7 @@ static struct sdt_header *sdt_copy(uintptr_t phys_addr)
 	}
 
 	unsigned length = sdt->length;	/* "sdt" dies at 2nd put_supervisor_page() */
-	copy = malloc(length);
+	copy = malloc(MAX(size_t, length, 1));
 	unsigned pos = 0;
 	while(pos < length) {
 		uintptr_t copy_at = phys_addr + pos;
