@@ -10,6 +10,8 @@
 #include <stdnoreturn.h>
 #include <assert.h>
 #include <unistd.h>
+#include <sys/types.h>
+#include <sys/wait.h>
 #include <ccan/compiler/compiler.h>
 #include <ccan/autodata/autodata.h>
 
@@ -283,10 +285,9 @@ extern bool use_forkserv_sbrk;
 /* from process.c */
 
 /* returns address space ID on parent, 0 on child. */
-extern int fork(void);
-extern int fork_tid(L4_ThreadId_t *tid_p);	/* fork(), and return child TID */
+extern pid_t fork_tid(L4_ThreadId_t *tid_p); /* fork(), and return child TID */
 extern int wait(int *status);
-extern noreturn void exit(int status);
+extern noreturn void exit(int status);	/* TODO: this belongs in stdlib.h */
 
 extern bool is_privileged(void);
 

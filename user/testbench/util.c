@@ -3,6 +3,8 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <string.h>
+#include <sys/types.h>
+#include <sys/wait.h>
 #include <ccan/str/str.h>
 
 #include <l4/types.h>
@@ -38,7 +40,7 @@ bool send_delay(
 }
 
 
-static void fixture_teardown_common(int pid, L4_ThreadId_t tid)
+static void fixture_teardown_common(pid_t pid, L4_ThreadId_t tid)
 {
 	if(!send_quit(tid)) {
 		printf("send_quit() failed, ec %#lx\n", L4_ErrorCode());
@@ -52,7 +54,8 @@ static void fixture_teardown_common(int pid, L4_ThreadId_t tid)
 	L4_Send_Timeout(tid, TEST_IPC_DELAY);
 
 	if(pid > 0) {
-		int st, dead = wait(&st);
+		int st;
+		pid_t dead = wait(&st);
 		if(dead != pid) {
 			printf("%s: failed to wait on p%d (dead=%d)\n",
 				__func__, pid, dead);

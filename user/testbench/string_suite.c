@@ -11,6 +11,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <alloca.h>
+#include <unistd.h>
 #include <ccan/compiler/compiler.h>
 #include <ccan/str/str.h>
 #include <ccan/crc32c/crc32c.h>

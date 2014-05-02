@@ -7,6 +7,7 @@
 #include <stdlib.h>
 #include <stdint.h>
 #include <string.h>
+#include <unistd.h>
 
 #include <ccan/compiler/compiler.h>
 #include <ccan/talloc/talloc.h>

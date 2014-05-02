@@ -4,6 +4,7 @@
 #include <assert.h>
 #include <errno.h>
 #include <threads.h>
+#include <unistd.h>
 
 #include <ccan/str/str.h>
 #include <ccan/crc32c/crc32c.h>

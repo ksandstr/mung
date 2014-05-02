@@ -3,7 +3,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <errno.h>
-
+#include <unistd.h>
+#include <sys/types.h>
+#include <sys/wait.h>
 #include <ccan/list/list.h>
 #include <ccan/likely/likely.h>
 #include <ccan/compiler/compiler.h>
@@ -52,7 +54,7 @@ bool is_privileged(void) {
 }
 
 
-int getpid(void)
+pid_t getpid(void)
 {
 	assert(!is_roottask || task_pid == 1);
 	assert(is_roottask || task_pid > 1);
@@ -307,7 +309,7 @@ fail:
 }
 
 
-int fork(void)
+pid_t fork(void)
 {
 	if(L4_IsNilThread(mgr_tid)) {
 		mgr_tid = start_thread(&proc_mgr_fn, NULL);
@@ -400,7 +402,7 @@ ipc_fail:
 }
 
 
-int fork_tid(L4_ThreadId_t *tid_p)
+pid_t fork_tid(L4_ThreadId_t *tid_p)
 {
 	L4_MsgTag_t tag;
 	L4_ThreadId_t parent = L4_MyGlobalId(),
@@ -429,7 +431,7 @@ int fork_tid(L4_ThreadId_t *tid_p)
 }
 
 
-int wait(int *status)
+pid_t wait(int *status)
 {
 	int32_t id;
 	int n = forkserv_wait(L4_Pager(), &id, status);

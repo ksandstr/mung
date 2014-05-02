@@ -5,6 +5,7 @@
 #include <stdint.h>
 #include <string.h>
 #include <assert.h>
+#include <unistd.h>
 #include <ccan/compiler/compiler.h>
 #include <ccan/likely/likely.h>
 #include <ccan/tally/tally.h>

@@ -6,6 +6,8 @@
 #include <stdarg.h>
 #include <ctype.h>
 #include <assert.h>
+#include <sys/types.h>
+#include <sys/wait.h>
 
 #include <ccan/list/list.h>
 #include <ccan/container_of/container_of.h>

@@ -5,7 +5,7 @@ include $(CFGDIR)/config.mk
 LDFLAGS=-e_start -N -nostdlib -L $(CFGDIR)/user/lib/l4
 # under -O3, GCC may produce SSE instructions in a runtime that doesn't align
 # the stack properly. FIXME: repair that, then remove -mstackrealign.
-CFLAGS:=$(subst -D__KERNEL__,,$(CFLAGS)) -mstackrealign
+CFLAGS:=$(subst -D__KERNEL__,,$(CFLAGS)) -mstackrealign -ffreestanding
 
 TEST_IDL:=idl/common.idl idl/benchmark.idl \
 	$(wildcard idl/*-suite.idl)
