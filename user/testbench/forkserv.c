@@ -70,7 +70,8 @@ struct fs_space
 	L4_Fpage_t utcb_area, kip_area;
 	struct list_head children, dead_children, waiting_threads;
 	struct list_node child_link;	/* in parent's children | dead_children */
-	int exit_status;
+	int wait_status;
+	L4_Word_t last_segv_addr;
 
 	L4_ThreadId_t child_redir_tid;
 };
@@ -128,7 +129,9 @@ static size_t hash_word(const void *, void *);
 static size_t hash_threadno(const void *, void *);
 static struct fs_space *get_space(L4_Word_t id);
 static void handle_pf(L4_Word_t addr, L4_Word_t ip, L4_MapItem_t *page_ptr);
-static void handle_exit(int32_t status);
+
+static void exit_common(L4_ThreadId_t target, int32_t wait_status);
+static void exit_segv(L4_ThreadId_t target, uintptr_t fault_addr);
 
 
 /* thread_hash is keyed by ThreadNo; the version field is ignored. this
@@ -871,6 +874,7 @@ static void handle_pf(L4_Word_t addr, L4_Word_t ip, L4_MapItem_t *page_ptr)
 			 * though, so until the helper thread starts sending these things
 			 * a finite send-timeout will serve as band-aid adequately.)
 			 */
+			sp->last_segv_addr = addr;
 			n = __tmgr_segv_timeout(sp->mgr_tid, from.raw, addr,
 				sp->id == root_space_id ? L4_TimePeriod(200 * 1000)
 					: L4_ZeroTime);
@@ -886,12 +890,8 @@ static void handle_pf(L4_Word_t addr, L4_Word_t ip, L4_MapItem_t *page_ptr)
 			 * required for it to return to the ipc receive bit. that can be
 			 * alleviated by making the manager thread always have the largest
 			 * priority in its process.
-			 *
-			 * NOTE: for now, low 4 bits of status is 7 for a segfault. its
-			 * faulting address is delivered in the remaining bits, sans the
-			 * low four.
 			 */
-			handle_exit((addr & ~15) | 7);
+			exit_segv(muidl_get_sender(), addr);
 		}
 		goto no_reply;
 	} else if(page->page->refcount == 1
@@ -1284,7 +1284,7 @@ static int32_t handle_fork(void)
 		copy_id = next_space_id++;
 	} while(htable_get(&space_hash, int_hash(copy_id), &word_cmp,
 		&copy_id) != NULL);
-	struct fs_space *copy_space = malloc(sizeof(*copy_space));
+	struct fs_space *copy_space = calloc(1, sizeof(*copy_space));
 	for(int i=0; i < THREADS_PER_SPACE; i++) copy_space->threads[i] = NULL;
 	copy_space->id = copy_id;
 	copy_space->parent_id = sp->id;
@@ -1581,7 +1581,7 @@ static int32_t handle_wait(int32_t *status_ptr)
 	if(dead != NULL) {
 		/* immediate success */
 		int id = dead->id;
-		*status_ptr = dead->exit_status;
+		*status_ptr = dead->wait_status;
 		destroy_space(dead);
 		return id;
 	} else if(!list_empty(&sp->children)) {
@@ -1655,14 +1655,35 @@ static bool end_thread(L4_ThreadId_t tid)
 }
 
 
-static void handle_exit(int32_t status)
+/* NOTE: IDL call. parameters from out-of-process. */
+static void handle_exit(int32_t exit_status, bool was_segv)
 {
 	L4_ThreadId_t ipc_from = muidl_get_sender();
 	assert(L4_IsGlobalId(ipc_from));
-	struct fs_space *sp = get_space_by_tid(ipc_from);
+	if(!was_segv) {
+		int32_t status = exit_status << 1;
+		assert(WIFEXITED(status));
+		exit_common(ipc_from, status);
+	} else {
+		struct fs_space *sp = get_space_by_tid(ipc_from);
+		if(sp == NULL) {
+			printf("forkserv/exit: unknown TID %lu:%lu\n",
+				L4_ThreadNo(ipc_from), L4_Version(ipc_from));
+			return;
+		}
+
+		exit_segv(ipc_from, sp->last_segv_addr);
+	}
+	muidl_raise_no_reply();
+}
+
+
+static void exit_common(L4_ThreadId_t target, int32_t wait_status)
+{
+	struct fs_space *sp = get_space_by_tid(target);
 	if(sp == NULL) {
-		printf("forkserv/exit: unknown TID %lu:%lu\n",
-			L4_ThreadNo(ipc_from), L4_Version(ipc_from));
+		printf("forkserv/exit_common: unknown TID %lu:%lu\n",
+			L4_ThreadNo(target), L4_Version(target));
 		return;
 	}
 
@@ -1718,7 +1739,7 @@ static void handle_exit(int32_t status)
 
 		L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 2 }.raw);
 		L4_LoadMR(1, dead_id);
-		L4_LoadMR(2, status);
+		L4_LoadMR(2, wait_status);
 		L4_MsgTag_t tag = L4_Reply(wakeup->tid);
 		if(L4_IpcFailed(tag)) {
 			printf("forkserv: can't send wakeup, ec=%#lx\n",
@@ -1755,10 +1776,23 @@ static void handle_exit(int32_t status)
 	} else {
 		/* the dead walk */
 		list_add_tail(&parent->dead_children, &sp->child_link);
-		sp->exit_status = status;
+		sp->wait_status = wait_status;
+		assert(WIFEXITED(sp->wait_status));
 	}
 
 	muidl_raise_no_reply();
+}
+
+
+/* encodes the WSEGVADDR() format. */
+static void exit_segv(L4_ThreadId_t target, uintptr_t fault_addr)
+{
+	uintptr_t status = 1 | (11 << 1) | (fault_addr & ~0x3ful);
+	assert(!WIFEXITED(status));
+	assert(WIFSIGNALED(status));
+	assert(WTERMSIG(status) == 11);
+	assert(WSEGVADDR(status) == (fault_addr & ~0x3ful));
+	exit_common(target, status);
 }
 
 
@@ -1780,7 +1814,7 @@ static void handle_exit_thread(L4_Word_t dest_raw)
 		}
 	}
 
-	if(is_last && dest_tid.raw == from.raw) handle_exit(0);
+	if(is_last && dest_tid.raw == from.raw) exit_common(from, 0);
 	else if(is_last) {
 		/* would do exit of a process via exit_thread() from a foreign address
 		 * space. which is weird.

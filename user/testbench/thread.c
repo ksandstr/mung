@@ -819,10 +819,16 @@ static void t_add_thread(L4_Word_t arg_tid)
 }
 
 
+/* indicates segfault to joiner or forkserv (when the last thread is exiting)
+ * when status == 1. that is also how a caller to join_thread_long() may
+ * distinguish from a regular exit and a segfault.
+ */
 static void end_mgrt(
 	L4_ThreadId_t tid,
 	int join_status, int exit_status, L4_Word_t result)
 {
+	const bool is_segv = (join_status == 1);
+
 	tid = L4_GlobalIdOf(tid);
 	assert(L4_ThreadNo(tid) - base_tnum < MAX_THREADS);
 	struct mgrt *t = get_mgrt(tid);
@@ -854,14 +860,22 @@ static void end_mgrt(
 		mtx_unlock(&thread_lock);
 	} else {
 		t->alive = false;
-		t->segfault = (join_status == 1);
+		t->segfault = is_segv;
 		t->result = result;
 	}
 
 	mgrt_alive--;
 	assert(mgrt_alive <= mgr_threads.elems);
 	if(mgrt_alive == 0) {
-		exit(exit_status);
+		/* last thread is gone. */
+		if(is_segv) {
+			forkserv_exit(L4_Pager(), 0, true);
+			L4_Set_ExceptionHandler(L4_nilthread);
+			asm volatile ("int $1");
+			assert(false);
+		} else {
+			exit(0);	/* process-level success. */
+		}
 	}
 }
 
@@ -876,7 +890,6 @@ static void t_exit_thread(L4_Word_t result)
 	}
 
 	end_mgrt(sender, 0, 0, result);
-
 	muidl_raise_no_reply();
 }
 

@@ -468,7 +468,7 @@ void exit(int status)
 	}
 
 	for(int retry = 0; retry < 5; retry++) {
-		forkserv_exit(L4_Pager(), status);
+		forkserv_exit(L4_Pager(), status, false);
 	}
 	/* ultimate failure path */
 	asm volatile ("int $1");
