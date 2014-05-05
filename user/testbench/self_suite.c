@@ -5,6 +5,8 @@
 #include <errno.h>
 #include <threads.h>
 #include <unistd.h>
+#include <sys/types.h>
+#include <sys/wait.h>
 
 #include <ccan/str/str.h>
 #include <ccan/crc32c/crc32c.h>
@@ -316,7 +318,7 @@ START_LOOP_TEST(basic_fork_and_wait, iter, 0, 1)
 {
 	bool sleeping_child = CHECK_FLAG(iter, 1);
 	diag("sleeping_child=%s", btos(sleeping_child));
-	plan_tests(3);
+	plan_tests(4);
 
 	int parent_pid = getpid();
 	int spid = fork();
@@ -332,7 +334,10 @@ START_LOOP_TEST(basic_fork_and_wait, iter, 0, 1)
 	if(!sleeping_child) L4_Sleep(A_SHORT_NAP);
 	int status = 0, dead = wait(&status);
 	ok(dead > 0 && dead == spid, "child exited");
-	ok(status == abs(getpid() - spid), "exit status was delivered");
+	skip_start(!ok1(WIFEXITED(status)), 1, "didn't exit normally") {
+		ok(WEXITSTATUS(status) == abs(getpid() - spid),
+			"exit status was delivered");
+	} skip_end;
 }
 END_TEST
 
@@ -531,7 +536,7 @@ END_TEST
 
 START_TEST(copy_on_write)
 {
-	plan_tests(2);
+	plan_tests(3);
 	const int buffer_size = 256;
 
 	const char *teststr = "the quick brown fox jumps over the lazy dog";
@@ -545,7 +550,8 @@ START_TEST(copy_on_write)
 		int status = 0, dead = wait(&status);
 		fail_if(dead < 0, "wait failed");
 		fail_if(dead != spid, "expected %d from wait, got %d", spid, dead);
-		ok(status == (int)buffer[0] + 1 + (int)(buffer[255] + 1) % 256,
+		ok1(WIFEXITED(status));
+		ok(WEXITSTATUS(status) == (int)buffer[0] + 1 + (int)(buffer[255] + 1) % 256,
 			"exit status is correct");
 
 		bool bad = false;
@@ -619,27 +625,28 @@ END_TEST
 
 
 /* test that the exit status is communicated back correctly. note that this
- * hits the waiting and non-waiting cases equally.
+ * hits both the waiting and non-waiting cases.
  */
-START_TEST(return_exit_status)
+START_LOOP_TEST(return_exit_status, iter, 0, 1)
 {
-	plan_tests(1);
+	plan_tests(3);
+	const bool do_wait = CHECK_FLAG(iter, 1);
+	diag("do_wait=%s", btos(do_wait));
 
-	int expect_sum = 0, observe_sum = 0;
-	for(int i=0; i < 16; i++) {
-		expect_sum += (i + 1);
-		int child = fork();
-		if(child != 0) {
-			fail_if(child == -1);
-			int status = 0, dead = wait(&status);
-			fail_unless(dead == child);
-			observe_sum += status;
-		} else {
-			int rc = i + 1;
-			if((i & 1) != 0) wait_and_exit(rc, 2); else exit(rc);
-		}
+	pid_t child = fork();
+	if(child == 0) {
+		int rc = getpid() ^ 0x7f;
+		if(do_wait) wait_and_exit(rc, 2); else exit(rc);
+		fail_if(true, "child shouldn't get here");
 	}
-	ok1(expect_sum == observe_sum);
+	fail_if(child == -1, "fork failed");
+
+	int status = 0;
+	pid_t dead = wait(&status);
+	ok1(dead == child);
+	ok1(WIFEXITED(status));
+	ok1(WEXITSTATUS(status) == (child ^ 0x7f));
+	diag("dead=%d, status=%#x (%d)", dead, (unsigned)status, status);
 }
 END_TEST
 
@@ -676,19 +683,21 @@ START_TEST(reparent_orphans)
 END_TEST
 
 
-/* provoke two kinds of segfault in as many children. the first is when the
- * ordinary process dies, and the second causes the process manager thread to
- * segfault. both segfaults will occur as writes on the kernel interface page.
+/* provoke two kinds of segfault: first is vanilla from the child's main
+ * thread, the second by causing the process manager thread to segfault. both
+ * are done as writes on the kernel interface page.
  */
 START_LOOP_TEST(report_child_segfault, iter, 0, 1)
 {
 	L4_KernelInterfacePage_t *kip = L4_GetKernelInterface();
 
-	plan_tests(2);
+	plan_tests(3);
+	const bool mgr_fault = CHECK_FLAG(iter, 1);
+	diag("mgr_fault=%s", btos(mgr_fault));
 
 	int child = fork();
 	if(child == 0) {
-		if(iter == 0) {
+		if(!mgr_fault) {
 			memset(kip, 0, 100);	/* boomqvist! */
 		} else {
 			/* coax the manager thread into a snafu: cancel its IPC and send
@@ -715,12 +724,14 @@ START_LOOP_TEST(report_child_segfault, iter, 0, 1)
 	}
 
 	int st = 0, dead = wait(&st);
-	fail_if(dead != child, "different dead child: expected=%d, got=%d",
-		child, dead);
-	diag("child=%d, dead=%d, st=%#lx", child, dead, (unsigned long)st);
-	ok((st & 0xf) == 7, "segfault was indicated");
-	ok((st & ~PAGE_MASK) == ((L4_Word_t)kip & ~PAGE_MASK),
-		"segfault was at correct address");
+	fail_if(dead != child,
+		"different dead child: expected=%d, got=%d", child, dead);
+	diag("st=%#x", st);
+	skip_start(!ok1(WIFSIGNALED(st)), 2, "didn't exit by signal") {
+		ok(WTERMSIG(st) == 11, "signal was SEGV");
+		ok((WSEGVADDR(st) & ~PAGE_MASK) == ((L4_Word_t)kip & ~PAGE_MASK),
+			"segfault was at correct address");
+	} skip_end;
 }
 END_TEST
 
@@ -738,12 +749,17 @@ START_TEST(deep_fork)
 		fail_if(child < 0);
 		int status = 0, dead = wait(&status);
 		fail_if(dead < 0);
-		ok1(dead == child && status == 0);
+		fail_if(dead != child);
+		if(!ok1(WEXITSTATUS(status) == 0)) {
+			diag("WIFEXITED=%s, WEXITSTATUS=%d",
+				btos(WIFEXITED(status)), WEXITSTATUS(status));
+		}
 	} else {
 		child = fork();
 		if(child != 0) {
 			int status = 0, dead = wait(&status);
-			exit(dead == child && status == exit_magic ? 0 : 1);
+			exit((dead == child && WIFEXITED(status)
+				&& WEXITSTATUS(status) == exit_magic) ? 0 : 1);
 		} else {
 			exit(exit_magic);
 		}
@@ -902,7 +918,8 @@ START_TEST(many_fork_sequence)
 		} else {
 			int st, dead = wait(&st);
 			fail_if(dead != child, "expected dead=%d, got %d", child, dead);
-			fail_if(st != i, "expected st=%d, got %d", i, st);
+			fail_if(!WIFEXITED(st) || WEXITSTATUS(st) != i,
+				"expected st=%d, got %d", i, st);
 		}
 	}
 	ok(true, "didn't die");
@@ -1226,7 +1243,7 @@ START_LOOP_TEST(daemon_allows_exit, iter, 0, 1)
 {
 	const bool daemon_flag = CHECK_FLAG(iter, 1);
 	diag("daemon_flag=%s", btos(daemon_flag));
-	plan_tests(2);
+	plan_tests(3);
 
 	int child = fork();
 	if(child == 0) {
@@ -1239,8 +1256,10 @@ START_LOOP_TEST(daemon_allows_exit, iter, 0, 1)
 	fail_if(pid != child, "pid=%d, errno=%d", pid, errno);
 
 	diag("st=%d", st);
-	imply_ok1(!daemon_flag, st == 2);
-	imply_ok1(daemon_flag, st == 0);
+	skip_start(!ok1(WIFEXITED(st)), 2, "didn't exit normally") {
+		imply_ok1(!daemon_flag, WEXITSTATUS(st) == 2);
+		imply_ok1(daemon_flag, WEXITSTATUS(st) == 0);
+	} skip_end;
 }
 END_TEST
 
@@ -1255,7 +1274,7 @@ START_LOOP_TEST(daemon_set_triggers_exit, iter, 0, 3)
 		plan_skip_all("redundant combination");
 		goto end;
 	}
-	plan_tests(2);
+	plan_tests(3);
 
 	int child = fork();
 	if(child == 0) {
@@ -1279,8 +1298,11 @@ START_LOOP_TEST(daemon_set_triggers_exit, iter, 0, 3)
 	fail_if(pid != child, "pid=%d, st=%d", pid, st);
 
 	diag("st=%d", st);
-	ok(st == 0 || st == 2, "exit status is valid");
-	ok(st == 0, "child didn't exit(3)");
+	skip_start(!ok1(WIFEXITED(st)), 2, "didn't exit normally") {
+		ok(WEXITSTATUS(st) == 0 || WEXITSTATUS(st) == 2,
+			"exit WEXITSTATUS(st)atus is valid");
+		ok(WEXITSTATUS(st) == 0, "child didn't exit(3)");
+	} skip_end;
 
 end:
 	;;
@@ -1369,15 +1391,15 @@ START_LOOP_TEST(uncaught_segv_test, iter, 0, 3)
 		fail_if(dead != child, "wait returned pid=%d, wanted %d",
 			dead, child);
 		diag("st=%#lx", (unsigned long)st);
-		iff_ok1(should_fault, (st & 15) == 7);
+		iff_ok1(should_fault, WIFSIGNALED(st) && WTERMSIG(st) == 11);
 
-		uintptr_t f_addr = st & ~15,
-			trunc_ill = (uintptr_t)ill & ~15;
+		uintptr_t f_addr = WSEGVADDR(st) & ~PAGE_MASK,
+			trunc_ill = (uintptr_t)ill & ~PAGE_MASK;
 		if(!imply_ok1(should_fault, f_addr == trunc_ill)) {
 			diag("f_addr=%#lx, trunc_ill=%#lx", f_addr, trunc_ill);
 		}
 
-		iff_ok1(!should_fault, st == 666);
+		iff_ok1(!should_fault, WIFEXITED(st) && WEXITSTATUS(st) == 666);
 	}
 }
 END_TEST

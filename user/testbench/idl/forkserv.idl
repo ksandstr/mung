@@ -69,6 +69,12 @@ interface ForkServ: L4X2::FaultHandler, L4X2::X86IOFaultHandler
 	void exit(in long status)
 		raises(muidl::NoReply);
 
+	/* @status is defined thus:
+	 *   bit 0 indicates exit/signal status. 0 for exit, 1 for signal.
+	 *   for exit, bits 31:1 represent a signed 31-bit exit status.
+	 *   for signal, bits 5:1 give the signal number, which is always 11,
+	 *     and bits 31:6 give the high bits of the segfaulting address.
+	 */
 	[Label(0x7741)]		/* "wA" */
 	long wait([MR(2)] out long status)
 		raises(muidl::NoReply);

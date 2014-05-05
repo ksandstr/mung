@@ -10,9 +10,14 @@ extern pid_t wait(int *status);
 /* TODO: add waitpid(), perhaps waitid() also */
 
 
-/* TODO: add WIFEXITED(), WEXITSTATUS(), WIFSIGNALED(), WTERMSIG(). the others
- * aren't supported by forkserv.
- */
+#define WIFEXITED(st) (((st) & 1) == 0)
+#define WEXITSTATUS(st) ((int)(st) >> 1)
+#define WIFSIGNALED(st) (((st) & 1) == 1)
+#define WTERMSIG(st) (((st) >> 1) & 0x1f)
+
+/* non-portable: segv address w/o low 6 bits */
+#define WSEGVADDR(st) ((st) & ~0x3ful)
+
 #endif
 
 #endif
