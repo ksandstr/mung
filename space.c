@@ -305,7 +305,7 @@ struct space *space_new(void)
 
 	struct space *sp = kmem_cache_alloc(space_slab);
 	space_init(sp, NULL);
-	mapdb_init(&sp->mapdb, sp);
+	mapdb_init(&sp->mapdb);
 	sp->tss = NULL;
 	sp->tss_len = 0;
 	sp->tss_seg = 0;

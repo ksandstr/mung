@@ -105,15 +105,13 @@ struct map_db
 	 * TODO: change to a word_hash() function.
 	 */
 	struct htable groups;
-
-	struct space *space;
 };
 
 
 extern void init_mapdb(void);
 
 /* returns 0 on success, or -ENOMEM */
-extern int mapdb_init(struct map_db *ptr, struct space *space);
+extern int mapdb_init(struct map_db *ptr);
 extern void mapdb_destroy(struct map_db *ptr);
 
 /* on success, returns OR mask of rights that would've been granted by this

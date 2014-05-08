@@ -464,7 +464,7 @@ void kmain(void *bigp, unsigned int magic)
 	setup_paging(resv_start, resv_end);
 
 	/* (see comment for init_spaces().) */
-	int n = mapdb_init(&kernel_space->mapdb, kernel_space);
+	int n = mapdb_init(&kernel_space->mapdb);
 	if(n < 0) panic("mapdb_init() for the kernel space failed");
 
 	space_finalize_kernel(kernel_space, &ksp_resv);

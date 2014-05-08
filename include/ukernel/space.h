@@ -6,6 +6,7 @@
 #include <ccan/list/list.h>
 #include <ccan/htable/htable.h>
 #include <ccan/likely/likely.h>
+#include <ccan/container_of/container_of.h>
 #include <l4/types.h>
 
 #include <ukernel/thread.h>
@@ -21,6 +22,8 @@
 #define UTCB_SIZE 512
 #define UTCB_PER_PAGE (PAGE_SIZE / UTCB_SIZE)
 #define NUM_UTCB_PAGES(area) (L4_Size((area)) / UTCB_SIZE / UTCB_PER_PAGE)
+
+#define SPACE_OF_MAPDB(mdb) (container_of((mdb), struct space, mapdb))
 
 
 struct thread;

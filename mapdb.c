@@ -378,7 +378,7 @@ static size_t rehash_ref_hash(const void *elem, void *priv) {
 }
 
 
-int mapdb_init(struct map_db *ptr, struct space *space)
+int mapdb_init(struct map_db *ptr)
 {
 	/* FIXME: add a proper interface for enabling/disabling trace IDs.
 	 * kernel commandline perhaps?
@@ -388,8 +388,8 @@ int mapdb_init(struct map_db *ptr, struct space *space)
 	// trace_enable(TRID_IPC);
 	// trace_enable(TRID_SCHED);
 #endif
+
 	htable_init(&ptr->groups, &rehash_map_group, NULL);
-	ptr->space = space;
 	ptr->ref_id = next_ref_id++;
 	bool ok = htable_add(&ref_hash, int_hash(ptr->ref_id), ptr);
 	return ok ? 0 : -ENOMEM;
@@ -411,7 +411,6 @@ void mapdb_destroy(struct map_db *db)
 	}
 
 	htable_clear(&db->groups);
-	db->space = NULL;
 
 	assert(check_mapdb_module(0));
 }
@@ -785,7 +784,7 @@ static bool add_map_postcond(
 	 * either blanks or hits along the run from @first_page_id .
 	 */
 	struct pt_iter it;
-	pt_iter_init(&it, db->space);
+	pt_iter_init(&it, SPACE_OF_MAPDB(db));
 	for(L4_Word_t addr = FPAGE_LOW(map_area), exp_pgid = first_page_id;
 		addr < FPAGE_HIGH(map_area);
 		addr += PAGE_SIZE, exp_pgid++)
@@ -822,7 +821,7 @@ int mapdb_add_map(
 	 * sigma0_space, or while sigma0_space isn't defined. other causes of such
 	 * entries are nonrecursive flushes: grants and mappings on top of.
 	 */
-	assert(REF_DEFINED(parent) || db->space == sigma0_space
+	assert(REF_DEFINED(parent) || SPACE_OF_MAPDB(db) == sigma0_space
 		|| sigma0_space == NULL);
 	/* TODO: assert that when @parent is defined and not special, then
 	 * @parent's parent isn't a special range
@@ -889,7 +888,7 @@ int mapdb_add_map(
 			panic("shrimp case not implemented");
 		}
 	}
-	space_set_range(db->space, fpage, first_page_id);
+	space_set_range(SPACE_OF_MAPDB(db), fpage, first_page_id);
 
 	assert(add_map_postcond(db, parent, fpage, first_page_id));
 	assert(check_mapdb_module(MOD_NO_CHILD_REFS));
@@ -1567,7 +1566,7 @@ int mapdb_unmap_fpage(
 				do {
 					L4_Word_t next = 0;
 					int pmask = space_probe_pt_access(&next,
-						db->space, r_pos);
+						SPACE_OF_MAPDB(db), r_pos);
 					r_pos += PAGE_SIZE;
 					if(pmask >= 0) {
 						e_mask |= pmask;
@@ -1641,7 +1640,7 @@ int mapdb_unmap_fpage(
 				L4_Set_Rights(&e->range, new_access);
 				if(new_access == 0) drop = true;
 				else if(new_access < old_access) {
-					space_set_range_access(db->space, e->range);
+					space_set_range_access(SPACE_OF_MAPDB(db), e->range);
 					db_changed = true;
 				}
 			}
@@ -1664,7 +1663,7 @@ int mapdb_unmap_fpage(
 					return -ENOMEM;
 				}
 
-				space_clear_range(db->space, e->range);
+				space_clear_range(SPACE_OF_MAPDB(db), e->range);
 				db_changed = true;
 
 				int pos = e - g->entries;
@@ -1703,7 +1702,7 @@ int mapdb_unmap_fpage(
 	}
 
 	assert(unmap_rights == 0 || check_mapdb_module(0));
-	if(db_changed) space_commit(db->space);
+	if(db_changed) space_commit(SPACE_OF_MAPDB(db));
 
 	/* TODO: move postconditions into another function */
 #ifndef NDEBUG
@@ -1752,7 +1751,7 @@ int mapdb_fill_page_table(struct map_db *db, uintptr_t addr)
 
 	int n_set = 0;
 	struct pt_iter it;
-	pt_iter_init(&it, db->space);
+	pt_iter_init(&it, SPACE_OF_MAPDB(db));
 	for(int i=0; i < g->num_entries; i++) {
 		struct map_entry *e = &g->entries[i];
 		int n_pages = L4_Size(e->range) / PAGE_SIZE;
