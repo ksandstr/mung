@@ -443,7 +443,9 @@ struct utcb_page *space_get_utcb_page(struct space *sp, uint16_t page_pos)
 #ifndef NDEBUG
 			struct pt_iter it;
 			pt_iter_init(&it, sp);
-			assert(pt_get_pgid(&it, NULL, L4_Address(u_page)) == up->pg->id);
+			bool upper = false;
+			assert(pt_get_pgid(&it, &upper, L4_Address(u_page)) == up->pg->id
+				|| !upper);
 			pt_iter_destroy(&it);
 #endif
 		}
@@ -519,10 +521,18 @@ int space_set_kip_area(struct space *sp, L4_Fpage_t area)
 
 	if(!L4_IsNilFpage(sp->kip_area)) {
 		mapdb_erase_special(&sp->mapdb, sp->kip_area);
-		/* TODO: replace this with asserts */
+
+	/* NOTE: this may be redundant with mapdb_erase_special()'s
+	 * postconditions.
+	 */
+#ifndef NDEBUG
+		struct pt_iter it;
+		pt_iter_init(&it, sp);
 		for(L4_Word_t pos = 0; pos < L4_Size(sp->kip_area); pos += PAGE_SIZE) {
-			space_put_page(sp, L4_Address(sp->kip_area) + pos, 0, 0);
+			assert(!pt_page_present(&it, L4_Address(sp->kip_area) + pos));
 		}
+		pt_iter_destroy(&it);
+#endif
 	}
 
 	sp->kip_area = area;
@@ -530,11 +540,18 @@ int space_set_kip_area(struct space *sp, L4_Fpage_t area)
 		MIN(int, L4_SizeLog2(area), PAGE_BITS));
 	L4_Set_Rights(&k_page, L4_Readable);
 	/* FIXME: catch error result from mapdb_add_map() */
-	mapdb_add_map(&sp->mapdb, REF_SPECIAL(0), k_page,
-		(L4_Word_t)kip_mem >> PAGE_BITS);
-	/* TODO: replace this with an assert */
-	space_put_page(sp, L4_Address(k_page),
-		(L4_Word_t)kip_mem >> PAGE_BITS, L4_Readable);
+	uint32_t kip_pgid = (L4_Word_t)kip_mem >> PAGE_BITS;
+	mapdb_add_map(&sp->mapdb, REF_SPECIAL(0), k_page, kip_pgid);
+
+	/* NOTE: this may be redundant with mapdb_add_map()'s postconditions. */
+#ifndef NDEBUG
+	struct pt_iter it;
+	pt_iter_init(&it, sp);
+	bool upper = false;
+	assert(pt_get_pgid(&it, &upper, L4_Address(k_page)) == kip_pgid
+		|| !upper);
+	pt_iter_destroy(&it);
+#endif
 
 	return 0;
 }
@@ -570,51 +587,6 @@ struct thread *space_find_local_thread(
 static struct page *get_ptab_page(struct space *sp, uint32_t pt_id) {
 	return htable_get(&sp->ptab_pages, int_hash(pt_id),
 		&cmp_page_id_to_key, &pt_id);
-}
-
-
-void space_put_page(
-	struct space *sp,
-	uintptr_t addr,
-	uint32_t page_id,
-	int access)
-{
-	assert(check_space(NO_PTAB_TO_MAPDB, sp));
-	assert(addr < KERNEL_SEG_START);
-	assert(page_id == 0 || access != 0);
-
-	int dir_ix = addr >> 22, ptab_ix = (addr >> 12) & 0x3ff;
-	assert(sp->pdirs->vm_addr != NULL);
-	uint32_t *pdir_mem = sp->pdirs->vm_addr;
-	struct page *ptab_page;
-	if(unlikely(!CHECK_FLAG(pdir_mem[dir_ix], PDIR_PRESENT))) {
-		if(page_id == 0) goto end;
-
-		ptab_page = get_kern_page(0);
-		/* TODO: prefill it? */
-		memset(ptab_page->vm_addr, 0, PAGE_SIZE);
-		pdir_mem[dir_ix] = ptab_page->id << 12 | PDIR_PRESENT | PDIR_USER
-			| PDIR_RW;
-		/* FIXME: catch ENOMEM! */
-		htable_add(&sp->ptab_pages, int_hash(ptab_page->id), ptab_page);
-	} else {
-		ptab_page = get_ptab_page(sp, pdir_mem[dir_ix] >> 12);
-		assert(ptab_page != NULL);
-	}
-	assert(ptab_page->vm_addr != NULL);
-
-	uint32_t *ptab_mem = ptab_page->vm_addr;
-	if(page_id == 0 || !CHECK_FLAG(access, L4_Readable)) {
-		ptab_mem[ptab_ix] = 0;
-	} else {
-		assert(CHECK_FLAG(access, L4_Readable));
-		ptab_mem[ptab_ix] = page_id << 12 | PT_PRESENT | PT_USER
-			| (CHECK_FLAG(access, L4_Writable) ? PT_RW : 0);
-	}
-
-end:
-	if(current_space == sp) x86_invalidate_page(addr);
-	assert(check_space(NO_PTAB_TO_MAPDB, sp));
 }
 
 

@@ -106,13 +106,6 @@ extern void space_remove_thread(struct space *sp, struct thread *t);
  */
 extern struct utcb_page *space_get_utcb_page(struct space *sp, uint16_t ppos);
 
-/* use 0 for @page_id to erase a page. */
-extern void space_put_page(
-	struct space *sp,
-	uintptr_t addr,
-	uint32_t page_id,
-	int access);
-
 /* removes page table entries within @fp. ignores L4_Rights(@fp). */
 extern void space_clear_range(struct space *sp, L4_Fpage_t fp);
 
