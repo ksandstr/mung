@@ -437,7 +437,7 @@ struct utcb_page *space_get_utcb_page(struct space *sp, uint16_t page_pos)
 			L4_Fpage_t u_page = L4_FpageLog2(L4_Address(sp->utcb_area)
 				+ page_pos * PAGE_SIZE, PAGE_BITS);
 			L4_Set_Rights(&u_page, L4_Readable | L4_Writable);
-			/* FIXME: catch error result from mapdb_add_map() */
+			/* TODO: pass error result from mapdb_add_map() */
 			mapdb_add_map(&sp->mapdb, REF_SPECIAL(0), u_page, up->pg->id);
 
 #ifndef NDEBUG
@@ -539,7 +539,7 @@ int space_set_kip_area(struct space *sp, L4_Fpage_t area)
 	L4_Fpage_t k_page = L4_FpageLog2(L4_Address(area),
 		MIN(int, L4_SizeLog2(area), PAGE_BITS));
 	L4_Set_Rights(&k_page, L4_Readable);
-	/* FIXME: catch error result from mapdb_add_map() */
+	/* TODO: pass error result from mapdb_add_map() */
 	uint32_t kip_pgid = (L4_Word_t)kip_mem >> PAGE_BITS;
 	mapdb_add_map(&sp->mapdb, REF_SPECIAL(0), k_page, kip_pgid);
 
@@ -983,9 +983,13 @@ SYSCALL void sys_unmap(L4_Word_t control, void *utcb)
 }
 
 
-/* FIXME: this isn't at all robust against things like space_set_kip_area()'s
- * failure result. an attempt should be made to restore the previous values as
- * appropriate.
+/* TODO: this isn't at all robust against things like space_set_kip_area()'s
+ * failure result, compounded by that function in itself leaving the space's
+ * mapping database without any kip_area at all.
+ *
+ * these should be handled with an in-kernel OOM mechanism once the kernel
+ * heap can grow to 256M, and once a sigma1 is specified that can return
+ * userspace memory to the kernel.
  */
 SYSCALL L4_Word_t sys_spacecontrol(
 	L4_ThreadId_t spacespec,
@@ -1164,5 +1168,5 @@ COLD void space_finalize_kernel(
 	for(int i=0; i < NUM_KERN_UTCB_PAGES; i++) {
 		htable_add(&sp->utcb_pages, int_hash(ups[i].pos), &ups[i]);
 	}
-	/* FIXME: set kernel threads' UTCB page pointers, too? */
+	/* TODO: set kernel threads' UTCB page pointers, too? */
 }
