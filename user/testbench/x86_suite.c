@@ -665,6 +665,56 @@ START_TEST(invalid_kdb_exn)
 END_TEST
 
 
+#ifdef __SSE__
+static void pop_sse_exn(void *param)
+{
+	L4_Set_ExceptionHandler(x86_exh_tid);
+
+	diag("clearing exception mask bits in MXCSR");
+	unsigned int csr = _mm_getcsr();
+	csr &= ~_MM_MASK_MASK;		/* aaaaaaaaaaaaa! */
+	_mm_setcsr(csr);
+
+	diag("popping SSE exception");
+	/* a bog-standard division by zero. */
+	*(__m128 *)param = _mm_div_ps(_mm_set1_ps(1.0f), _mm_setzero_ps());
+	diag("returned from SSE exception");
+
+	/* FIXME: consider removing this? (see above, the paperbag comment.) */
+	L4_Sleep(L4_Never);
+}
+#endif
+
+
+/* provoke a SSE math exception. */
+START_TEST(sse_math_exn)
+{
+#ifndef __SSE__
+	plan_skip_all("no SSE support at compile-time");
+#else
+	plan_tests(3);
+
+	struct exn_dets d;
+	const int32_t first_ct = get_exn_dets(&d);
+
+	__m128 *output = malloc(sizeof(*output));
+	*output = _mm_setzero_ps();
+	L4_ThreadId_t child = child_exn_test(&pop_sse_exn, output);
+	free(output);
+	int32_t after_ct = get_exn_dets(&d);
+	ok(L4_Version(child) == L4_Version(d.tid),
+		"exception occurred in child");
+	if(!ok(after_ct == first_ct + 1, "one exception occurred")) {
+		diag("first_ct=%d, after_ct=%d", (int)first_ct, (int)after_ct);
+	}
+	if(!ok(d.ec == 8 * 19 + 2, "errorcod was for SSE exception")) {
+		diag("d.ec=%#lx", d.ec);
+	}
+#endif
+}
+END_TEST
+
+
 struct Suite *x86_suite(void)
 {
 	Suite *s = suite_create("x86");
@@ -696,6 +746,7 @@ struct Suite *x86_suite(void)
 		tcase_add_test(tc, illegal_insn_exn);
 		tcase_add_test(tc, valid_kdb_exn);
 		tcase_add_test(tc, invalid_kdb_exn);
+		tcase_add_test(tc, sse_math_exn);
 		suite_add_tcase(s, tc);
 	}
 
