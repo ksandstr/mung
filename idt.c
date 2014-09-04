@@ -66,7 +66,7 @@ void setup_idt(int code_seg, int max_irq)
 	EXN_GATE(ints, code_sel, 13, gp);	/* general protection */
 	EXN_GATE(ints, code_sel, 14, pf);	/* pagefault */
 	EXN_GATE(ints, code_sel, 16, mf);	/* x87 floating-point exception */
-	/* FIXME: SSE math fault is missing! */
+	EXN_GATE(ints, code_sel, 19, xm);	/* SIMD floating-point exception */
 
 	IRQ_GATE(ints, code_sel, 0);	/* IRQ0 (timer) */
 

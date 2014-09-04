@@ -46,6 +46,29 @@ void isr_exn_de_bottom(struct x86_exregs *regs)
 }
 
 
+static NORETURN void return_from_gp(struct thread *current, struct x86_exregs *regs)
+{
+#if 0
+	printf("#GP(%#lx) at eip %#lx, esp %#lx in %lu:%lu\n", regs->error,
+		regs->eip, regs->esp, TID_THREADNUM(current->id),
+		TID_VERSION(current->id));
+#endif
+
+	void *utcb = thread_get_utcb(current);
+	struct thread *exh = thread_get_exnh(current, utcb);
+	if(exh != NULL) {
+		build_exn_ipc(current, utcb, -5, regs);
+		return_to_ipc(exh);
+	} else {
+		thread_halt(current);
+		assert(current->status == TS_STOPPED);
+		return_to_scheduler();
+	}
+
+	assert(false);
+}
+
+
 /* TODO: could this be merged with return_from_gp()? */
 static NORETURN void return_from_ud(struct thread *current, struct x86_exregs *regs)
 {
@@ -205,9 +228,13 @@ void isr_exn_mf_bottom(struct x86_exregs *regs)
 /* SSE fpu exceptions */
 void isr_exn_xm_bottom(struct x86_exregs *regs)
 {
+	assert(x86_irq_is_enabled());
+
 	printf("#XM\n");
-	thread_halt(get_current_thread());
-	return_to_scheduler();
+
+	/* indicate SIMD exception like an INT# GP on line 19 (#XM). */
+	regs->error = (19 << 3) + 2;
+	return_from_gp(get_current_thread(), regs);
 }
 
 
@@ -468,29 +495,6 @@ void sysenter_bottom(struct x86_exregs *regs)
 	}
 }
 #endif
-
-
-static NORETURN void return_from_gp(struct thread *current, struct x86_exregs *regs)
-{
-#if 0
-	printf("#GP(%#lx) at eip %#lx, esp %#lx in %lu:%lu\n", regs->error,
-		regs->eip, regs->esp, TID_THREADNUM(current->id),
-		TID_VERSION(current->id));
-#endif
-
-	void *utcb = thread_get_utcb(current);
-	struct thread *exh = thread_get_exnh(current, utcb);
-	if(exh != NULL) {
-		build_exn_ipc(current, utcb, -5, regs);
-		return_to_ipc(exh);
-	} else {
-		thread_halt(current);
-		assert(current->status == TS_STOPPED);
-		return_to_scheduler();
-	}
-
-	assert(false);
-}
 
 
 static void handle_kdb_enter(struct thread *current, struct x86_exregs *regs)
