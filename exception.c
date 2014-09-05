@@ -172,7 +172,7 @@ void isr_exn_nm_bottom(struct x86_exregs *regs)
 		if(CPU_HAS_FXSR()) {
 			x86_fxsave(prev->fpu_context);
 		} else {
-			x86_fsave(prev->fpu_context);
+			x86_fnsave(prev->fpu_context);
 		}
 	}
 

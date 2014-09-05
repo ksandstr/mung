@@ -276,8 +276,8 @@ static inline void x86_init_fpu(void) {
 }
 
 
-static inline void x86_fsave(void *ptr) {
-	asm volatile ("fwait; fsave (%0)" :: "r" (ptr));
+static inline void x86_fnsave(void *ptr) {
+	asm volatile ("fnsave (%0)" :: "r" (ptr));
 }
 
 
@@ -287,7 +287,8 @@ static inline void x86_frstor(void *ptr) {
 
 
 static inline void x86_fxsave(void *ptr) {
-	asm volatile ("fwait; fxsave (%0)" :: "r" (ptr));
+	/* NOTE: fxsave, like fnsave, ignores pending exceptions. */
+	asm volatile ("fxsave (%0)" :: "r" (ptr));
 }
 
 
