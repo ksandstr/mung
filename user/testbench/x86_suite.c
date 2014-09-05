@@ -37,6 +37,7 @@
 #define INT3_EAX_FILLER 0xf00dcafe
 
 
+/* FIXME: replace these with inclusion of <ukernel/x86.h> */
 static inline uint16_t x86_fpu_getcw(void) {
 	uint16_t ax;
 	asm volatile ("fnstcw %0" : "=m" (ax));
@@ -46,6 +47,7 @@ static inline uint16_t x86_fpu_getcw(void) {
 
 static inline void x86_fpu_setcw(uint16_t new_cw) {
 	asm volatile ("fldcw %0" :: "m" (new_cw));
+	assert(x86_fpu_getcw() == new_cw);
 }
 
 
@@ -76,12 +78,59 @@ START_LOOP_TEST(fpu_cw_restore, iter, 0, 3)
 	cw &= ~0x0c00;
 	cw |= iter << 9;
 	x86_fpu_setcw(cw);
-	fail_unless(x86_fpu_getcw() == cw);
 
 	join_thread(helper_tid);
 	uint16_t post_cw = x86_fpu_getcw();
 	if(!ok1(cw == post_cw)) {
 		diag("pre_cw=%#04x post_cw=%#04x", cw, post_cw);
+	}
+}
+END_TEST
+
+
+/* confirm that the FPU control word is independent in different threads.
+ * we'll test this by twiddling the exception mask in the FPU control word.
+ *
+ * TODO: later, this test should test that the exception mask is being
+ * retained by causing (or not) an exception per the exception mask, the
+ * boolean being different across sides.
+ */
+START_TEST(fpu_ctx_unique)
+{
+	plan_tests(3);
+
+	L4_ThreadId_t child_tid, parent_tid = L4_Myself();
+	int child = fork_tid(&child_tid);
+	if(child == 0) {
+		/* the child sleeps _before_ setting the CW. */
+		L4_Sleep(A_SHORT_NAP);
+		uint16_t cw = x86_fpu_getcw();
+		cw = ((cw & ~0x3f) | 0x15);		/* mask = 0b010101 */
+		x86_fpu_setcw(cw);
+		/* sync with parent. */
+		L4_MsgTag_t tag = L4_Call_Timeouts(parent_tid,
+			TEST_IPC_DELAY, TEST_IPC_DELAY);
+		fail_if(L4_IpcFailed(tag), "[child] ec=%#lx", L4_ErrorCode());
+		exit(cw == x86_fpu_getcw() ? 0 : 1);
+	} else {
+		/* the parent sleeps _after_ setting the CW (by receiving from the
+		 * child TID).
+		 */
+		uint16_t cw = x86_fpu_getcw();
+		cw = ((cw & ~0x3f) | 0x2a);		/* mask = 0b101010 */
+		x86_fpu_setcw(cw);
+		/* receive from child. */
+		L4_MsgTag_t tag = L4_Receive_Timeout(child_tid, TEST_IPC_DELAY);
+		fail_if(L4_IpcFailed(tag), "[parent] ec=%#lx", L4_ErrorCode());
+		ok(cw == x86_fpu_getcw(), "cw consistent in parent, pre-wait");
+		L4_LoadMR(0, 0);
+		L4_Reply(child_tid);
+
+		int st, dead = wait(&st);
+		fail_if(dead != child);
+		/* verify cw after join. */
+		ok(cw == x86_fpu_getcw(), "cw consistent in parent, post-wait");
+		ok(st == 0, "cw consistent in child");
 	}
 }
 END_TEST
@@ -634,6 +683,7 @@ struct Suite *x86_suite(void)
 		TCase *tc = tcase_create("hwctx");
 		tcase_add_test(tc, fpu_cw_restore);
 		tcase_add_test(tc, sse_cw_restore);
+		tcase_add_test(tc, fpu_ctx_unique);
 		suite_add_tcase(s, tc);
 	}
 
