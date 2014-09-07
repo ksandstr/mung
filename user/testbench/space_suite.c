@@ -414,7 +414,10 @@ START_TEST(spacectl_iface)
 
 	/* TODO: test UTCB/KIP area change while thread is activated. */
 
-	/* TODO: destroy thread, space */
+	/* destroy thread, and with it the address space too */
+	res = L4_ThreadControl(tid, L4_nilthread, L4_nilthread,
+		L4_nilthread, (void *)-1);
+	fail_if(res != 1, "cleanup threadctl failed, ec=%#lx", L4_ErrorCode());
 }
 END_TEST
 
