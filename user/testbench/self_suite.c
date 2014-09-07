@@ -410,6 +410,27 @@ START_TEST(multi_fork_tid)
 END_TEST
 
 
+START_TEST(many_fork_sequence)
+{
+	const size_t n_forks = 1024;
+
+	plan_tests(1);
+
+	for(int i=0; i < n_forks; i++) {
+		int child = fork();
+		if(child == 0) {
+			exit(i);
+		} else {
+			int st, dead = wait(&st);
+			fail_if(dead != child, "expected dead=%d, got %d", child, dead);
+			fail_if(st != i, "expected st=%d, got %d", i, st);
+		}
+	}
+	ok(true, "didn't die");
+}
+END_TEST
+
+
 L4_Word_t __attribute__((noinline)) get_utcb_noinline(void) {
 	return (L4_Word_t)__L4_Get_UtcbAddress();
 }
@@ -893,6 +914,7 @@ Suite *self_suite(void)
 		tcase_add_test(tc, multi_fork_and_wait);
 		tcase_add_test(tc, deeper_fork);
 		tcase_add_test(tc, multi_fork_tid);
+		tcase_add_test(tc, many_fork_sequence);
 		suite_add_tcase(s, tc);
 	}
 
