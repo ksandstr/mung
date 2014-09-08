@@ -665,6 +665,49 @@ START_TEST(invalid_kdb_exn)
 END_TEST
 
 
+static void pop_x87_exn(void *param)
+{
+	L4_Set_ExceptionHandler(x86_exh_tid);
+
+	diag("clearing exception mask bits in FPCSR");
+	uint16_t cw = x86_fpu_getcw();
+	cw &= ~0x3f;		/* unmask everything! */
+	x86_fpu_setcw(cw);
+
+	diag("popping x86 divide-by-zero");
+	*(float *)param = *(float *)param / 0.0f;
+	diag("returned");
+
+	/* FIXME: consider removing this? (see above, the paperbag comment.) */
+	L4_Sleep(L4_Never);
+}
+
+
+/* provoke a x87 math exception. */
+START_TEST(x87_math_exn)
+{
+	plan_tests(3);
+
+	struct exn_dets d;
+	const int32_t first_ct = get_exn_dets(&d);
+
+	float *output = malloc(sizeof(*output));
+	*output = 1.0f;
+	L4_ThreadId_t child = child_exn_test(&pop_x87_exn, output);
+	free(output);
+	int32_t after_ct = get_exn_dets(&d);
+	ok(L4_Version(child) == L4_Version(d.tid),
+		"exception reported in child");
+	if(!ok(after_ct == first_ct + 1, "one exception occurred")) {
+		diag("first_ct=%d, after_ct=%d", (int)first_ct, (int)after_ct);
+	}
+	if(!ok(d.ec == 8 * 16 + 2, "EC was for x87 exception")) {
+		diag("d.ec=%#lx", d.ec);
+	}
+}
+END_TEST
+
+
 #ifdef __SSE__
 static void pop_sse_exn(void *param)
 {
@@ -703,11 +746,11 @@ START_TEST(sse_math_exn)
 	free(output);
 	int32_t after_ct = get_exn_dets(&d);
 	ok(L4_Version(child) == L4_Version(d.tid),
-		"exception occurred in child");
+		"exception reported in child");
 	if(!ok(after_ct == first_ct + 1, "one exception occurred")) {
 		diag("first_ct=%d, after_ct=%d", (int)first_ct, (int)after_ct);
 	}
-	if(!ok(d.ec == 8 * 19 + 2, "errorcod was for SSE exception")) {
+	if(!ok(d.ec == 8 * 19 + 2, "EC was for SSE exception")) {
 		diag("d.ec=%#lx", d.ec);
 	}
 #endif
@@ -747,6 +790,7 @@ struct Suite *x86_suite(void)
 		tcase_add_test(tc, valid_kdb_exn);
 		tcase_add_test(tc, invalid_kdb_exn);
 		tcase_add_test(tc, sse_math_exn);
+		tcase_add_test(tc, x87_math_exn);
 		suite_add_tcase(s, tc);
 	}
 
