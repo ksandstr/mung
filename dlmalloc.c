@@ -534,6 +534,7 @@ MAX_RELEASE_CHECK_RATE   default: 4095 unless not HAVE_MMAP
 #define MORECORE_CANNOT_TRIM 1
 #define NO_MALLOC_STATS 1
 #define DEFAULT_GRANULARITY (128 * 1024)
+#define MALLOC_ALIGNMENT 16		/* for SSE */
 
 extern void malloc_panic(void);
 #define ABORT malloc_panic()

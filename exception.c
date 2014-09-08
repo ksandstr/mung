@@ -602,6 +602,7 @@ static void handle_io_fault(struct thread *current, struct x86_exregs *regs)
 		/* TODO: string variants */
 
 		default:
+			/* FIXME: see callsite in isr_exn_gp_bottom() */
 			printf("unknown instruction %#02x in I/O fault at %#lx\n",
 				insn[0], regs->eip);
 			return_from_ud(current, regs);
@@ -769,6 +770,15 @@ void isr_exn_gp_bottom(struct x86_exregs *regs)
 	}
 
 	if(regs->error == 0) {
+		/* FIXME: things like unaligned MOVAPS instructions pop #GP(0). these
+		 * should be recognized by instruction prefix 0x0f, or VEX.128/256 on
+		 * AVX targets.
+		 *
+		 * correcting the problem above requires modification of
+		 * handle_io_fault() so that it'll return with an indicator when it
+		 * doesn't recognize an I/O fault, rather than being the noreturn
+		 * bog-void it currently is.
+		 */
 		handle_io_fault(current, regs);
 	} else if(regs->error == 3 * 8 + 2) {
 		/* INT3 via #GP */
