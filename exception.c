@@ -219,9 +219,11 @@ void isr_exn_nm_bottom(struct x86_exregs *regs)
 /* x87 fpu exceptions */
 void isr_exn_mf_bottom(struct x86_exregs *regs)
 {
-	printf("#MF\n");
-	thread_halt(get_current_thread());
-	return_to_scheduler();
+	assert(x86_irq_is_enabled());
+
+	/* indicate as INT# GP on line 16 (#MF). */
+	regs->error = (16 << 3) + 2;
+	return_from_gp(get_current_thread(), regs);
 }
 
 
