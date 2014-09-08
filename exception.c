@@ -48,18 +48,16 @@ void isr_exn_de_bottom(struct x86_exregs *regs)
 
 static NORETURN void return_from_gp(struct thread *current, struct x86_exregs *regs)
 {
-#if 0
-	printf("#GP(%#lx) at eip %#lx, esp %#lx in %lu:%lu\n", regs->error,
-		regs->eip, regs->esp, TID_THREADNUM(current->id),
-		TID_VERSION(current->id));
-#endif
-
 	void *utcb = thread_get_utcb(current);
 	struct thread *exh = thread_get_exnh(current, utcb);
 	if(exh != NULL) {
 		build_exn_ipc(current, utcb, -5, regs);
 		return_to_ipc(exh);
 	} else {
+		printf("#GP(%#lx) unhandled at eip=%#lx, esp=%#lx, tid=%lu:%lu\n",
+			regs->error, regs->eip, regs->esp,
+			TID_THREADNUM(current->id), TID_VERSION(current->id));
+
 		thread_halt(current);
 		assert(current->status == TS_STOPPED);
 		return_to_scheduler();
@@ -231,8 +229,6 @@ void isr_exn_mf_bottom(struct x86_exregs *regs)
 void isr_exn_xm_bottom(struct x86_exregs *regs)
 {
 	assert(x86_irq_is_enabled());
-
-	printf("#XM\n");
 
 	/* indicate SIMD exception like an INT# GP on line 19 (#XM). */
 	regs->error = (19 << 3) + 2;
@@ -785,6 +781,12 @@ void isr_exn_gp_bottom(struct x86_exregs *regs)
 		 * doesn't recognize an I/O fault, rather than being the noreturn
 		 * bog-void it currently is.
 		 */
+#if 0
+		printf("#GP(%#lx) eip=%#lx, esp=%#lx, current=%lu:%lu\n",
+			regs->error, regs->eip, regs->esp,
+			TID_THREADNUM(current->id), TID_VERSION(current->id));
+		printf("  eax=%#lx\n", regs->eax);
+#endif
 		handle_io_fault(current, regs);
 	} else if(regs->error == 3 * 8 + 2) {
 		/* INT3 via #GP */
