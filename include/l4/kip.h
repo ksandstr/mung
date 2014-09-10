@@ -209,12 +209,15 @@ static inline L4_Word_t L4_BootInfo(void *kip_ptr)
 }
 
 
-static inline L4_MemoryDesc_t *L4_MemoryDesc(void *kip, L4_Word_t num)
+static inline L4_MemoryDesc_t *L4_MemoryDesc(void *kip_ptr, L4_Word_t num)
 {
-	/* FIXME: use a KIP struct */
-	L4_Word_t meminfo = *(L4_Word_t *)(kip + 0x54);
-	if(num >= (meminfo & 0xffff)) return NULL;
-	else return (L4_MemoryDesc_t *)(kip + (meminfo >> 16)) + num;
+	const L4_KernelInterfacePage_t *kip = kip_ptr;
+	if(num < kip->MemoryInfo.n) {
+		return (L4_MemoryDesc_t *)(kip_ptr + kip->MemoryInfo.MemDescPtr) + num;
+	} else {
+		/* past the last one. */
+		return NULL;
+	}
 }
 
 static inline int L4_IsMemoryDescVirtual(const L4_MemoryDesc_t *m) {
