@@ -33,6 +33,9 @@
 	+ PAGE_SIZE - 1) / PAGE_SIZE)
 
 
+/* allocated statically for bootstrapping */
+static struct utcb_page kernel_utcb_pages[NUM_KERN_UTCB_PAGES];
+
 struct space *kernel_space = NULL;
 static struct space kernel_space_mem;
 
@@ -391,7 +394,7 @@ void space_remove_thread(struct space *sp, struct thread *t)
 	up->slots[slot] = NULL;
 	up->occmap &= ~(1 << slot);
 
-	if(up->occmap == 0) {
+	if(up->occmap == 0 && likely(!IS_KERNEL_THREAD(t))) {
 		/* toss the UTCB page. */
 		L4_Fpage_t fp = L4_FpageLog2(
 			L4_Address(sp->utcb_area) + up->pos * PAGE_SIZE,
@@ -405,6 +408,9 @@ void space_remove_thread(struct space *sp, struct thread *t)
 		pt_iter_destroy(&it);
 #endif
 
+		/* can't toss statically allocated UTCB pages, though. */
+		assert(up < &kernel_utcb_pages[0]
+			|| up >= &kernel_utcb_pages[NUM_KERN_UTCB_PAGES]);
 		free_kern_page(up->pg);
 		htable_del(&sp->utcb_pages, int_hash(up->pos), up);
 		kmem_cache_free(utcb_page_slab, up);
@@ -1125,7 +1131,6 @@ COLD void init_spaces(struct list_head *resv_list)
 	if(ua_shift < PAGE_BITS) ua_shift = PAGE_BITS;
 	kernel_space->utcb_area = L4_FpageLog2(
 		ALIGN_TO_SHIFT(KERNEL_HEAP_TOP, ua_shift), ua_shift);
-	static struct utcb_page kernel_utcb_pages[NUM_KERN_UTCB_PAGES];
 	const int n_ups = NUM_KERN_UTCB_PAGES;
 	/* keep pointer for finalize */
 	kernel_space->utcb_pages.priv = kernel_utcb_pages;
