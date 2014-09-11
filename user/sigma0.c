@@ -38,7 +38,6 @@ struct track_page
 static struct list_head free_pages[PAGE_BUCKETS];	/* size_log2 = index + 12 */
 static struct rb_root pages_by_range;
 static LIST_HEAD(slab_page_list);
-static LIST_HEAD(dead_trk_list);
 static LIST_HEAD(reuse_trk_list);		/* for static <struct track_page> */
 static struct kmem_cache *track_page_slab = NULL;
 
@@ -266,11 +265,8 @@ static void *get_free_page(int size_log2)
 		return get_free_page(size_log2);
 	}
 
-	/* this should remove the page from pages_by_range, but we can't call
-	 * AVL-tree functions from here as this indirectly backs its allocator.
-	 * instead remove these items lazily in find_page_by_range().
-	 */
-	list_add_tail(&dead_trk_list, &pg->link);
+	rb_erase(&pg->rb, &pages_by_range);
+	free_track_page(pg);
 
 	return ret;
 }
@@ -359,16 +355,6 @@ static void free_page_range(
 
 static struct track_page *find_page_by_range(L4_Fpage_t key)
 {
-	/* clean up the dead-tracking list so that removal latency isn't observed
-	 * through this function.
-	 */
-	struct track_page *tp, *next;
-	list_for_each_safe(&dead_trk_list, tp, next, link) {
-		rb_erase(&tp->rb, &pages_by_range);
-		list_del_from(&dead_trk_list, &tp->link);
-		free_track_page(tp);
-	}
-
 	struct rb_node *n = pages_by_range.rb_node;
 	while(n != NULL) {
 		struct track_page *pg = rb_entry(n, struct track_page, rb);
