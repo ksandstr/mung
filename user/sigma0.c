@@ -1,10 +1,12 @@
 
+#define __KERNEL__
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdarg.h>
 #include <stdbool.h>
+#include <ccan/likely/likely.h>
 #include <ccan/list/list.h>
-#include <ccan/avl/avl.h>
 #include <ccan/compiler/compiler.h>
 
 #include <l4/types.h>
@@ -17,6 +19,7 @@
 #include <ukernel/mm.h>
 #include <ukernel/slab.h>
 #include <ukernel/util.h>
+#include <ukernel/rbtree.h>
 
 
 #define NUM_SEED_PAGES 12
@@ -25,22 +28,15 @@
 
 struct track_page
 {
+	struct rb_node rb;		/* in pages_by_range */
 	struct list_node link;
 	L4_Fpage_t page;
 	bool dedicated;
 };
 
-struct malloc_size
-{
-	struct list_node link;
-	int size;
-	struct kmem_cache *cache;
-};
-
 
 static struct list_head free_pages[PAGE_BUCKETS];	/* size_log2 = index + 12 */
-static AVL *pages_by_range = NULL;
-static LIST_HEAD(malloc_size_list);
+static struct rb_root pages_by_range;
 static LIST_HEAD(slab_page_list);
 static LIST_HEAD(dead_trk_list);
 static struct kmem_cache *track_page_slab = NULL;
@@ -216,7 +212,7 @@ static void *get_free_page_at(L4_Word_t address, int want_size_log2)
 
 	L4_Fpage_t page = pg->page;
 	bool dedicated = pg->dedicated;
-	avl_remove(pages_by_range, &pg->page);
+	rb_erase(&pg->rb, &pages_by_range);
 	if(!dedicated) {
 		list_del_from(&free_pages[L4_SizeLog2(pg->page) - PAGE_BITS],
 			&pg->link);
@@ -272,6 +268,46 @@ static void *get_free_page(int size_log2)
 }
 
 
+static int fpage_cmp(L4_Fpage_t a, L4_Fpage_t b)
+{
+	if(fpage_overlap(a, b)) return 0;
+
+	const L4_Fpage_t *key = &a, *cand = &b;
+	if(L4_Address(*key) + L4_Size(*key) <= L4_Address(*cand)) return -1;
+	if(L4_Address(*key) >= L4_Address(*cand) + L4_Size(*cand)) return 1;
+
+	/* mysterious. */
+	return 0;
+}
+
+
+static struct track_page *insert_track_page_helper(
+	struct rb_root *root,
+	struct track_page *pg)
+{
+	struct rb_node **p = &pages_by_range.rb_node, *parent = NULL;
+	while(*p != NULL) {
+		parent = *p;
+		struct track_page *other = rb_entry(parent, struct track_page, rb);
+		int c = fpage_cmp(pg->page, other->page);
+		if(c < 0) p = &(*p)->rb_left;
+		else if(c > 0) p = &(*p)->rb_right;
+		else return other;
+	}
+
+	rb_link_node(&pg->rb, parent, p);
+	return NULL;
+}
+
+
+static struct track_page *insert_track_page(struct track_page *pg)
+{
+	struct track_page *dupe = insert_track_page_helper(&pages_by_range, pg);
+	if(likely(dupe == NULL)) rb_insert_color(&pg->rb, &pages_by_range);
+	return dupe;
+}
+
+
 static void free_phys_page(void *ptr, int size_log2, bool dedicate)
 {
 	if(track_page_slab == NULL) {
@@ -287,7 +323,12 @@ static void free_phys_page(void *ptr, int size_log2, bool dedicate)
 
 	pg->dedicated = dedicate;
 	pg->page = L4_FpageLog2((L4_Word_t)ptr, size_log2);
-	avl_insert(pages_by_range, &pg->page, pg);
+	if(insert_track_page(pg) != NULL) {
+		printf("warning: track_page for %#lx:%#lx already exists!\n",
+			L4_Address(pg->page), L4_Size(pg->page));
+		kmem_cache_free(track_page_slab, pg);
+		return;
+	}
 	if(!dedicate) {
 		list_add_tail(&free_pages[size_log2 - PAGE_BITS], &pg->link);
 	}
@@ -309,9 +350,12 @@ static void free_page_range(
 
 static struct track_page *find_page_by_range(L4_Fpage_t key)
 {
+	/* clean up the dead-tracking list so that removal latency isn't observed
+	 * through this function.
+	 */
 	struct track_page *tp, *next;
 	list_for_each_safe(&dead_trk_list, tp, next, link) {
-		avl_remove(pages_by_range, &tp->page);
+		rb_erase(&tp->rb, &pages_by_range);
 		list_del_from(&dead_trk_list, &tp->link);
 		if(kmem_cache_find(tp) != NULL) {
 			kmem_cache_free(track_page_slab, tp);
@@ -323,25 +367,22 @@ static struct track_page *find_page_by_range(L4_Fpage_t key)
 		}
 	}
 
-	struct track_page *pg = avl_lookup(pages_by_range, &key);
-	return pg;
-}
-
-
-static int compare_disjoint_fpages(const void *keyptr, const void *candptr)
-{
-	if(keyptr == candptr) return 0;
-
-	const L4_Fpage_t *key = keyptr, *cand = candptr;
-	if(L4_Address(*key) + L4_Size(*key) <= L4_Address(*cand)) return -1;
-	if(L4_Address(*key) >= L4_Address(*cand) + L4_Size(*cand)) return 1;
-	return 0;
+	struct rb_node *n = pages_by_range.rb_node;
+	while(n != NULL) {
+		struct track_page *pg = rb_entry(n, struct track_page, rb);
+		int c = fpage_cmp(key, pg->page);
+		if(c < 0) n = n->rb_left;
+		else if(c > 0) n = n->rb_right;
+		else return pg;
+	}
+	return NULL;
 }
 
 
 static void build_heap(void *kip_base)
 {
 	for(int i=0; i < PAGE_BUCKETS; i++) list_head_init(&free_pages[i]);
+	pages_by_range = RB_ROOT;
 
 	/* a little bit of seed memory for the slabs and whatnot.
 	 *
@@ -355,14 +396,7 @@ static void build_heap(void *kip_base)
 		s_page[i].page = L4_FpageLog2(
 			(L4_Word_t)&mem_seed[i * PAGE_SIZE], 12);
 		list_add_tail(&free_pages[0], &s_page[i].link);
-	}
-
-	/* add these to the AVL tree. this triggers most of the allocation
-	 * mechanisms.
-	 */
-	pages_by_range = avl_new(&compare_disjoint_fpages);
-	for(int i=0; i < NUM_SEED_PAGES; i++) {
-		avl_insert(pages_by_range, &s_page[i].page, &s_page[i]);
+		insert_track_page(&s_page[i]);
 	}
 
 	L4_Word_t meminfo = *(L4_Word_t *)(kip_base + 0x54),
@@ -484,47 +518,13 @@ void kmem_free_page(void *ptr) {
 }
 
 
-/* an ugly malloc() for ccan-avl.o's use */
-void *malloc(size_t size)
-{
-	if(size > 4000) {
-		printf("failing malloc(%u)\n", (unsigned)size);
-		return NULL;
-	}
-
-	size = (size + 15) & ~15ul;
-	struct malloc_size *ms;
-	bool found = false;
-	list_for_each(&malloc_size_list, ms, link) {
-		if(ms->size == size) {
-			found = true;
-			break;
-		}
-	}
-	if(!found) {
-		static struct kmem_cache *malloc_size_slab = NULL;
-		if(malloc_size_slab == NULL) {
-			malloc_size_slab = KMEM_CACHE_NEW("malloc_size_slab",
-				struct malloc_size);
-		}
-		ms = kmem_cache_alloc(malloc_size_slab);
-		ms->size = size;
-		ms->cache = kmem_cache_create("malloc slab", size, 16, 0, NULL, NULL);
-		list_add(&malloc_size_list, &ms->link);
-	}
-
-	return kmem_cache_alloc(ms->cache);
+/* linkables for memmove(), strdup() */
+void *malloc(size_t n) {
+	abort();
 }
 
-
-void free(void *ptr)
-{
-	if(ptr == NULL) return;
-	struct kmem_cache *cache = kmem_cache_find(ptr);
-	if(cache != NULL) kmem_cache_free(cache, ptr);
-	else {
-		printf("can't find slab to free memory at %p (leaked!)\n", ptr);
-	}
+void free(void *ptr) {
+	abort();
 }
 
 
