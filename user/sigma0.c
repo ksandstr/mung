@@ -42,13 +42,9 @@ static LIST_HEAD(reuse_trk_list);		/* for static <struct track_page> */
 static struct kmem_cache *track_page_slab = NULL;
 
 
-static struct track_page *find_page_by_range(L4_Fpage_t key);
 static void *get_free_page(int size_log2);
 static void *get_free_page_at(L4_Word_t address, int size_log2);
-static void free_page_range(
-	L4_Word_t start,
-	L4_Word_t length,
-	bool dedicate);
+static void free_phys_page(void *ptr, int size_log2, bool dedicate);
 
 
 void con_putstr(const char *str)
@@ -65,6 +61,16 @@ void con_putstr(const char *str)
 }
 
 
+void abort(void)
+{
+	printf("abort() called!\n");
+	for(;;) {
+		/* wheeee */
+		L4_Sleep(L4_Never);
+	}
+}
+
+
 void __assert_failure(
 	const char *condition,
 	const char *file,
@@ -73,14 +79,7 @@ void __assert_failure(
 {
 	printf("assert(%s) failed in `%s' (%s:%u)\n", condition, function,
 		file, line);
-	for(;;) { /* spin */ }
-}
-
-
-void abort(void)
-{
-	printf("abort() called!\n");
-	for(;;) { /* wheeee */ }
+	abort();
 }
 
 
@@ -213,6 +212,46 @@ static void free_track_page(struct track_page *tp)
 }
 
 
+static int fpage_cmp(L4_Fpage_t a, L4_Fpage_t b)
+{
+	if(fpage_overlap(a, b)) return 0;
+
+	const L4_Fpage_t *key = &a, *cand = &b;
+	if(L4_Address(*key) + L4_Size(*key) <= L4_Address(*cand)) return -1;
+	if(L4_Address(*key) >= L4_Address(*cand) + L4_Size(*cand)) return 1;
+
+	/* mysterious. */
+	return 0;
+}
+
+
+static struct track_page *find_page_by_range(L4_Fpage_t key)
+{
+	struct rb_node *n = pages_by_range.rb_node;
+	while(n != NULL) {
+		struct track_page *pg = rb_entry(n, struct track_page, rb);
+		int c = fpage_cmp(key, pg->page);
+		if(c < 0) n = n->rb_left;
+		else if(c > 0) n = n->rb_right;
+		else return pg;
+	}
+	return NULL;
+}
+
+
+static void free_page_range(
+	L4_Word_t start,
+	L4_Word_t length,
+	bool dedicate)
+{
+	int bit;
+	L4_Word_t addr;
+	for_page_range(start, start + length, addr, bit) {
+		free_phys_page((void *)addr, bit, dedicate);
+	}
+}
+
+
 static void *get_free_page_at(L4_Word_t address, int want_size_log2)
 {
 	assert((address & PAGE_MASK) == 0);
@@ -272,19 +311,6 @@ static void *get_free_page(int size_log2)
 }
 
 
-static int fpage_cmp(L4_Fpage_t a, L4_Fpage_t b)
-{
-	if(fpage_overlap(a, b)) return 0;
-
-	const L4_Fpage_t *key = &a, *cand = &b;
-	if(L4_Address(*key) + L4_Size(*key) <= L4_Address(*cand)) return -1;
-	if(L4_Address(*key) >= L4_Address(*cand) + L4_Size(*cand)) return 1;
-
-	/* mysterious. */
-	return 0;
-}
-
-
 static struct track_page *insert_track_page_helper(
 	struct rb_root *root,
 	struct track_page *pg)
@@ -340,33 +366,6 @@ static void free_phys_page(void *ptr, int size_log2, bool dedicate)
 }
 
 
-static void free_page_range(
-	L4_Word_t start,
-	L4_Word_t length,
-	bool dedicate)
-{
-	int bit;
-	L4_Word_t addr;
-	for_page_range(start, start + length, addr, bit) {
-		free_phys_page((void *)addr, bit, dedicate);
-	}
-}
-
-
-static struct track_page *find_page_by_range(L4_Fpage_t key)
-{
-	struct rb_node *n = pages_by_range.rb_node;
-	while(n != NULL) {
-		struct track_page *pg = rb_entry(n, struct track_page, rb);
-		int c = fpage_cmp(key, pg->page);
-		if(c < 0) n = n->rb_left;
-		else if(c > 0) n = n->rb_right;
-		else return pg;
-	}
-	return NULL;
-}
-
-
 static void build_heap(void *kip_base)
 {
 	for(int i=0; i < PAGE_BUCKETS; i++) list_head_init(&free_pages[i]);
@@ -398,8 +397,8 @@ static void build_heap(void *kip_base)
 	 *
 	 * the way this works is, it finds ranges of conventional memory that
 	 * overlap virtual memory and don't overlap a reserved range. those areas
-	 * are added to the free lists and the AVL tree. ranges that further
-	 * overlap dedicated memory are added only to the AVL tree but not the
+	 * are added to the free lists and the pages_by_range tree. ranges that
+	 * further overlap dedicated memory are added only to the tree but not the
 	 * freelists.
 	 *
 	 * FIXME: hurr durr apparently v_start and v_end aren't used after the for
