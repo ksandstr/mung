@@ -174,8 +174,9 @@ COLD struct thread *kth_init(L4_ThreadId_t boot_tid)
 #include <ukernel/ktest.h>
 
 #if KTEST
-static void returning_kth(void *param) {
-	diag("%s running", __func__);
+static void returning_kth(void *param)
+{
+	/* simple as can get. */
 	*(bool *)param = true;
 }
 
@@ -204,8 +205,51 @@ START_TEST(t_basics)
 END_TEST
 
 
+START_TEST(t_many_kths)
+{
+	const int n_kths = 200;
+
+	plan_tests(2);
+	diag("n_kths=%d", n_kths);
+
+	diag("starting kthreads");
+	bool *signals[n_kths];
+	struct thread *t[n_kths];
+	int n_started = 0;
+	for(int i=0; i < n_kths; i++) {
+		signals[i] = malloc(sizeof(bool));
+		*signals[i] = false;
+		t[i] = kth_start(&returning_kth, signals[i]);
+		if(t[i] != NULL) n_started++;
+		else {
+			diag("starting t[%d]", i);
+		}
+	}
+	ok(true, "didn't die yet");
+	bool done;
+	int n_loops = 0;
+	do {
+		done = true;
+		n_loops++;
+		for(int i=0; i < n_kths; i++) {
+			done = done & *signals[i];
+		}
+		if(!done && !kth_yield()) {
+			diag("kth_yield() failed!");
+			break;
+		}
+	} while(!done);
+	ok(done, "all started kthreads signaled");
+	diag("n_loops=%d", n_loops);
+
+	for(int i=0; i < n_kths; i++) free(signals[i]);
+}
+END_TEST
+
+
 void ktest_kth(void)
 {
 	RUN(t_basics);
+	RUN(t_many_kths);
 }
 #endif

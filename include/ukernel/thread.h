@@ -58,9 +58,10 @@ typedef L4_Word_t thread_id;
 #define IS_KERNEL_THREAD(thread) ((thread)->space == kernel_space)
 
 /* there's need for a few kernel threads: the boot (scheduler) thread, the
- * sigma0 pager, and possibly the ones used by the kernel's self-tests.
+ * sigma0 pager, and possibly the ones used by the kernel's self-tests. a
+ * larger ID-space reservation won't hurt, however, so 256 it is.
  */
-#define NUM_KERNEL_THREADS 8
+#define NUM_KERNEL_THREADS 256
 
 /* allocation of implementation-defined UTCB fields.
  * one is used for %gs:0, and two more to return ECX and EDX via SYSEXIT and
