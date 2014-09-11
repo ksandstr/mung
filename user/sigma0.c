@@ -39,6 +39,7 @@ static struct list_head free_pages[PAGE_BUCKETS];	/* size_log2 = index + 12 */
 static struct rb_root pages_by_range;
 static LIST_HEAD(slab_page_list);
 static LIST_HEAD(dead_trk_list);
+static LIST_HEAD(reuse_trk_list);		/* for static <struct track_page> */
 static struct kmem_cache *track_page_slab = NULL;
 
 
@@ -202,6 +203,17 @@ static int sigma0_ipc_loop(void *kip_base)
 }
 
 
+static void free_track_page(struct track_page *tp)
+{
+	if(kmem_cache_find(tp) != NULL) {
+		kmem_cache_free(track_page_slab, tp);
+	} else {
+		/* from s_page[], reused in free_phys_page(). */
+		list_add(&reuse_trk_list, &tp->link);
+	}
+}
+
+
 static void *get_free_page_at(L4_Word_t address, int want_size_log2)
 {
 	assert((address & PAGE_MASK) == 0);
@@ -217,7 +229,7 @@ static void *get_free_page_at(L4_Word_t address, int want_size_log2)
 		list_del_from(&free_pages[L4_SizeLog2(pg->page) - PAGE_BITS],
 			&pg->link);
 	}
-	kmem_cache_free(track_page_slab, pg);
+	free_track_page(pg);
 
 	if(L4_Address(page) != address || L4_SizeLog2(page) != want_size_log2) {
 		/* complex case. */
@@ -238,12 +250,8 @@ static void *get_free_page(int size_log2)
 {
 	struct track_page *pg = NULL;
 	for(int i=size_log2 - PAGE_BITS; i < PAGE_BUCKETS; i++) {
-		if(!list_empty(&free_pages[i])) {
-			pg = list_top(&free_pages[i], struct track_page, link);
-			assert(pg != NULL);
-			list_del_from(&free_pages[i], &pg->link);
-			break;
-		}
+		pg = list_pop(&free_pages[i], struct track_page, link);
+		if(pg != NULL) break;
 	}
 	if(pg == NULL) return NULL;
 
@@ -314,7 +322,8 @@ static void free_phys_page(void *ptr, int size_log2, bool dedicate)
 		track_page_slab = KMEM_CACHE_NEW("track_page_slab", struct track_page);
 	}
 
-	struct track_page *pg = kmem_cache_alloc(track_page_slab);
+	struct track_page *pg = list_pop(&reuse_trk_list, struct track_page, link);
+	if(pg == NULL) pg = kmem_cache_alloc(track_page_slab);
 	if(pg == NULL) {
 		printf("warning: can't allocate track_page for %#lx:%#lx; memory was lost\n",
 			(L4_Word_t)ptr, 1ul << size_log2);
@@ -326,7 +335,7 @@ static void free_phys_page(void *ptr, int size_log2, bool dedicate)
 	if(insert_track_page(pg) != NULL) {
 		printf("warning: track_page for %#lx:%#lx already exists!\n",
 			L4_Address(pg->page), L4_Size(pg->page));
-		kmem_cache_free(track_page_slab, pg);
+		free_track_page(pg);
 		return;
 	}
 	if(!dedicate) {
@@ -357,14 +366,7 @@ static struct track_page *find_page_by_range(L4_Fpage_t key)
 	list_for_each_safe(&dead_trk_list, tp, next, link) {
 		rb_erase(&tp->rb, &pages_by_range);
 		list_del_from(&dead_trk_list, &tp->link);
-		if(kmem_cache_find(tp) != NULL) {
-			kmem_cache_free(track_page_slab, tp);
-		} else {
-			/* TODO: track the statically allocated struct track_page in a "usable
-			 * track_page list" or some such, and recycle those in
-			 * free_phys_page().
-			 */
-		}
+		free_track_page(tp);
 	}
 
 	struct rb_node *n = pages_by_range.rb_node;
