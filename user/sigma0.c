@@ -45,6 +45,36 @@ static struct kmem_cache *track_page_slab = NULL;
 static void *get_free_page(int size_log2);
 static void *get_free_page_at(L4_Word_t address, int size_log2);
 static void free_phys_page(void *ptr, int size_log2, bool dedicate);
+static struct track_page *find_page_by_range(L4_Fpage_t range);
+
+
+static bool invariants(void)
+{
+#ifdef NDEBUG
+	/* 1. all pages in free_pages[] should have `!dedicated', and appear in
+	 * pages_by_range.
+	 */
+	for(int i=0; i < PAGE_BUCKETS; i++) {
+		struct track_page *pg;
+		list_for_each(&free_pages[i], pg, link) {
+			assert(!pg->dedicated);
+			assert(find_page_by_range(pg->page) == pg);
+		}
+	}
+
+	/* 2. pages in slab_page_list shouldn't appear either in pages_by_range or
+	 * free_pages[].
+	 */
+	struct track_page *pg;
+	list_for_each(&slab_page_list, pg, link) {
+		assert(find_page_by_range(pg->page) == NULL);
+		assert(get_free_page_at(L4_Address(pg->page),
+			L4_SizeLog2(pg->page)) == NULL);
+	}
+#endif
+
+	return true;
+}
 
 
 void con_putstr(const char *str)
@@ -191,6 +221,10 @@ static int sigma0_ipc_loop(void *kip_base)
 					L4_ThreadNo(from), L4_Version(from));
 				break;
 			}
+
+#ifdef DEBUG_ME_HARDER
+			assert(invariants());
+#endif
 
 			tag = L4_ReplyWait(sender, &from);
 		}
@@ -520,5 +554,6 @@ int main(void)
 	L4_Word_t apiver, apiflags, kernelid;
 	void *kip = L4_KernelInterface(&apiver, &apiflags, &kernelid);
 	build_heap(kip);
+	assert(invariants());
 	return sigma0_ipc_loop(kip);
 }
