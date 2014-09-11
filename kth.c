@@ -79,12 +79,14 @@ struct thread *kth_start(void (*function)(void *), void *parameter)
 	struct thread *t = list_pop(&dead_thread_list, struct thread,
 		u0.dead_link);
 	if(t != NULL) {
+		struct page *stack_page = t->u1.stack_page;	/* stomped by ctor */
 		if(!thread_ctor(t, tid.raw)) {
 			printf("%s: ctor failed for %lu:%lu\n", __func__,
 				L4_ThreadNo(tid), L4_Version(tid));
 			return NULL;
 		}
-		assert(t->u1.stack_page != NULL);
+		assert(stack_page != NULL);
+		t->u1.stack_page = stack_page;
 		if(t->u1.stack_page->vm_addr == NULL) {
 			/* TODO: map it in somewhere */
 			panic("arrrrrgggghhhh!");
