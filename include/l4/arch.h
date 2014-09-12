@@ -25,8 +25,8 @@ static inline L4_Fpage_t L4_IoFpage(L4_Word_t port, int size)
 	int msb = sizeof(L4_Word_t) * 8 - __builtin_clzl(size) - 1,
 		shift = (1ul << msb) <= size ? msb : msb + 1;
 	L4_IoFpage_t fp = {
-		.X.p = port, .X.__two = 2, .X.rwx = L4_NoAccess,
-		.X.s = shift,
+		.X.p = port, .X.s = shift,
+		.X.__two = 2, .X.rwx = L4_ReadWriteOnly,
 	};
 	return (L4_Fpage_t){ .raw = fp.raw };
 }
@@ -35,8 +35,8 @@ static inline L4_Fpage_t L4_IoFpage(L4_Word_t port, int size)
 static inline L4_Fpage_t L4_IoFpageLog2(L4_Word_t port, int sizelog2)
 {
 	L4_IoFpage_t fp = {
-		.X.p = port, .X.__two = 2, .X.s = sizelog2,
-		.X.rwx = L4_NoAccess,
+		.X.p = port, .X.s = sizelog2,
+		.X.__two = 2, .X.rwx = L4_ReadWriteOnly,
 	};
 	return (L4_Fpage_t){ .raw = fp.raw };
 }
