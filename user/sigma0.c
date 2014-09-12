@@ -349,7 +349,7 @@ static struct track_page *insert_track_page_helper(
 	struct rb_root *root,
 	struct track_page *pg)
 {
-	struct rb_node **p = &pages_by_range.rb_node, *parent = NULL;
+	struct rb_node **p = &root->rb_node, *parent = NULL;
 	while(*p != NULL) {
 		parent = *p;
 		struct track_page *other = rb_entry(parent, struct track_page, rb);
@@ -430,10 +430,14 @@ static void build_heap(void *kip_base)
 	/* discover system memory.
 	 *
 	 * the way this works is, it finds ranges of conventional memory that
-	 * overlap virtual memory and don't overlap a reserved range. those areas
-	 * are added to the free lists and the pages_by_range tree. ranges that
-	 * further overlap dedicated memory are added only to the tree but not the
-	 * freelists.
+	 * overlap virtual memory and don't overlap a reserved range. memory at
+	 * those addresses was added to sigma0's address space by the microkernel
+	 * before sigma0's first thread was started.
+	 *
+	 * ranges that further overlap dedicated memory are added only to the tree
+	 * but not the freelists, so they'll only be handed out at specific
+	 * request. ranges that don't are considered ordinary memory and are are
+	 * added to both the freelists and the pages_by_range tree.
 	 *
 	 * FIXME: hurr durr apparently v_start and v_end aren't used after the for
 	 * loop. the assignments in the if-clause are dead according to the clang
@@ -532,7 +536,6 @@ static void build_heap(void *kip_base)
 void *kmem_alloc_new_page(void) {
 	return get_free_page(12);
 }
-
 
 void kmem_free_page(void *ptr) {
 	free_phys_page(ptr, 12, false);
