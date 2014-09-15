@@ -145,13 +145,16 @@ static bool handle_int(
 		abort();
 	}
 
-	/* send it off. hand it the new base tnum also.
+	/* send it off. hand it the new base tnum, and its UDH value (i.e. TSD
+	 * struct pointer).
 	 *
 	 * TODO: could handshake with the child to confirm its side of the fork
 	 * has succeeded in recreating the caller thread etc.
 	 */
-	L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 1 }.raw);
+	L4_Word_t from_udh = L4_UserDefinedHandleOf(from);
+	L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 2 }.raw);
 	L4_LoadMR(1, L4_ThreadNo(cp_tid) - thread_self());
+	L4_LoadMR(2, from_udh);
 	L4_MsgTag_t tag = L4_Send(cp_tid);
 	if(L4_IpcFailed(tag)) {
 		printf("%s: child starter ipc failed, ec=%#lx\n", __func__,
@@ -224,8 +227,9 @@ static void child_starter_fn(struct child_param *param)
 		printf("%s: init IPC failed, code %#lx\n", __func__, L4_ErrorCode());
 		goto fail;
 	}
-	L4_Word_t new_base_tnum;
+	L4_Word_t new_base_tnum, new_udh;
 	L4_StoreMR(1, &new_base_tnum);
+	L4_StoreMR(2, &new_udh);
 
 	/* the technique is this: create a page-sized temporary stack for
 	 * pop_int24_to(), which contains the exception handler parameter that
@@ -244,6 +248,7 @@ static void child_starter_fn(struct child_param *param)
 		/* FIXME: abort properly */
 		goto fail;
 	}
+	L4_Set_UserDefinedHandleOf(caller_tid, new_udh);
 
 	tag = L4_Receive(caller_tid);
 	if(L4_IpcFailed(tag)) {
