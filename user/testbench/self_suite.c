@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <assert.h>
+#include <ccan/str/str.h>
 
 #include <l4/types.h>
 #include <l4/ipc.h>
@@ -427,6 +428,32 @@ START_TEST(many_fork_sequence)
 		}
 	}
 	ok(true, "didn't die");
+}
+END_TEST
+
+
+/* test that TSDs are retained across fork(). */
+START_TEST(retain_tsd_on_fork)
+{
+	plan_tests(2);
+
+	const char *teststr = "i am just a humble test string";
+
+	int key;
+	tsd_key_create(&key, &free);
+	tsd_set(key, strdup(teststr));
+	ok(streq(tsd_get(key), teststr), "match before fork");
+	int child = fork();
+	if(child == 0) {
+		const char *gotstr = tsd_get(key);
+		bool fail = gotstr == NULL || !streq(gotstr, teststr);
+		if(fail) diag("gotstr=`%s'", gotstr);
+		exit(fail ? 1 : 0);
+	} else {
+		int st, dead = wait(&st);
+		fail_if(dead != child);
+		ok(st == 0, "match after fork");
+	}
 }
 END_TEST
 
@@ -915,6 +942,7 @@ Suite *self_suite(void)
 		tcase_add_test(tc, deeper_fork);
 		tcase_add_test(tc, multi_fork_tid);
 		tcase_add_test(tc, many_fork_sequence);
+		tcase_add_test(tc, retain_tsd_on_fork);
 		suite_add_tcase(s, tc);
 	}
 
