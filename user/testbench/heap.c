@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 #include <ccan/likely/likely.h>
 #include <ccan/compiler/compiler.h>
 
@@ -128,6 +129,11 @@ COLD L4_Word_t find_phys_mem_top(void)
 	 * all-ones.
 	 */
 	return high;
+}
+
+
+int getpagesize(void) {
+	return PAGE_SIZE;
 }
 
 

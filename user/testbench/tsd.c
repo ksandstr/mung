@@ -1,5 +1,7 @@
 
 #include <stdlib.h>
+#include <errno.h>
+#include <ccan/likely/likely.h>
 #include <ccan/htable/htable.h>
 
 #include <l4/thread.h>
@@ -116,4 +118,28 @@ void tsd_clear(void)
 		free(tsd);
 		L4_Set_UserDefinedHandle(0);
 	}
+}
+
+
+/* TODO: find somewhere better to put this. */
+int *__errno_location(void)
+{
+	static int errno_key = 0;
+
+	if(unlikely(errno_key == 0)) {
+		tsd_key_create(&errno_key, NULL);
+	}
+	int *ptr = tsd_get(errno_key);
+	if(unlikely(ptr == NULL)) {
+		ptr = malloc(sizeof(*ptr));
+		if(ptr == NULL) {
+			static int bodge = 0;
+			ptr = &bodge;
+		} else {
+			*ptr = 0;
+			tsd_set(errno_key, ptr);
+		}
+	}
+
+	return ptr;
 }

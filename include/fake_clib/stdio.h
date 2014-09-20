@@ -48,5 +48,7 @@ extern int putchar(char c);
 extern int fputc(char c, FILE *stream);
 extern size_t fwrite(const void *ptr, size_t size, size_t nmemb, FILE *stream);
 
+extern int fflush(FILE *stream);
+
 
 #endif

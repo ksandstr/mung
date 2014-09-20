@@ -20,5 +20,7 @@ extern int abs(int j);
 extern long int labs(long int j);
 extern long long int llabs(long long int j);
 
+extern int atexit(void (*function)(void));
+
 
 #endif

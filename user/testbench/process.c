@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <ccan/list/list.h>
 #include <ccan/likely/likely.h>
 #include <ccan/compiler/compiler.h>
 
@@ -29,6 +30,13 @@ struct child_param
 };
 
 
+struct atexit_entry {
+	struct list_node link;
+	void (*fn)(void);
+};
+
+
+static LIST_HEAD(atexit_list);
 static L4_ThreadId_t mgr_tid = { .raw = 0 };
 static bool is_roottask = true;
 static int task_pid = 1;
@@ -424,8 +432,23 @@ int wait(int *status)
 }
 
 
+int atexit(void (*fn)(void))
+{
+	struct atexit_entry *ae = malloc(sizeof(*ae));
+	if(ae == NULL) return -1;		/* failure. */
+	ae->fn = fn;
+	list_add_tail(&atexit_list, &ae->link);
+	return 0;
+}
+
+
 void exit(int status)
 {
+	struct atexit_entry *ae;
+	list_for_each(&atexit_list, ae, link) {
+		(*ae->fn)();
+	}
+
 	for(int retry = 0; retry < 5; retry++) {
 		forkserv_exit(L4_Pager(), status);
 	}

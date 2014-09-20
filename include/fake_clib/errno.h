@@ -11,4 +11,8 @@
 #define EEXIST	17	/* file exists */
 #define EINVAL	22	/* invalid value */
 
+
+extern int *__errno_location(void);
+#define errno (*__errno_location())
+
 #endif

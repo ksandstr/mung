@@ -85,3 +85,9 @@ size_t fwrite(const void *ptr, size_t size, size_t nmemb, FILE *stream)
 	for(size_t i=0; i < size * nmemb; i++) fputc(cs[i], stream);
 	return nmemb;
 }
+
+
+/* fake as it gets. */
+int fflush(FILE *stream) {
+	return 0;
+}

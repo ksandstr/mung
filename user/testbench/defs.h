@@ -8,6 +8,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <assert.h>
+#include <unistd.h>
 #include <ccan/compiler/compiler.h>
 
 #include <l4/types.h>
@@ -289,7 +290,6 @@ extern int fork(void);
 extern int fork_tid(L4_ThreadId_t *tid_p);	/* fork(), and return child TID */
 extern int wait(int *status);
 extern NORETURN void exit(int status);
-extern int getpid(void);
 
 extern bool is_privileged(void);
 
