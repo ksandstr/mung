@@ -332,9 +332,10 @@ SRunner *srunner_create(Suite *first_suite)
 {
 	SRunner *sr = malloc(sizeof(SRunner));
 	list_head_init(&sr->suites);
-	if(first_suite != NULL) srunner_add_suite(sr, first_suite);
 	htable_init(&sr->test_by_path, &rehash_test_entry, NULL);
 	htable_init(&sr->test_by_id, &rehash_test_entry, NULL);
+
+	if(first_suite != NULL) srunner_add_suite(sr, first_suite);
 
 	return sr;
 }
