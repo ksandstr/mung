@@ -139,6 +139,11 @@ void subtest_start(const char *fmt, ...)
 
 int subtest_end(void)
 {
+	if(save_stack == NULL) {
+		diag("%s: save_stack == NULL", __func__);
+		abort();
+	}
+
 	int exst = exit_status();
 	struct saved_ctx *c = save_stack;
 	save_stack = c->next;
