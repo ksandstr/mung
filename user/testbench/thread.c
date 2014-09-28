@@ -564,7 +564,11 @@ static void t_add_thread(L4_Word_t arg_tid)
 
 
 /* not a service call despite naming. */
-static void t_end_thread(L4_ThreadId_t tid, int status, L4_Word_t result)
+static void t_end_thread(
+	L4_ThreadId_t tid,
+	int join_status,
+	int exit_status,
+	L4_Word_t result)
 {
 	tid = L4_GlobalIdOf(tid);
 	assert(L4_ThreadNo(tid) - base_tnum < MAX_THREADS);
@@ -583,7 +587,7 @@ static void t_end_thread(L4_ThreadId_t tid, int status, L4_Word_t result)
 			// printf("  sending wakeup to %lu:%lu\n",
 			//	L4_ThreadNo(s->tid), L4_Version(s->tid));
 			L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 2 }.raw);
-			L4_LoadMR(1, status);
+			L4_LoadMR(1, join_status);
 			L4_LoadMR(2, result);
 			L4_MsgTag_t tag = L4_Reply(s->tid);
 			if(L4_IpcSucceeded(tag)) reply_ok = true;
@@ -602,7 +606,7 @@ static void t_end_thread(L4_ThreadId_t tid, int status, L4_Word_t result)
 	} else {
 		// printf("  waiting until join.\n");
 		t->alive = false;
-		t->segfault = (status == 1);
+		t->segfault = (join_status == 1);
 		t->result = result;
 	}
 
@@ -610,7 +614,7 @@ static void t_end_thread(L4_ThreadId_t tid, int status, L4_Word_t result)
 	assert(mgrt_alive <= mgr_threads.elems);
 	if(mgrt_alive == 0) {
 		// printf("  process exit because last thread is gone.\n");
-		exit(status);
+		exit(exit_status);
 	}
 }
 
@@ -624,7 +628,7 @@ static void t_exit_thread(L4_Word_t result)
 		return;
 	}
 
-	t_end_thread(sender, 0, result);
+	t_end_thread(sender, 0, 0, result);
 
 	muidl_raise_no_reply();
 }
@@ -645,8 +649,8 @@ static void t_segv(L4_Word_t a_dead_tid, L4_Word_t fault_addr)
 		L4_ThreadNo(dead_tid), L4_Version(dead_tid), fault_addr);
 #endif
 
-	/* must provide both process exit status and thread join result */
-	t_end_thread(dead_tid, (fault_addr & ~15) | 7, fault_addr);
+	/* 1 per ThreadMgr join_thread spec */
+	t_end_thread(dead_tid, 1, (fault_addr & ~0xf) | 7, fault_addr);
 }
 
 
