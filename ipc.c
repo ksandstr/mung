@@ -166,9 +166,7 @@ void ipc_xfer_timeout(struct ipc_state *st)
 
 	from->flags &= ~TF_SENDER;
 	thread_ipc_fail(from);
-	assert(IS_READY(from->status));
 	thread_ipc_fail(to);
-	assert(IS_READY(to->status));
 }
 
 
@@ -645,7 +643,10 @@ static bool ipc_send_half(
 			}
 			thread_wake(dest);
 		} else {
-			assert(dest->ipc != NULL || IS_READY(dest->status));
+			assert(dest->ipc != NULL
+				|| IS_READY(dest->status)
+				|| (CHECK_FLAG(dest->flags, TF_HALT)
+					&& dest->status == TS_STOPPED));
 			/* timeout should've happened in post_exn_ok() already */
 			assert(dest->ipc == NULL
 				|| dest->ipc->xferto_at == 0
@@ -903,7 +904,6 @@ bool ipc_recv_half(struct thread *self, void *self_utcb)
 				 * xferto_at has passed.
 				 */
 				ipc_xfer_timeout(self->ipc);
-				assert(IS_READY(self->status));
 				return true;
 			} else {
 				/* avoid L4_Time_t back-and-forth in thread_sleep() */
@@ -1010,7 +1010,9 @@ bool ipc_recv_half(struct thread *self, void *self_utcb)
 			/* post-IPC exception hooks may start another IPC operation right
 			 * away, so check this only in the ordinary path.
 			 */
-			assert(IS_READY(from->status));
+			assert(IS_READY(from->status)
+				|| (CHECK_FLAG(from->flags, TF_HALT)
+					&& from->status == TS_STOPPED));
 		}
 
 		return true;

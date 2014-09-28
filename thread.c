@@ -187,7 +187,8 @@ bool post_exn_ok(struct thread *t)
 {
 	int num = hook_call_front(&t->post_exn_call, -1, false, 0);
 	/* kernel IPC chains either keep shitting, or get off the pot. */
-	assert(num == 0 || t->ipc != NULL || IS_READY(t->status));
+	assert(num == 0 || t->ipc != NULL || IS_READY(t->status)
+		|| (CHECK_FLAG(t->flags, TF_HALT) && t->status == TS_STOPPED));
 	return num > 0;
 }
 
@@ -495,6 +496,9 @@ void thread_sleep(struct thread *t, L4_Time_t period)
 }
 
 
+/* postcond: @t->status == TS_READY || @t->status == TS_STOPPED
+ * (depending on TF_HALT)
+ */
 void thread_ipc_fail(struct thread *t)
 {
 	assert(t->status == TS_RECV_WAIT
