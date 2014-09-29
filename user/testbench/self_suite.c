@@ -445,7 +445,8 @@ END_TEST
 
 START_TEST(many_fork_sequence)
 {
-	const size_t n_forks = 1024;
+	/* keep this low enough to not time out on a slower core2, plz */
+	const size_t n_forks = 256;
 
 	plan_tests(1);
 
