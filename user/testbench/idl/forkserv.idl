@@ -34,6 +34,17 @@ interface ForkServ: L4X2::FaultHandler
 	[Label(0x664f)]		/* "fO" */
 	long fork();
 
+	/* set redirector of future child processes to a thread in the calling
+	 * space. returns the previous value. nilthread only queries the current
+	 * redirector. anythread sets redir to anythread per L4.X2 SpaceControl.
+	 * on error, returns nilthread. value is inherited from parent but cannot
+	 * be re-set. invalid @next values return anythread in @previous.
+	 */
+	[Label(0x6652)]		/* "fR" */
+	void set_fork_redir(
+		out L4X2::ThreadId previous,
+		in L4X2::ThreadId next);
+
 	[Label(0x734d)]		/* "sM" */
 	void set_mgr_tid(in L4X2::ThreadId tid);
 

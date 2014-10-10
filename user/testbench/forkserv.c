@@ -65,6 +65,8 @@ struct fs_space
 	struct list_node dead_link;		/* in parent's dead_children */
 	int exit_status;
 	GUARD_MEMBER(g_3);
+
+	L4_ThreadId_t child_redir_tid;
 };
 
 
@@ -268,6 +270,7 @@ static struct fs_space *make_initial_space(int id)
 		.id = id, .parent_id = 0, .prog_brk = find_phys_mem_top() + 1,
 		.utcb_area = L4_Fpage(0x30000, UTCB_SIZE * THREADS_PER_SPACE),
 		.kip_area = L4_FpageLog2(0x2f000, 12),
+		.child_redir_tid = L4_anythread,
 	};
 	GUARD_INIT(sp, g_0);
 	GUARD_INIT(sp, g_1);
@@ -796,9 +799,15 @@ static bool handle_new_thread(struct helper_work *w)
 
 	if(space_tid.raw == new_tid.raw) {
 		/* also initialize the new address space. */
+		struct fs_space *parent_sp = get_space(sp->parent_id);
+		assert(parent_sp != NULL);
+		L4_ThreadId_t redir_tid = parent_sp->child_redir_tid;
+		assert(redir_tid.raw == L4_anythread.raw
+			|| get_space_by_tid(redir_tid) == parent_sp);
+
 		L4_Word_t ctl_out;
 		retval = fpager_spacectl(&tag, &syscall_ec,
-			space_tid, 0, sp->kip_area, sp->utcb_area, L4_nilthread,
+			space_tid, 0, sp->kip_area, sp->utcb_area, redir_tid,
 			&ctl_out);
 		if(retval != 1) goto sc_fail;
 	}
@@ -908,6 +917,7 @@ static int32_t handle_fork(void)
 	copy_space->utcb_area = sp->utcb_area;
 	copy_space->kip_area = sp->kip_area;
 	copy_space->mgr_tid = L4_nilthread;
+	copy_space->child_redir_tid = sp->child_redir_tid;
 	GUARD_INIT(copy_space, g_0);
 	GUARD_INIT(copy_space, g_1);
 	GUARD_INIT(copy_space, g_2);
@@ -949,6 +959,29 @@ static int32_t handle_fork(void)
 
 end:
 	return copy_id;
+}
+
+
+static void handle_set_fork_redir(L4_Word_t *prev_tid, L4_Word_t next_tid)
+{
+	struct fs_thread *t = get_thread(muidl_get_sender());
+	if(t == NULL) goto fail;
+
+	L4_ThreadId_t next = { .raw = next_tid };
+	*prev_tid = t->space->child_redir_tid.raw;
+	if(!L4_IsNilThread(next)) {
+		/* NOTE: this allows escape from the redirector hierarchy! */
+		if(next.raw != L4_anythread.raw) {
+			struct fs_thread *rd = get_thread(next);
+			if(rd == NULL || rd->space != t->space) goto fail;
+		}
+		t->space->child_redir_tid = next;
+	}
+
+	return;
+
+fail:
+	*prev_tid = L4_nilthread.raw;
 }
 
 
@@ -1337,6 +1370,7 @@ static void forkserv_dispatch_loop(void)
 		.send_page = &handle_send_page,
 		.add_tid = &handle_add_tid,
 		.fork = &handle_fork,
+		.set_fork_redir = &handle_set_fork_redir,
 		.sbrk = &handle_sbrk,
 		.get_utcb_area = &handle_get_utcb_area,
 		.exit_thread = &handle_exit_thread,
