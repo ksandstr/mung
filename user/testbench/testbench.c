@@ -760,6 +760,7 @@ int main(void)
 			&sched_suite,
 			&ipc_suite,
 			&string_suite,
+			&redir_suite,
 		};
 		suites = real_plan;
 		n_suites = NUM_ELEMENTS(real_plan);

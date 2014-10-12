@@ -802,8 +802,6 @@ static bool handle_new_thread(struct helper_work *w)
 		struct fs_space *parent_sp = get_space(sp->parent_id);
 		assert(parent_sp != NULL);
 		L4_ThreadId_t redir_tid = parent_sp->child_redir_tid;
-		assert(redir_tid.raw == L4_anythread.raw
-			|| get_space_by_tid(redir_tid) == parent_sp);
 
 		L4_Word_t ctl_out;
 		retval = fpager_spacectl(&tag, &syscall_ec,
@@ -970,10 +968,14 @@ static void handle_set_fork_redir(L4_Word_t *prev_tid, L4_Word_t next_tid)
 	L4_ThreadId_t next = { .raw = next_tid };
 	*prev_tid = t->space->child_redir_tid.raw;
 	if(!L4_IsNilThread(next)) {
-		/* NOTE: this allows escape from the redirector hierarchy! */
+		/* NOTE: this allows escape from the redirector hierarchy. that's
+		 * fine, testbench isn't supposed to guarantee anything. if such
+		 * criteria are needed, add a predicate that examines the redirector
+		 * hierarchy in the inner conditional.
+		 */
 		if(next.raw != L4_anythread.raw) {
 			struct fs_thread *rd = get_thread(next);
-			if(rd == NULL || rd->space != t->space) goto fail;
+			if(rd == NULL) goto fail;
 		}
 		t->space->child_redir_tid = next;
 	}
