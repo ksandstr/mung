@@ -786,7 +786,7 @@ static int copy_intraspace_stritem(L4_Fpage_t *fault_p, struct ipc_state *st)
 #endif
 
 		int seg = MIN(int, src_iter->len - s_off, dst_iter->len - d_off);
-		assert(seg > 0);
+		assert(seg >= 0);
 
 		uintptr_t src_addr = src_iter->ptr + s_off + KERNEL_SEG_SIZE,
 			dst_addr = dst_iter->ptr + d_off + KERNEL_SEG_SIZE;
