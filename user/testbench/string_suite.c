@@ -1639,6 +1639,95 @@ START_TEST(str_receiver_test)
 END_TEST
 
 
+struct fsb_helper_param {
+	size_t buf_size;
+	L4_ThreadId_t parent_tid;
+	bool sleep;
+};
+
+
+static void fsb_helper_fn(void *param_ptr)
+{
+	struct fsb_helper_param *p = param_ptr;
+	uint8_t *mem = malloc(p->buf_size);
+	diag("child mem=%p", mem);
+	memset(mem, 0, p->buf_size);
+	if(p->sleep) L4_Sleep(A_SHORT_NAP);
+	L4_StringItem_t r_si = L4_StringItem(p->buf_size, mem);
+	L4_LoadBR(0, L4_StringItemsAcceptor.raw);
+	L4_LoadBRs(1, 2, r_si.raw);
+	L4_MsgTag_t tag = L4_Receive_Timeout(p->parent_tid, TEST_IPC_DELAY);
+	if(L4_IpcFailed(tag)) {
+		diag("child: ipc failed, ec=%#lx", L4_ErrorCode());
+	} else {
+		uint32_t crc = crc32c(0, mem, p->buf_size);
+		L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 1 }.raw);
+		L4_LoadMR(1, crc);
+		L4_Reply(p->parent_tid);
+	}
+	free(mem);
+}
+
+
+/* perform a string transfer of exactly N bytes.
+ *
+ * TODO: flags for multiple string items, scatter/gather operation
+ */
+START_LOOP_TEST(full_string_buffers, iter, 0, 3)
+{
+	const bool use_fork = CHECK_FLAG(iter, 1),
+		active_receive = CHECK_FLAG(iter, 2);
+	const size_t buf_size = 47;
+
+	plan_tests(2);
+	diag("buf_size=%u, use_fork=%s, active_receive=%s",
+		(unsigned)buf_size, btos(use_fork), btos(active_receive));
+
+	struct fsb_helper_param *p = malloc(sizeof(*p));
+	fail_if(p == NULL);
+	*p = (struct fsb_helper_param){
+		.parent_tid = L4_Myself(),
+		.buf_size = buf_size,
+		.sleep = active_receive,
+	};
+	L4_ThreadId_t child_tid;
+	int child = -1;
+	if(use_fork) {
+		child = fork_tid(&child_tid);
+		if(child == 0) {
+			fsb_helper_fn(p);
+			exit(0);
+		}
+	} else {
+		child_tid = xstart_thread(&fsb_helper_fn, p);
+	}
+
+	uint8_t *mem = malloc(buf_size);
+	fail_if(mem == NULL);
+	for(int i=0; i < buf_size; i++) mem[i] = i + 1;
+	if(!active_receive) L4_Sleep(A_SHORT_NAP);
+	L4_StringItem_t si = L4_StringItem(buf_size, mem);
+	L4_LoadMR(0, (L4_MsgTag_t){ .X.t = 2 }.raw);
+	L4_LoadMRs(1, 2, si.raw);
+	L4_MsgTag_t tag = L4_Call_Timeouts(child_tid,
+		TEST_IPC_DELAY, TEST_IPC_DELAY);
+	L4_Word_t got_crc; L4_StoreMR(1, &got_crc);
+	if(!ok1(L4_IpcSucceeded(tag))) diag("ec=%#lx", L4_ErrorCode());
+	ok1(got_crc == crc32c(0, mem, buf_size));
+
+	if(use_fork) {
+		int st, dead = wait(&st);
+		fail_unless(dead == child);
+	} else {
+		xjoin_thread(child_tid);
+	}
+
+	free(mem);
+	free(p);
+}
+END_TEST
+
+
 /* test for message overflow error when there are more string items given by
  * the sender, than string buffer items in the receiver.
  *
@@ -1790,6 +1879,7 @@ Suite *string_suite(void)
 		tcase_add_checked_fixture(tc, &stt_setup, &stt_teardown);
 		tcase_add_checked_fixture(tc, &stats_setup, &stats_teardown);
 		ADD_IDL_FIXTURE(tc, drop);
+		tcase_add_test(tc, full_string_buffers);	/* NB: not in `space' */
 		add_echo_tests(tc);
 		add_receiver_tests(tc);
 		suite_add_tcase(s, tc);
