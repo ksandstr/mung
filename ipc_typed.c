@@ -675,8 +675,11 @@ static int copy_interspace_stritem(L4_Fpage_t *fault_p, struct ipc_state *st)
 		} else {
 			assert(d_off <= dst_iter->len);
 			if(d_off == dst_iter->len) {
-				bool ok UNNEEDED = stritem_next(dst_iter);
-				assert(ok);
+				bool ok = stritem_next(dst_iter);
+				if(!ok) {
+					/* src ended at dst segment boundary. */
+					break;
+				}
 				d_off = 0;
 			}
 		}
@@ -815,7 +818,10 @@ static int copy_intraspace_stritem(L4_Fpage_t *fault_p, struct ipc_state *st)
 		assert(d_off <= dst_iter->len);
 		if(d_off == dst_iter->len) {
 			bool ok = stritem_next(dst_iter);
-			assert(ok);
+			if(!ok) {
+				/* src ended at dst segment boundary. */
+				break;
+			}
 			d_off = 0;
 		}
 	} while(s_off < src_iter->len || (s_off = 0, stritem_next(src_iter)));
