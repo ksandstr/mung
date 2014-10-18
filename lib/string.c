@@ -33,7 +33,32 @@
  */
 #pragma GCC optimize ("no-tree-loop-distribute-patterns")
 
+static void *memcpy_forward(void *dst, const void *src, size_t len);
 
+
+
+#ifdef __i386__
+/* via uClibc */
+static void *memcpy_forward(void *dst, const void *src, size_t len)
+{
+	int32_t d0, d1, d2;
+	asm volatile (
+		"rep; movsl\n"
+		"movl %4, %%ecx\n"
+		"andl $3, %%ecx\n"
+		/* avoids rep;movsb with ecx==0, faster on post-2008 iron */
+		"jz 1f\n"
+		"rep; movsb\n"
+		"1:\n"
+		: "=&c" (d0), "=&D" (d1), "=&S" (d2)
+		: "0" (len / 4), "g" (len), "1" (dst), "2" (src)
+		: "memory");
+	return dst;
+}
+
+#else
+
+/* generic memcpy_forward() for one-word transfers in a simple loop. */
 static void *memcpy_forward(void *dst, const void *src, size_t len)
 {
 	uintptr_t *d = dst;
@@ -56,6 +81,7 @@ static void *memcpy_forward(void *dst, const void *src, size_t len)
 
 	return dst;
 }
+#endif
 
 
 void *memcpy(void *dst, const void *src, size_t len) {
