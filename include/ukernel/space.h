@@ -88,7 +88,8 @@ extern struct space *sigma0_space;
 extern struct space *space_new(void);
 extern void space_free(struct space *sp);
 extern L4_ThreadId_t space_name(struct space *sp);
-extern void space_switch(struct space *sp);
+/* returns the previous space */
+extern struct space *space_switch(struct space *sp);
 /* (this only finds spaces that've got at least one thread associated with
  * them.)
  */

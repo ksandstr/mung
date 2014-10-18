@@ -461,12 +461,12 @@ struct utcb_page *space_get_utcb_page(struct space *sp, uint16_t page_pos)
 }
 
 
-void space_switch(struct space *next)
+struct space *space_switch(struct space *next)
 {
 	struct space *old = current_space;
 	if(unlikely(old == NULL)) old = kernel_space;
 
-	if(old == next) return;
+	if(old == next) return old;
 
 	if(old->tss != next->tss) {
 		int slot = next->tss_seg;
@@ -485,6 +485,8 @@ void space_switch(struct space *next)
 	 * interrupt handler.)
 	 */
 	current_space = next;
+
+	return old;
 }
 
 

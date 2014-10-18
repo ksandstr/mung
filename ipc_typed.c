@@ -614,12 +614,10 @@ static int copy_interspace_stritem(L4_Fpage_t *fault_p, struct ipc_state *st)
 	assert(st->str_off >= 0);
 
 	struct space *dest_space = st->to->space, *src_space = st->from->space;
-#if 0
-	/* exploit the memcpy_from() fast path under active receive.
-	 * TODO: write a test to prove active receives still work!
+	/* this exploits the memcpy_from() fast path under active receive. it's a
+	 * no-op in active send.
 	 */
-	space_switch(src_space);
-#endif
+	struct space *old_space = space_switch(src_space);
 
 	int rc;
 	uintptr_t copy_dst = reserve_heap_page();
@@ -692,6 +690,7 @@ static int copy_interspace_stritem(L4_Fpage_t *fault_p, struct ipc_state *st)
 end:
 	put_supervisor_page(copy_dst, 0);
 	free_heap_page(copy_dst);
+	space_switch(old_space);
 	return rc;
 
 fault:
