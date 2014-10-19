@@ -14,6 +14,7 @@
 #include <ccan/compiler/compiler.h>
 #include <ccan/str/str.h>
 #include <ccan/crc/crc.h>
+#include <ccan/darray/darray.h>
 
 #include <l4/types.h>
 #include <l4/space.h>
@@ -1639,8 +1640,9 @@ START_TEST(str_receiver_test)
 END_TEST
 
 
+/* helper thread & param type for full_string_buffers. */
 struct fsb_helper_param {
-	size_t buf_size;
+	size_t buf_size, n_bufs;
 	L4_ThreadId_t parent_tid;
 	bool sleep;
 };
@@ -1649,45 +1651,68 @@ struct fsb_helper_param {
 static void fsb_helper_fn(void *param_ptr)
 {
 	struct fsb_helper_param *p = param_ptr;
-	uint8_t *mem = malloc(p->buf_size);
-	diag("child mem=%p", mem);
-	memset(mem, 0, p->buf_size);
+
+	darray(uint8_t *) mems; darray_init(mems);
+	for(int i=0; i < p->n_bufs; i++) {
+		uint8_t *m = malloc(p->buf_size);
+		fail_if(m == NULL);
+		memset(m, 0, p->buf_size);
+		darray_push(mems, m);
+	}
+
+	diag("child mem_0=%p, n_bufs=%u", mems.item[0], (unsigned)p->n_bufs);
 	if(p->sleep) L4_Sleep(A_SHORT_NAP);
-	L4_StringItem_t r_si = L4_StringItem(p->buf_size, mem);
 	L4_LoadBR(0, L4_StringItemsAcceptor.raw);
-	L4_LoadBRs(1, 2, r_si.raw);
+	for(int i=0; i < mems.size; i++) {
+		L4_StringItem_t r_si = L4_StringItem(p->buf_size, mems.item[i]);
+		r_si.X.C = i + 1 < mems.size;
+		L4_LoadBRs(1 + i * 2, 2, r_si.raw);
+	}
+
 	L4_MsgTag_t tag = L4_Receive_Timeout(p->parent_tid, TEST_IPC_DELAY);
 	if(L4_IpcFailed(tag)) {
 		diag("child: ipc failed, ec=%#lx", L4_ErrorCode());
 	} else {
-		uint32_t crc = crc32c(0, mem, p->buf_size);
-		L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 1 }.raw);
-		L4_LoadMR(1, crc);
+		L4_Word_t sums[mems.size];
+		for(int i=0; i < mems.size; i++) {
+			sums[i] = crc32c(0, mems.item[i], p->buf_size);
+			free(mems.item[i]);
+		}
+		L4_LoadMR(0, (L4_MsgTag_t){ .X.u = mems.size }.raw);
+		L4_LoadMRs(1, mems.size, sums);
 		L4_Reply(p->parent_tid);
 	}
-	free(mem);
+
+	darray_free(mems);
 }
 
 
 /* perform a string transfer of exactly N bytes.
  *
- * TODO: flags for multiple string items, scatter/gather operation
+ * TODO: scatter/gather operation, more receive buffers than there are send
+ * buffers
+ *
+ * TODO: this test has a bunch of implementation overlap with the various
+ * str_receiver_fn() users. this overlap should be removed carefully.
  */
-START_LOOP_TEST(full_string_buffers, iter, 0, 3)
+START_LOOP_TEST(full_string_buffers, iter, 0, 7)
 {
 	const bool use_fork = CHECK_FLAG(iter, 1),
-		active_receive = CHECK_FLAG(iter, 2);
+		active_receive = CHECK_FLAG(iter, 2),
+		many_bufs = CHECK_FLAG(iter, 4);
 	const size_t buf_size = 47;
 
 	plan_tests(2);
-	diag("buf_size=%u, use_fork=%s, active_receive=%s",
-		(unsigned)buf_size, btos(use_fork), btos(active_receive));
+	diag("buf_size=%u, use_fork=%s, active_receive=%s, many_bufs=%s",
+		(unsigned)buf_size, btos(use_fork), btos(active_receive),
+		btos(many_bufs));
 
 	struct fsb_helper_param *p = malloc(sizeof(*p));
 	fail_if(p == NULL);
 	*p = (struct fsb_helper_param){
 		.parent_tid = L4_Myself(),
 		.buf_size = buf_size,
+		.n_bufs = many_bufs ? 5 : 1,
 		.sleep = active_receive,
 	};
 	L4_ThreadId_t child_tid;
@@ -1702,28 +1727,51 @@ START_LOOP_TEST(full_string_buffers, iter, 0, 3)
 		child_tid = xstart_thread(&fsb_helper_fn, p);
 	}
 
-	uint8_t *mem = malloc(buf_size);
-	fail_if(mem == NULL);
-	for(int i=0; i < buf_size; i++) mem[i] = i + 1;
+	uint32_t seed = 0xbabecafe ^ (getpid() << 17) ^ child_tid.raw;
+	darray(char *) mems; darray_init(mems);
+	for(int i=0; i < p->n_bufs; i++) {
+		char *mem = malloc(buf_size);
+		fail_if(mem == NULL);
+		random_string(mem, buf_size, &seed);
+		darray_push(mems, mem);
+	}
 	if(!active_receive) L4_Sleep(A_SHORT_NAP);
-	L4_StringItem_t si = L4_StringItem(buf_size, mem);
-	L4_LoadMR(0, (L4_MsgTag_t){ .X.t = 2 }.raw);
-	L4_LoadMRs(1, 2, si.raw);
+	L4_Word_t msg[63];
+	int mpos = 0;
+	for(int i=0; i < p->n_bufs; i++) {
+		L4_StringItem_t si = L4_StringItem(buf_size, mems.item[i]);
+		memcpy(&msg[mpos], si.raw, sizeof(L4_Word_t) * 2);
+		mpos += 2;
+	}
+	L4_LoadMR(0, (L4_MsgTag_t){ .X.t = mpos }.raw);
+	L4_LoadMRs(1, mpos, msg);
 	L4_MsgTag_t tag = L4_Call_Timeouts(child_tid,
 		TEST_IPC_DELAY, TEST_IPC_DELAY);
-	L4_Word_t got_crc; L4_StoreMR(1, &got_crc);
+	L4_Word_t got_msg[63];
+	L4_StoreMRs(1, tag.X.u + tag.X.t, got_msg);
 	if(!ok1(L4_IpcSucceeded(tag))) diag("ec=%#lx", L4_ErrorCode());
-	ok1(got_crc == crc32c(0, mem, buf_size));
+	bool crc_ok = true;
+	for(int i=0; i < p->n_bufs; i++) {
+		L4_Word_t want = crc32c(0, mems.item[i], buf_size);
+		if(got_msg[i] != want) {
+			diag("got_msg[%d]=%#lx, want=%#lx", i, got_msg[i], want);
+			crc_ok = false;
+		}
+	}
+	ok(crc_ok, "all CRCs match");
 
 	if(use_fork) {
+		assert(L4_LocalIdOf(child_tid).raw == L4_nilthread.raw);
 		int st, dead = wait(&st);
 		fail_unless(dead == child);
 	} else {
+		assert(child == -1);
 		xjoin_thread(child_tid);
 	}
-
-	free(mem);
 	free(p);
+
+	for(int i=0; i < mems.size; i++) free(mems.item[i]);
+	darray_free(mems);
 }
 END_TEST
 
