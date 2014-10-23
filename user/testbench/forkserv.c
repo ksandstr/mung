@@ -1044,17 +1044,30 @@ static void handle_unmap(
 }
 
 
+/* POSIX reparents children to PID1. since there's no PID1 in the testbench
+ * personality, any dead children waiting to get reaped by @sp will be
+ * recursively destroyed.
+ */
 static void destroy_space(struct fs_space *sp)
 {
-	struct fs_space *cur, *next, *parent = get_space(sp->parent_id);
-	assert(parent != NULL);
-	assert(parent != sp);
-	assert(parent->id == sp->parent_id);
+	/* find children, reset parent_id. */
+	struct htable_iter it;
+	for(void *space_ptr = htable_first(&space_hash, &it);
+		space_ptr != NULL;
+		space_ptr = htable_next(&space_hash, &it))
+	{
+		struct fs_space *child = container_of(space_ptr, struct fs_space, id);
+		if(child->parent_id != sp->id) continue;
+		child->parent_id = 0;
+	}
 
+	/* destroy dead children. */
+	struct fs_space *cur, *next;
 	list_for_each_safe(&sp->dead_children, cur, next, dead_link) {
 		list_del(&cur->dead_link);
-		list_add_tail(&parent->dead_children, &cur->dead_link);
+		destroy_space(cur);
 	}
+	assert(list_empty(&sp->dead_children));
 	free(sp);
 }
 
