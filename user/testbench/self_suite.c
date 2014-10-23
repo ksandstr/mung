@@ -199,6 +199,38 @@ START_TEST(return_exit_status)
 END_TEST
 
 
+/* start an outer child, and an inner child. have the outer child exit without
+ * waiting. see if shit breaks.
+ */
+START_TEST(reparent_orphans)
+{
+	plan_tests(1);
+
+	int child = fork();
+	if(child == 0) {
+		int second = fork();
+		if(second == 0) {
+			L4_Sleep(TEST_IPC_DELAY);
+			diag("second exiting");
+			exit(0);
+		}
+		diag("second=%d (child exiting)", second);
+		exit(0);
+	}
+	diag("child=%d", child);
+	L4_Sleep(A_SHORT_NAP);
+
+	int st, dead = wait(&st);
+	fail_unless(dead == child, "dead=%d, child=%d", dead, child);
+
+	pass("didn't crash");
+
+	/* let the grandchild exit. */
+	L4_Sleep(TEST_IPC_DELAY);
+}
+END_TEST
+
+
 /* provoke two kinds of segfault in as many children. the first is when the
  * ordinary process dies, and the second causes the process manager thread to
  * segfault. both segfaults will occur as writes on the kernel interface page.
@@ -935,6 +967,7 @@ Suite *self_suite(void)
 		tcase_add_test(tc, basic_fork_and_wait);
 		tcase_add_test(tc, copy_on_write);
 		tcase_add_test(tc, return_exit_status);
+		tcase_add_test(tc, reparent_orphans);
 		tcase_add_test(tc, report_child_segfault);
 		tcase_add_test(tc, ipc_with_child);
 		tcase_add_test(tc, deep_fork);
