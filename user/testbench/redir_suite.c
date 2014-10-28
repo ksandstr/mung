@@ -284,6 +284,102 @@ START_LOOP_TEST(fork_redirect_deep, iter, 0, 3)
 END_TEST
 
 
+/* the "deadlk" tcase. */
+
+/* fork two children A, B. A calls B, then communicates status to parent and
+ * exits. B receives, replies, and exits.
+ *
+ * variables: whether A is being redirected, same for B, and another that says
+ * whether the receiver should sleep before receiving.
+ */
+START_LOOP_TEST(no_deadlock, iter, 0, 7)
+{
+	const bool redir_rcv = CHECK_FLAG(iter, 1),
+		redir_snd = CHECK_FLAG(iter, 2),
+		rcv_sleep = CHECK_FLAG(iter, 4);
+	diag("redir_rcv=%s, redir_snd=%s, rcv_sleep=%s",
+		btos(redir_rcv), btos(redir_snd), btos(rcv_sleep));
+
+	plan_tests(2);
+
+	const L4_ThreadId_t parent_tid = L4_MyGlobalId();
+
+	/* B, aka `rcv' */
+	set_fork_redir(redir_rcv ? redir_fixture_tid : L4_anythread);
+	L4_ThreadId_t rcv_tid;
+	int rcv_child = fork_tid(&rcv_tid);
+	if(rcv_child == 0) {
+		if(rcv_sleep) {
+			/* twice the forward timeout of redir_fixture_fn() */
+			L4_Sleep(A_SHORT_NAP);
+			L4_Sleep(A_SHORT_NAP);
+		}
+		L4_ThreadId_t sender;
+		L4_MsgTag_t tag = L4_Wait_Timeout(TEST_IPC_DELAY, &sender);
+		if(L4_IpcSucceeded(tag)) {
+			L4_LoadMR(0, 0);
+			L4_Reply(sender);
+		} else {
+			diag("rcv_child: ec=%#lx", L4_ErrorCode());
+		}
+		exit(L4_IpcFailed(tag) ? 1 : 0);
+	}
+
+	/* A, aka `snd' */
+	set_fork_redir(redir_snd ? redir_fixture_tid : L4_anythread);
+	L4_ThreadId_t snd_tid;
+	int snd_child = fork_tid(&snd_tid);
+	if(snd_child == 0) {
+		L4_LoadMR(0, (L4_MsgTag_t){ .X.label = 0xbeef }.raw);
+		L4_MsgTag_t tag = L4_Call_Timeouts(rcv_tid,
+			TEST_IPC_DELAY, TEST_IPC_DELAY);
+		L4_Word_t ec = L4_IpcFailed(tag) ? L4_ErrorCode() : 0;
+		if(ec != 0) diag("snd_child: ec=%#lx", ec);
+
+		/* report back. */
+		L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 1 }.raw);
+		L4_LoadMR(1, ec);
+		tag = L4_Call_Timeouts(parent_tid, TEST_IPC_DELAY, TEST_IPC_DELAY);
+		if(L4_IpcFailed(tag)) {
+			diag("snd_child: report call failed, ec=%#lx", L4_ErrorCode());
+		}
+		exit(L4_IpcFailed(tag) ? 1 : 0);
+	}
+
+	/* catch report from A. */
+	L4_MsgTag_t tag = L4_Receive_Timeout(snd_tid,
+		L4_TimePeriod(L4_PeriodUs_NP(TEST_IPC_DELAY) * 3));
+	L4_Word_t snd_ec = 0; L4_StoreMR(1, &snd_ec);
+	if(!ok(L4_IpcSucceeded(tag), "got report")) {
+		diag("report ec=%#lx", L4_ErrorCode());
+	}
+	if(!ok1(snd_ec == 0)) diag("snd_ec=%#lx", snd_ec);
+	if(L4_IpcSucceeded(tag)) {
+		L4_LoadMR(0, 0);
+		L4_Reply(snd_tid);
+	}
+
+	/* clean up. */
+	diag("waiting for snd=%d, rcv=%d", snd_child, rcv_child);
+	for(int i=0; i < 2; i++) {
+		int st, dead = wait(&st);
+		if(dead != snd_child && dead != rcv_child) {
+			diag("unexpected dead=%d", dead);
+		}
+	}
+}
+END_TEST
+
+
+START_TEST(deadlock_under_redirect)
+{
+	plan_tests(1);
+	todo_start("nothing here!");
+	ok1(true);
+}
+END_TEST
+
+
 /* a simple redirector fixture. captures and forwards all messages besides
  * get_msgs() and quit().
  *
@@ -471,11 +567,21 @@ Suite *redir_suite(void)
 {
 	Suite *s = suite_create("redir");
 
+	/* tests of the runtime (i.e. forkserv). */
 	{
 		TCase *tc = tcase_create("rt");
 		tcase_add_checked_fixture(tc, &fixture_start, &fixture_teardown);
 		tcase_add_test(tc, fork_redirect_basic);
 		tcase_add_test(tc, fork_redirect_deep);
+		suite_add_tcase(s, tc);
+	}
+
+	/* tests on deadlock behaviour under redirection. */
+	{
+		TCase *tc = tcase_create("deadlk");
+		tcase_add_checked_fixture(tc, &fixture_start, &fixture_teardown);
+		tcase_add_test(tc, no_deadlock);
+		tcase_add_test(tc, deadlock_under_redirect);
 		suite_add_tcase(s, tc);
 	}
 
