@@ -162,7 +162,7 @@ static bool check_space(int opt, struct space *sp)
 				ptab_mem = NULL;
 			}
 
-			if(up == NULL) {
+			if(up == NULL || ptab_mem == NULL) {
 				uint32_t ent = ptab_mem != NULL ? ptab_mem[pg_ix] : 0;
 				inv_log("no utcb page; ptab_mem is %p, entry %d is %#x",
 					ptab_mem, pg_ix, ent);
