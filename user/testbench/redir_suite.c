@@ -371,11 +371,79 @@ START_LOOP_TEST(no_deadlock, iter, 0, 7)
 END_TEST
 
 
-START_TEST(deadlock_under_redirect)
+/* fork two children A, B. both call to one another with a timeout, and report
+ * the result back to parent. both should report a send-side timeout both with
+ * and without redirection.
+ */
+START_LOOP_TEST(mutual_send_deadlock, iter, 0, 3)
 {
-	plan_tests(1);
-	todo_start("nothing here!");
-	ok1(true);
+	const bool redir_flag[2] = { CHECK_FLAG(iter, 1), CHECK_FLAG(iter, 2) };
+	diag("redir_flag={%s, %s}", btos(redir_flag[0]), btos(redir_flag[1]));
+	plan_tests(4);
+
+	const L4_ThreadId_t parent_tid = L4_MyGlobalId();
+
+	int child[2];
+	L4_ThreadId_t child_tid[2];
+	for(int i=0; i < 2; i++) {
+		set_fork_redir(redir_flag[i] ? redir_fixture_tid : L4_anythread);
+		child[i] = fork_tid(&child_tid[i]);
+		if(child[i] == 0) {
+			L4_ThreadId_t peer_tid;
+			if(i == 1) peer_tid = child_tid[0];
+			else {
+				/* get peer from parent. */
+				L4_MsgTag_t tag = L4_Receive_Timeout(parent_tid,
+					TEST_IPC_DELAY);
+				IPC_FAIL(tag);
+				L4_StoreMR(1, &peer_tid.raw);
+			}
+			/* call. */
+			L4_LoadMR(0, (L4_MsgTag_t){ .X.label = 0xb0a0 + i }.raw);
+			L4_MsgTag_t tag = L4_Call_Timeouts(peer_tid,
+				TEST_IPC_DELAY, TEST_IPC_DELAY);
+			L4_Word_t ec = L4_ErrorCode();
+			/* report back. */
+			L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 2 }.raw);
+			L4_LoadMR(1, tag.raw);
+			L4_LoadMR(2, ec);
+			tag = L4_Send_Timeout(parent_tid, TEST_IPC_DELAY);
+			exit(L4_IpcFailed(tag) ? 1 : 0);
+		}
+	}
+
+	/* send peer info to the first child. */
+	L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 1 }.raw);
+	L4_LoadMR(1, child_tid[1].raw);
+	L4_MsgTag_t tag = L4_Send_Timeout(child_tid[0], A_SHORT_NAP);
+	fail_if(L4_IpcFailed(tag), "can't send to child[0]=%d; ec=%#lx",
+		child[0], L4_ErrorCode());
+
+	/* get results. */
+	L4_MsgTag_t child_tag[2];
+	L4_Word_t child_ec[2];
+	for(int i=0; i < 2; i++) {
+		L4_MsgTag_t tag = L4_Receive_Timeout(child_tid[i],
+			L4_TimePeriod(L4_PeriodUs_NP(TEST_IPC_DELAY) * 3));
+		fail_if(L4_IpcFailed(tag),
+			"can't get result from child[%d]=%d; ec=%#lx",
+			i, child[i], L4_ErrorCode());
+		L4_StoreMR(1, &child_tag[i].raw);
+		L4_StoreMR(2, &child_ec[i]);
+	}
+
+	ok1(L4_IpcFailed(child_tag[0]) && L4_IpcFailed(child_tag[1]));
+	ok1(L4_Label(child_tag[0]) >> 4 != 0xb0a);
+	ok1(L4_Label(child_tag[1]) >> 4 != 0xb0a);
+	ok1(child_ec[0] == 0x2 && child_ec[1] == 0x2);
+
+	/* clean up */
+	for(int i=0; i < 2; i++) {
+		int st, dead = wait(&st);
+		if(dead != child[0] && dead != child[1]) {
+			diag("unexpected dead=%d", dead);
+		}
+	}
 }
 END_TEST
 
@@ -418,18 +486,18 @@ static void redir_fixture_fn(void *parameter)
 				 */
 				assert(L4_IsGlobalId(ir));
 				sender = L4_GlobalIdOf(sender);
+#if 0
 				if(L4_Label(tag) >> 4 != 0xffe) {
 					printf("redir ipc from=%lu:%lu, label=%#lx, ir=%lu:%lu\n",
 						L4_ThreadNo(sender), L4_Version(sender), L4_Label(tag),
 						L4_ThreadNo(ir), L4_Version(ir));
 				} else {
-#if 0
 					L4_Word_t fip = mrs[1], faddr = mrs[0];
 					printf("redir #pf from=%lu:%lu, ip=%#lx, addr=%#lx, ir=%lu:%lu\n",
 						L4_ThreadNo(sender), L4_Version(sender), fip, faddr,
 						L4_ThreadNo(ir), L4_Version(ir));
-#endif
 				}
+#endif
 				struct redir_fixture_msg_info *msg = talloc_size(ctx,
 					sizeof(*msg));
 				msg->tag = tag.raw;
@@ -581,7 +649,7 @@ Suite *redir_suite(void)
 		TCase *tc = tcase_create("deadlk");
 		tcase_add_checked_fixture(tc, &fixture_start, &fixture_teardown);
 		tcase_add_test(tc, no_deadlock);
-		tcase_add_test(tc, deadlock_under_redirect);
+		tcase_add_test(tc, mutual_send_deadlock);
 		suite_add_tcase(s, tc);
 	}
 
