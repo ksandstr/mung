@@ -35,6 +35,9 @@ typedef struct redir_fixture_msg_info {
 
 static L4_ThreadId_t redir_fixture_tid;
 
+static void fixture_start(void);
+static void fixture_teardown(void);
+
 static int __redir_fixture_get_msgs_timeouts(
 	L4_ThreadId_t service_tid,
 	uint16_t *n_got,
@@ -113,6 +116,142 @@ static int fork_sender(L4_ThreadId_t *tid_p, L4_ThreadId_t partner, L4_Word_t la
 	exit(0);
 }
 
+
+/* tcase `api' */
+
+static void set_redir(L4_ThreadId_t space_id, L4_ThreadId_t redir_tid)
+{
+	L4_Word_t dummy, res = L4_SpaceControl(space_id, 0,
+		L4_Nilpage, L4_Nilpage, redir_tid, &dummy);
+	if(res != 1) {
+		/* some errors, like "invalid space" (0x3), can occur if the target
+		 * has exited in forkserv before the syscall happens.
+		 */
+		diag("%s: res=%lu, ec=%#x", __func__, res, L4_ErrorCode());
+	}
+}
+
+
+/* start the redirector fixture, launch a process with it, kill the
+ * redirector, receive Call from child process.
+ *   - the kernel shouldn't crash
+ *   - the child process shouldn't be able to do Ipc sends while the
+ *     redirector is invalid
+ *   - the child Ipc should proceed after redirector is reinstated
+ *     - ... or set to anythread
+ *
+ * variables:
+ *   - [pre_send_remove] whether the redirector is killed before SEND_WAIT, or
+ *     during it
+ *     - i.e. the "active receive" flag
+ *   - [reinstate] whether the child's redirector is restored to be the fixture
+ *     thread, or anythread
+ *
+ * TODO: this should also test that:
+ *   - altering the redirector's version bits has the same effect as removing
+ *     it outright
+ *     - ... and restoring the version bits shouldn't let the child process
+ *       proceed, i.e. redirection is associated with an abstract thread which
+ *       is considered lost when its ID is re-versioned, or when the thread is
+ *       deleted.
+ *   - Schedule will see the thread's status as "pending send".
+ *   - ExchangeRegisters will see the thread's status as not halted, and
+ *     cannot resume it by un-halting.
+ *   - ExchangeRegisters can break the SEND_WAIT status.
+ *     - these two are hard: the exregs caller must be in the same space, but
+ *       not halt for pagefault redirection.
+ */
+START_LOOP_TEST(vanishing_redirector, iter, 0, 3)
+{
+	const bool pre_send_remove = CHECK_FLAG(iter, 1),
+		reinstate = CHECK_FLAG(iter, 2);
+	diag("pre_send_remove=%s, reinstate=%s", btos(pre_send_remove),
+		btos(reinstate));
+
+	plan_tests(6);
+
+	fixture_start();
+	L4_Sleep(A_SHORT_NAP);
+
+	set_fork_redir(redir_fixture_tid);
+	L4_ThreadId_t child_tid, parent_tid = L4_MyGlobalId();
+	int child = fork_tid(&child_tid);
+	if(child == 0) {
+		L4_LoadMR(0, 0);
+		L4_MsgTag_t tag = L4_Call_Timeouts(parent_tid,
+			TEST_IPC_DELAY, TEST_IPC_DELAY);
+		if(L4_IpcFailed(tag)) {
+			diag("child: ec=%#lx", L4_ErrorCode());
+			exit(1);
+		}
+
+		L4_LoadMR(0, 0);
+		tag = L4_Call_Timeouts(parent_tid, TEST_IPC_DELAY, TEST_IPC_DELAY);
+		exit(L4_IpcFailed(tag) ? 1 : 0);
+	}
+
+	L4_MsgTag_t tag = L4_Receive_Timeout(child_tid, TEST_IPC_DELAY);
+	ok(L4_IpcSucceeded(tag), "first receive ok");
+
+	if(pre_send_remove) fixture_teardown();
+
+	L4_LoadMR(0, 0);
+	L4_Reply(child_tid);
+
+	if(!pre_send_remove) {
+		L4_Sleep(A_SHORT_NAP);
+		fixture_teardown();
+	}
+
+	/* get the second message. this should timeout, verifying that IPC from
+	 * the child doesn't work with an invalid redirector.
+	 */
+	tag = L4_Receive_Timeout(child_tid, L4_TimePeriod(25 * 1000));
+	L4_Word_t ec = L4_ErrorCode();
+	if(!ok(L4_IpcFailed(tag) && ec == 0x3, "timeout after remove")) {
+		diag("tag=%#lx, ec=%#lx", tag.raw, ec);
+	}
+
+	/* permit active receive from child & complete the IPC */
+	if(reinstate) {
+		fixture_start();
+		L4_Sleep(A_SHORT_NAP);
+		set_redir(child_tid, redir_fixture_tid);
+	} else {
+		set_redir(child_tid, L4_anythread);
+	}
+	tag = L4_Receive_Timeout(child_tid, L4_TimePeriod(25 * 1000));
+	ec = L4_ErrorCode();
+	L4_ThreadId_t as = L4_ActualSender();
+	if(!ok(L4_IpcSucceeded(tag), "post-reset receive ok")) {
+		diag("tag=%#lx, ec=%#lx", tag.raw, ec);
+	}
+	/* redirector is in our space, so no propagation should be seen.
+	 * this test isn't about that, anyway.
+	 */
+	if(!ok1(!L4_IpcPropagated(tag))) {
+		diag("as=%lu:%lu", L4_ThreadNo(as), L4_Version(as));
+	}
+
+	L4_LoadMR(0, 0);
+	tag = L4_Reply(child_tid);
+	ec = L4_ErrorCode();
+	if(!ok(L4_IpcSucceeded(tag), "post-reset reply ok")) {
+		diag("tag=%#lx, ec=%#lx", tag.raw, ec);
+	}
+
+	int st, dead = wait(&st);
+	fail_if(dead != child, "dead=%d, child=%d!", dead, child);
+	/* TODO: check child exit status to confirm that its Call failed */
+
+	pass("didn't crash");
+
+	if(reinstate) fixture_teardown();
+}
+END_TEST
+
+
+/* tcase `rt' */
 
 /* test that a child process can be started with redirection, and that the
  * redirected child can wake up enough to synchronize with a different process
@@ -628,12 +767,21 @@ static void fixture_teardown(void)
 
 	send_quit(redir_fixture_tid);
 	xjoin_thread(redir_fixture_tid);
+	redir_fixture_tid = L4_nilthread;
 }
 
 
 Suite *redir_suite(void)
 {
 	Suite *s = suite_create("redir");
+
+	/* API tests */
+	{
+		TCase *tc = tcase_create("api");
+		tcase_set_fork(tc, false);
+		tcase_add_test(tc, vanishing_redirector);
+		suite_add_tcase(s, tc);
+	}
 
 	/* tests of the runtime (i.e. forkserv). */
 	{
