@@ -432,12 +432,12 @@ static inline bool is_interrupt(L4_ThreadId_t tid) {
 /* whether "tip" ends up redirecting for "base". */
 static bool has_redir_chain(struct thread *base, struct thread *tip)
 {
+	assert(tip != NULL);
 	do {
-		L4_ThreadId_t r = base->space->redirector;
-		if(r.raw == L4_anythread.raw) return false;
-		if(r.raw == tip->id) return true;
-		base = thread_find(r.raw);
-		if(base == NULL || base->id != r.raw) return false;
+		if(!CHECK_FLAG(base->space->flags, SF_REDIRECT)) return false;
+		struct thread *r = base->space->redirector;
+		if(r == tip) return true;
+		base = r;
 	} while(base != NULL);
 	return false;
 }
@@ -472,7 +472,7 @@ static bool ipc_send_half(
 	if(dest == NULL) {
 		assert(CHECK_FLAG(self->flags, TF_INTR));
 		assert(is_interrupt(self->ipc_to));
-		assert(self->space->redirector.raw == L4_anythread.raw);
+		assert(!CHECK_FLAG(self->space->flags, SF_REDIRECT));
 
 		/* eat an interrupt reply. */
 		err_code = int_clear(L4_ThreadNo(self->ipc_to), self);
@@ -483,20 +483,9 @@ static bool ipc_send_half(
 	struct thread *saved_dest = NULL;
 	tag->X.flags &= 0x1;	/* keep the propagate flag */
 	if(self->space != dest->space
-		&& self->space->redirector.raw != L4_anythread.raw)
+		&& CHECK_FLAG(self->space->flags, SF_REDIRECT))
 	{
-		/* TODO: this should be moved into an invariant in space.c */
-		assert(L4_IsGlobalId(self->space->redirector)
-			|| L4_IsNilThread(self->space->redirector)
-			|| self->space->redirector.raw == L4_anythread.raw);
-		/* TODO: this entails a thread lookup every time that a redirected
-		 * task needs to do IPC with a non-local thread. that's sort of bad.
-		 * instead there should be a redir_thread pointer, and the thread
-		 * marked with TF_REDIR; the pointer is reset when that thread is
-		 * deleted. (this scales linearly wrt all threads in the system.)
-		 */
-		struct thread *red = thread_find(self->space->redirector.raw);
-		assert(red == NULL || red->id == self->space->redirector.raw);
+		struct thread *red = self->space->redirector;
 		if(unlikely(red == NULL)) {
 			/* FIXME: this is erroneous behaviour. instead we should put the
 			 * sender into SEND_WAIT | TF_REDIR_WAIT without an entry in the
@@ -1162,7 +1151,7 @@ SYSCALL L4_Word_t sys_ipc(
 		&& (!CHECK_FLAG(current->flags, TF_INTR)
 			|| !is_interrupt(to)
 			/* redirected tasks can never reply to interrupts. */
-			|| current->space->redirector.raw != L4_anythread.raw))
+			|| CHECK_FLAG(current->space->flags, SF_REDIRECT)))
 	{
 		/* resolve to an actual thread (not an interrupt). or fail if not
 		 * associated with an interrupt.

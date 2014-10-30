@@ -18,6 +18,7 @@
 
 /* space->flags */
 #define SF_PRIVILEGE 0x1	/* *Control syscall access */
+#define SF_REDIRECT  0x2	/* ->redirector is obeyed in ipc_send_half() */
 
 #define UTCB_SIZE 512
 #define UTCB_PER_PAGE (PAGE_SIZE / UTCB_SIZE)
@@ -58,11 +59,11 @@ struct space
 	L4_Fpage_t utcb_area;
 	L4_Fpage_t kip_area;
 
-	/* nilthread for invalid (removed and not reset), anythread for no
-	 * redirector, or global TID to specify one. local TID or anylocalthread
-	 * not defined.
+	/* when flags & SF_REDIRECT, NULL for invalid (removed and not set) and
+	 * non-NULL when set to a valid TID;
+	 * otherwise no redirector was set (redir=anythread).
 	 */
-	L4_ThreadId_t redirector;
+	struct thread *redirector;
 
 	struct htable utcb_pages;	/* <struct utcb_page *>, by ->pos */
 	struct htable ptab_pages;	/* <struct page *>, by page.id */

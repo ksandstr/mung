@@ -313,7 +313,7 @@ struct space *space_new(void)
 	sp->tss_len = 0;
 	sp->tss_seg = 0;
 	sp->flags = 0;
-	sp->redirector = L4_anythread;
+	sp->redirector = NULL;
 
 	return sp;
 }
@@ -694,7 +694,9 @@ void space_remove_redirector(struct thread *t)
 
 	struct space *sp;
 	list_for_each(&space_list, sp, link) {
-		if(sp->redirector.raw == t->id) sp->redirector = L4_nilthread;
+		if(CHECK_FLAG(sp->flags, SF_REDIRECT) && sp->redirector == t) {
+			sp->redirector = NULL;
+		}
 	}
 }
 
@@ -1097,12 +1099,15 @@ SYSCALL L4_Word_t sys_spacecontrol(
 		assert(sp->utcb_area.raw == utcb_area.raw);
 	}
 
-	if(new_red != NULL || redirector.raw == L4_anythread.raw) {
-		if(new_red != NULL && !CHECK_FLAG(new_red->flags, TF_REDIR)) {
-			new_red->flags |= TF_REDIR;
-		}
-		assert(new_red == NULL || new_red->id == redirector.raw);
-		sp->redirector = redirector;
+	if(redirector.raw == L4_anythread.raw) {
+		sp->flags &= ~SF_REDIRECT;
+		sp->redirector = NULL;
+		/* TODO: restart SEND_WAIT | TF_REDIR_WAIT threads in @sp */
+	} else if(new_red != NULL) {
+		assert(new_red->id == redirector.raw);
+		new_red->flags |= TF_REDIR;
+		sp->redirector = new_red;
+		sp->flags |= SF_REDIRECT;
 	}
 
 	result = 1;
@@ -1129,7 +1134,8 @@ COLD void init_spaces(struct list_head *resv_list)
 	kernel_space->tss = &kernel_tss;
 	kernel_space->tss_len = sizeof(struct tss);
 	kernel_space->tss_seg = SEG_KERNEL_TSS;
-	kernel_space->redirector = L4_anythread;
+	assert(kernel_space->flags == 0);
+	assert(kernel_space->redirector == NULL);
 
 	/* preallocate page table pages for the kernel segment, so that it makes
 	 * sense to copy the page table pointers.
