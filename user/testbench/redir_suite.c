@@ -587,6 +587,104 @@ START_LOOP_TEST(mutual_send_deadlock, iter, 0, 3)
 END_TEST
 
 
+/* fork N senders and 1 receiver. have the receiver receive N times.
+ * successful when no timeouts occur.
+ *
+ * variables:
+ *   - [use_wildcard] whether the receiver uses anythread, or walks through
+ *     the children one by one.
+ *   - [use_redir] whether a redirector is applied to the senders
+ */
+START_LOOP_TEST(multi_receive_ok, iter, 0, 3)
+{
+	const size_t n_senders = 6;		/* N */
+	const bool use_redir = CHECK_FLAG(iter, 1),
+		use_wildcard = CHECK_FLAG(iter, 2);
+	diag("use_redir=%s, use_wildcard=%s",
+		btos(use_redir), btos(use_wildcard));
+	plan_tests(3);
+
+	/* the receiver. */
+	L4_ThreadId_t receiver_tid, parent_tid = L4_MyGlobalId();
+	int receiver = fork_tid(&receiver_tid);
+	if(receiver == 0) {
+		/* get senders from parent. */
+		L4_MsgTag_t tag = L4_Receive_Timeout(parent_tid, TEST_IPC_DELAY);
+		IPC_FAIL(tag);
+		L4_ThreadId_t senders[63];
+		assert(L4_UntypedWords(tag) == n_senders);
+		for(int i=0; i < n_senders; i++) {
+			L4_StoreMR(i + 1, &senders[i].raw);
+		}
+		/* receive. */
+		L4_Word_t statuses[63];
+		for(int i=0; i < n_senders; i++) {
+			L4_ThreadId_t from;
+			if(use_wildcard) {
+				tag = L4_Wait_Timeout(TEST_IPC_DELAY, &from);
+			} else {
+				from = senders[i];
+				tag = L4_Receive_Timeout(from, TEST_IPC_DELAY);
+			}
+			statuses[i] = L4_IpcFailed(tag) ? L4_ErrorCode() : 0;
+			if(L4_IpcSucceeded(tag)) {
+				L4_LoadMR(0, 0);
+				L4_Reply(from);
+			}
+		}
+		/* deliver. */
+		L4_LoadMR(0, (L4_MsgTag_t){ .X.u = n_senders }.raw);
+		L4_LoadMRs(1, n_senders, statuses);
+		tag = L4_Send_Timeout(parent_tid, TEST_IPC_DELAY);
+		exit(L4_IpcFailed(tag) ? 1 : 0);
+	}
+
+	/* senders. */
+	if(use_redir) set_fork_redir(redir_fixture_tid);
+	int sender_pids[n_senders];
+	L4_ThreadId_t senders[n_senders];
+	for(int i=0; i < n_senders; i++) {
+		sender_pids[i] = fork_tid(&senders[i]);
+		if(sender_pids[i] == 0) {
+			L4_LoadMR(0, 0);
+			L4_MsgTag_t tag = L4_Call_Timeouts(receiver_tid,
+				TEST_IPC_DELAY, TEST_IPC_DELAY);
+			exit(L4_IpcFailed(tag) ? 1 : 0);
+		}
+	}
+	L4_LoadMR(0, (L4_MsgTag_t){ .X.u = n_senders }.raw);
+	for(int i=0; i < n_senders; i++) L4_LoadMR(i + 1, senders[i].raw);
+	L4_MsgTag_t tag = L4_Send_Timeout(receiver_tid, TEST_IPC_DELAY);
+	IPC_FAIL(tag);
+
+	/* results from receiver. */
+	tag = L4_Receive_Timeout(receiver_tid,
+		L4_TimePeriod(L4_PeriodUs_NP(TEST_IPC_DELAY) * (n_senders + 1)));
+	skip_start(!ok(L4_IpcSucceeded(tag), "got receiver report"),
+		2, "no report")
+	{
+		L4_Word_t results[n_senders];
+		int n_got = MIN(int, n_senders, L4_UntypedWords(tag));
+		L4_StoreMRs(1, n_got, results);
+		ok1(n_got == n_senders);
+		bool all_ok = true;
+		for(int i=0; i < n_got; i++) {
+			if(results[i] != 0) {
+				diag("results[%d]=%#lx", i, results[i]);
+				all_ok = false;
+			}
+		}
+		ok1(all_ok);
+	} skip_end;
+
+	for(int i=0; i < n_senders + 1; i++) {
+		int st, dead = wait(&st);
+		if(dead <= 0) diag("dead=%d, st=%d", dead, st);
+	}
+}
+END_TEST
+
+
 /* a simple redirector fixture. captures and forwards all messages besides
  * get_msgs() and quit().
  *
@@ -798,6 +896,7 @@ Suite *redir_suite(void)
 		tcase_add_checked_fixture(tc, &fixture_start, &fixture_teardown);
 		tcase_add_test(tc, no_deadlock);
 		tcase_add_test(tc, mutual_send_deadlock);
+		tcase_add_test(tc, multi_receive_ok);
 		suite_add_tcase(s, tc);
 	}
 
