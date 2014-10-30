@@ -43,7 +43,7 @@ struct utcb_page
 	 * limit won't be hit.
 	 */
 	uint16_t pos;
-	uint16_t occmap;		/* little-endian occupancy map */
+	uint16_t occmap;		/* little-endian occupancy map, 1 for present */
 	struct page *pg;
 	struct thread *slots[UTCB_PER_PAGE];
 };
@@ -58,6 +58,10 @@ struct space
 	L4_Fpage_t utcb_area;
 	L4_Fpage_t kip_area;
 
+	/* nilthread for invalid (removed and not reset), anythread for no
+	 * redirector, or global TID to specify one. local TID or anylocalthread
+	 * not defined.
+	 */
 	L4_ThreadId_t redirector;
 
 	struct htable utcb_pages;	/* <struct utcb_page *>, by ->pos */
@@ -112,6 +116,12 @@ extern struct utcb_page *space_get_utcb_page(struct space *sp, uint16_t ppos);
 
 /* removes page table entries within @fp. ignores L4_Rights(@fp). */
 extern void space_clear_range(struct space *sp, L4_Fpage_t fp);
+
+/* invalidates the redirector field in all spaces where it references @t. used
+ * in deleting and version-altering ThreadControl cases. SEND_WAIT threads in
+ * those spaces will be stopped.
+ */
+extern void space_remove_redirector(struct thread *t);
 
 /* sets access for a range. if @fp.rights doesn't include Readable, the entry
  * is removed altogether to enforce non-readability.

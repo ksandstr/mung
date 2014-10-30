@@ -688,6 +688,17 @@ void space_clear_range(struct space *sp, L4_Fpage_t fp)
 }
 
 
+void space_remove_redirector(struct thread *t)
+{
+	assert(CHECK_FLAG(t->flags, TF_REDIR));
+
+	struct space *sp;
+	list_for_each(&space_list, sp, link) {
+		if(sp->redirector.raw == t->id) sp->redirector = L4_nilthread;
+	}
+}
+
+
 bool space_prefill_upper(struct space *space, L4_Word_t fault_addr)
 {
 	bool ret;
@@ -1087,6 +1098,9 @@ SYSCALL L4_Word_t sys_spacecontrol(
 	}
 
 	if(new_red != NULL || redirector.raw == L4_anythread.raw) {
+		if(new_red != NULL && !CHECK_FLAG(new_red->flags, TF_REDIR)) {
+			new_red->flags |= TF_REDIR;
+		}
 		assert(new_red == NULL || new_red->id == redirector.raw);
 		sp->redirector = redirector;
 	}

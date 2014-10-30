@@ -36,6 +36,7 @@ typedef L4_Word_t thread_id;
 #define TF_INTR		0x4	/* interrupt receiver */
 #define TF_PRE_RECV	0x8	/* halted in TS_R_RECV (restored on resume) */
 #define TF_SYSCALL	0x10 /* may do fast exit (for Ipc, Lipc, ThreadSwitch) */
+#define TF_REDIR	0x20 /* has ever been made redirector of any space */
 
 /* thread states (<struct thread>.status); see also sched_status_str() */
 #define TS_STOPPED 0

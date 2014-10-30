@@ -485,7 +485,10 @@ static bool ipc_send_half(
 	if(self->space != dest->space
 		&& self->space->redirector.raw != L4_anythread.raw)
 	{
-		assert(L4_IsGlobalId(self->space->redirector));
+		/* TODO: this should be moved into an invariant in space.c */
+		assert(L4_IsGlobalId(self->space->redirector)
+			|| L4_IsNilThread(self->space->redirector)
+			|| self->space->redirector.raw == L4_anythread.raw);
 		/* TODO: this entails a thread lookup every time that a redirected
 		 * task needs to do IPC with a non-local thread. that's sort of bad.
 		 * instead there should be a redir_thread pointer, and the thread
@@ -493,12 +496,14 @@ static bool ipc_send_half(
 		 * deleted. (this scales linearly wrt all threads in the system.)
 		 */
 		struct thread *red = thread_find(self->space->redirector.raw);
-		if(red == NULL || red->id != self->space->redirector.raw) {
-			/* FIXME: this should put the sender into TF_HALT | TF_RWAIT,
-			 * which should be resumed from in sys_spacecontrol() when a valid
-			 * redirector is reinstated.
+		assert(red == NULL || red->id == self->space->redirector.raw);
+		if(unlikely(red == NULL)) {
+			/* FIXME: this is erroneous behaviour. instead we should put the
+			 * sender into SEND_WAIT | TF_REDIR_WAIT without an entry in the
+			 * upcoming `redir_wait' htable, so that it'll stay asleep until a
+			 * redirector is added or set to anythread.
 			 */
-			panic("invalid redirector!");
+			red = dest;
 		}
 
 		if(dest->space != red->space) {

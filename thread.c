@@ -1120,6 +1120,15 @@ int int_clear(int intnum, struct thread *sender)
 }
 
 
+static void drop_redir_to(struct thread *t)
+{
+	if(CHECK_FLAG(t->flags, TF_REDIR)) {
+		space_remove_redirector(t);
+		t->flags &= ~TF_REDIR;
+	}
+}
+
+
 /* FIXME: make this function atomic on error! */
 SYSCALL L4_Word_t sys_threadcontrol(
 	L4_ThreadId_t dest_tid,
@@ -1207,6 +1216,7 @@ SYSCALL L4_Word_t sys_threadcontrol(
 			goto dead;
 		}
 
+		drop_redir_to(dest);
 		cancel_ipc_from(dest);
 		if(!CHECK_FLAG(dest->flags, TF_HALT)) thread_halt(dest);
 		if(CHECK_FLAG(dest->flags, TF_INTR)) int_kick(dest);
@@ -1228,6 +1238,8 @@ SYSCALL L4_Word_t sys_threadcontrol(
 			/* version field and IPC stomp */
 			assert(L4_ThreadNo(dest_tid) == TID_THREADNUM(dest->id));
 			assert(L4_Version(dest_tid) != TID_VERSION(dest->id));
+			/* version bits changed, invalidating redir TIDs */
+			drop_redir_to(dest);
 			/* fail sends to the moribund TID & break propagation where it's
 			 * used for VirtualSender
 			 */
