@@ -1042,7 +1042,8 @@ SYSCALL L4_Word_t sys_spacecontrol(
 	struct space *sp;
 	if(L4_IsNilThread(spacespec)
 		|| L4_IsLocalId(spacespec)
-		|| (sp = space_find(spacespec.raw)) == NULL)
+		|| (sp = space_find(spacespec.raw)) == NULL
+		|| unlikely(sp == kernel_space))
 	{
 		*ec_p = 3;		/* invalid space */
 		result = 0;
