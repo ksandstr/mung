@@ -23,6 +23,7 @@
 #include <ukernel/misc.h>
 #include <ukernel/util.h>
 #include <ukernel/thread.h>
+#include <ukernel/ipc.h>
 #include <ukernel/sched.h>
 #include <ukernel/mapdb.h>
 #include <ukernel/kip.h>
@@ -688,6 +689,69 @@ void space_clear_range(struct space *sp, L4_Fpage_t fp)
 }
 
 
+/* call @fn for each thread in @sp. stop early if @fn returns false. */
+static void for_each_thread_in_space(
+	struct space *sp,
+	bool (*fn)(struct thread *t, void *priv),
+	void *priv)
+{
+	struct htable_iter it;
+	for(struct utcb_page *up = htable_first(&sp->utcb_pages, &it);
+		up != NULL;
+		up = htable_next(&sp->utcb_pages, &it))
+	{
+		unsigned occmap = up->occmap;
+		while(occmap != 0) {
+			int slot = ffsl(occmap) - 1;
+			occmap &= ~(1 << slot);
+			assert(up->slots[slot] != NULL);
+			if(!(*fn)(up->slots[slot], priv)) return;
+		}
+	}
+}
+
+
+static bool clear_empty_redir_wait(struct thread *t, void *unused)
+{
+	if(t->status != TS_SEND_WAIT) return true;
+	if(!CHECK_FLAG(t->flags, TF_REDIR_WAIT)) return true;
+	if(t->u1.waited_redir.raw != L4_nilthread.raw) return true;
+
+	/* FIXME: handle this by temporarily clearing TF_HALT over ipc_send_half()
+	 * where applicable. this changes the interpretation of TF_HALT to just
+	 * code execution rather than that and IPC.
+	 *
+	 * needs a provocation test, first.
+	 */
+	assert(!CHECK_FLAG(t->flags, TF_HALT));
+
+	t->flags &= ~TF_REDIR_WAIT;
+	redo_ipc_send_half(t);
+
+	return true;
+}
+
+
+/* TODO: allow for pre-emption of the SpaceControl caller, i.e.
+ * current_thread
+ */
+static void restart_redir_waits(struct space *sp) {
+	for_each_thread_in_space(sp, &clear_empty_redir_wait, NULL);
+}
+
+
+static bool invalidate_redir_wait(struct thread *t, void *unused)
+{
+	if(CHECK_FLAG(t->flags, TF_REDIR_WAIT)) {
+		assert(t->status == TS_SEND_WAIT);
+		remove_redir_wait(t);
+		t->u1.waited_redir = L4_nilthread;
+	}
+
+	return true;
+}
+
+
 void space_remove_redirector(struct thread *t)
 {
 	assert(CHECK_FLAG(t->flags, TF_REDIR));
@@ -696,6 +760,7 @@ void space_remove_redirector(struct thread *t)
 	list_for_each(&space_list, sp, link) {
 		if(CHECK_FLAG(sp->flags, SF_REDIRECT) && sp->redirector == t) {
 			sp->redirector = NULL;
+			for_each_thread_in_space(sp, &invalidate_redir_wait, NULL);
 		}
 	}
 }
@@ -1100,15 +1165,27 @@ SYSCALL L4_Word_t sys_spacecontrol(
 		assert(sp->utcb_area.raw == utcb_area.raw);
 	}
 
+	bool became_valid = false;
 	if(redirector.raw == L4_anythread.raw) {
+		became_valid = CHECK_FLAG(sp->flags, SF_REDIRECT)
+			&& sp->redirector == NULL;
+
 		sp->flags &= ~SF_REDIRECT;
 		sp->redirector = NULL;
-		/* TODO: restart SEND_WAIT | TF_REDIR_WAIT threads in @sp */
 	} else if(new_red != NULL) {
+		became_valid = CHECK_FLAG(sp->flags, SF_REDIRECT)
+			&& sp->redirector == NULL;
+
 		assert(new_red->id == redirector.raw);
 		new_red->flags |= TF_REDIR;
 		sp->redirector = new_red;
 		sp->flags |= SF_REDIRECT;
+	}
+	if(became_valid) {
+		/* FIXME: this may pre-empt the SpaceControl caller. that should be
+		 * tested for, first.
+		 */
+		restart_redir_waits(sp);
 	}
 
 	result = 1;

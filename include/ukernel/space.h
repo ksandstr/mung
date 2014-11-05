@@ -119,8 +119,9 @@ extern struct utcb_page *space_get_utcb_page(struct space *sp, uint16_t ppos);
 extern void space_clear_range(struct space *sp, L4_Fpage_t fp);
 
 /* invalidates the redirector field in all spaces where it references @t. used
- * in deleting and version-altering ThreadControl cases. SEND_WAIT threads in
- * those spaces will be stopped.
+ * in deleting and version-altering ThreadControl cases. REDIR_WAIT[t] threads
+ * in those spaces will be put into REDIR_WAIT[nil] to remove references to
+ * @t; active receive handles other cases.
  */
 extern void space_remove_redirector(struct thread *t);
 

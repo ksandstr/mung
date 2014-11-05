@@ -48,6 +48,10 @@ extern void cancel_ipc_to(L4_ThreadId_t dest_tid, L4_Word_t errorcode);
 extern void cancel_ipc_from(struct thread *t);
 
 
+/* accessors to `redir_wait'. */
+extern void remove_redir_wait(struct thread *t);
+
+
 extern L4_MsgTag_t kipc(
 	L4_ThreadId_t to,
 	L4_ThreadId_t *from_p,
@@ -60,8 +64,7 @@ extern SYSCALL L4_Word_t sys_ipc(
 	L4_ThreadId_t from,
 	L4_Word_t timeouts);
 
-/* perform one half of the IPC system call. ipc_send_half() is only valid for
- * non-STOPPED, non-halted threads.
+/* perform active IPC receive, or put @t into passive receive.
  *
  * returns true when active half-ipc succeeded immediately. @t->state will
  * depend on TF_HALT: if it is set, @t->state == STOPPED; if it's clear,
@@ -82,6 +85,14 @@ extern bool ipc_recv_half(struct thread *t, void *t_utcb);
 
 /* as ipc_recv_half(), but requires @peer->state == TS_XFER */
 extern bool ipc_resume(struct thread *peer);
+
+/* interface for redirection processing outside ipc.c. returns false if @t is
+ * known not to have any chance of pre-empting the current thread.
+ *
+ * this function will never execute @t's receive phase. it'll put @t into a
+ * timeouted R_RECV state instead.
+ */
+extern bool redo_ipc_send_half(struct thread *t);
 
 /* partner thread of a thread in TS_XFER. accessor of struct ipc_state. */
 extern struct thread *ipc_partner(struct thread *t);

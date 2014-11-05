@@ -32,6 +32,7 @@
 
 
 #define TRACE(fmt, ...) TRACE_MSG(TRID_IPC, fmt, ##__VA_ARGS__)
+#define TRACE_REDIR(fmt, ...) TRACE_MSG(TRID_IPC_REDIR, fmt, ##__VA_ARGS__)
 
 
 /* these are kept in sendwait_hash in a multiset way, i.e. use
@@ -42,21 +43,30 @@ struct ipc_wait
 	L4_ThreadId_t dest_tid;		/* global ID. key, ptr in sendwait_hash */
 	L4_ThreadId_t send_tid;		/* thread->id or vs, may be local */
 	struct thread *thread;		/* (actual) sender thread */
-	L4_ThreadId_t ir_tid;		/* IntendedReceiver, or nil when not */
 };
 
 
 static size_t hash_threadid(const void *tid, void *priv);
+static size_t hash_waited_redir(const void *thread, void *priv);
 
 
 static struct kmem_cache *ipc_wait_slab = NULL;
 static struct htable sendwait_hash = HTABLE_INITIALIZER(
-	sendwait_hash, &hash_threadid, NULL);
+		sendwait_hash, &hash_threadid, NULL),
+	redir_wait = HTABLE_INITIALIZER(redir_wait, &hash_waited_redir, NULL);
 
 
 static size_t hash_threadid(const void *tid, void *priv) {
 	const L4_ThreadId_t *p = tid;
 	return int_hash(p->raw);
+}
+
+
+static size_t hash_waited_redir(const void *threadptr, void *priv) {
+	const struct thread *t = threadptr;
+	assert(!L4_IsNilThread(t->u1.waited_redir));
+	assert(t->space != kernel_space);
+	return int_hash(t->u1.waited_redir.raw);
 }
 
 
@@ -113,6 +123,11 @@ static L4_ThreadId_t tid_return(struct thread *self, struct thread *t)
 	} else {
 		return (L4_ThreadId_t){ .raw = t->id };
 	}
+}
+
+
+void remove_redir_wait(struct thread *t) {
+	htable_del(&redir_wait, hash_waited_redir(t, NULL), t);
 }
 
 
@@ -443,9 +458,54 @@ static bool has_redir_chain(struct thread *base, struct thread *tip)
 }
 
 
+/* whether @t's redirector chain is ready. this covers the whole chain.
+ * returns the non-ready one in *holdup_p, or nilthread if there was an
+ * invalid redirector along the chain.
+ */
+static bool is_redir_ready(L4_ThreadId_t *holdup_p, struct thread *t)
+{
+	assert(holdup_p != NULL);
+
+	bool rdy;
+	do {
+		if(!CHECK_FLAG(t->space->flags, SF_REDIRECT)) return true;
+		if(unlikely(t->space->redirector == NULL)) {
+			/* invalid redirector. happens when the redirecting thread's ID
+			 * has been deleted or its version bits overwritten, and a new
+			 * redirector hasn't been set.
+			 */
+			*holdup_p = L4_nilthread;
+			return false;
+		}
+		struct thread *prev = t;
+		t = t->space->redirector;
+		rdy = (t->status == TS_R_RECV || t->status == TS_RECV_WAIT)
+			&& (t->ipc_from.raw == L4_anythread.raw
+				|| t->ipc_from.raw == prev->id
+				|| (prev->space == t->space
+					&& (t->ipc_from.raw == L4_anylocalthread.raw
+						|| t->ipc_from.raw == tid_return(t, prev).raw)));
+	} while(rdy);
+
+	holdup_p->raw = t->id;
+	return false;
+}
+
+
+/* returns true iff @t's IPC to @dst will be redirected. */
+static inline bool will_redirect(struct thread *t, struct thread *dst)
+{
+	return CHECK_FLAG(t->space->flags, SF_REDIRECT)
+		&& t->space != dst->space
+		&& (unlikely(t->space->redirector == NULL)
+			|| t->space->redirector->space != dst->space);
+}
+
+
 /* returns true for instant success, and false for error condition, or IPC in
  * progress (sleep, string transfer fault).
  *
+ * precond: @self->status != TS_STOPPED && !CHECK_FLAG(@self->flags, TF_HALT)
  * postcond: @retval -> @self->status \in {READY, R_RECV, STOPPED}
  *           !@retval -> @self->status \in {SEND_WAIT, XFER, READY, STOPPED}
  */
@@ -468,6 +528,7 @@ static bool ipc_send_half(
 
 	int err_code = 0;
 	L4_MsgTag_t *tag = (void *)&L4_VREG(self_utcb, L4_TCR_MR(0));
+	tag->X.flags &= 0x1;	/* keep the propagate flag */
 
 	if(dest == NULL) {
 		assert(CHECK_FLAG(self->flags, TF_INTR));
@@ -478,46 +539,6 @@ static bool ipc_send_half(
 		err_code = int_clear(L4_ThreadNo(self->ipc_to), self);
 		if(err_code == 0) return true; else goto error;
 	}
-
-	bool redirected = false;
-	struct thread *saved_dest = NULL;
-	tag->X.flags &= 0x1;	/* keep the propagate flag */
-	if(self->space != dest->space
-		&& CHECK_FLAG(self->space->flags, SF_REDIRECT))
-	{
-		struct thread *red = self->space->redirector;
-		if(unlikely(red == NULL)) {
-			/* FIXME: this is erroneous behaviour. instead we should put the
-			 * sender into SEND_WAIT | TF_REDIR_WAIT without an entry in the
-			 * upcoming `redir_wait' htable, so that it'll stay asleep until a
-			 * redirector is added or set to anythread.
-			 */
-			red = dest;
-		}
-
-		if(dest->space != red->space) {
-			tag->X.flags |= 0x2;		/* set redirect bit */
-			redirected = true;
-			saved_dest = dest;
-			dest = red;
-			/* redirect a closed IPC's receive phase. this'll be re-redirected
-			 * to saved_dest if the redirector passes the IPC as-is, or
-			 * replied to if the redirector returns a rejection.
-			 *
-			 * NOTE: this is not explicitly specified by L4.X2, but the
-			 * wording also doesn't forbid it; and this seems like the most
-			 * reasonable approach in any case. (it also fits the "redirector
-			 * chain" pattern; if not, those'd only work for chaining
-			 * pass/don't policies together -- and that's bizarre.)
-			 *
-			 * rerererere.
-			 */
-			if(self->ipc_from.raw == saved_dest->id) {
-				self->ipc_from.raw = red->id;
-			}
-		}
-	}
-	assert(!redirected || saved_dest != NULL);
 
 	/* get matching variables, incl. propagation */
 	L4_ThreadId_t self_id = { .raw = self->id },
@@ -552,7 +573,7 @@ static bool ipc_send_half(
 	assert(!propagated || vs != NULL);
 
 	uint64_t now_us = ksystemclock();
-	const bool active_cond = dest->ipc_from.raw == L4_anythread.raw
+	const bool match_cond = dest->ipc_from.raw == L4_anythread.raw
 		|| dest->ipc_from.raw == self_id.raw
 		|| dest->ipc_from.raw == self_lid.raw
 		|| (dest->ipc_from.raw == L4_anylocalthread.raw
@@ -560,7 +581,15 @@ static bool ipc_send_half(
 
 	/* override TS_R_RECV? */
 	int status = dest->status;
-	if(active_cond && status == TS_R_RECV) {
+	bool status_cond;
+	if(match_cond && status == TS_R_RECV) {
+		/* FIXME: this peer-timeouting thing shouldn't be here. such timeouts
+		 * should be handled by the scheduler; this code should just fail to
+		 * send to a thread under its receive timeout.
+		 *
+		 * and that test could bear to be much higher up. it would also call
+		 * passive_send() explicitly.
+		 */
 		if(now_us >= dest->wakeup_time) {
 			/* nah, time the peer out instead. */
 			dest->status = TS_RECV_WAIT;	/* required by thread_wake() */
@@ -568,15 +597,19 @@ static bool ipc_send_half(
 			thread_wake(dest);
 			status = dest->status;		/* reload after thread_wake() */
 			TRACE("%s: r_recv override timeout\n", __func__);
+			status_cond = false;
 		} else {
 			/* yep */
 			TRACE("%s: override r_recv\n", __func__);
 			status = TS_RECV_WAIT;
+			status_cond = true;
 		}
+	} else {
+		status_cond = (status == TS_RECV_WAIT);
 	}
 
-	if(status == TS_RECV_WAIT
-		&& active_cond
+	if(status_cond
+		&& match_cond
 		&& (dest->wakeup_time == ~(uint64_t)0u
 			|| dest->wakeup_time > now_us))
 	{
@@ -586,9 +619,66 @@ static bool ipc_send_half(
 			TID_THREADNUM(self_id.raw), TID_VERSION(self_id.raw),
 			TID_THREADNUM(self->id), TID_VERSION(self->id));
 
+		/* check and apply redirection. */
+		bool redirected = false;
+		struct thread *saved_dest = NULL;
+		if(self->space != dest->space
+			&& CHECK_FLAG(self->space->flags, SF_REDIRECT))
+		{
+			assert(!CHECK_FLAG(self->flags, TF_REDIR_WAIT));
+			if(!is_redir_ready(&self->u1.waited_redir, self)) {
+				/* a redirector in the chain was either invalid, or not ready
+				 * to receive. hold this IPC until ready.
+				 */
+				TRACE_REDIR("IPC: send-side held by %lu:%lu\n",
+					L4_ThreadNo(self->u1.waited_redir),
+					L4_Version(self->u1.waited_redir));
+				self->flags |= TF_REDIR_WAIT;
+				self->status = TS_SEND_WAIT;
+				thread_sleep(self, self->send_timeout);
+				if(!L4_IsNilThread(self->u1.waited_redir)) {
+					/* TODO: handle or conceal OOM */
+					htable_add(&redir_wait,
+						hash_waited_redir(self, NULL), self);
+				}
+				return false;
+			}
+
+			struct thread *red = self->space->redirector;
+			assert(red != NULL);	/* ensured by is_redir_ready() */
+			if(dest->space != red->space) {
+				TRACE_REDIR("IPC: redirecting orig[to=%lu:%lu] -> red=%lu:%lu\n",
+					TID_THREADNUM(dest->id), TID_VERSION(dest->id),
+					TID_THREADNUM(red->id), TID_VERSION(red->id));
+				tag->X.flags |= 0x2;		/* set redirect bit */
+				redirected = true;
+				saved_dest = dest;
+				dest = red;
+				/* redirect a closed IPC's receive phase. this'll be
+				 * re-redirected to saved_dest if the redirector passes the
+				 * IPC as-is, or replied to if the redirector returns a
+				 * rejection.
+				 *
+				 * NOTE: this is not explicitly specified by L4.X2, but the
+				 * wording also doesn't forbid it; and this seems like the
+				 * most reasonable approach in any case. (it also fits the
+				 * "redirector chain" pattern; if not, those'd only work for
+				 * chaining pass/don't policies together -- and that's
+				 * bizarre.)
+				 *
+				 * rerererere.
+				 */
+				if(self->ipc_from.raw == saved_dest->id) {
+					self->ipc_from.raw = red->id;
+				}
+			}
+		}
+		assert(!redirected || saved_dest != NULL);
+
 		void *dest_utcb = thread_get_utcb(dest);
 		int n = do_ipc_transfer(self, self_utcb, dest, dest_utcb);
 		if(n > 0) {
+			TRACE("%s: do_ipc_transfer failed, n=%d\n", __func__, n);
 			const L4_Word_t error = n;
 			int code = (error & 0xe) >> 1;
 			if(code >= 4) {
@@ -667,11 +757,10 @@ static bool ipc_send_half(
 			.dest_tid = { .raw = dest->id },
 			.send_tid = tid_return(dest, propagated ? vs : self),
 			.thread = self,
-			.ir_tid = redirected
-				? tid_return(dest, saved_dest)
-				: L4_nilthread,
 		};
 		htable_add(&sendwait_hash, int_hash(w->dest_tid.raw), w);
+		assert(!L4_IsGlobalId(self->ipc_to)
+			|| L4_ThreadNo(w->dest_tid) == L4_ThreadNo(self->ipc_to));
 
 		self->status = TS_SEND_WAIT;
 		thread_sleep(self, self->send_timeout);
@@ -691,6 +780,44 @@ error:
 	set_ipc_error(self_utcb, (err_code << 1) | 0);
 	self->status = TS_READY;
 	return false;
+}
+
+
+bool redo_ipc_send_half(struct thread *t)
+{
+	assert(t->status == TS_SEND_WAIT);
+	assert(!CHECK_FLAG(t->flags, TF_HALT));
+
+	/* drop a previous ipc_wait & cancel propagation chaining. */
+	cancel_ipc_from(t);
+
+	if(t->wakeup_time == ~(uint64_t)0) t->send_timeout = L4_Never;
+	else {
+		L4_Clock_t base = { .raw = ksystemclock() };
+		t->send_timeout = base.raw < t->wakeup_time
+			? L4_TimePoint2_NP(base, (L4_Clock_t){ .raw = t->wakeup_time })
+			: L4_ZeroTime;
+	}
+	thread_wake(t);
+
+	void *utcb = thread_get_utcb(t);
+	struct thread *dest = resolve_tid_spec(t->space, t->ipc_to);
+	if(unlikely(dest == NULL)) {
+		set_ipc_error(utcb, 4);	/* no partner, send phase */
+		might_preempt(t);
+		return true;
+	}
+
+	bool done = ipc_send_half(t, utcb, dest);
+	if(done && t->status == TS_READY && !L4_IsNilThread(t->ipc_from)) {
+		sq_remove_thread(t);
+		t->wakeup_time = wakeup_at(t->recv_timeout);
+		t->status = TS_R_RECV;
+		sq_insert_thread(t);
+	} else if(done && !IS_IPC(t->status)) {
+		might_preempt(t);
+	}
+	return done;
 }
 
 
@@ -722,6 +849,31 @@ void ipc_user(
 }
 
 
+/* add `w' to redir_hash under `holdup', then remove `w' from sendwait_hash
+ * and free it. this makes sure that a held passive send can be restarted
+ * through the `holdup' redirector's active receive when the ultimate
+ * recipient goes to passive receive.
+ *
+ * TODO: this function is quite similar to what other code that handles
+ * redir_wait does.
+ */
+static void convert_to_redirwait(struct ipc_wait *w, L4_ThreadId_t holdup)
+{
+	assert(!CHECK_FLAG(w->thread->flags, TF_REDIR_WAIT));
+	assert(w->thread->status == TS_SEND_WAIT);
+
+	w->thread->u1.waited_redir = holdup;
+	w->thread->flags |= TF_REDIR_WAIT;
+	if(likely(!L4_IsNilThread(holdup))) {
+		/* TODO: handle malloc fail */
+		htable_add(&redir_wait, hash_waited_redir(w->thread, NULL),
+			w->thread);
+	}
+	htable_del(&sendwait_hash, int_hash(w->dest_tid.raw), w);
+	kmem_cache_free(ipc_wait_slab, w);
+}
+
+
 static struct ipc_wait *find_global_sender(bool *valid_p, struct thread *self)
 {
 	assert(L4_IsGlobalId(self->ipc_from));
@@ -739,7 +891,7 @@ static struct ipc_wait *find_global_sender(bool *valid_p, struct thread *self)
 		}
 		L4_ThreadId_t ltid = tid_return(self, ft);
 
-		/* find the IPC waiter. it may be from the @ft, or a propagator. */
+		/* find the IPC waiter. it may be from @ft, or a propagator. */
 		for(w = htable_firstval(&sendwait_hash, &it, hash);
 			w != NULL;
 			w = htable_nextval(&sendwait_hash, &it, hash))
@@ -751,17 +903,115 @@ static struct ipc_wait *find_global_sender(bool *valid_p, struct thread *self)
 				break;
 			}
 		}
+
+		L4_ThreadId_t holdup;
+		if(w != NULL
+			&& will_redirect(w->thread, self)
+			&& !is_redir_ready(&holdup, w->thread))
+		{
+			TRACE_REDIR("IPC: targeted receive held by %lu:%lu\n",
+				L4_ThreadNo(holdup), L4_Version(holdup));
+			/* the caller might go to sleep on passive receive, so the passive
+			 * sender should be made resumable by a redirector's action.
+			 */
+			convert_to_redirwait(w, holdup);
+			w = NULL;
+		}
 	} else {
 		for(w = htable_firstval(&sendwait_hash, &it, hash);
 			w != NULL;
 			w = htable_nextval(&sendwait_hash, &it, hash))
 		{
-			if(w->dest_tid.raw == self->id) break;
+			if(w->dest_tid.raw != self->id) continue;
+
+			L4_ThreadId_t holdup;
+			if(will_redirect(w->thread, self)
+				&& !is_redir_ready(&holdup, w->thread))
+			{
+				TRACE_REDIR("IPC: global anythread receive held by %lu:%lu\n",
+					L4_ThreadNo(holdup), L4_Version(holdup));
+				convert_to_redirwait(w, holdup);
+			} else {
+				/* got one. (TODO: collect them instead and pick the one with
+				 * highest priority?)
+				 */
+				break;
+			}
 		}
 	}
 
 	if(w != NULL) htable_delval(&sendwait_hash, &it);
 	return w;
+}
+
+
+/* find a redirected IPC sender for @redir, or return NULL. doesn't remove the
+ * thread on success.
+ */
+static struct thread *find_redir_sender(struct thread *redir)
+{
+	struct thread *ret;
+
+	/* fool is_redir_ready() */
+	int old_status = redir->status;
+	redir->status = TS_R_RECV;
+
+	struct htable_iter it;
+	size_t hash = int_hash(redir->id);
+	for(struct thread *cand = htable_firstval(&redir_wait, &it, hash);
+		cand != NULL;
+		cand = htable_nextval(&redir_wait, &it, hash))
+	{
+		if(cand->u1.waited_redir.raw != redir->id) continue;
+
+		/* TODO: move these into an invariant check over @redir_wait's
+		 * items
+		 */
+		assert(cand->status == TS_SEND_WAIT);
+		assert(CHECK_FLAG(cand->flags, TF_REDIR_WAIT));
+		assert(cand->space->redirector != NULL);
+
+		if(redir->ipc_from.raw != L4_anythread.raw
+			&& redir->ipc_from.raw != cand->id)
+		{
+			continue;
+		}
+
+		L4_ThreadId_t holdup;
+		if(!is_redir_ready(&holdup, cand)) {
+			assert(holdup.raw != redir->id);
+			/* TODO: move the redir_wait to a different thread. */
+			panic("would reset redir_wait target!");
+		}
+
+		if(cand->space->redirector == redir) {
+			/* it's the immediate redirector. short-circuit re-send
+			 * processing.
+			 */
+
+			/* the inter-space active send condition. */
+			assert(L4_IsGlobalId(cand->ipc_to));
+			struct thread *dest = thread_find(cand->ipc_to.raw);
+			if((dest->status == TS_R_RECV || dest->status == TS_RECV_WAIT)
+				&& (dest->ipc_from.raw == L4_anythread.raw
+					|| dest->ipc_from.raw == cand->id))
+			{
+				ret = cand;
+				goto end;
+			}
+		} else {
+			/* FIXME: re-run ipc_send_half() for `cand' while preserving its
+			 * existing timeout, then cause ipc_recv_half() to go into passive
+			 * receive and switch to the thread `cand' active-sent to.
+			 */
+			panic("multi-redirector chain case in iterated redirector!");
+		}
+	}
+	ret = NULL;
+
+end:
+	redir->status = old_status;
+	return ret;
 }
 
 
@@ -865,11 +1115,26 @@ bool ipc_recv_half(struct thread *self, void *self_utcb)
 
 	/* find waiting IPC. */
 	struct ipc_wait *w;
+	struct thread *r_sender = NULL;
 	if(L4_IsLocalId(self->ipc_from)) {
 		assert(self->ipc_from.raw != L4_anythread.raw);
 		bool valid;
 		w = find_local_sender(&valid, self);
 		if(!valid) goto err_no_partner;
+	} else if(CHECK_FLAG(self->flags, TF_REDIR)
+		&& (r_sender = find_redir_sender(self)) != NULL)
+	{
+		TRACE_REDIR("IPC: found redir_sender(%lu:%lu) in %lu:%lu\n",
+			TID_THREADNUM(r_sender->id), TID_VERSION(r_sender->id),
+			TID_THREADNUM(self->id), TID_VERSION(self->id));
+		htable_del(&redir_wait, hash_waited_redir(r_sender, NULL), r_sender);
+		/* synthesize ipc_wait. (slab allocation is fast enough for this.) */
+		w = kmem_cache_alloc(ipc_wait_slab);
+		*w = (struct ipc_wait){
+			.dest_tid.raw = self->id,
+			.send_tid = tid_return(self, r_sender),
+			.thread = r_sender,
+		};
 	} else {
 		assert(self->ipc_from.raw != L4_anylocalthread.raw);
 		bool valid;
@@ -882,6 +1147,9 @@ bool ipc_recv_half(struct thread *self, void *self_utcb)
 			goto err_no_partner;
 		}
 	}
+	assert(w == NULL
+		|| (!CHECK_FLAG(w->thread->space->flags, SF_REDIRECT)
+			|| w->thread->space->redirector != NULL));
 
 	if(w == NULL) {
 		TRACE("%s: passive receive to %lu:%lu (waiting on %lu:%lu)\n", __func__,
@@ -925,6 +1193,50 @@ bool ipc_recv_half(struct thread *self, void *self_utcb)
 			}
 		}
 		return false;
+	} else if(CHECK_FLAG(w->thread->space->flags, SF_REDIRECT)
+		&& self->space != w->thread->space
+		&& self->space != w->thread->space->redirector->space)
+	{
+		/* active receive through redirector. */
+		struct thread *from = w->thread;
+		TRACE_REDIR("IPC: redirecting active receive from %lu:%lu\n",
+			TID_THREADNUM(from->id), TID_VERSION(from->id));
+		kmem_cache_free(ipc_wait_slab, w);
+
+		L4_ThreadId_t dummy;
+		assert(is_redir_ready(&dummy, w->thread));
+
+		/* put current thread into R_RECV so that the final redirector may
+		 * communicate, that the scheduler will pick up the next partner if
+		 * the redirectors go to perpetual call-sleep instead, and that
+		 * timeouts occur as they should.
+		 */
+		if(self->status == TS_RUNNING || IS_READY(self->status)) {
+			sq_remove_thread(self);
+		}
+		self->status = TS_R_RECV;
+		self->wakeup_time = wakeup_at(self->recv_timeout);
+		sq_insert_thread(self);
+
+		/* re-execute @from's send half. */
+		if(redo_ipc_send_half(from)) {
+			/* go back to scheduler; our own IPC didn't complete yet. */
+			/* TODO: switch to the redirector through the IPC partnering
+			 * mechanism, yet to be written.
+			 */
+			TRACE_REDIR("IPC: active receive was redirected, status=%s\n",
+				sched_status_str(self));
+			/* (instead leave it to the scheduler.) */
+		} else if(!kernel_preempt_pending) {
+			/* IPC didn't complete, and no pre-emption occurs. try again. */
+			sq_remove_thread(self);
+			self->status = TS_RUNNING;
+			return ipc_recv_half(self, self_utcb);
+		}
+
+		/* pre-empted. stay in R_RECV and don't complete. */
+		assert(self->status == TS_R_RECV);
+		return false;
 	} else {
 		/* active receive */
 		struct thread *from = w->thread;
@@ -952,6 +1264,10 @@ bool ipc_recv_half(struct thread *self, void *self_utcb)
 					set_ipc_return_thread(from, from_utcb);
 				}
 				thread_wake(from);
+			} else {
+				/* FIXME: cause `w' to be freed (when r_sender != NULL) or reinserted
+				 * into sendwait_hash.
+				 */
 			}
 			set_ipc_error(self_utcb, error | 1);
 			assert(self->status == TS_RUNNING);
@@ -960,6 +1276,7 @@ bool ipc_recv_half(struct thread *self, void *self_utcb)
 		} else if(n < 0) {
 			assert(n == -EFAULT);
 			assert(IS_IPC(self->status));
+			/* FIXME: reinsert or free `w' */
 			return false;
 		}
 
@@ -972,12 +1289,18 @@ bool ipc_recv_half(struct thread *self, void *self_utcb)
 
 		/* whodunnit */
 		self->ipc_from = w->send_tid;
-		L4_MsgTag_t tag = { .raw = L4_VREG(self_utcb, L4_TCR_MR(0)) };
-		if(L4_IpcPropagated(tag)) {
+		L4_MsgTag_t *tag = (L4_MsgTag_t *)&L4_VREG(self_utcb, L4_TCR_MR(0));
+		if(L4_IpcPropagated(*tag)) {
+			TRACE("%s: propagated to %lu:%lu from %lu:%lu as %lu:%lu\n",
+				__func__, TID_THREADNUM(self->id), TID_VERSION(self->id),
+				TID_THREADNUM(from->id), TID_VERSION(from->id),
+				L4_ThreadNo(self->ipc_from), L4_Version(self->ipc_from));
 			L4_VREG(self_utcb, L4_TCR_VA_SENDER) = tid_return(self, from).raw;
 		}
-		if(L4_IpcRedirected(tag)) {
-			L4_VREG(self_utcb, L4_TCR_INTENDEDRECEIVER) = w->ir_tid.raw;
+		if(r_sender != NULL) {
+			tag->X.flags |= 0x2;	/* redirection */
+			L4_VREG(self_utcb, L4_TCR_INTENDEDRECEIVER) = r_sender->ipc_to.raw;
+			r_sender->flags &= ~TF_REDIR_WAIT;
 		}
 		kmem_cache_free(ipc_wait_slab, w);
 
@@ -1215,7 +1538,6 @@ SYSCALL L4_Word_t sys_ipc(
 			current->status = TS_RUNNING;
 		} else if(IS_IPC(current->status)) {
 			/* ongoing IPC. */
-			assert(current->status != TS_R_RECV);
 			return_to_scheduler();
 		} else {
 			/* error condition in receive phase. */

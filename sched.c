@@ -2,7 +2,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <ccan/list/list.h>
-#include <ccan/htable/htable.h>
 #include <ccan/likely/likely.h>
 
 #include <l4/types.h>
@@ -494,7 +493,8 @@ bool schedule(void)
 		ipc_recv_half(next, thread_get_utcb(next));
 		if(next->status != TS_READY) {
 			/* either entered passive receive (and not eligible to run
-			 * anymore), or preempted by sender. try again.
+			 * anymore), or preempted by sender or sender's redirection.
+			 * try again.
 			 */
 			return schedule();
 		}

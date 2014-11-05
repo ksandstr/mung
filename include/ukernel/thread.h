@@ -37,6 +37,7 @@ typedef L4_Word_t thread_id;
 #define TF_PRE_RECV	0x8	/* halted in TS_R_RECV (restored on resume) */
 #define TF_SYSCALL	0x10 /* may do fast exit (for Ipc, Lipc, ThreadSwitch) */
 #define TF_REDIR	0x20 /* has ever been made redirector of any space */
+#define TF_REDIR_WAIT 0x40 /* in SEND_WAIT but redirector blocked */
 
 /* thread states (<struct thread>.status); see also sched_status_str() */
 #define TS_STOPPED 0
@@ -147,6 +148,16 @@ struct thread
 
 	union {
 		struct page *stack_page;	/* kth stack page */
+
+		/* key into `redir_wait' in ipc.c. implies TF_REDIR_WAIT when not
+		 * nilthread, but may be nilthread even when a thread is in SEND_WAIT
+		 * with REDIR_WAIT set. when not nilthread, thread is present in
+		 * `redir_wait'.
+		 *
+		 * non-kth only. (enforced by forbidding SpaceControl on
+		 * kernel_space.)
+		 */
+		L4_ThreadId_t waited_redir;
 	} u1;
 
 	void *fpu_context;

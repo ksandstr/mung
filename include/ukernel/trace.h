@@ -42,6 +42,7 @@ enum trace_id {
 	TRID_THREAD,		/* everything in thread.c */
 	TRID_MAPDB,
 	TRID_IPC,
+	TRID_IPC_REDIR,
 };
 
 #endif

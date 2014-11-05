@@ -518,12 +518,17 @@ void thread_ipc_fail(struct thread *t)
 		t->status = TS_STOPPED;
 		sq_remove_thread(t);
 	} else {
+		if(CHECK_FLAG(t->flags, TF_REDIR_WAIT)) {
+			remove_redir_wait(t);
+		}
 		t->status = TS_READY;
 		if(t->wakeup_time > 0) {
 			t->wakeup_time = 0;
 			sq_update_thread(t);
 		}
 	}
+
+	t->flags &= ~TF_REDIR_WAIT;
 }
 
 
