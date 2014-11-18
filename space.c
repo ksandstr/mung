@@ -281,25 +281,43 @@ static void space_init(struct space *sp, struct list_head *resv_list)
 }
 
 
-/* spaces without threads are nameless. this is also used to check whether
- * there's at least one active thread in the address space, active being
- * defined as having an UTCB slot.
- */
-L4_ThreadId_t space_name(struct space *sp)
+/* call @fn for each thread in @sp. stop early if @fn returns false. */
+static inline void for_each_thread_in_space(
+	struct space *sp,
+	bool (*fn)(struct thread *t, void *priv),
+	void *priv)
 {
 	struct htable_iter it;
 	for(struct utcb_page *up = htable_first(&sp->utcb_pages, &it);
 		up != NULL;
 		up = htable_next(&sp->utcb_pages, &it))
 	{
-		int slot = ffsl(up->occmap) - 1;
-		if(slot >= 0) {
+		unsigned occmap = up->occmap;
+		while(occmap != 0) {
+			int slot = ffsl(occmap) - 1;
+			occmap &= ~(1 << slot);
 			assert(up->slots[slot] != NULL);
-			return (L4_ThreadId_t){ .raw = up->slots[slot]->id };
+			if(!(*fn)(up->slots[slot], priv)) return;
 		}
 	}
+}
 
-	return L4_nilthread;
+
+static bool store_first_tid(struct thread *t, void *priv) {
+	((L4_ThreadId_t *)priv)->raw = t->id;
+	return false;
+}
+
+
+/* spaces without threads are nameless. this is also used to check whether
+ * there's at least one active thread in the address space, active being
+ * defined as having an UTCB slot.
+ */
+L4_ThreadId_t space_name(struct space *sp)
+{
+	L4_ThreadId_t ret = L4_nilthread;
+	for_each_thread_in_space(sp, &store_first_tid, &ret);
+	return ret;
 }
 
 
@@ -689,28 +707,6 @@ void space_clear_range(struct space *sp, L4_Fpage_t fp)
 }
 
 
-/* call @fn for each thread in @sp. stop early if @fn returns false. */
-static void for_each_thread_in_space(
-	struct space *sp,
-	bool (*fn)(struct thread *t, void *priv),
-	void *priv)
-{
-	struct htable_iter it;
-	for(struct utcb_page *up = htable_first(&sp->utcb_pages, &it);
-		up != NULL;
-		up = htable_next(&sp->utcb_pages, &it))
-	{
-		unsigned occmap = up->occmap;
-		while(occmap != 0) {
-			int slot = ffsl(occmap) - 1;
-			occmap &= ~(1 << slot);
-			assert(up->slots[slot] != NULL);
-			if(!(*fn)(up->slots[slot], priv)) return;
-		}
-	}
-}
-
-
 static bool clear_empty_redir_wait(struct thread *t, void *unused)
 {
 	if(t->status != TS_SEND_WAIT) return true;
@@ -732,9 +728,6 @@ static bool clear_empty_redir_wait(struct thread *t, void *unused)
 }
 
 
-/* TODO: allow for pre-emption of the SpaceControl caller, i.e.
- * current_thread
- */
 static void restart_redir_waits(struct space *sp) {
 	for_each_thread_in_space(sp, &clear_empty_redir_wait, NULL);
 }
