@@ -133,12 +133,13 @@ static void set_redir(L4_ThreadId_t space_id, L4_ThreadId_t redir_tid)
 
 
 /* start the redirector fixture, launch a process with it, kill the
- * redirector, receive Call from child process.
+ * redirector, receive redirected Call from child process.
  *   - the kernel shouldn't crash
  *   - the child process shouldn't be able to do Ipc sends while the
  *     redirector is invalid
  *   - the child Ipc should proceed after redirector is reinstated
  *     - ... or set to anythread
+ *   - propagation should occur iff not set to anythread
  *
  * variables:
  *   - [pre_send_remove] whether the redirector is killed before SEND_WAIT, or
@@ -173,12 +174,46 @@ START_LOOP_TEST(vanishing_redirector, iter, 0, 3)
 	fixture_start();
 	L4_Sleep(A_SHORT_NAP);
 
+	L4_ThreadId_t receiver_tid, child_tid, parent_tid = L4_MyGlobalId();
+	int receiver = fork_tid(&receiver_tid);
+	if(receiver == 0) {
+		/* receive twice. forward tag, ec, as to parent. reply when parent
+		 * replies.
+		 */
+		for(int iter=0; iter < 2; iter++) {
+			L4_ThreadId_t sender;
+			L4_MsgTag_t tag = L4_Wait_Timeout(TEST_IPC_DELAY, &sender);
+			L4_Word_t ec = L4_ErrorCode();
+			L4_ThreadId_t as = L4_ActualSender();
+			L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 3,
+				.X.label = L4_IpcSucceeded(tag) ? 0xb00b : 0xb000 }.raw);
+			L4_LoadMR(1, tag.raw);
+			L4_LoadMR(2, ec);
+			L4_LoadMR(3, as.raw);
+			tag = L4_Call_Timeouts(parent_tid,
+				TEST_IPC_DELAY, TEST_IPC_DELAY);
+			if(L4_IpcFailed(tag)) {
+				diag("call to parent failed, iter=%d, ec=%#lx",
+					iter, L4_ErrorCode());
+			}
+			L4_LoadMR(0, 0);
+			tag = L4_Reply(sender);
+			if(L4_IpcFailed(tag)) {
+				diag("reply to sender failed, ec=%#lx", L4_ErrorCode());
+			}
+			if(iter == 0 && !pre_send_remove) {
+				/* force active receive. */
+				L4_Sleep(A_SHORT_NAP);
+			}
+		}
+		exit(0);
+	}
+
 	set_fork_redir(redir_fixture_tid);
-	L4_ThreadId_t child_tid, parent_tid = L4_MyGlobalId();
 	int child = fork_tid(&child_tid);
 	if(child == 0) {
 		L4_LoadMR(0, 0);
-		L4_MsgTag_t tag = L4_Call_Timeouts(parent_tid,
+		L4_MsgTag_t tag = L4_Call_Timeouts(receiver_tid,
 			TEST_IPC_DELAY, TEST_IPC_DELAY);
 		if(L4_IpcFailed(tag)) {
 			diag("child: ec=%#lx", L4_ErrorCode());
@@ -186,30 +221,30 @@ START_LOOP_TEST(vanishing_redirector, iter, 0, 3)
 		}
 
 		L4_LoadMR(0, 0);
-		tag = L4_Call_Timeouts(parent_tid, TEST_IPC_DELAY, TEST_IPC_DELAY);
+		tag = L4_Call_Timeouts(receiver_tid, TEST_IPC_DELAY, TEST_IPC_DELAY);
 		exit(L4_IpcFailed(tag) ? 1 : 0);
 	}
 
-	L4_MsgTag_t tag = L4_Receive_Timeout(child_tid, TEST_IPC_DELAY);
-	ok(L4_IpcSucceeded(tag), "first receive ok");
+	L4_MsgTag_t tag = L4_Receive_Timeout(receiver_tid, TEST_IPC_DELAY);
+	L4_MsgTag_t subtag; L4_StoreMR(1, &subtag.raw);
+	ok(L4_IpcSucceeded(tag) && L4_IpcSucceeded(subtag),
+		"first receive ok");
+	ok(L4_IpcPropagated(subtag), "child ipc was redirected");
 
 	if(pre_send_remove) fixture_teardown();
-
 	L4_LoadMR(0, 0);
-	L4_Reply(child_tid);
-
-	if(!pre_send_remove) {
-		L4_Sleep(A_SHORT_NAP);
-		fixture_teardown();
-	}
+	L4_Reply(receiver_tid);
+	if(!pre_send_remove) fixture_teardown();
 
 	/* get the second message. this should timeout, verifying that IPC from
-	 * the child doesn't work with an invalid redirector.
+	 * the child stops working with an invalid redirector.
 	 */
-	tag = L4_Receive_Timeout(child_tid, L4_TimePeriod(25 * 1000));
+	tag = L4_Receive_Timeout(receiver_tid, L4_TimePeriod(25 * 1000));
 	L4_Word_t ec = L4_ErrorCode();
+	L4_StoreMR(1, &subtag.raw);
 	if(!ok(L4_IpcFailed(tag) && ec == 0x3, "timeout after remove")) {
-		diag("tag=%#lx, ec=%#lx", tag.raw, ec);
+		diag("tag=%#lx, subtag=%#lx, ec=%#lx",
+			tag.raw, subtag.raw, ec);
 	}
 
 	/* permit active receive from child & complete the IPC */
@@ -220,31 +255,36 @@ START_LOOP_TEST(vanishing_redirector, iter, 0, 3)
 	} else {
 		set_redir(child_tid, L4_anythread);
 	}
-	tag = L4_Receive_Timeout(child_tid, L4_TimePeriod(25 * 1000));
+	tag = L4_Receive_Timeout(receiver_tid, L4_TimePeriod(25 * 1000));
+	L4_StoreMR(1, &subtag.raw);
+	L4_Word_t sub_ec; L4_StoreMR(2, &sub_ec);
+	L4_ThreadId_t as; L4_StoreMR(3, &as.raw);
 	ec = L4_ErrorCode();
-	L4_ThreadId_t as = L4_ActualSender();
-	if(!ok(L4_IpcSucceeded(tag), "post-reset receive ok")) {
-		diag("tag=%#lx, ec=%#lx", tag.raw, ec);
+	if(!ok(L4_IpcSucceeded(tag) && L4_IpcSucceeded(subtag),
+		"post-reset receive ok"))
+	{
+		diag("ec=%#lx, sub_ec=%#lx", ec, sub_ec);
 	}
-	/* redirector is in our space, so no propagation should be seen.
-	 * this test isn't about that, anyway.
+	/* redirector is foreign to receiver, so propagation should
+	 * be seen iff redirector wasn't set to anythread.
 	 */
-	if(!ok1(!L4_IpcPropagated(tag))) {
+	if(!iff_ok1(L4_IpcPropagated(subtag), reinstate)) {
 		diag("as=%lu:%lu", L4_ThreadNo(as), L4_Version(as));
 	}
+	imply_ok1(reinstate, L4_SameThreads(as, redir_fixture_tid));
 
 	L4_LoadMR(0, 0);
-	tag = L4_Reply(child_tid);
-	ec = L4_ErrorCode();
-	if(!ok(L4_IpcSucceeded(tag), "post-reset reply ok")) {
-		diag("tag=%#lx, ec=%#lx", tag.raw, ec);
+	tag = L4_Reply(receiver_tid);
+	if(!L4_IpcSucceeded(tag)) {
+		diag("post-reset reply failed, tag=%#lx, ec=%#lx", tag.raw, ec);
 	}
 
-	int st, dead = wait(&st);
-	fail_if(dead != child, "dead=%d, child=%d!", dead, child);
-	/* TODO: check child exit status to confirm that its Call failed */
-
-	pass("didn't crash");
+	for(int i=0; i < 2; i++) {
+		int st, dead = wait(&st);
+		fail_if(dead != child && dead != receiver,
+			"dead=%d, child=%d, receiver=%d!", dead, child, receiver);
+		/* TODO: check child exit status to confirm that its Call failed */
+	}
 
 	if(reinstate) fixture_teardown();
 }
