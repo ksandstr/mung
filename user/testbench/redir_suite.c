@@ -48,34 +48,47 @@ static int __redir_fixture_get_msgs_timeouts(
 
 
 /* an out-of-process receiver. this is used because IPC to the redirector's
- * space (i.e. the test process) occurs without redirection. calls parent with
- * ec, label and exits after the call finishes.
+ * space (i.e. the test process) occurs without redirection. receives @n_iters
+ * times, calls parent with tag * ec * as, replies after parent has replied,
+ * takes a short nap when iter == @nap_iter.
+ *
+ * exits with rc=0 if all ipc was successful.
  */
-static int fork_receiver(L4_ThreadId_t *tid_p)
+static int fork_receiver(L4_ThreadId_t *tid_p, int n_iters, int nap_iter)
 {
 	L4_ThreadId_t parent_tid = L4_MyGlobalId();
 	int receiver = fork_tid(tid_p);
 	if(receiver != 0) return receiver;
 
-	L4_ThreadId_t sender;
-	L4_MsgTag_t tag = L4_Wait_Timeout(TEST_IPC_DELAY, &sender);
-	L4_Word_t ec = L4_IpcFailed(tag) ? L4_ErrorCode() : 0;
-	L4_Word_t label = 0;
-	if(L4_IpcFailed(tag)) {
-		diag("receiver wait failed: ec=%#lx", L4_ErrorCode());
-	} else {
-		label = L4_Label(tag);
+	for(int iter=0; iter < n_iters; iter++) {
+		L4_ThreadId_t sender;
+		L4_MsgTag_t tag = L4_Wait_Timeout(TEST_IPC_DELAY, &sender);
+		L4_Word_t ec = L4_ErrorCode();
+		L4_ThreadId_t as = L4_ActualSender();
+		sender = L4_GlobalIdOf(sender);
+		L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 4,
+			.X.label = L4_IpcSucceeded(tag) ? 0xb00b : 0xb000 }.raw);
+		L4_LoadMR(1, tag.raw);
+		L4_LoadMR(2, ec);
+		L4_LoadMR(3, as.raw);
+		L4_LoadMR(4, sender.raw);
+		tag = L4_Call_Timeouts(parent_tid,
+			TEST_IPC_DELAY, TEST_IPC_DELAY);
+		if(L4_IpcFailed(tag)) {
+			diag("%s: call to parent failed, iter=%d, ec=%#lx",
+				__func__, iter, L4_ErrorCode());
+		}
 		L4_LoadMR(0, 0);
 		tag = L4_Reply(sender);
 		if(L4_IpcFailed(tag)) {
-			diag("receiver reply failed: ec=%#lx", L4_ErrorCode());
+			diag("%s: reply to sender failed, ec=%#lx",
+				__func__, L4_ErrorCode());
+		}
+		if(iter == nap_iter) {
+			/* force active receive. */
+			L4_Sleep(A_SHORT_NAP);
 		}
 	}
-	/* notify parent. */
-	L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 2 }.raw);
-	L4_LoadMR(1, ec);
-	L4_LoadMR(2, label);
-	L4_Call_Timeouts(parent_tid, TEST_IPC_DELAY, TEST_IPC_DELAY);
 	exit(0);
 }
 
@@ -174,40 +187,9 @@ START_LOOP_TEST(vanishing_redirector, iter, 0, 3)
 	fixture_start();
 	L4_Sleep(A_SHORT_NAP);
 
-	L4_ThreadId_t receiver_tid, child_tid, parent_tid = L4_MyGlobalId();
-	int receiver = fork_tid(&receiver_tid);
-	if(receiver == 0) {
-		/* receive twice. forward tag, ec, as to parent. reply when parent
-		 * replies.
-		 */
-		for(int iter=0; iter < 2; iter++) {
-			L4_ThreadId_t sender;
-			L4_MsgTag_t tag = L4_Wait_Timeout(TEST_IPC_DELAY, &sender);
-			L4_Word_t ec = L4_ErrorCode();
-			L4_ThreadId_t as = L4_ActualSender();
-			L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 3,
-				.X.label = L4_IpcSucceeded(tag) ? 0xb00b : 0xb000 }.raw);
-			L4_LoadMR(1, tag.raw);
-			L4_LoadMR(2, ec);
-			L4_LoadMR(3, as.raw);
-			tag = L4_Call_Timeouts(parent_tid,
-				TEST_IPC_DELAY, TEST_IPC_DELAY);
-			if(L4_IpcFailed(tag)) {
-				diag("call to parent failed, iter=%d, ec=%#lx",
-					iter, L4_ErrorCode());
-			}
-			L4_LoadMR(0, 0);
-			tag = L4_Reply(sender);
-			if(L4_IpcFailed(tag)) {
-				diag("reply to sender failed, ec=%#lx", L4_ErrorCode());
-			}
-			if(iter == 0 && !pre_send_remove) {
-				/* force active receive. */
-				L4_Sleep(A_SHORT_NAP);
-			}
-		}
-		exit(0);
-	}
+	L4_ThreadId_t receiver_tid, child_tid;
+	int receiver = fork_receiver(&receiver_tid, 2,
+		pre_send_remove ? 0 : -1);
 
 	set_fork_redir(redir_fixture_tid);
 	int child = fork_tid(&child_tid);
@@ -306,7 +288,7 @@ START_LOOP_TEST(fork_redirect_basic, iter, 0, 1)
 	diag("use_redir=%s", btos(use_redir));
 
 	L4_ThreadId_t receiver_tid;
-	int receiver = fork_receiver(&receiver_tid);
+	int receiver = fork_receiver(&receiver_tid, 1, -1);
 
 	if(use_redir) set_fork_redir(redir_fixture_tid);
 	L4_ThreadId_t child_tid;
@@ -314,9 +296,11 @@ START_LOOP_TEST(fork_redirect_basic, iter, 0, 1)
 
 	diag("waiting for receiver=%d, child=%d", receiver, child);
 	L4_MsgTag_t tag = L4_Receive_Timeout(receiver_tid, TEST_IPC_DELAY);
-	L4_Word_t recv_ec; L4_StoreMR(1, &recv_ec);
-	L4_Word_t recv_label; L4_StoreMR(2, &recv_label);
-	ok1(L4_IpcSucceeded(tag) && recv_ec == 0);
+	L4_MsgTag_t subtag; L4_StoreMR(1, &subtag.raw);
+	L4_Word_t recv_ec; L4_StoreMR(2, &recv_ec);
+	L4_ThreadId_t as; L4_StoreMR(3, &as.raw);
+	L4_Word_t recv_label = L4_Label(subtag);
+	ok1(L4_IpcSucceeded(tag) && L4_IpcSucceeded(subtag));
 	ok1(recv_label == call_label);
 	L4_LoadMR(0, 0); L4_Reply(receiver_tid);
 	for(int i=0; i < 2; i++) {
@@ -372,9 +356,6 @@ END_TEST
 /* test for redirection from the child's child, which should have the same
  * redirector as its parent. the redirector should see messages according to
  * where redirectors are enabled.
- *
- * FIXME: remove all the debug diags once redirection starts to work without
- * blocking.
  */
 START_LOOP_TEST(fork_redirect_deep, iter, 0, 3)
 {
@@ -384,26 +365,10 @@ START_LOOP_TEST(fork_redirect_deep, iter, 0, 3)
 	diag("call_label=%#lx, use_outer_redir=%s, use_inner_redir=%s",
 		call_label, btos(use_outer_redir), btos(use_inner_redir));
 
-	if(use_outer_redir && use_inner_redir) {
-		/* FIXME: this case craps out and leaves a child process hanging in
-		 * iter=3, which crashes forkserv. that's due to the redirection
-		 * lock-up in the child's fork call causing it never to return;
-		 * subsequently nothing kills the child nor parent, and forkserv winds
-		 * up in untested space -- and assert-crashes out.
-		 */
-		plan_skip_all("FIXME: see comment for iter=3");
-		return;
-	}
-
-	plan_tests(2);
-
-	diag("redir_fixture_tid=%lu:%lu",
-		L4_ThreadNo(redir_fixture_tid), L4_Version(redir_fixture_tid));
+	plan_tests(6);
 
 	L4_ThreadId_t receiver_tid, child_tid, parent_tid = L4_Myself();
-	int receiver = fork_receiver(&receiver_tid);
-	diag("receiver=%d (%lu:%lu)", receiver,
-		L4_ThreadNo(receiver_tid), L4_Version(receiver_tid));
+	int receiver = fork_receiver(&receiver_tid, 1, -1);
 	if(use_outer_redir) set_fork_redir(redir_fixture_tid);
 
 	int child = fork_tid(&child_tid);
@@ -411,14 +376,10 @@ START_LOOP_TEST(fork_redirect_deep, iter, 0, 3)
 		if(use_outer_redir != use_inner_redir) {
 			set_fork_redir(use_inner_redir ? redir_fixture_tid : L4_anythread);
 		}
-		set_fork_redir(L4_nilthread);
 		L4_ThreadId_t sender_tid;
 		int sender = fork_sender(&sender_tid, receiver_tid, call_label);
 		diag("sender=%d (%lu:%lu)", sender,
 			L4_ThreadNo(sender_tid), L4_Version(sender_tid));
-
-		int st, dead = wait(&st);
-		if(dead != sender) diag("dead=%d, sender=%d", dead, sender);
 
 		L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 2 }.raw);
 		L4_LoadMR(1, sender);
@@ -426,11 +387,14 @@ START_LOOP_TEST(fork_redirect_deep, iter, 0, 3)
 		L4_MsgTag_t tag = L4_Call_Timeouts(parent_tid,
 			TEST_IPC_DELAY, TEST_IPC_DELAY);
 		if(L4_IpcFailed(tag)) diag("child: ec=%#lx", L4_ErrorCode());
+
+		int st, dead = wait(&st);
+		if(dead != sender) diag("dead=%d, sender=%d", dead, sender);
+
 		exit(0);
 	}
-	diag("child=%d (%lu:%lu)", child,
-		L4_ThreadNo(child_tid), L4_Version(child_tid));
 
+	/* get sender_tid, sender_pid from primary child. */
 	L4_MsgTag_t tag = L4_Receive_Timeout(child_tid, TEST_IPC_DELAY);
 	L4_Word_t sender_pid;
 	L4_ThreadId_t sender_tid;
@@ -443,11 +407,23 @@ START_LOOP_TEST(fork_redirect_deep, iter, 0, 3)
 		L4_StoreMR(2, &sender_tid.raw);
 		L4_LoadMR(0, 0);
 		L4_Reply(child_tid);
-		diag("sender_pid=%lu", sender_pid);
 	}
 
-	/* TODO: examine the entrails. check that call_label exists iff
-	 * use_inner_redir
+	/* handshake the receiver and examine its status. */
+	tag = L4_Receive_Timeout(receiver_tid, TEST_IPC_DELAY);
+	L4_MsgTag_t subtag; L4_StoreMR(1, &subtag.raw);
+	L4_Word_t ec; L4_StoreMR(2, &ec);
+	L4_ThreadId_t as, rcv_from_tid;
+	L4_StoreMR(3, &as.raw);
+	L4_StoreMR(4, &rcv_from_tid.raw);
+	ok(L4_IpcSucceeded(tag) && L4_IpcSucceeded(subtag),
+		"receiver status ok");
+	ok1(L4_SameThreads(rcv_from_tid, sender_tid));
+	iff_ok1(L4_IpcPropagated(subtag), use_inner_redir);
+	imply_ok1(use_inner_redir, L4_SameThreads(as, redir_fixture_tid));
+
+	/* TODO: examine the redir_fixture_fn entrails. check that call_label
+	 * exists iff use_inner_redir
 	 */
 	pass("didn't crash!");
 
@@ -457,7 +433,6 @@ START_LOOP_TEST(fork_redirect_deep, iter, 0, 3)
 			diag("unexpected dead=%d (ok are %d, %d)\n",
 				dead, receiver, child);
 		}
-		diag("i=%d, dead=%d", i, dead);
 	}
 }
 END_TEST
