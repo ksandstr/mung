@@ -32,19 +32,15 @@ typedef struct redir_fixture_msg_info {
 	L4_Word_t mr[7];
 } fixmsg_t;
 
+typedef darray(fixmsg_t *) msgarray;
+
 
 static L4_ThreadId_t redir_fixture_tid;
 
 static void fixture_start(void);
 static void fixture_teardown(void);
 
-static int __redir_fixture_get_msgs_timeouts(
-	L4_ThreadId_t service_tid,
-	uint16_t *n_got,
-	fixmsg_t *buf,
-	unsigned *buflen_p,
-	L4_Time_t send_timeout,
-	L4_Time_t recv_timeout);
+static int get_redir_msgs(L4_ThreadId_t redir_tid, msgarray *out);
 
 
 /* an out-of-process receiver. this is used because IPC to the redirector's
@@ -61,11 +57,14 @@ static int fork_receiver(L4_ThreadId_t *tid_p, int n_iters, int nap_iter)
 	if(receiver != 0) return receiver;
 
 	for(int iter=0; iter < n_iters; iter++) {
+		diag("waiting (iter=%d)", iter);
 		L4_ThreadId_t sender;
 		L4_MsgTag_t tag = L4_Wait_Timeout(TEST_IPC_DELAY, &sender);
 		L4_Word_t ec = L4_ErrorCode();
 		L4_ThreadId_t as = L4_ActualSender();
 		sender = L4_GlobalIdOf(sender);
+		diag("received message from %lu:%lu",
+			L4_ThreadNo(sender), L4_Version(sender));
 		L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 4,
 			.X.label = L4_IpcSucceeded(tag) ? 0xb00b : 0xb000 }.raw);
 		L4_LoadMR(1, tag.raw);
@@ -273,6 +272,148 @@ START_LOOP_TEST(vanishing_redirector, iter, 0, 3)
 END_TEST
 
 
+/* start two redirector fixtures, a receiver process, and a sender process.
+ * set the sender's redirector to the first redirector for the first IPC, and
+ * to the second redirector for the second. measure their buffers.
+ *
+ * variables:
+ *   - [active_send] whether the new redirector is first seen in active send,
+ *     or active receive
+ *   - [redir_wait] whether the first redirector blocks the active send before
+ *     redirector changes
+ *
+ * TODO:
+ *   - redirection chain length (1, 2, 7, 19)
+ *   - breaking a longer redirection chain either close (first) or far (2nd,
+ *     n - n/2 depending on length)
+ */
+START_LOOP_TEST(changing_redirector, iter, 0, 3)
+{
+	const bool active_send = CHECK_FLAG(iter, 1),
+		redir_wait = CHECK_FLAG(iter, 2);
+	diag("active_send=%s, redir_wait=%s",
+		btos(active_send), btos(redir_wait));
+
+	plan_tests(10);
+
+	void *talctx = talloc_new(NULL);
+	fixture_start();
+	L4_Sleep(A_SHORT_NAP);
+	L4_ThreadId_t first_rtid = redir_fixture_tid;
+	redir_fixture_tid = L4_nilthread;
+	fixture_start();
+	L4_Sleep(A_SHORT_NAP);
+	diag("first_rtid=%lu:%lu, redir_fixture_tid=%lu:%lu",
+		L4_ThreadNo(first_rtid), L4_Version(first_rtid),
+		L4_ThreadNo(redir_fixture_tid), L4_Version(redir_fixture_tid));
+
+	/* the receiver may sleep after replying to the first message, forcing
+	 * active receive. this is also used to force redir_wait in passive send.
+	 */
+	L4_ThreadId_t receiver_tid;
+	int receiver = fork_receiver(&receiver_tid, 2,
+		active_send || redir_wait ? -1 : 0);
+
+	set_fork_redir(first_rtid);
+	L4_ThreadId_t sender_tid;
+	int sender = fork_tid(&sender_tid);
+	if(sender == 0) {
+		/* send two messages. */
+		L4_LoadMR(0, (L4_MsgTag_t){ .X.label = 0x7055 }.raw);
+		L4_Call_Timeouts(receiver_tid, TEST_IPC_DELAY, TEST_IPC_DELAY);
+		if(active_send) {
+			L4_Sleep(A_SHORT_NAP);
+			L4_Sleep(A_SHORT_NAP);
+		}
+		L4_LoadMR(0, (L4_MsgTag_t){ .X.label = 0xb007 }.raw);
+		L4_Call_Timeouts(receiver_tid, TEST_IPC_DELAY, TEST_IPC_DELAY);
+		exit(0);
+	}
+
+	/* first IPC. */
+	L4_MsgTag_t tag = L4_Receive_Timeout(receiver_tid, TEST_IPC_DELAY);
+	L4_MsgTag_t subtag; L4_StoreMR(1, &subtag.raw);
+	L4_ThreadId_t sub_as; L4_StoreMR(3, &sub_as.raw);
+	ok(L4_IpcSucceeded(tag) && L4_IpcSucceeded(subtag),
+		"first message ok");
+	ok(L4_IpcPropagated(subtag), "first message propagated");
+	ok1(L4_Label(subtag) == 0x7055);
+	ok(L4_SameThreads(sub_as, first_rtid), "was via 1st redirector");
+	if(redir_wait) {
+		L4_LoadMR(0, (L4_MsgTag_t){ .X.label = DELAY_LABEL }.raw);
+		tag = L4_Call_Timeouts(first_rtid, TEST_IPC_DELAY, TEST_IPC_DELAY);
+		fail_if(L4_IpcFailed(tag), "delay failed, ec=%#lx", L4_ErrorCode());
+	}
+	L4_LoadMR(0, 0);
+	L4_Reply(receiver_tid);
+
+	/* change redirectors in the middle of passive send or receive. */
+	L4_Sleep(A_SHORT_NAP);
+	set_redir(sender_tid, redir_fixture_tid);
+
+	/* second IPC. */
+	tag = L4_Receive_Timeout(receiver_tid, TEST_IPC_DELAY);
+	L4_StoreMR(1, &subtag.raw);
+	L4_StoreMR(3, &sub_as.raw);
+	ok(L4_IpcSucceeded(tag) && L4_IpcSucceeded(subtag),
+		"second message ok");
+	ok(L4_IpcPropagated(subtag), "second message propagated");
+	ok1(L4_Label(subtag) == 0xb007);
+	ok(L4_SameThreads(sub_as, redir_fixture_tid), "was via 2nd redirector");
+	L4_LoadMR(0, 0);
+	L4_Reply(receiver_tid);
+
+	/* analyse the redirector logs. check that 0x7055 is present only in the
+	 * first and 0xb007 only in the second.
+	 */
+	msgarray *fst = talloc(talctx, msgarray); darray_init(*fst);
+	get_redir_msgs(first_rtid, fst);
+	bool found_fst = false, found_snd = false;
+	for(size_t i=0; i < fst->size; i++) {
+		L4_Word_t label = L4_Label((L4_MsgTag_t){ .raw = fst->item[i]->tag });
+		if(label == 0x7055) found_fst = true;
+		if(label == 0xb007) found_snd = true;
+		if(!CHECK_FLAG_ALL(label, 0xff00)) {
+			diag("i=%d: label=%#04lx", (int)i, label);
+		}
+	}
+	if(!ok(found_fst && !found_snd, "1st redirector log contents")) {
+		diag("found_fst=%s, found_snd=%s", btos(found_fst), btos(found_snd));
+	}
+
+	/* second redirector's logs. */
+	msgarray *snd = talloc(talctx, msgarray); darray_init(*snd);
+	get_redir_msgs(redir_fixture_tid, snd);
+	found_fst = false; found_snd = false;
+	for(size_t i=0; i < snd->size; i++) {
+		L4_Word_t label = L4_Label((L4_MsgTag_t){ .raw = snd->item[i]->tag });
+		if(label == 0x7055) found_fst = true;
+		if(label == 0xb007) found_snd = true;
+		if(!CHECK_FLAG_ALL(label, 0xff00)) {
+			diag("i=%d: label=%#04lx", (int)i, label);
+		}
+	}
+	if(!ok(!found_fst && found_snd, "2nd redirector log contents")) {
+		diag("found_fst=%s, found_snd=%s", btos(found_fst), btos(found_snd));
+	}
+
+	/* cleanup */
+	set_fork_redir(L4_anythread);
+	for(int i=0; i < 2; i++) {
+		int st, dead = wait(&st);
+		fail_if(dead != sender && dead != receiver,
+			"dead=%d, sender=%d, receiver=%d", dead, sender, receiver);
+	}
+
+	fixture_teardown();
+	redir_fixture_tid = first_rtid;
+	fixture_teardown();
+
+	talloc_free(talctx);
+}
+END_TEST
+
+
 /* tcase `rt' */
 
 /* test that a child process can be started with redirection, and that the
@@ -310,36 +451,16 @@ START_LOOP_TEST(fork_redirect_basic, iter, 0, 1)
 		}
 	}
 
-	/* grab and examine the entrails.
-	 * TODO: move this into a function.
-	 */
-	void *talctx = talloc_new(NULL);
-	darray(struct redir_fixture_msg_info *) msgs;
-	darray_init(msgs);
-	uint16_t n_got;
-	do {
-		n_got = 0;
-		struct redir_fixture_msg_info buf[6];
-		unsigned blen = sizeof(buf);
-		memset(buf, 0, sizeof(buf));
-		int n = __redir_fixture_get_msgs_timeouts(redir_fixture_tid,
-			&n_got, buf, &blen, TEST_IPC_DELAY, TEST_IPC_DELAY);
-		if(n != 0) {
-			diag("RedirFixture::get_msgs failed: n=%d", n);
-			break;
-		}
-		for(int i=0; i < n_got; i++) {
-			struct redir_fixture_msg_info *m = talloc_size(talctx,
-				sizeof(*m));
-			*m = buf[i];
-			darray_push(msgs, m);
-		}
-	} while(n_got > 0);
-	iff_ok1(msgs.size > 0, use_redir);
+	/* grab and examine the entrails. */
+	msgarray *msgs = talloc(NULL, msgarray);
+	darray_init(*msgs);
+	get_redir_msgs(redir_fixture_tid, msgs);
+	iff_ok1(msgs->size > 0, use_redir);
 
 	bool found_call = false, found_pf = false;
-	for(size_t i=0; i < msgs.size; i++) {
-		L4_Word_t label = L4_Label((L4_MsgTag_t){ .raw = msgs.item[i]->tag });
+	for(size_t i=0; i < msgs->size; i++) {
+		L4_Word_t label = L4_Label((L4_MsgTag_t){
+			.raw = msgs->item[i]->tag });
 		if(label == call_label) found_call = true;
 		else if((label >> 4) == 0xffe) found_pf = true;
 	}
@@ -347,8 +468,7 @@ START_LOOP_TEST(fork_redirect_basic, iter, 0, 1)
 	iff_ok1(found_pf, use_redir);
 
 	/* cleanup */
-	darray_free(msgs);
-	talloc_free(talctx);
+	talloc_free(msgs);
 }
 END_TEST
 
@@ -713,8 +833,6 @@ static void redir_fixture_fn(void *parameter)
 		L4_Sleep(A_SHORT_NAP);
 	}
 
-	assert(L4_SameThreads(redir_fixture_tid, L4_Myself()));
-
 	struct rf_ctx *ctx = parameter;
 
 	while(ctx->running) {
@@ -781,6 +899,20 @@ static void redir_fixture_fn(void *parameter)
 				break;
 			} else if(L4_Label(tag) == QUIT_LABEL) {
 				ctx->running = false;
+				break;
+			} else if(L4_Label(tag) == DELAY_LABEL) {
+				/* (DELAY_LABEL is from defs.h .) */
+				int nap_factor = 5;
+				if(L4_UntypedWords(tag) > 0) {
+					L4_Word_t val; L4_StoreMR(1, &val);
+					if(val > 0) nap_factor = val;
+				}
+				diag("%s: nap factor %d!!!", __func__, nap_factor);
+				L4_LoadMR(0, 0);
+				tag = L4_Reply(sender);
+				L4_Sleep(L4_TimePeriod(
+					L4_PeriodUs_NP(A_SHORT_NAP) * nap_factor));
+				diag("%s: wakey wakey", __func__);
 				break;
 			} else if(L4_Label(tag) == GET_MSGS_LABEL) {
 				/* RedirFixture::get_msgs */
@@ -859,6 +991,36 @@ static int __redir_fixture_get_msgs_timeouts(
 }
 
 
+/* gets messages from redirector. adds structures to @out. note that @out is
+ * used as a talloc context!
+ */
+static int get_redir_msgs(L4_ThreadId_t redir_tid, msgarray *out)
+{
+	int n_total = 0;
+	uint16_t n_got;
+	do {
+		n_got = 0;
+		struct redir_fixture_msg_info buf[6];
+		unsigned blen = sizeof(buf);
+		memset(buf, 0, sizeof(buf));
+		int n = __redir_fixture_get_msgs_timeouts(redir_tid,
+			&n_got, buf, &blen, TEST_IPC_DELAY, TEST_IPC_DELAY);
+		if(n != 0) {
+			diag("RedirFixture::get_msgs failed: n=%d", n);
+			break;
+		}
+		for(int i=0; i < n_got; i++) {
+			fixmsg_t *m = talloc_size(out, sizeof(*m));
+			*m = buf[i];
+			darray_push(*out, m);
+		}
+		n_total += n_got;
+	} while(n_got > 0);
+
+	return n_total;
+}
+
+
 static void fixture_start(void)
 {
 	struct rf_ctx *ctx = talloc(NULL, struct rf_ctx);
@@ -893,6 +1055,7 @@ Suite *redir_suite(void)
 		TCase *tc = tcase_create("api");
 		tcase_set_fork(tc, false);
 		tcase_add_test(tc, vanishing_redirector);
+		tcase_add_test(tc, changing_redirector);
 		suite_add_tcase(s, tc);
 	}
 
