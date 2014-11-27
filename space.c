@@ -1109,17 +1109,21 @@ SYSCALL L4_Word_t sys_spacecontrol(
 	}
 
 	struct thread *new_red = NULL;
-	if(L4_IsGlobalId(redirector)
-		&& redirector.raw != L4_anythread.raw
-		&& L4_ThreadNo(redirector) >= first_user_threadno())
+	if((L4_IsGlobalId(redirector)
+			&& redirector.raw != L4_anythread.raw
+			&& L4_ThreadNo(redirector) >= first_user_threadno())
+	   || (!L4_IsNilThread(redirector)
+			&& L4_IsLocalId(redirector)
+			&& redirector.raw != L4_anylocalthread.raw))
 	{
-		new_red = thread_find(redirector.raw);
-		if(new_red == NULL || new_red->id != redirector.raw) {
-			/* NOTE: this isn't in the L4.X2 spec. */
-			*ec_p = 2;	/* invalid thread */
-			result = 0;
-			goto end;
-		}
+		new_red = resolve_tid_spec(current->space, redirector);
+	} else {
+		/* read pre-user range numbers, anylocalthread, and threads that can't
+		 * be matched correctly as nilthread (no change). this part could also
+		 * report invalid thread (ec=2, result=0, goto end) but it'd be
+		 * contrary to specification.
+		 */
+		if(redirector.raw != L4_anythread.raw) redirector = L4_nilthread;
 	}
 
 	bool t_active = !L4_IsNilThread(space_name(sp));
