@@ -790,6 +790,7 @@ bool redo_ipc_send_half(struct thread *t)
 {
 	assert(t->status == TS_SEND_WAIT);
 	assert(!CHECK_FLAG(t->flags, TF_HALT));
+	assert(!CHECK_FLAG(t->flags, TF_REDIR_WAIT));
 
 	/* drop a previous ipc_wait & cancel propagation chaining. */
 	cancel_ipc_from(t);
@@ -948,8 +949,10 @@ static struct ipc_wait *find_global_sender(bool *valid_p, struct thread *self)
 }
 
 
-/* find a redirected IPC sender for @redir, or return NULL. doesn't remove the
- * thread on success.
+/* find a redirected IPC sender for @redir, or return NULL.
+ *
+ * TODO: doesn't remove the thread on success, but should; this'd avoid
+ * recomputing the hash value.
  */
 static struct thread *find_redir_sender(struct thread *redir)
 {
@@ -983,16 +986,23 @@ static struct thread *find_redir_sender(struct thread *redir)
 		L4_ThreadId_t holdup;
 		if(!is_redir_ready(&holdup, cand)) {
 			assert(holdup.raw != redir->id);
-			/* TODO: move the redir_wait to a different thread. */
-			panic("would reset redir_wait target!");
+			/* move redir_wait to a different thread. */
+			htable_del(&redir_wait, hash, cand);
+			cand->u1.waited_redir = holdup;
+			/* TODO: handle malloc failure */
+			htable_add(&redir_wait, hash_waited_redir(cand, NULL), cand);
+			continue;
 		}
 
 		if(cand->space->redirector == redir) {
-			/* it's the immediate redirector. short-circuit re-send
-			 * processing.
+			/* it's the immediate redirector. short-circuit re-send processing
+			 * into active receive.
 			 */
 
-			/* the inter-space active send condition. */
+			/* FIXME: this duplicates the inter-space active send condition.
+			 * it should be moved out of this, ipc_send_wait(), and whatever
+			 * else uses it.
+			 */
 			assert(L4_IsGlobalId(cand->ipc_to));
 			struct thread *dest = thread_find(cand->ipc_to.raw);
 			if((dest->status == TS_R_RECV || dest->status == TS_RECV_WAIT)
@@ -1003,11 +1013,15 @@ static struct thread *find_redir_sender(struct thread *redir)
 				goto end;
 			}
 		} else {
-			/* FIXME: re-run ipc_send_half() for `cand' while preserving its
-			 * existing timeout, then cause ipc_recv_half() to go into passive
-			 * receive and switch to the thread `cand' active-sent to.
+			/* TODO: this re-runs ipc_send_half() entirely, which may be very
+			 * expensive. it should instead cause it to be run through
+			 * scheduling, so that the highest-priority ready sender gets to
+			 * execute.
 			 */
-			panic("multi-redirector chain case in iterated redirector!");
+			htable_del(&redir_wait, hash, cand);
+			cand->flags &= ~TF_REDIR_WAIT;
+			cand->u1.waited_redir = L4_nilthread;
+			redo_ipc_send_half(cand);
 		}
 	}
 	ret = NULL;
