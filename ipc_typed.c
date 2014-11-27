@@ -656,7 +656,7 @@ static int copy_interspace_stritem(L4_Fpage_t *fault_p, struct ipc_state *st)
 				MIN(int, src_iter->len - s_off, dst_iter->len - d_off));
 
 		int d_pos = ((dst_iter->ptr & PAGE_MASK) + d_off) & PAGE_MASK;
-		assert(d_pos >= 0 && seg > 0);
+		assert(d_pos >= 0 && seg >= 0);
 		assert(d_pos + seg <= PAGE_SIZE);
 
 		size_t n = space_memcpy_from(src_space, (void *)(copy_dst + d_pos),
