@@ -6,6 +6,7 @@
 #include <assert.h>
 #include <ccan/talloc/talloc.h>
 #include <ccan/darray/darray.h>
+#include <ccan/bitmap/bitmap.h>
 
 #include <l4/types.h>
 #include <l4/ipc.h>
@@ -26,6 +27,13 @@ struct rf_ctx {
 };
 
 
+/* returned by build_redir_chain(). */
+struct redir_link {
+	int pid;
+	L4_ThreadId_t tid;
+};
+
+
 /* (typedef for ease of relocation to IDL, eventually.) */
 typedef struct redir_fixture_msg_info {
 	L4_Word_t tag, sender, ir;
@@ -39,8 +47,22 @@ static L4_ThreadId_t redir_fixture_tid;
 
 static void fixture_start(void);
 static void fixture_teardown(void);
+static void redir_fixture_fn(void *param_is_rf_ctx);
 
 static int get_redir_msgs(L4_ThreadId_t redir_tid, msgarray *out);
+
+
+static void set_redir(L4_ThreadId_t space_id, L4_ThreadId_t redir_tid)
+{
+	L4_Word_t dummy, res = L4_SpaceControl(space_id, 0,
+		L4_Nilpage, L4_Nilpage, redir_tid, &dummy);
+	if(res != 1) {
+		/* some errors, like "invalid space" (0x3), can occur if the target
+		 * has exited in forkserv before the syscall happens.
+		 */
+		diag("%s: res=%lu, ec=%#x", __func__, res, L4_ErrorCode());
+	}
+}
 
 
 /* an out-of-process receiver. this is used because IPC to the redirector's
@@ -57,14 +79,16 @@ static int fork_receiver(L4_ThreadId_t *tid_p, int n_iters, int nap_iter)
 	if(receiver != 0) return receiver;
 
 	for(int iter=0; iter < n_iters; iter++) {
-		diag("waiting (iter=%d)", iter);
+		//diag("waiting (iter=%d)", iter);
 		L4_ThreadId_t sender;
 		L4_MsgTag_t tag = L4_Wait_Timeout(TEST_IPC_DELAY, &sender);
 		L4_Word_t ec = L4_ErrorCode();
 		L4_ThreadId_t as = L4_ActualSender();
 		sender = L4_GlobalIdOf(sender);
+#if 0
 		diag("received message from %lu:%lu",
 			L4_ThreadNo(sender), L4_Version(sender));
+#endif
 		L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 4,
 			.X.label = L4_IpcSucceeded(tag) ? 0xb00b : 0xb000 }.raw);
 		L4_LoadMR(1, tag.raw);
@@ -99,6 +123,7 @@ static L4_ThreadId_t set_fork_redir(L4_ThreadId_t redir_tid)
 		redir_tid.raw);
 	fail_if(n != 0, "redir setting failed, n=%d", n);
 
+#if 0
 	if(!L4_IsNilThread(redir_tid)) {
 		if(prev_redir.raw != L4_anythread.raw) {
 			diag("prev_redir=%lu:%lu",
@@ -107,6 +132,7 @@ static L4_ThreadId_t set_fork_redir(L4_ThreadId_t redir_tid)
 			diag("prev_redir=any");
 		}
 	}
+#endif
 
 	return prev_redir;
 }
@@ -129,20 +155,151 @@ static int fork_sender(L4_ThreadId_t *tid_p, L4_ThreadId_t partner, L4_Word_t la
 }
 
 
-/* tcase `api' */
+/* tcase `meta' */
 
-static void set_redir(L4_ThreadId_t space_id, L4_ThreadId_t redir_tid)
+/* forks a chain of children such that ret[x] is redirected by ret[x+1], until
+ * ret[length-1] which inherits redirection from whatever the caller set. the
+ * latter value is restored.
+ *
+ * return value is terminated with rc[n].tid == nilthread.
+ */
+static struct redir_link *build_redir_chain(int length)
 {
-	L4_Word_t dummy, res = L4_SpaceControl(space_id, 0,
-		L4_Nilpage, L4_Nilpage, redir_tid, &dummy);
-	if(res != 1) {
-		/* some errors, like "invalid space" (0x3), can occur if the target
-		 * has exited in forkserv before the syscall happens.
-		 */
-		diag("%s: res=%lu, ec=%#x", __func__, res, L4_ErrorCode());
+	L4_ThreadId_t prev_redir = set_fork_redir(L4_nilthread);
+	struct redir_link *ret = talloc_zero_array(NULL,
+		struct redir_link, length + 1);
+	ret[length].tid = L4_nilthread;
+	for(int i = length - 1; i >= 0; --i) {
+		ret[i].pid = fork_tid(&ret[i].tid);
+		if(ret[i].pid == 0) {
+			struct rf_ctx *ctx = talloc_zero(NULL, struct rf_ctx);
+			ctx->running = true;
+			darray_init(ctx->msgs);
+			redir_fixture_fn(ctx);
+			exit(0);
+		}
+		set_fork_redir(ret[i].tid);
 	}
+	set_fork_redir(prev_redir);
+	return ret;
 }
 
+
+/* disposes of build_redir_chain() output and frees @chain. returns -1
+ * terminated array of other children that were waited for (talloc'd under
+ * @chain's parent).
+ */
+static int *kill_redir_chain(struct redir_link *chain)
+{
+	int len = 0;
+	for(int i=0; !L4_IsNilThread(chain[i].tid); i++, len++) {
+		set_redir(chain[i].tid, L4_anythread);
+		send_quit(chain[i].tid);
+	}
+
+	bitmap *running = bitmap_alloc1(len);
+	darray(int) others; darray_init(others);
+	while(!bitmap_empty(running, len)) {
+		int st, dead = wait(&st);
+		bool found = false;
+		for(int i=0; i < len; i++) {
+			if(chain[i].pid == dead) {
+				bitmap_clear_bit(running, i);
+				found = true;
+				break;
+			}
+		}
+		if(!found) darray_push(others, dead);
+	}
+	free(running);
+	int *ret = talloc_array(talloc_parent(chain), int, others.size + 1);
+	memcpy(ret, others.item, others.size * sizeof(int));
+	ret[others.size] = -1;
+	darray_free(others);
+	talloc_free(chain);
+	return ret;
+}
+
+
+/* start a redirection chain of length 2 or 7, then pass a message through it
+ * and check that it appeared in each redirector.
+ */
+START_LOOP_TEST(redirect_chain_basic, iter, 0, 1)
+{
+	const L4_Word_t call_label = 0xbeef;
+
+	const bool is_long = CHECK_FLAG(iter, 1);
+	const int chain_length = is_long ? 7 : 2;
+	diag("is_long=%s", btos(is_long));
+
+	plan_tests(7);
+
+	struct redir_link *chain = build_redir_chain(chain_length);
+	pass("chain started");
+
+	set_fork_redir(L4_anythread);
+	L4_ThreadId_t receiver_tid;
+	int receiver = fork_receiver(&receiver_tid, 1, -1);
+	set_fork_redir(chain[0].tid);
+	L4_ThreadId_t sender_tid;
+	int sender = fork_sender(&sender_tid, receiver_tid, call_label);
+	diag("receiver=%d, sender=%d", receiver, sender);
+
+	L4_MsgTag_t tag = L4_Receive_Timeout(receiver_tid, TEST_IPC_DELAY);
+	L4_MsgTag_t subtag; L4_StoreMR(1, &subtag.raw);
+	L4_ThreadId_t as; L4_StoreMR(3, &as.raw);
+	ok1(L4_IpcSucceeded(tag) && L4_IpcSucceeded(subtag));
+	ok1(L4_IpcPropagated(subtag));
+	ok1(!L4_IpcRedirected(subtag));
+	ok1(L4_SameThreads(as, chain[chain_length - 1].tid));
+	L4_LoadMR(0, 0);
+	L4_Reply(receiver_tid);
+
+	/* check that it appears along the chain. */
+	int n_present = 0;
+	for(int i=0; i < chain_length; i++) {
+		msgarray *msgs = talloc(chain, msgarray);
+		darray_init(*msgs);
+#if 1
+		/* replies don't pass through redirection properly because of
+		 * the string item limitation in redir_fixture_fn(), so ease up a bit.
+		 *
+		 * TODO: change this once the limitation is no longer there.
+		 */
+		set_redir(chain[i].tid, L4_anythread);
+#endif
+		get_redir_msgs(chain[i].tid, msgs);
+		int n_here = 0;
+		for(int j=0; j < msgs->size; j++) {
+			L4_Word_t label = L4_Label((L4_MsgTag_t){
+				.raw = msgs->item[j]->tag });
+			if(label == call_label) n_here++;
+		}
+		darray_free(*msgs);
+		if(n_here == 1) n_present++;
+		else diag("i=%d, n_here=%d", i, n_here);
+	}
+	ok1(n_present == chain_length);
+
+	/* cleanup */
+	int *others = kill_redir_chain(chain);
+	int n_found = 0;
+	for(int i=0; others[i] >= 0; i++) {
+		if(others[i] == sender || others[i] == receiver) n_found++;
+	}
+	talloc_free(others);
+	set_redir(sender_tid, L4_anythread);
+	for(int i=0; i + n_found < 2; i++) {
+		int st, dead = wait(&st);
+		fail_if(dead != sender && dead != receiver);
+	}
+
+	pass("didn't die");
+}
+END_TEST
+
+
+/* tcase `api' */
 
 /* start the redirector fixture, launch a process with it, kill the
  * redirector, receive redirected Call from child process.
@@ -1049,6 +1206,14 @@ static void fixture_teardown(void)
 Suite *redir_suite(void)
 {
 	Suite *s = suite_create("redir");
+
+	/* mechanism self-tests. */
+	{
+		TCase *tc = tcase_create("meta");
+		tcase_set_fork(tc, false);
+		tcase_add_test(tc, redirect_chain_basic);
+		suite_add_tcase(s, tc);
+	}
 
 	/* API tests */
 	{
