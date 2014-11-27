@@ -1158,25 +1158,44 @@ SYSCALL L4_Word_t sys_spacecontrol(
 		assert(sp->utcb_area.raw == utcb_area.raw);
 	}
 
-	bool became_valid = false;
+	/* NOTE: this is somewhat inelegant in first invalidating existing
+	 * redir_waits, and then re-running the relevant IPC segments on reset.
+	 * instead a for_each_thread_in_space() could rewrite the redir_wait as
+	 * appropriate and re-do at most one.
+	 *
+	 * however, changing from one redirector to another is a rare operation.
+	 */
+	bool need_restart = false;
+	struct thread *old_red = CHECK_FLAG(sp->flags, SF_REDIRECT)
+		? sp->redirector : NULL;
 	if(redirector.raw == L4_anythread.raw) {
-		became_valid = CHECK_FLAG(sp->flags, SF_REDIRECT)
+		need_restart = CHECK_FLAG(sp->flags, SF_REDIRECT)
 			&& sp->redirector == NULL;
+
+		if(old_red != NULL) {
+			need_restart = true;
+			for_each_thread_in_space(sp, &invalidate_redir_wait, NULL);
+		}
 
 		sp->flags &= ~SF_REDIRECT;
 		sp->redirector = NULL;
 	} else if(new_red != NULL) {
-		became_valid = CHECK_FLAG(sp->flags, SF_REDIRECT)
+		need_restart = CHECK_FLAG(sp->flags, SF_REDIRECT)
 			&& sp->redirector == NULL;
+
+		if(old_red != new_red) {
+			need_restart = true;
+			for_each_thread_in_space(sp, &invalidate_redir_wait, NULL);
+		}
 
 		assert(new_red->id == redirector.raw);
 		new_red->flags |= TF_REDIR;
 		sp->redirector = new_red;
 		sp->flags |= SF_REDIRECT;
 	}
-	if(became_valid) {
-		/* FIXME: this may pre-empt the SpaceControl caller. that should be
-		 * tested for, first.
+	if(need_restart) {
+		/* TODO: this may pre-empt the SpaceControl caller. that should be
+		 * tested for.
 		 */
 		restart_redir_waits(sp);
 	}

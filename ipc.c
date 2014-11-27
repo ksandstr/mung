@@ -126,8 +126,11 @@ static L4_ThreadId_t tid_return(struct thread *self, struct thread *t)
 }
 
 
-void remove_redir_wait(struct thread *t) {
-	htable_del(&redir_wait, hash_waited_redir(t, NULL), t);
+void remove_redir_wait(struct thread *t)
+{
+	if(likely(!L4_IsNilThread(t->u1.waited_redir))) {
+		htable_del(&redir_wait, hash_waited_redir(t, NULL), t);
+	}
 }
 
 
