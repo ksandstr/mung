@@ -21,9 +21,18 @@
 #define GET_MSGS_LABEL 0x674d
 
 
+/* (typedef for ease of relocation to IDL, eventually.) */
+typedef struct redir_fixture_msg_info {
+	L4_Word_t tag, sender, ir;
+	L4_Word_t mr[7];
+} fixmsg_t;
+
+typedef darray(fixmsg_t *) msgarray;
+
+
 struct rf_ctx {
 	bool running;
-	darray(struct redir_fixture_msg_info *) msgs;
+	msgarray msgs;
 };
 
 
@@ -32,15 +41,6 @@ struct redir_link {
 	int pid;
 	L4_ThreadId_t tid;
 };
-
-
-/* (typedef for ease of relocation to IDL, eventually.) */
-typedef struct redir_fixture_msg_info {
-	L4_Word_t tag, sender, ir;
-	L4_Word_t mr[7];
-} fixmsg_t;
-
-typedef darray(fixmsg_t *) msgarray;
 
 
 static L4_ThreadId_t redir_fixture_tid;
@@ -1025,8 +1025,7 @@ static void redir_fixture_fn(void *parameter)
 						L4_ThreadNo(ir), L4_Version(ir));
 				}
 #endif
-				struct redir_fixture_msg_info *msg = talloc_size(ctx,
-					sizeof(*msg));
+				fixmsg_t *msg = talloc_zero(ctx, fixmsg_t);
 				msg->tag = tag.raw;
 				msg->sender = sender.raw;
 				msg->ir = ir.raw;
@@ -1074,7 +1073,7 @@ static void redir_fixture_fn(void *parameter)
 			} else if(L4_Label(tag) == GET_MSGS_LABEL) {
 				/* RedirFixture::get_msgs */
 				int n_send = MIN(int, 6, ctx->msgs.size);
-				struct redir_fixture_msg_info buf[6];
+				fixmsg_t buf[6];
 				for(int i=0; i < n_send; i++) {
 					memcpy(&buf[i], ctx->msgs.item[i], sizeof(buf[0]));
 				}
@@ -1157,7 +1156,7 @@ static int get_redir_msgs(L4_ThreadId_t redir_tid, msgarray *out)
 	uint16_t n_got;
 	do {
 		n_got = 0;
-		struct redir_fixture_msg_info buf[6];
+		fixmsg_t buf[6];
 		unsigned blen = sizeof(buf);
 		memset(buf, 0, sizeof(buf));
 		int n = __redir_fixture_get_msgs_timeouts(redir_tid,
