@@ -32,7 +32,7 @@ static struct trace_item *add_trace_item(int id)
 		if(repl == NULL) {
 			panic("can't reallocate trace_status");
 		}
-		for(int i=trace_status_size; i <= id + 1; i++) {
+		for(int i=trace_status_size; i < id + 1; i++) {
 			repl[i] = (struct trace_item){ };
 		}
 		trace_status = repl;
