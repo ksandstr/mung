@@ -142,9 +142,15 @@ struct str_meta {
 };
 
 
-/* in-progress string transfer. at most one per two threads.
+/* in-progress string transfer. at most one per two threads. variable length;
+ * see `buf' at the end. alloca()ted on the stack when no transfer faults have
+ * occurred.
  *
- * alloca()ted on the stack when no transfer faults have occurred.
+ * this structure encodes a typed transfer that was paused due to
+ * string-transfer faults (v1: or mid-transfer pre-emption). it's present in a
+ * <struct thread> iff TF_XFER is set, also implying !BLOCKED && IPC for both
+ * threads, SENDING for `from', and !SENDING for `to'. these flags will be
+ * restored at when XFER is cleared at completion of the paused transfer.
  */
 struct ipc_state
 {

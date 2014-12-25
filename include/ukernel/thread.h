@@ -80,7 +80,7 @@ typedef L4_Word_t thread_id;
 
 struct space;
 struct utcb_page;
-struct ipc_state;		/* private to ipc.c */
+struct ipc_state;		/* defined in <ukernel/ipc.h> */
 struct saved_regs;		/* private to thread.c */
 
 struct thread
