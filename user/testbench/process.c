@@ -456,8 +456,8 @@ void exit(int status)
 	asm volatile ("int $1");
 
 	/* double ultimate failure path */
-	L4_Set_ExceptionHandler(L4_nilthread);
 	for(;;) {
+		L4_Set_ExceptionHandler(L4_nilthread);
 		asm volatile ("int $1");
 	}
 }
