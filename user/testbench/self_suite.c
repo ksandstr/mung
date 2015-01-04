@@ -678,7 +678,7 @@ static void wait_for_child_fn(void *param UNUSED)
 /* tests subprocess exit when its last thread terminates. */
 START_LOOP_TEST(exit_with_thread_test, iter, 0, 1)
 {
-	plan_tests(1);
+	plan_tests(2);
 	const bool from_thread = CHECK_FLAG(iter, 1);
 	diag("from_thread=%s", btos(from_thread));
 
@@ -700,16 +700,16 @@ START_LOOP_TEST(exit_with_thread_test, iter, 0, 1)
 	diag("child_tid=%lu:%lu",
 		L4_ThreadNo(child_tid), L4_Version(child_tid));
 	L4_Accept(L4_UntypedWordsAcceptor);
-	L4_MsgTag_t tag = L4_Receive_Timeout(child_tid,
-		L4_TimePeriod(10000));
+	L4_MsgTag_t tag = L4_Receive_Timeout(child_tid, L4_TimePeriod(10000));
 	L4_Word_t ec = L4_ErrorCode();
-	fail_unless(L4_IpcFailed(tag));
-	fail_unless(ec == 3 || ec == 5, "ec=%#lx", ec);
+	if(!ok1(L4_IpcFailed(tag) && (ec == 3 || ec == 5))) {
+		diag("tag=%#lx, ec=%#lx", tag.raw, ec);
+	}
 
 	L4_ThreadId_t w_tid = xstart_thread(&wait_for_child_fn, NULL);
 	ec = 0;
 	void *ret = join_thread_long(w_tid, L4_TimePeriod(15000), &ec);
-	if(!ok(ret != NULL && ec == 0, "wait ok")) {
+	if(!ok(ret != NULL && ec == 0, "waiter joined")) {
 		diag("ec=%#lx", ec);
 		kill_thread(w_tid);
 	}
