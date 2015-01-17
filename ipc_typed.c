@@ -988,20 +988,16 @@ static bool eval_xfer_timeout(
 	 * TimePeriod conversion, and the latter is detected with pt_is_valid()
 	 * from a latent call to do_typed_transfer().
 	 *
-	 * this code could unify the clock conversion bits in a nicer way. as it
-	 * stands TimePoints are slightly slower to process.
+	 * FIXME: using the current time as @base is clearly wack. this should use
+	 * a ksystemclock() value from when sys_ipc()/sys_lipc() was called.
 	 */
 	if(L4_IsTimePoint_NP(snd_to)) {
 		L4_Clock_t base = { .raw = ksystemclock() };
-		snd_to = pt_is_valid(base, snd_to)
-			? L4_TimePeriod(L4_PointClock_NP(base, snd_to).raw - base.raw)
-			: L4_ZeroTime;
+		snd_to = point_to_period(base, snd_to);
 	}
 	if(L4_IsTimePoint_NP(rcv_to)) {
 		L4_Clock_t base = { .raw = ksystemclock() };
-		rcv_to = pt_is_valid(base, rcv_to)
-			? L4_TimePeriod(L4_PointClock_NP(base, rcv_to).raw - base.raw)
-			: L4_ZeroTime;
+		rcv_to = point_to_period(base, rcv_to);
 	}
 
 	uint64_t v;

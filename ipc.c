@@ -799,8 +799,11 @@ bool redo_ipc_send_half(struct thread *t)
 	if(t->wakeup_time == ~(uint64_t)0) t->send_timeout = L4_Never;
 	else {
 		L4_Clock_t base = { .raw = ksystemclock() };
+		/* it's OK to use a timeperiod here because the passive send will
+		 * resolve immediately anyway.
+		 */
 		t->send_timeout = base.raw < t->wakeup_time
-			? L4_TimePoint2_NP(base, (L4_Clock_t){ .raw = t->wakeup_time })
+			? L4_TimePeriod(t->wakeup_time - base.raw)
 			: L4_ZeroTime;
 	}
 	thread_wake(t);
@@ -1523,10 +1526,21 @@ SYSCALL L4_Word_t sys_ipc(
 		return L4_nilthread.raw;
 	}
 
+	L4_Clock_t now = { .raw = ksystemclock() };
 	current->ipc_to = to;
 	current->ipc_from = from;
 	current->send_timeout.raw = timeouts >> 16;
 	current->recv_timeout.raw = timeouts & 0xffff;
+	/* FIXME: this way of handling the receive timeout is basically wrong; a
+	 * time period counts from the start of the receive phase but a timepoint
+	 * is rooted in @now, resolved at sys_ipc() invocation.
+	 *
+	 * for SndTimeout though they're exactly the same thing.
+	 */
+	if(L4_IsTimePoint_NP(current->recv_timeout)) {
+		current->recv_timeout = point_to_period(now, current->recv_timeout);
+	}
+	/* SndTimeout is converted after the send phase test. */
 
 	struct thread *dest = NULL;
 	if(!L4_IsNilThread(to)
@@ -1553,6 +1567,10 @@ SYSCALL L4_Word_t sys_ipc(
 	if(!L4_IsNilThread(to)) {
 		/* send phase. */
 		TRACE("%s: IPC send phase.\n", __func__);
+		if(L4_IsTimePoint_NP(current->send_timeout)) {
+			current->send_timeout = point_to_period(now,
+				current->send_timeout);
+		}
 		if(!ipc_send_half(current, utcb, &dest)) {
 			/* didn't complete. either READY, SEND_WAIT, STOPPED, or XFER. */
 			assert(current->status != TS_STOPPED);	/* (would be weird.) */

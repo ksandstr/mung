@@ -94,6 +94,15 @@ static inline bool pt_is_valid(L4_Clock_t base, L4_Time_t t)
 }
 
 
+/* returns L4_ZeroTime when !pt_is_valid(@pt), i.e. when @pt < @base. */
+static inline L4_Time_t point_to_period(L4_Clock_t base, L4_Time_t pt)
+{
+	assert(L4_IsTimePoint_NP(pt));
+	return !pt_is_valid(base, pt) ? L4_ZeroTime
+		: L4_TimePeriod(L4_PointClock_NP(base, pt).raw - base.raw);
+}
+
+
 static inline bool fpage_overlap(L4_Fpage_t a, L4_Fpage_t b)
 {
 	L4_Word_t mask = ~((1ul << MAX(int, L4_SizeLog2(a), L4_SizeLog2(b))) - 1);

@@ -455,6 +455,8 @@ void thread_sleep(struct thread *t, L4_Time_t period)
 	 * RECV_WAIT.
 	 */
 
+	assert(L4_IsTimePeriod_NP(period));
+
 #ifndef NDEBUG
 	if(period.raw != L4_ZeroTime.raw && period.raw != L4_Never.raw) {
 		TRACE("%s: sleeping thread %lu:%lu for %llu microseconds\n", __func__,
