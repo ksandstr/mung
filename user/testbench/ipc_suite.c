@@ -2568,6 +2568,145 @@ START_LOOP_TEST(mapgrant_address, iter, 0, 3)
 END_TEST
 
 
+static bool send_mapgrant_to(
+	L4_ThreadId_t parent_tid,
+	bool send_nilpage,
+	bool send_grant)
+{
+	void *send_mem = valloc(PAGE_SIZE);
+	assert(((uintptr_t)send_mem & (PAGE_SIZE - 1)) == 0);
+	memset(send_mem, 0x5f, PAGE_SIZE);
+
+	/* handshake. */
+	L4_Accept(L4_UntypedWordsAcceptor);
+	L4_MsgTag_t tag = L4_Receive_Timeout(parent_tid, TEST_IPC_DELAY);
+	if(L4_IpcFailed(tag)) {
+		diag("%s: receive failed, ec=%#lx", __func__, L4_ErrorCode());
+		return false;
+	}
+
+	L4_Fpage_t map_page;
+	if(send_nilpage) map_page = L4_Nilpage;
+	else {
+		map_page = L4_Fpage((uintptr_t)send_mem, PAGE_SIZE);
+		L4_Set_Rights(&map_page, L4_ReadWriteOnly);
+	}
+	L4_MapItem_t mi;
+	if(send_grant) {
+		*(L4_GrantItem_t *)&mi.raw[0] = L4_GrantItem(map_page, 0);
+	} else {
+		mi = L4_MapItem(map_page, 0);
+	}
+	L4_LoadMR(0, (L4_MsgTag_t){ .X.t = 2, .X.label = 0xbeef }.raw);
+	L4_LoadMRs(1, 2, mi.raw);
+	tag = L4_Reply(parent_tid);
+	if(L4_IpcFailed(tag)) {
+		diag("%s: reply failed, ec=%#lx", __func__, L4_ErrorCode());
+	}
+
+	/* sync to let the parent read the entrails. */
+	L4_Accept(L4_UntypedWordsAcceptor);
+	tag = L4_Receive_Timeout(parent_tid, TEST_IPC_DELAY);
+	if(L4_IpcFailed(tag)) {
+		diag("%s: sync receive failed, ec=%#lx", __func__, L4_ErrorCode());
+	}
+
+	free(send_mem);
+	return L4_IpcSucceeded(tag);
+}
+
+
+struct smgt_param {
+	L4_ThreadId_t parent_tid;
+	bool is_nil, is_grant;
+};
+
+
+static void send_mapgrant_to_fn(void *param)
+{
+	struct smgt_param *p = param;
+	send_mapgrant_to(p->parent_tid, p->is_nil, p->is_grant);
+	free(p);
+}
+
+
+/* test that map/grant operations are only effective under the conditions
+ * specified by receiving a map/grant item into a nil receivewindow, sending a
+ * nil page, sending a map/grant item in the same address space, or a
+ * combination thereof.
+ *
+ * it should only map when neither page is nil and the transfer occurs between
+ * address spaces.
+ *
+ * this covers the parameter validation clause in apply_mapitem().
+ */
+START_LOOP_TEST(mapgrant_effect_clause, iter, 0, 15)
+{
+	const bool is_nil_map = CHECK_FLAG(iter, 1),
+		is_nil_wnd = CHECK_FLAG(iter, 2),
+		is_grant = CHECK_FLAG(iter, 4),
+		is_thread = CHECK_FLAG(iter, 8);
+	diag("is_nil_map=%s, is_nil_wnd=%s, is_grant=%s, is_thread=%s",
+		btos(is_nil_map), btos(is_nil_wnd), btos(is_grant), btos(is_thread));
+
+	plan_tests(4);
+
+	L4_ThreadId_t child_tid, parent_tid = L4_Myself();
+	int child = -1;
+	if(is_thread) {
+		struct smgt_param *p = malloc(sizeof(*p));
+		*p = (struct smgt_param){ .parent_tid = parent_tid,
+			.is_nil = is_nil_map, .is_grant = is_grant };
+		child_tid = xstart_thread(&send_mapgrant_to_fn, p);
+	} else {
+		child = fork_tid(&child_tid);
+		if(child == 0) {
+			bool ok = send_mapgrant_to(parent_tid, is_nil_map, is_grant);
+			exit(ok ? 0 : 1);
+		}
+	}
+
+	volatile uint8_t *recv_mem = valloc(PAGE_SIZE);
+	memset((void *)recv_mem, 0xaa, PAGE_SIZE);
+	uint8_t old_value = recv_mem[0];
+	L4_Fpage_t rwnd;
+	if(is_nil_wnd) rwnd = L4_Nilpage;
+	else {
+		rwnd = L4_Fpage((uintptr_t)recv_mem, PAGE_SIZE);
+		L4_Set_Rights(&rwnd, L4_FullyAccessible);
+	}
+	L4_Accept(L4_MapGrantItems(rwnd));
+	L4_LoadMR(0, 0);
+	L4_MsgTag_t tag = L4_Call_Timeouts(child_tid,
+		TEST_IPC_DELAY, TEST_IPC_DELAY);
+	L4_Word_t ec = L4_ErrorCode();
+	if(!ok1(L4_IpcSucceeded(tag))) diag("ec=%#lx", ec);
+
+	/* no map when ineffective. */
+	imply_ok1(is_nil_map || is_nil_wnd || is_thread,
+		recv_mem[0] == 0xaa && recv_mem[0x123] == 0xaa);
+	/* map when effective. */
+	imply_ok1(!is_nil_map && !is_nil_wnd && !is_thread,
+		recv_mem[0] != 0xaa && recv_mem[0x123] != 0xaa);
+
+	/* write should disappear on flush when effective. */
+	recv_mem[0] ^= 0xff;
+	L4_FlushFpage(rwnd);
+	iff_ok1(recv_mem[0] == old_value,
+		!is_nil_map && !is_nil_wnd && !is_thread);
+
+	L4_LoadMR(0, 0);
+	L4_Send_Timeout(child_tid, TEST_IPC_DELAY);
+	if(is_thread) {
+		xjoin_thread(child_tid);
+	} else {
+		int st, dead = wait(&st);
+		fail_unless(dead == child);
+	}
+}
+END_TEST
+
+
 /* simple enough. fork, receive map in fork over initialized memory, check
  * if it still looks like that memory afterward, return observation.
  *
@@ -3063,6 +3202,7 @@ Suite *ipc_suite(void)
 		TCase *tc = tcase_create("typed");
 		tcase_add_test(tc, c_bit_in_typed_words);
 		tcase_add_test(tc, mapgrant_address);
+		tcase_add_test(tc, mapgrant_effect_clause);
 		/* NOTE: these must be run from within a fork; otherwise there's a
 		 * chance they screw with testbench's UTCB or KIP pages.
 		 */
