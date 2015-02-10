@@ -197,15 +197,14 @@ static int apply_mapitem(
 	void *d_base,
 	L4_MapItem_t *m)
 {
-	L4_Fpage_t map_page = L4_MapItemSndFpage(*m);
-	L4_Fpage_t wnd = { .raw = L4_VREG(d_base, L4_TCR_BR(0)) & ~0xfUL };
+	L4_Fpage_t map_page = L4_MapItemSndFpage(*m),
+		wnd = { .raw = L4_VREG(d_base, L4_TCR_BR(0)) & ~0xfUL };
 
 	/* parameter validation */
-	if(source->space == dest->space
+	if(unlikely(source->space == dest->space
 		|| L4_IsNilFpage(map_page)
-		|| L4_IsNilFpage(wnd))
+		|| L4_IsNilFpage(wnd)))
 	{
-		/* FIXME: these conditions haven't been tested for */
 		goto noop;
 	}
 
