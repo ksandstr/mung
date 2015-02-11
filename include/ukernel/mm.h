@@ -46,7 +46,16 @@ typedef uint32_t page_t;
 #define PT_GLOBAL (1 << 7)
 
 
-/* represents a hardware page reserved by the kernel. */
+/* parameter of map_vm_page() */
+#define VM_REF 1		/* reference-counted kernel address space */
+#define VM_SYSCALL 2	/* guaranteed valid until kernel exit */
+
+
+/* values of <struct page>.flags */
+#define PAGEF_VMREF 0x01	/* page's VM map is reference counted. */
+
+
+/* tracks a physical page reserved by the kernel. */
 struct page
 {
 	struct list_node link;
@@ -56,6 +65,9 @@ struct page
 	 * 44 bits of physical memory (i.e. 16 TiB).
 	 */
 	uint32_t id;
+
+	uint16_t refcount;	/* # of map_vm_page() refs (wrt ->vm_addr) */
+	uint16_t flags;		/* of PAGEF_* */
 };
 
 
@@ -63,6 +75,12 @@ extern void add_supervisor_pages(intptr_t heap_pos, int num_pages);
 
 extern uintptr_t reserve_heap_page(void);
 extern void free_heap_page(uintptr_t address);
+
+/* ensures @pg->vm_addr validity. duration is one of VM_*.
+ * unref_vm_page() releases references from VM_REF.
+ */
+extern void *map_vm_page(struct page *pg, int duration);
+extern void unref_vm_page(struct page *p);
 
 
 /* kernel heap initialization. the caller must identitymap between *resv_start

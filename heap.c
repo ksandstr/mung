@@ -96,6 +96,45 @@ void free_heap_page(uintptr_t addr)
 }
 
 
+/* maps @pg into a reserve_heap_page() area. */
+void *map_vm_page(struct page *pg, int duration)
+{
+	if(CHECK_FLAG(pg->flags, PAGEF_VMREF)) {
+		if(duration == VM_REF) pg->refcount++;
+		return pg->vm_addr;
+	}
+
+	if(pg->vm_addr == NULL) {
+		pg->vm_addr = (void *)reserve_heap_page();
+		if(duration == VM_REF) {
+			pg->refcount = 1;
+			pg->flags |= PAGEF_VMREF;
+		} else {
+			assert(duration == VM_SYSCALL);
+			pg->refcount = 0;
+			pg->flags &= ~PAGEF_VMREF;
+			/* TODO: set VM_SYSCALL epoch */
+		}
+		put_supervisor_page((uintptr_t)pg->vm_addr, pg->id);
+	}
+
+	return pg->vm_addr;
+}
+
+
+void unref_vm_page(struct page *pg)
+{
+	if(CHECK_FLAG(pg->flags, PAGEF_VMREF)) {
+		assert(pg->refcount > 0);
+		if(--pg->refcount == 0) {
+			/* downgrade to VM_SYSCALL scope. */
+			pg->flags &= ~PAGEF_VMREF;
+			/* TODO: set VM_SYSCALL epoch */
+		}
+	}
+}
+
+
 static COLD bool page_is_available(
 	const L4_KernelConfigurationPage_t *kcp,
 	L4_Word_t addr)
