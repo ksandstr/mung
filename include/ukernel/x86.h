@@ -368,12 +368,15 @@ static inline void mm_orl(uintptr_t address, uint32_t mask) {
  * describe)
  */
 
-extern struct page *x86_get_ptab(struct space *sp, uintptr_t ptab_addr);
+/* get a pointer to a mapped last-level page table for @ptab_addr in @sp. if
+ * none exists, returns NULL. return value is valid until kernel exit.
+ */
+extern uint32_t *x86_get_ptab(struct space *sp, uintptr_t ptab_addr);
 
 /* returns NULL on alloc failure; this can be failure to allocate a page, or
  * a resize failure on @sp->ptab_pages.
  */
-extern struct page *x86_alloc_ptab(struct space *sp, uintptr_t ptab_addr);
+extern uint32_t *x86_alloc_ptab(struct space *sp, uintptr_t ptab_addr);
 
 
 /* from cpu.c (should be in x86.c or some such, or in an ia32 directory

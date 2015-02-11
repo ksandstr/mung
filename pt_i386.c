@@ -25,7 +25,7 @@ struct pt_iter
 {
 	struct space *sp;
 	uintptr_t ptab_addr;	/* 4M area covered by cur_ptab, or 0 if invalid */
-	struct page *cur_ptab;	/* from space->ptab_pages; NULL if absent */
+	uint32_t *cur_ptab;		/* kernel-mapped page table */
 };
 
 
@@ -46,7 +46,7 @@ static inline void pt_iter_destroy(struct pt_iter *it)
 }
 
 
-static inline struct page *_pt_ptab(struct pt_iter *it, uintptr_t addr)
+static inline uint32_t *_pt_ptab(struct pt_iter *it, uintptr_t addr)
 {
 	if((addr & ~_PTAB_MASK) != it->ptab_addr) {
 		it->ptab_addr = addr & ~_PTAB_MASK;
@@ -62,17 +62,14 @@ static inline uint32_t pt_get_pgid(
 	bool *upper_present_p,
 	uintptr_t addr)
 {
-	struct page *ptab = _pt_ptab(it, addr);
+	uint32_t *ptab_mem = _pt_ptab(it, addr);
 	if(upper_present_p != NULL) {
-		*upper_present_p = ptab != NULL;
+		*upper_present_p = ptab_mem != NULL;
 		assert(*upper_present_p == pt_upper_present(it, it->ptab_addr));
 	}
-	if(ptab == NULL) return 0;
+	if(ptab_mem == NULL) return 0;
 
-	uint32_t *ptab_mem = ptab->vm_addr;
-	assert(ptab_mem != NULL);
 	uint32_t pte = ptab_mem[(addr >> 12) & 0x3ff];
-
 	return CHECK_FLAG(pte, PT_PRESENT) ? pte >> 12 : 0;
 }
 
@@ -87,19 +84,24 @@ static inline void pt_set_page(
 	if((addr & ~_PTAB_MASK) != it->ptab_addr
 		|| (force && it->cur_ptab == NULL))
 	{
-		it->ptab_addr = addr & ~_PTAB_MASK;
-		if(force && !pt_upper_present(it, addr)) {
-			it->cur_ptab = x86_alloc_ptab(it->sp, addr);
-		} else {
-			it->cur_ptab = x86_get_ptab(it->sp, addr);
+		uint32_t *tmp = x86_get_ptab(it->sp, addr);
+		if(tmp == NULL) {
+			if(force) {
+				assert(!pt_upper_present(it, addr));
+				tmp = x86_alloc_ptab(it->sp, addr);
+			} else {
+				return;
+			}
 		}
+		it->cur_ptab = tmp;
+		it->ptab_addr = addr & ~_PTAB_MASK;
 	}
 	assert(it->cur_ptab != NULL);
 
-	uint32_t *ptab_mem = it->cur_ptab->vm_addr;
-	assert(ptab_mem != NULL);
+	uint32_t *ptab_mem = it->cur_ptab;
+	assert(L4_Writable == PT_RW);
 	ptab_mem[(addr >> 12) & 0x3ff] = pgid << 12 | PT_USER | PT_PRESENT
-		| (CHECK_FLAG(rights, L4_Writable) ? PT_RW : 0);
+		| (rights & L4_Writable);
 }
 
 
@@ -114,15 +116,9 @@ static inline bool pt_upper_present(struct pt_iter *it, uintptr_t addr)
 }
 
 
-static inline bool pt_page_present(
-	struct pt_iter *it,
-	uintptr_t addr)
+static inline bool pt_page_present(struct pt_iter *it, uintptr_t addr)
 {
-	struct page *ptab = _pt_ptab(it, addr);
-	if(ptab == NULL) return false;
-
-	const uint32_t *ptab_mem = ptab->vm_addr;
-	assert(ptab_mem != NULL);
-	uint32_t pte = ptab_mem[(addr >> 12) & 0x3ff];
-	return CHECK_FLAG(pte, PT_PRESENT);
+	const uint32_t *ptab_mem = _pt_ptab(it, addr);
+	return likely(ptab_mem != NULL)
+		&& CHECK_FLAG(ptab_mem[(addr >> 12) & 0x3ff], PT_PRESENT);
 }
