@@ -57,9 +57,10 @@ static inline uint32_t *_pt_ptab(struct pt_iter *it, uintptr_t addr)
 }
 
 
-static inline uint32_t pt_get_pgid(
+static inline uint32_t pt_probe(
 	struct pt_iter *it,
 	bool *upper_present_p,
+	int *access_p,
 	uintptr_t addr)
 {
 	uint32_t *ptab_mem = _pt_ptab(it, addr);
@@ -70,7 +71,24 @@ static inline uint32_t pt_get_pgid(
 	if(ptab_mem == NULL) return 0;
 
 	uint32_t pte = ptab_mem[(addr >> 12) & 0x3ff];
-	return CHECK_FLAG(pte, PT_PRESENT) ? pte >> 12 : 0;
+	if(!CHECK_FLAG(pte, PT_PRESENT)) return 0;
+
+	if(access_p != NULL) {
+		if(pte != 0) {
+			ptab_mem[(addr >> 12) & 0x3ff] &= ~(PT_ACCESSED | PT_DIRTY);
+		}
+		int rx = (pte & PT_ACCESSED) >> 3;
+		rx |= rx >> 2;
+		assert(!CHECK_FLAG(pte, PT_ACCESSED)
+			|| rx == (L4_Readable | L4_eXecutable));
+		assert(CHECK_FLAG(pte, PT_ACCESSED) || rx == 0);
+		int w = (pte & PT_DIRTY) >> 5;
+		assert(!CHECK_FLAG(pte, PT_DIRTY) || w == L4_Writable);
+		assert(CHECK_FLAG(pte, PT_DIRTY) || w == 0);
+
+		*access_p = rx | w;
+	}
+	return pte >> 12;
 }
 
 

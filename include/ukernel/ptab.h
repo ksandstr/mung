@@ -36,14 +36,18 @@ struct pt_iter;
 static inline void pt_iter_init(struct pt_iter *iter, struct space *sp);
 static inline void pt_iter_destroy(struct pt_iter *iter);
 
-/* read a single page ID at a given address. returns 0 when not present. if
- * there's a chance that physical page #0 would actually become mapped at this
- * address, the caller should disambiguate with pt_page_present().
+/* examine a pagetable entry for a given address. returns 0 when not present.
+ * if there's a chance that physical page #0 would actually become mapped at
+ * this address, the caller should disambiguate with pt_page_present().
  */
-static inline uint32_t pt_get_pgid(
+static inline uint32_t pt_probe(
 	struct pt_iter *iter,
 	bool *upper_present_p,		/* optional */
+	int *access_p,				/* optional, clears bits if set */
 	uintptr_t addr);
+
+#define pt_get_pgid(iter, upp, addr) pt_probe((iter), (upp), NULL, (addr))
+
 
 /* write a pagetable entry. rights mask per L4_Rights().
  *
@@ -57,13 +61,8 @@ static inline void pt_set_page(
 	bool force);
 
 /* test whether an upper-level directory entry is present. */
-static inline bool pt_upper_present(
-	struct pt_iter *iter,
-	uintptr_t addr);
-
-static inline bool pt_page_present(
-	struct pt_iter *iter,
-	uintptr_t addr);
+static inline bool pt_upper_present(struct pt_iter *iter, uintptr_t addr);
+static inline bool pt_page_present(struct pt_iter *iter, uintptr_t addr);
 
 
 /* TODO: switch according to pagetable format. */
