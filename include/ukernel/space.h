@@ -130,16 +130,6 @@ extern void space_remove_redirector(struct thread *t);
  */
 extern bool space_prefill_upper(struct space *sp, L4_Word_t addr);
 
-/* probe and reset the access bits of a page. if the probed address is in a
- * hole, the function returns -ENOENT; also, if next_addr_p != NULL, then
- * *next_addr_p will be set to a following address that might not be in the
- * same hole.
- */
-extern int space_probe_pt_access(
-	L4_Word_t *next_addr_p,
-	struct space *sp,
-	L4_Word_t addr);
-
 extern size_t space_memcpy_from(
 	struct space *sp,
 	void *dest,

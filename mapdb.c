@@ -1595,31 +1595,28 @@ int mapdb_unmap_fpage(
 
 		do {
 			if(REF_SPACE(e->parent) != 1) {
-				/* check each native page.
-				 *
-				 * TODO: move into a function!
-				 *
-				 * TODO: extend to support big pages as specified in the
-				 * related KIP field.
+				/* check each native page in e->range.
 				 *
 				 * TODO: only do this if the caller provides a location for
 				 * the out-parameter.
 				 */
-				L4_Word_t r_pos = L4_Address(e->range);
+				L4_Word_t r_pos = L4_Address(e->range),
+					r_last = r_pos + L4_Size(e->range);
 				int e_mask = 0;
 				do {
-					L4_Word_t next = 0;
-					int pmask = space_probe_pt_access(&next,
-						SPACE_OF_MAPDB(db), r_pos);
-					r_pos += PAGE_SIZE;
-					if(pmask >= 0) {
-						e_mask |= pmask;
+					bool up;
+					int pmask = 0;
+					pt_probe(&mod_it, &up, &pmask, r_pos);
+					if(!up) {
+						r_pos = (r_pos + PT_UPPER_SIZE) & ~PT_UPPER_MASK;
 					} else {
-						assert(pmask == -ENOENT);
-						if(next > r_pos) r_pos = next;
+						r_pos += PAGE_SIZE;
+						if(pmask >= 0) e_mask |= pmask;
+						else {
+							assert(pmask == -ENOENT);
+						}
 					}
-				} while(r_pos < L4_Address(e->range) + L4_Size(e->range)
-					&& e_mask != L4_FullyAccessible);
+				} while(r_pos < r_last);
 
 				if(e_mask != 0 && REF_DEFINED(e->parent)) {
 					/* FIXME: propagate e_mask to parent */

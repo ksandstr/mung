@@ -680,56 +680,6 @@ bool space_prefill_upper(struct space *space, L4_Word_t fault_addr)
 }
 
 
-int space_probe_pt_access(
-	L4_Word_t *next_addr_p,
-	struct space *sp,
-	L4_Word_t address)
-{
-	assert(check_space(0, sp));
-
-	L4_Word_t dir = address >> 22, p_ix = (address >> 12) & 0x3ff,
-		dummy = 0, *skip_to = next_addr_p == NULL ? &dummy : next_addr_p;
-	const pdir_t *dirs = sp->pdirs->vm_addr;
-	if(!CHECK_FLAG(dirs[dir], PDIR_PRESENT)) {
-		*skip_to = (dir + 1) << 22;
-		return -ENOENT;
-	}
-
-	uint32_t pt_id = dirs[dir] >> 12;
-	struct page *ptab_page = htable_get(&sp->ptab_pages, int_hash(pt_id),
-		&cmp_page_id_to_key, &pt_id);
-	if(unlikely(ptab_page == NULL)) {
-		L4_ThreadId_t name = space_name(sp);
-		printf("warning: page table for address %#lx in space %lu:%lu not found\n",
-			address, L4_ThreadNo(name), L4_Version(name));
-		*skip_to = 0;
-		return -ENOENT;
-	}
-
-	assert(ptab_page->vm_addr != NULL);
-	page_t *ptab = ptab_page->vm_addr;
-	if(!CHECK_FLAG(ptab[p_ix], PT_PRESENT)) {
-		if(next_addr_p != NULL) {
-			/* scan the page table forward a bit, just to amortize some of the
-			 * hash table access cost.
-			 */
-			L4_Word_t lim = MIN(L4_Word_t, p_ix + 32, 0x3ff);
-			while(p_ix <= lim && !CHECK_FLAG(ptab[p_ix], PT_PRESENT)) p_ix++;
-			*next_addr_p = p_ix <= lim ? dir << 22 | p_ix << 12 : 0;
-		}
-		return -ENOENT;
-	} else {
-		int rwx = 0;
-		if(CHECK_FLAG(ptab[p_ix], PT_ACCESSED)) {
-			rwx = L4_Readable | L4_eXecutable;
-		}
-		if(CHECK_FLAG(ptab[p_ix], PT_DIRTY)) rwx |= L4_Writable;
-		ptab[p_ix] &= ~(PT_DIRTY | PT_ACCESSED);
-		return rwx;
-	}
-}
-
-
 static size_t space_memcpy_from_fast(
 	struct space *sp,
 	void *dest,
