@@ -118,25 +118,12 @@ extern void space_remove_thread(struct space *sp, struct thread *t);
  */
 extern struct utcb_page *space_get_utcb_page(struct space *sp, uint16_t ppos);
 
-/* removes page table entries within @fp. ignores L4_Rights(@fp). */
-extern void space_clear_range(struct space *sp, L4_Fpage_t fp);
-
 /* invalidates the redirector field in all spaces where it references @t. used
  * in deleting and version-altering ThreadControl cases. REDIR_WAIT[t] threads
  * in those spaces will be put into REDIR_WAIT[nil] to remove references to
  * @t; active receive handles other cases.
  */
 extern void space_remove_redirector(struct thread *t);
-
-/* sets access for a range. if @fp.rights doesn't include Readable, the entry
- * is removed altogether to enforce non-readability.
- */
-extern void space_set_range_access(struct space *sp, L4_Fpage_t fp);
-
-extern void space_set_range(
-	struct space *sp,
-	L4_Fpage_t range,
-	uint32_t first_pgid);
 
 /* generate and prefill a second-level page table. if one is already present,
  * no-op and return false.
@@ -166,11 +153,8 @@ extern bool space_add_ioperm(
 	int size);
 
 
-/* stubbed out interface for architectures (non-x86, non-amd64) that don't
- * have an INVLPG equivalent. a sequence of calls to space_put_page(), or
- * others that alter the page tables, should be terminated with
- * space_commit(). it may also end up doing something in a multiprocessor
- * environment.
+/* TODO: remove this and all its call sites. audit the latter to substitute
+ * with explicit invalidation or flushing.
  */
 static inline void space_commit(struct space *sp) {
 	/* emptiness */

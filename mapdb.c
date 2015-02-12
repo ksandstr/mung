@@ -888,7 +888,14 @@ int mapdb_add_map(
 			panic("shrimp case not implemented");
 		}
 	}
-	space_set_range(SPACE_OF_MAPDB(db), fpage, first_page_id);
+	struct pt_iter it;
+	pt_iter_init(&it, SPACE_OF_MAPDB(db));
+	for(int i = 0, l = L4_Size(fpage) / PAGE_SIZE; i < l; i++) {
+		pt_set_page(&it, L4_Address(fpage) + i * PAGE_SIZE,
+			first_page_id + i, L4_Rights(fpage), false);
+	}
+	pt_iter_destroy(&it);
+	space_commit(SPACE_OF_MAPDB(db));
 
 	assert(add_map_postcond(db, parent, fpage, first_page_id));
 	assert(check_mapdb_module(MOD_NO_CHILD_REFS));
@@ -1482,6 +1489,39 @@ static int reparent_children(struct map_db *db, struct map_entry *e)
 }
 
 
+static void clear_pt_range(struct pt_iter *drop_it, L4_Fpage_t range)
+{
+	L4_Word_t a = L4_Address(range), l = a + L4_Size(range);
+	while(a < l) {
+		if(pt_clear_page(drop_it, a)) a += PAGE_SIZE;
+		else a = (a + PT_UPPER_SIZE) & ~PT_UPPER_MASK;
+	}
+}
+
+
+static void set_pt_range_rights(struct pt_iter *mod_it, L4_Fpage_t range)
+{
+	if(unlikely(!CHECK_FLAG(L4_Rights(range), L4_Readable))) {
+		clear_pt_range(mod_it, range);
+		return;
+	}
+
+	L4_Word_t a = L4_Address(range), l = a + L4_Size(range);
+	while(a < l) {
+		/* TODO: add an interface that doesn't dig through the page tables
+		 * twice. then use it here.
+		 */
+		bool upper;
+		uint32_t pgid = pt_probe(mod_it, &upper, NULL, a);
+		if(unlikely(!upper)) a = (a + PT_UPPER_SIZE) & ~PT_UPPER_MASK;
+		else {
+			pt_set_page(mod_it, a, pgid, L4_Rights(range), false);
+			a += PAGE_SIZE;
+		}
+	}
+}
+
+
 int mapdb_unmap_fpage(
 	struct map_db *db,
 	L4_Fpage_t range,
@@ -1500,6 +1540,10 @@ int mapdb_unmap_fpage(
 		&& L4_Rights(range) == L4_FullyAccessible
 		&& (range.raw & 0xc00) == 0x800;
 	assert(drop_special || (L4_Address(range) & 0xc00) == 0);
+
+	/* TODO: only initialize this if the `drop' variable becomes true */
+	struct pt_iter mod_it;
+	pt_iter_init(&mod_it, SPACE_OF_MAPDB(db));
 
 	TRACE("%s: range %#lx:%#lx, %simmediate, %srecursive, ref_id %d\n",
 		__func__, L4_Address(range), L4_Size(range),
@@ -1635,12 +1679,12 @@ int mapdb_unmap_fpage(
 				assert(FPAGE_LOW(e->range) < r_end);
 				assert(FPAGE_HIGH(e->range) <= r_end);
 
-				int old_access = L4_Rights(e->range),
-					new_access = old_access & ~unmap_rights;
-				L4_Set_Rights(&e->range, new_access);
-				if(new_access == 0) drop = true;
-				else if(new_access < old_access) {
-					space_set_range_access(SPACE_OF_MAPDB(db), e->range);
+				int old_rights = L4_Rights(e->range),
+					new_rights = old_rights & ~unmap_rights;
+				L4_Set_Rights(&e->range, new_rights);
+				if(new_rights == 0) drop = true;
+				else if(new_rights < old_rights) {
+					set_pt_range_rights(&mod_it, e->range);
 					db_changed = true;
 				}
 			}
@@ -1660,10 +1704,10 @@ int mapdb_unmap_fpage(
 					 * functional stages, each invoked according to its
 					 * corresponding bool parameter.
 					 */
-					return -ENOMEM;
+					goto Enomem;
 				}
 
-				space_clear_range(SPACE_OF_MAPDB(db), e->range);
+				clear_pt_range(&mod_it, e->range);
 				db_changed = true;
 
 				int pos = e - g->entries;
@@ -1702,7 +1746,6 @@ int mapdb_unmap_fpage(
 	}
 
 	assert(unmap_rights == 0 || check_mapdb_module(0));
-	if(db_changed) space_commit(SPACE_OF_MAPDB(db));
 
 	/* TODO: move postconditions into another function */
 #ifndef NDEBUG
@@ -1719,7 +1762,18 @@ int mapdb_unmap_fpage(
 	}
 #endif
 
+end:
+	if(db_changed) {
+		/* TODO: move this into pt_iter_destroy()! */
+		x86_flush_tlbs();
+		space_commit(SPACE_OF_MAPDB(db));
+	}
+	pt_iter_destroy(&mod_it);
 	return rwx_seen;
+
+Enomem:
+	rwx_seen = -ENOMEM;
+	goto end;
 }
 
 
