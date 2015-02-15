@@ -895,7 +895,6 @@ int mapdb_add_map(
 			first_page_id + i, L4_Rights(fpage), false);
 	}
 	pt_iter_destroy(&it);
-	space_commit(SPACE_OF_MAPDB(db));
 
 	assert(add_map_postcond(db, parent, fpage, first_page_id));
 	assert(check_mapdb_module(MOD_NO_CHILD_REFS));
@@ -1532,7 +1531,6 @@ int mapdb_unmap_fpage(
 	assert(recursive || immediate);	/* disallows the one-level status read */
 	assert(check_mapdb_module(0));
 
-	bool db_changed = false;		/* TODO: track elsewhere */
 	int rwx_seen = 0;
 
 	/* check "affect special ranges" form */
@@ -1682,7 +1680,6 @@ int mapdb_unmap_fpage(
 				if(new_rights == 0) drop = true;
 				else if(new_rights < old_rights) {
 					set_pt_range_rights(&mod_it, e->range);
-					db_changed = true;
 				}
 			}
 			if(drop) {
@@ -1705,7 +1702,6 @@ int mapdb_unmap_fpage(
 				}
 
 				clear_pt_range(&mod_it, e->range);
-				db_changed = true;
 
 				int pos = e - g->entries;
 				if(pos < g->num_entries - 1) {
@@ -1760,11 +1756,6 @@ int mapdb_unmap_fpage(
 #endif
 
 end:
-	if(db_changed) {
-		/* TODO: move this into pt_iter_destroy()! */
-		x86_flush_tlbs();
-		space_commit(SPACE_OF_MAPDB(db));
-	}
 	pt_iter_destroy(&mod_it);
 	return rwx_seen;
 

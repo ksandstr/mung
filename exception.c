@@ -810,7 +810,6 @@ void isr_exn_pf_bottom(struct x86_exregs *regs)
 			&& space_prefill_upper(current->space, fault_addr))
 		{
 			/* lazy-mode kernel pf repair */
-			space_commit(current->space);
 			return;
 		} else {
 			catch_pf_ok = false;
@@ -872,7 +871,6 @@ void isr_exn_pf_bottom(struct x86_exregs *regs)
 		if(space_prefill_upper(current->space, fault_addr)) {
 			assert(pt_upper_present(&it, fault_addr));
 			pt_iter_destroy(&it);
-			space_commit(current->space);
 			return_from_exn();
 			return;
 		} else {

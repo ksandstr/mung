@@ -143,13 +143,6 @@ extern bool space_add_ioperm(
 	int size);
 
 
-/* TODO: remove this and all its call sites. audit the latter to substitute
- * with explicit invalidation or flushing.
- */
-static inline void space_commit(struct space *sp) {
-	/* emptiness */
-}
-
 /* UTCB is accessed by the wrapper to sync ESI and MR0. */
 extern SYSCALL void sys_unmap(L4_Word_t control, void *current_utcb);
 

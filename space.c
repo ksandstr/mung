@@ -853,12 +853,11 @@ SYSCALL void sys_unmap(L4_Word_t control, void *utcb)
 	struct thread *current = get_current_thread();
 	struct map_db *mdb = &current->space->mapdb;
 	const bool flush = CHECK_FLAG(control, 0x40);
-	int page_count = (control & 0x3f) + 1, remove_agg = 0;
+	int page_count = (control & 0x3f) + 1;
 	for(int i=0; i < page_count; i++) {
 		L4_Fpage_t fp = { .raw = L4_VREG(utcb, L4_TCR_MR(i)) };
 		if(L4_SizeLog2(fp) < PAGE_BITS) continue;
 		int remove = L4_Rights(fp);
-		remove_agg |= remove;
 #if 0
 		printf("  %s %#x:%#x (%c%c%c) for thread %lu:%lu\n",
 			flush ? "flushing" : "unmapping",
@@ -912,7 +911,6 @@ SYSCALL void sys_unmap(L4_Word_t control, void *utcb)
 		}
 #endif
 	}
-	if(flush && remove_agg != 0) space_commit(current->space);
 
 	assert(check_all_spaces(0));
 }
