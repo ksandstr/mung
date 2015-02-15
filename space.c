@@ -46,13 +46,6 @@ static struct kmem_cache *space_slab = NULL, *utcb_page_slab = NULL;
 static struct list_head space_list = LIST_HEAD_INIT(space_list);
 
 
-/* get-cmp function for struct space's ptab_pages */
-static bool cmp_page_id_to_key(const void *cand, void *key) {
-	const struct page *pg = cand;
-	return pg->id == *(uint32_t *)key;
-}
-
-
 /* rehash for same */
 static size_t hash_page_by_id(const void *page_ptr, void *priv)
 {
@@ -857,7 +850,6 @@ SYSCALL void sys_unmap(L4_Word_t control, void *utcb)
 	for(int i=0; i < page_count; i++) {
 		L4_Fpage_t fp = { .raw = L4_VREG(utcb, L4_TCR_MR(i)) };
 		if(L4_SizeLog2(fp) < PAGE_BITS) continue;
-		int remove = L4_Rights(fp);
 #if 0
 		printf("  %s %#x:%#x (%c%c%c) for thread %lu:%lu\n",
 			flush ? "flushing" : "unmapping",
@@ -870,46 +862,6 @@ SYSCALL void sys_unmap(L4_Word_t control, void *utcb)
 
 		L4_Set_Rights(&fp, mapdb_unmap_fpage(mdb, fp, flush, true, true));
 		L4_VREG(utcb, L4_TCR_MR(i)) = fp.raw;
-
-#ifndef NDEBUG
-		if(remove != 0 && flush) {
-			/* flush must take effect in the caller's space. */
-			const L4_Word_t grp_step = MAX_ENTRIES_PER_GROUP * PAGE_SIZE;
-			uint32_t *pdir_mem = current->space->pdirs->vm_addr,
-				*ptab_mem = NULL, ptab_id = 0;
-			assert(pdir_mem != NULL);
-			L4_Word_t addr = FPAGE_LOW(fp);
-			while(addr <= FPAGE_HIGH(fp)) {
-				if(!CHECK_FLAG(pdir_mem[addr >> 22], PDIR_PRESENT)) {
-					addr = (addr + grp_step) & ~(grp_step - 1);
-					continue;
-				} else if(ADDR_IN_FPAGE(current->space->utcb_area, addr)
-					|| ADDR_IN_FPAGE(current->space->kip_area, addr))
-				{
-					addr += PAGE_SIZE;
-					continue;
-				} else if(ptab_id != pdir_mem[addr >> 22] >> 12
-					|| ptab_mem == NULL)
-				{
-					ptab_id = pdir_mem[addr >> 22] >> 12;
-					struct page *pg = htable_get(&current->space->ptab_pages,
-						int_hash(ptab_id), &cmp_page_id_to_key, &ptab_id);
-					assert(pg != NULL);
-					assert(pg->vm_addr != NULL);
-					ptab_mem = pg->vm_addr;
-				}
-				assert(ptab_mem != NULL);
-
-				int ix = (addr >> 12) & 0x3ff;
-				int present = CHECK_FLAG(ptab_mem[ix], PT_PRESENT)
-					? L4_Readable : 0;
-				present |= CHECK_FLAG_ALL(ptab_mem[ix], PT_PRESENT | PT_RW)
-					? L4_Writable : 0;
-				assert(!CHECK_FLAG_ANY(remove, present));
-				addr += PAGE_SIZE;
-			}
-		}
-#endif
 	}
 
 	assert(check_all_spaces(0));
