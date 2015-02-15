@@ -58,8 +58,10 @@ static inline void pt_iter_destroy(struct pt_iter *it)
 static inline uint32_t *_pt_ptab(struct pt_iter *it, uintptr_t addr)
 {
 	if((addr & ~_PTAB_MASK) != it->ptab_addr) {
+		uint32_t *tmp = x86_get_ptab(it->sp, addr);
+		if(tmp == NULL) return NULL;
 		it->ptab_addr = addr & ~_PTAB_MASK;
-		it->cur_ptab = x86_get_ptab(it->sp, addr);
+		it->cur_ptab = tmp;
 	}
 
 	return it->cur_ptab;
@@ -82,15 +84,14 @@ static inline uint32_t pt_probe(
 	int *access_p,
 	uintptr_t addr)
 {
-	uint32_t *ptab_mem = _pt_ptab(it, addr);
-	if(upper_present_p != NULL) {
-		*upper_present_p = ptab_mem != NULL;
-		assert(*upper_present_p == pt_upper_present(it, it->ptab_addr));
+	uint32_t *ptab_mem = _pt_ptab(it, addr), pte = 0;
+	if(likely(ptab_mem != NULL)) {
+		if(upper_present_p != NULL) *upper_present_p = true;
+		uint32_t t = ptab_mem[(addr >> 12) & 0x3ff];
+		if(CHECK_FLAG(t, PT_PRESENT)) pte = t;
+	} else {
+		if(upper_present_p != NULL) *upper_present_p = false;
 	}
-	if(ptab_mem == NULL) return 0;
-
-	uint32_t pte = ptab_mem[(addr >> 12) & 0x3ff];
-	if(!CHECK_FLAG(pte, PT_PRESENT)) return 0;
 
 	if(access_p != NULL) {
 		if(pte != 0) {
@@ -107,11 +108,12 @@ static inline uint32_t pt_probe(
 
 		*access_p = rx | w;
 	}
+
 	return pte >> 12;
 }
 
 
-static inline void pt_set_page(
+static inline bool pt_set_page(
 	struct pt_iter *it,
 	uintptr_t addr,
 	uint32_t pgid,
@@ -127,7 +129,7 @@ static inline void pt_set_page(
 				assert(!pt_upper_present(it, addr));
 				tmp = x86_alloc_ptab(it->sp, addr);
 			} else {
-				return;
+				return false;
 			}
 		}
 		it->cur_ptab = tmp;
@@ -140,6 +142,7 @@ static inline void pt_set_page(
 	ptab_mem[(addr >> 12) & 0x3ff] = pgid << 12 | PT_USER | PT_PRESENT
 		| (rights & L4_Writable);
 	_pt_changed(it, addr);
+	return true;
 }
 
 
