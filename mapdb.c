@@ -1396,21 +1396,6 @@ static struct map_entry *discontiguate(
 		}
 	}
 
-#ifndef NDEBUG
-	/* discontiguate() guarantees that no entry in `g' overlaps the start or
-	 * end of `range'. that's easy enough to check by brute force.
-	 */
-	struct map_entry *chk_e = probe_group_range(g, range);
-	assert(chk_e != NULL);
-	while(chk_e < &g->entries[g->num_entries]
-		&& L4_Address(chk_e->range) < FPAGE_HIGH(range))
-	{
-		assert(ADDR_IN_FPAGE(range, FPAGE_LOW(chk_e->range)));
-		assert(ADDR_IN_FPAGE(range, FPAGE_HIGH(chk_e->range)));
-		chk_e++;
-	}
-#endif
-
 	if(new_e) {
 		e = probe_group_range(g, range);
 		assert(e != NULL);		/* guaranteed by previous "e" */
@@ -1739,21 +1724,6 @@ int mapdb_unmap_fpage(
 	}
 
 	assert(unmap_rights == 0 || check_mapdb_module(0));
-
-	/* TODO: move postconditions into another function */
-#ifndef NDEBUG
-	if(unmap_rights != 0 && immediate) {
-		for(L4_Word_t addr = FPAGE_LOW(range);
-			addr < FPAGE_HIGH(range);
-			addr += PAGE_SIZE)
-		{
-			struct map_entry *e = mapdb_probe(db, addr);
-			assert(e == NULL
-				|| REF_SPACE(e->parent) == 1	/* (cop-out) */
-				|| !CHECK_FLAG_ALL(L4_Rights(e->range), unmap_rights));
-		}
-	}
-#endif
 
 end:
 	pt_iter_destroy(&mod_it);
