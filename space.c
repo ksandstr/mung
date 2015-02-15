@@ -907,10 +907,10 @@ static void *alloc_tss(size_t size)
 	L4_Word_t p0, p1;
 	do {
 		ptr = malloc(size);
-		if(ptr == NULL) break;
 		p0 = (L4_Word_t)ptr >> PAGE_BITS;
 		p1 = ((L4_Word_t)ptr + sizeof(struct tss) - 1) >> PAGE_BITS;
 		if(p0 < p1) {
+			if(unlikely(ptr == NULL)) break;
 			if(n_trash == 0) list_head_init(&trash_list);
 			list_add(&trash_list, ptr);
 		}
