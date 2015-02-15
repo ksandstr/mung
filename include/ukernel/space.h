@@ -89,6 +89,9 @@ extern struct space *kernel_space;
  */
 extern struct space *sigma0_space;
 
+/* (v2: per-cpu when SMP happens, natch.) */
+extern struct space *current_space;
+
 
 extern struct space *space_new(void);
 extern void space_free(struct space *sp);

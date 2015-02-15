@@ -11,6 +11,7 @@
 #include <l4/types.h>
 
 #include <ukernel/mm.h>
+#include <ukernel/space.h>
 
 
 #define PT_UPPER_WIDTH 10
@@ -21,11 +22,16 @@
 #define _PTAB_MASK ((1ul << 22) - 1)
 
 
+#define MAX_INVLS 32		/* 128k of ops, then flush */
+
+
 struct pt_iter
 {
 	struct space *sp;
 	uintptr_t ptab_addr;	/* 4M area covered by cur_ptab, or 0 if invalid */
 	uint32_t *cur_ptab;		/* kernel-mapped page table */
+	bool is_current;
+	uint8_t n_invls;
 };
 
 
@@ -35,11 +41,14 @@ static inline void pt_iter_init(struct pt_iter *it, struct space *sp)
 	it->ptab_addr = 123;	/* ensures replacement */
 	assert((it->ptab_addr & _PTAB_MASK) != 0);
 	it->cur_ptab = NULL;
+	it->n_invls = 0;
+	it->is_current = (sp == current_space);
 }
 
 
 static inline void pt_iter_destroy(struct pt_iter *it)
 {
+	if(it->n_invls == 0xff) x86_flush_tlbs();
 #ifndef NDEBUG
 	memset(it, 0xbd, sizeof(*it));
 #endif
@@ -54,6 +63,16 @@ static inline uint32_t *_pt_ptab(struct pt_iter *it, uintptr_t addr)
 	}
 
 	return it->cur_ptab;
+}
+
+
+static inline void _pt_changed(struct pt_iter *it, uintptr_t addr)
+{
+	if(!it->is_current) return;
+	if(it->n_invls < MAX_INVLS) {
+		it->n_invls++;
+		x86_invalidate_page(addr);
+	}
 }
 
 
@@ -120,6 +139,19 @@ static inline void pt_set_page(
 	assert(L4_Writable == PT_RW);
 	ptab_mem[(addr >> 12) & 0x3ff] = pgid << 12 | PT_USER | PT_PRESENT
 		| (rights & L4_Writable);
+	_pt_changed(it, addr);
+}
+
+
+static inline bool pt_clear_page(struct pt_iter *it, uintptr_t addr)
+{
+	uint32_t *ptab_mem = _pt_ptab(it, addr);
+	if(unlikely(ptab_mem == NULL)) return false;
+	else {
+		ptab_mem[(addr >> 12) & 0x3ff] = 0;
+		_pt_changed(it, addr);
+		return true;
+	}
 }
 
 

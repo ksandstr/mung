@@ -37,12 +37,13 @@
 /* allocated statically for bootstrapping */
 static struct utcb_page kernel_utcb_pages[NUM_KERN_UTCB_PAGES];
 
+struct space *current_space = NULL;
+
 struct space *kernel_space = NULL;
 static struct space kernel_space_mem;
 
 static struct kmem_cache *space_slab = NULL, *utcb_page_slab = NULL;
 static struct list_head space_list = LIST_HEAD_INIT(space_list);
-static struct space *current_space = NULL;
 
 
 /* get-cmp function for struct space's ptab_pages */
