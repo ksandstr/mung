@@ -942,9 +942,9 @@ static int32_t handle_fork(void)
 		htable_add(&copy_space->pages, int_hash(cvp->address),
 			&cvp->address);
 
-		unmapbuf[num_unmap] = L4_Fpage(ovp->page->local_addr, PAGE_SIZE);
-		/* XXX would only need L4_Writable, but until unmap works, ... */
-		L4_Set_Rights(&unmapbuf[num_unmap], L4_FullyAccessible);
+		unmapbuf[num_unmap] = L4_FpageLog2(
+			ovp->page->local_addr, PAGE_BITS);
+		L4_Set_Rights(&unmapbuf[num_unmap], L4_Writable);
 		num_unmap++;
 
 		if(num_unmap == 64) {
