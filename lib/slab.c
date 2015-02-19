@@ -7,6 +7,7 @@
 #include <stdint.h>
 #include <assert.h>
 #include <stdbool.h>
+
 #include <ccan/list/list.h>
 #include <ccan/container_of/container_of.h>
 #include <ccan/compiler/compiler.h>
@@ -18,7 +19,7 @@
 #include <ukernel/slab.h>
 
 
-#define CACHE_SIZE 8		/* # of objects cached */
+#define CACHE_SIZE 16
 
 #define SLAB_FIRST(cache, slab) \
 	((void *)((((intptr_t)&(slab)[1]) + (cache)->align - 1) & ~((cache)->align - 1)))
@@ -141,10 +142,8 @@ void *kmem_cache_alloc(struct kmem_cache *cache)
 
 	struct slab *slab = list_top(&cache->partial_list, struct slab, link);
 	if(slab == NULL) {
-		slab = list_top(&cache->free_list, struct slab, link);
-		if(slab != NULL) {
-			list_del_from(&cache->free_list, &slab->link);
-		} else {
+		slab = list_pop(&cache->free_list, struct slab, link);
+		if(slab == NULL) {
 			void *kpage = kmem_alloc_new_page();
 			if(unlikely(kpage == NULL)) return NULL;
 			slab = kpage;
