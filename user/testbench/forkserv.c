@@ -14,6 +14,7 @@
 #include <ccan/likely/likely.h>
 #include <ccan/container_of/container_of.h>
 
+#include <ukernel/slab.h>
 #include <ukernel/guard.h>
 #include <ukernel/util.h>
 
@@ -130,6 +131,7 @@ static struct htable
 	space_hash = HTABLE_INITIALIZER(space_hash, &hash_word, NULL),
 	async_hash = HTABLE_INITIALIZER(async_hash, &hash_word, NULL);
 static LIST_HEAD(free_page_list);
+static struct kmem_cache *vpage_slab = NULL;		/* for fs_vpage */
 
 static L4_ThreadId_t console_tid, fpager_tid, helper_tid, forkserv_tid;
 static L4_Word_t map_range_pos = 0, next_space_id = 100, next_async_id = 1;
@@ -302,15 +304,11 @@ static struct fs_space *get_space_by_tid(L4_ThreadId_t tid)
 
 static struct fs_phys_page *alloc_new_page(void)
 {
-	struct fs_phys_page *phys = list_top(&free_page_list,
+	struct fs_phys_page *phys = list_pop(&free_page_list,
 		struct fs_phys_page, link);
-	if(phys != NULL) {
-		list_del_from(&free_page_list, &phys->link);
-	} else {
-		assert(list_empty(&free_page_list));
+	if(phys == NULL) {
 		phys = malloc(sizeof(*phys));
-		void *ptr = valloc(PAGE_SIZE);
-		phys->local_addr = (L4_Word_t)ptr;
+		phys->local_addr = (uintptr_t)sbrk(PAGE_SIZE);
 	}
 	phys->refcount = 1;
 	memset((void *)phys->local_addr, 0, PAGE_SIZE);
@@ -423,7 +421,7 @@ static void handle_send_page(L4_Word_t phys_addr, int32_t space_id)
 		.local_addr = L4_Address(window),
 		.refcount = 1,
 	};
-	struct fs_vpage *p = malloc(sizeof(*p));
+	struct fs_vpage *p = kmem_cache_alloc(vpage_slab);
 	*p = (struct fs_vpage){
 		.address = phys_addr,
 		.page = phys,
@@ -489,7 +487,7 @@ static void handle_pf(
 		&& !in_special)
 	{
 		/* moar ramz pls */
-		page = malloc(sizeof(*page));
+		page = kmem_cache_alloc(vpage_slab);
 		page->address = page_addr;
 		page->page = alloc_new_page();
 		page->access = L4_FullyAccessible;
@@ -933,7 +931,7 @@ static int32_t handle_fork(void)
 		ovp != NULL;
 		ovp = htable_next(&sp->pages, &it))
 	{
-		struct fs_vpage *cvp = malloc(sizeof(*cvp));
+		struct fs_vpage *cvp = kmem_cache_alloc(vpage_slab);
 		cvp->address = ovp->address;
 		cvp->access = L4_Readable;
 		cvp->page = ovp->page;
@@ -944,6 +942,10 @@ static int32_t handle_fork(void)
 
 		unmapbuf[num_unmap] = L4_FpageLog2(
 			ovp->page->local_addr, PAGE_BITS);
+		/* FIXME: setting this to L4_FullyAccessible (which isn't necessary
+		 * here) makes SelfThreUnca:3 blow up with an inconsistent
+		 * mapdb/pagetable fail. but not if DEBUG_ME_HARDER is set.
+		 */
 		L4_Set_Rights(&unmapbuf[num_unmap], L4_Writable);
 		num_unmap++;
 
@@ -1204,7 +1206,7 @@ static void handle_exit(int32_t status)
 				vp->page = NULL;
 			}
 		}
-		free(vp);
+		kmem_cache_free(vpage_slab, vp);
 	}
 	htable_clear(&sp->pages);
 	sp->utcb_area = L4_Nilpage;
@@ -1604,6 +1606,7 @@ int main(void)
 	max_vaddr = find_high_vaddr();
 	printf("forkserv: high vaddr=%#lx\n", max_vaddr);
 	heap_init(0x80000);		/* leave 512 KiB for testbench */
+	vpage_slab = KMEM_CACHE_NEW("fs_vpage slab", struct fs_vpage);
 	start_helper_thread();
 	forkserv_dispatch_loop();
 

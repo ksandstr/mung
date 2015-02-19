@@ -3,6 +3,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+
+#include <ccan/list/list.h>
 #include <ccan/likely/likely.h>
 #include <ccan/compiler/compiler.h>
 
@@ -20,6 +22,18 @@ static L4_Word_t heap_pos = 0, heap_top = 0;
 static L4_ThreadId_t heap_tid;	/* forkserv's TID */
 
 bool use_forkserv_sbrk = false;
+
+
+COLD void heap_init(int adjustment)
+{
+	assert(adjustment >= 0);
+	adjustment = (adjustment + PAGE_SIZE - 1) & ~PAGE_MASK;
+
+	/* for the testbench root task, find the highest address where there's
+	 * regular memory. use that as heap top.
+	 */
+	heap_pos = find_phys_mem_top() + 1 - adjustment;
+}
 
 
 /* NOTE: the current L4.X2 spec says there's a third parameter, high_address.
@@ -137,13 +151,20 @@ int getpagesize(void) {
 }
 
 
-COLD void heap_init(int adjustment)
-{
-	assert(adjustment >= 0);
-	adjustment = (adjustment + PAGE_SIZE - 1) & ~PAGE_MASK;
+/* interface for lib/slab.c */
 
-	/* for the testbench root task, find the highest address where there's
-	 * regular memory. use that as heap top.
-	 */
-	heap_pos = find_phys_mem_top() + 1 - adjustment;
+static struct list_head kmem_list = LIST_HEAD_INIT(kmem_list);
+
+void *kmem_alloc_new_page(void) {
+	if(list_empty(&kmem_list)) return sbrk(PAGE_SIZE);
+	else {
+		struct list_node *link = kmem_list.n.next;
+		list_del_from(&kmem_list, link);
+		return link;
+	}
+}
+
+void kmem_free_page(void *ptr) {
+	struct list_node *link = ptr;
+	list_add(&kmem_list, link);
 }
