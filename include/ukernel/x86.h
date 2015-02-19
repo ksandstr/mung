@@ -1,6 +1,6 @@
 
-/* x86 features. most of these should only be called with interrupts
- * disabled.
+/* x86 features. some of these should only be called with interrupts disabled.
+ * caveat lector.
  */
 
 #ifndef SEEN_UKERNEL_X86_H
@@ -10,6 +10,7 @@
 #include <stdlib.h>
 #include <stdbool.h>
 #include <assert.h>
+
 #include <ccan/likely/likely.h>
 
 #include <ukernel/tss.h>
@@ -377,6 +378,13 @@ extern uint32_t *x86_get_ptab(struct space *sp, uintptr_t ptab_addr);
  * a resize failure on @sp->ptab_pages.
  */
 extern uint32_t *x86_alloc_ptab(struct space *sp, uintptr_t ptab_addr);
+
+
+/* get-cmp function for struct space's ptab_pages. */
+static inline bool cmp_page_id_to_key(const void *cand, void *key) {
+	const struct page *pg = cand;
+	return pg->id == *(uint32_t *)key;
+}
 
 
 /* from cpu.c (should be in x86.c or some such, or in an ia32 directory

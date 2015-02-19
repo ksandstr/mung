@@ -12,13 +12,6 @@
 #include <ukernel/x86.h>
 
 
-/* get-cmp function for struct space's ptab_pages. */
-static bool cmp_page_id_to_key(const void *cand, void *key) {
-	const struct page *pg = cand;
-	return pg->id == *(uint32_t *)key;
-}
-
-
 uint32_t *x86_get_ptab(struct space *sp, uint32_t page_addr)
 {
 	uint32_t *pdir_mem = sp->pdirs->vm_addr;
