@@ -5,6 +5,7 @@
 #include <string.h>
 #include <assert.h>
 #include <errno.h>
+
 #include <ccan/htable/htable.h>
 #include <ccan/alignof/alignof.h>
 #include <ccan/likely/likely.h>
@@ -1334,9 +1335,9 @@ static int split_entry(
 }
 
 
-/* render a map_group's map_entries discontiguous in such a way that entries
- * covered by "range" fit inside it exactly. returns the first entry covered
- * by "range".
+/* separate a larger entry that contains @range into smaller segments, and
+ * exactly one for @range. if @range contains smaller entries, they're left
+ * alone. returns the first entry covered by "range".
  *
  * punts when a special range is hit. this allows things like multi-page KIPs,
  * hugepage UTCB mappings, and so forth.
@@ -1348,67 +1349,30 @@ static struct map_entry *discontiguate(
 {
 	assert(L4_Size(range) >= PAGE_SIZE);
 
-	int err;
 	TRACE("%s: group %#lx, range %#lx:%#lx\n", __func__, g->start,
 		L4_Address(range), L4_Size(range));
-	/* test the first and last entries in the group that fall within
-	 * `range`.
-	 */
+
 	struct map_entry *e = probe_group_range(g, range);
-	if(e == NULL) return NULL;
-	else if(REF_SPACE(e->parent) == 1) return e;
-
-	bool new_e = false;
-	L4_Word_t r_start = L4_Address(range);
-	if(L4_Address(e->range) < r_start
-		|| (L4_Address(e->range) == r_start
-			&& L4_Size(e->range) > L4_Size(range)))
+	if(e == NULL || unlikely(REF_SPACE(e->parent) == 1)
+		|| likely(L4_SizeLog2(e->range) <= L4_SizeLog2(range)))
 	{
-		err = split_entry(db, g, e, range);
-		if(err < 0) goto fail;
-		new_e = true;
+		/* not found, special, or equal-or-smaller in size. */
+		return e;
 	}
 
-	/* then the last entry. */
-	if(L4_Size(range) > PAGE_SIZE) {
-		L4_Word_t r_end = r_start + L4_Size(range);
-		struct map_entry *last = probe_group_range(g, L4_FpageLog2(
-			L4_Address(range) + L4_Size(range) - PAGE_SIZE, PAGE_BITS));
-		/* two assumptions:
-		 * 1. if the entry would've started from before `range', then it'll
-		 *    have been cut up by the earlier call to split_entry().
-		 * 2. if the entry ends after `range', it should be split up further.
-		 */
-		if(last != NULL) {
-			/* if the entry would've started from before `range', it'll have
-			 * been turned to smaller chunks by the earlier call to
-			 * split_entry().
-			 */
-			assert(L4_Address(last->range) >= r_start);
-			/* so we only need test whether the entry at the last page's
-			 * position straddles r_end.
-			 */
-			if(FPAGE_HIGH(last->range) + 1 > r_end) {
-				err = split_entry(db, g, last, range);
-				if(err < 0) goto fail;
-				new_e = true;
-			}
-		}
+	int err = split_entry(db, g, e, range);
+	if(unlikely(err < 0)) {
+		/* FIXME: handle this properly. */
+		if(err == -ENOMEM) panic("split_entry() failed: out of kernel heap");
+		else panic("split_entry() failed: non-ENOMEM error code");
+
+		return NULL;
 	}
 
-	if(new_e) {
-		e = probe_group_range(g, range);
-		assert(e != NULL);		/* guaranteed by previous "e" */
-	}
+	e = probe_group_range(g, range);
+	assert(e != NULL);
 
 	return e;
-
-fail:
-	/* FIXME: have a proper exit path here */
-	if(err == -ENOMEM) panic("split_entry() failed: out of kernel heap");
-	else panic("split_entry() failed: non-ENOMEM error code");
-
-	return NULL;
 }
 
 
