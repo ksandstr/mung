@@ -435,58 +435,65 @@ static struct map_group *group_for_addr(struct map_db *db, uintptr_t addr)
 }
 
 
-static struct map_entry *probe_group_addr(struct map_group *g, uintptr_t addr)
+/* find first map_entry inside @range, starting from @e (which is typically a
+ * return value from probe_group_range()).
+ */
+static inline struct map_entry *rewind_to_first(
+	struct map_group *grp,
+	struct map_entry *e,
+	L4_Fpage_t range)
 {
-	assert(BETWEEN(g->start,
-		g->start + MAX_ENTRIES_PER_GROUP * PAGE_SIZE - 1,
-		addr));
-	if(g->num_entries == 0) return NULL;
-
-	/* common binary search. */
-	int imin = 0, imax = g->num_entries - 1;
-	int iters = 0;
-	while(imax >= imin && ++iters < 100) {
-		int probe = (imin + imax) / 2, slide = probe;
-		struct map_entry *ent = &g->entries[probe];
-		/* NOTE: could do sparse storage support here. see commit
-		 * 3a617b7947ab4ff1badc51254cf70a41e34d66d1 for a related code
-		 * fragment that used to be here.
-		 */
-		assert(slide >= 0 && slide < MAX_ENTRIES_PER_GROUP);
-
-		if(addr < L4_Address(ent->range)) {
-			imax = MIN(int, probe - 1, slide);
-		} else if(addr >= L4_Address(ent->range) + L4_Size(ent->range)) {
-			imin = MAX(int, probe + 1, slide);
-		} else {
-			assert(ADDR_IN_FPAGE(ent->range, addr));
-			return ent;
-		}
+	assert(L4_SizeLog2(e->range) < L4_SizeLog2(range));
+	while(e > &grp->entries[0]
+		&& L4_Address(e[-1].range) >= L4_Address(range))
+	{
+		assert(fpage_overlap(e[-1].range, range));
+		e--;
 	}
-	assert(iters < 100);
+	assert(fpage_overlap(e->range, range));
 
-	assert(no_addr_in_group(g, addr));
-	return NULL;
+	return e;
 }
 
 
-/* finds the leftmost entry in @g that overlaps @fpage. */
+/* returns an entry that falls in @fpage; this may not be the left-most one
+ * when @fpage.s > retval->range.s .
+ */
 static struct map_entry *probe_group_range(struct map_group *g, L4_Fpage_t fpage)
 {
-	/* when in doubt, use brute force.
-	 *
-	 * this time it's because 1) the group occupancy bitmap wasn't known to be
-	 * a good idea, and 2) it was also broken. this isn't the properly
-	 * efficient version; instead, a range-to-range binary search operation
-	 * should be written.
-	 */
-	for(int i=0; i < g->num_entries; i++) {
-		if(fpage_overlap(g->entries[i].range, fpage)) return &g->entries[i];
+	/* binary search. faster than it looks. */
+	L4_Word_t fpage_addr = L4_Address(fpage);
+	int low = 0, high = g->num_entries - 1, mid;
+	while(low <= high) {
+		mid = low + (high - low) / 2;
+		if(fpage_overlap(g->entries[mid].range, fpage)) {
+			return &g->entries[mid];
+		} else {
+			/* branchless selection. */
+			L4_Word_t e_addr = L4_Address(g->entries[mid].range),
+				mask = (intptr_t)(e_addr - fpage_addr) >> (WORD_BITS - 1);
+			assert(e_addr >= fpage_addr || mask == ~0ul);
+			assert(e_addr <  fpage_addr || mask == 0);
+			low = (mask & (mid + 1)) | (~mask & low);
+			high = (mask & high) | (~mask & (mid - 1));
+		}
 	}
 
 	assert(no_addr_in_group(g, FPAGE_LOW(fpage)));
 	assert(no_addr_in_group(g, FPAGE_HIGH(fpage)));
 	return NULL;
+}
+
+
+static struct map_entry *probe_group_addr(struct map_group *g, uintptr_t addr)
+{
+	assert(BETWEEN(g->start,
+		g->start + MAX_ENTRIES_PER_GROUP * PAGE_SIZE - 1,
+		addr));
+	if(unlikely(g->num_entries == 0)) return NULL;
+
+	return probe_group_range(g,
+		L4_FpageLog2(addr & ~PAGE_MASK, PAGE_BITS));
 }
 
 
@@ -883,8 +890,11 @@ int mapdb_add_map(
 			assert(L4_SizeLog2(old->range) < L4_SizeLog2(fpage));
 			/* "shrimp" case.
 			 *
-			 * TODO: erase entries from here to @fpage's end, recycle one slot
-			 * for the added entry, and compress the rest of the group.
+			 * TODO: wind "old" back to the leftmost entry covered by @fpage,
+			 * erase entries from here to @fpage's end, recycle one slot for
+			 * the added entry, and compress the rest of the group.
+			 *
+			 * FIXME: implement this!
 			 */
 			panic("shrimp case not implemented");
 		}
@@ -1049,16 +1059,9 @@ int mapdb_map_pages(
 	if(unlikely(grp == NULL)) return 0;
 	struct map_entry *first = probe_group_range(grp, map_page);
 	if(unlikely(first == NULL)) return 0;
-	/* TODO: move this into a function: rewind @first to leftmost entry
-	 * covered.
-	 */
-	while(first > &grp->entries[0]
-		&& L4_Address(first[-1].range) >= first_addr)
-	{
-		assert(fpage_overlap(first[-1].range, map_page));
-		first--;
+	if(L4_SizeLog2(first->range) < L4_SizeLog2(map_page)) {
+		first = rewind_to_first(grp, first, map_page);
 	}
-	assert(fpage_overlap(first->range, map_page));
 
 	int given;
 	if(likely(L4_SizeLog2(map_page) <= L4_SizeLog2(first->range))) {
@@ -1331,6 +1334,10 @@ static int split_entry(
  *
  * punts when a special range is hit. this allows things like multi-page KIPs,
  * hugepage UTCB mappings, and so forth.
+ *
+ * TODO: rename this to something more useful & activate splitting only if
+ * given a "subdivide" parameter. it should be the primary lookup mechanism
+ * for modifying map and unmap operations.
  */
 static struct map_entry *discontiguate(
 	struct map_db *db,
@@ -1343,10 +1350,14 @@ static struct map_entry *discontiguate(
 		L4_Address(range), L4_Size(range));
 
 	struct map_entry *e = probe_group_range(g, range);
-	if(e == NULL || unlikely(REF_SPACE(e->parent) == 1)
-		|| likely(L4_SizeLog2(e->range) <= L4_SizeLog2(range)))
-	{
-		/* not found, special, or equal-or-smaller in size. */
+	if(e == NULL || unlikely(REF_SPACE(e->parent) == 1)) {
+		/* not found, or is special */
+		return e;
+	}
+
+	int esz = L4_SizeLog2(e->range), rsz = L4_SizeLog2(range);
+	if(esz <= rsz) {
+		if(esz < rsz) e = rewind_to_first(g, e, range);
 		return e;
 	}
 
@@ -1361,7 +1372,8 @@ static struct map_entry *discontiguate(
 
 	e = probe_group_range(g, range);
 	assert(e != NULL);
-	assert(fpage_overlap(e->range, range));
+	assert(L4_Address(e->range) == L4_Address(range));
+	assert(L4_SizeLog2(e->range) == L4_SizeLog2(range));
 
 	return e;
 }
