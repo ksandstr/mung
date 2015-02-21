@@ -195,8 +195,11 @@ static inline uint32_t mapdb_page_id_in_entry(
 extern int mapdb_fill_page_table(struct map_db *db, uintptr_t addr);
 
 
-/* NOTE: this doesn't communicate whether the affected address range should be
- * flushed or not. a simple 0/1 boolean thing would suffice.
+/* completely unatomic on out-of-memory; the caller is supposed to suspend and
+ * re-start once malloc has a chance of succeeding.
+ *
+ * returns either a mask of rights given (on any component of @fpage), or
+ * -ENOMEM.
  */
 extern int mapdb_add_map(
 	struct map_db *db,

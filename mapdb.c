@@ -1011,8 +1011,8 @@ static int mapdb_add_child(struct map_entry *ent, L4_Word_t child)
 
 
 /* does mappings of all physical pages inside map_page. skips holes in the
- * sender address space within the mapping (so pages in the receiver won't be
- * unmapped on overlap with empty.)
+ * sender address space within the mapping: therefore pages in the receiver
+ * won't be unmapped when the sender's corresponding slot is empty.
  *
  * FIXME: should catch and return -ENOMEM from mapdb_add_map() etc.
  */
@@ -1024,105 +1024,95 @@ int mapdb_map_pages(
 {
 	assert(check_mapdb_module(0));
 
-	struct map_entry *first = NULL;
-	struct map_group *grp;
-	L4_Word_t first_addr = L4_Address(map_page),
-		last_addr = L4_Address(map_page) + L4_Size(map_page) - 1;
-	do {
-		grp = group_for_addr(from_db, first_addr);
-		if(grp != NULL) first = probe_group_addr(grp, first_addr);
-		/* TODO: would this work? (or fold it into the += right-side.) */
-		// else first_addr += GROUP_SIZE - PAGE_SIZE;
-	} while(first == NULL && (first_addr += PAGE_SIZE) <= last_addr);
-
-	if(first == NULL) {
-		/* no pages; it's a no-op. */
-		return 0;
+	/* well this is a bit vile: the map_page > group_size case. recursion
+	 * recurs, baby.
+	 */
+	int n_groups = L4_Size(map_page) / GROUP_SIZE;
+	if(unlikely(n_groups > 1)) {
+		int given = 0;
+		for(int i=0; i < n_groups; i++) {
+			L4_Fpage_t fp = L4_Fpage(
+				L4_Address(map_page) + i * GROUP_SIZE,
+				GROUP_SIZE);
+			L4_Set_Rights(&fp, L4_Rights(map_page));
+			int n = mapdb_map_pages(from_db, to_db, fp,
+				dest_addr + i * GROUP_SIZE);
+			if(unlikely(n < 0)) return n;
+			given |= n;
+		}
+		return given;
 	}
 
-	if(L4_SizeLog2(map_page) <= L4_SizeLog2(first->range)
-		&& fpage_overlap(map_page, first->range))
+	/* the "within a single group in @from_db" case. */
+	const L4_Word_t first_addr = L4_Address(map_page);
+	struct map_group *grp = group_for_addr(from_db, first_addr);
+	if(unlikely(grp == NULL)) return 0;
+	struct map_entry *first = probe_group_range(grp, map_page);
+	if(unlikely(first == NULL)) return 0;
+	/* TODO: move this into a function: rewind @first to leftmost entry
+	 * covered.
+	 */
+	while(first > &grp->entries[0]
+		&& L4_Address(first[-1].range) >= first_addr)
 	{
-		assert(first_addr == L4_Address(map_page));
+		assert(fpage_overlap(first[-1].range, map_page));
+		first--;
+	}
+	assert(fpage_overlap(first->range, map_page));
+
+	int given;
+	if(likely(L4_SizeLog2(map_page) <= L4_SizeLog2(first->range))) {
 		/* the simple case: a small fpage being mapped from inside larger or
 		 * equal-sized entry.
 		 */
 		if(unlikely(REF_SPACE(first->parent) == 1)) return 0;
-		L4_Fpage_t p = L4_FpageLog2(dest_addr, L4_SizeLog2(map_page));
-		L4_Set_Rights(&p, L4_Rights(first->range) & L4_Rights(map_page));
-		if(L4_Rights(p) != 0) {
-			L4_Word_t off = L4_Address(map_page) - L4_Address(first->range);
+		given = L4_Rights(first->range) & L4_Rights(map_page);
+		if(given != 0) {
+			L4_Fpage_t p = L4_FpageLog2(dest_addr, L4_SizeLog2(map_page));
+			L4_Set_Rights(&p, given);
+			int off = first_addr - L4_Address(first->range);
 			mapdb_add_map(to_db, MAPDB_REF(from_db->ref_id, first_addr),
 				p, first->first_page_id + (off >> PAGE_BITS));
 			mapdb_add_child(first, MAPDB_REF(to_db->ref_id, L4_Address(p)));
 		}
-		return L4_Rights(p);
 	} else {
 		/* the complex case: the range is made up out of multiple smaller
 		 * entries.
 		 */
 		struct map_entry *ent = first;
-		L4_Word_t pos = MAX(L4_Word_t, L4_Address(ent->range), first_addr),
-			limit = last_addr + 1;
-		int given = L4_Rights(map_page);
-		while(pos < limit && ent != NULL && L4_Address(ent->range) < limit) {
-			L4_Word_t end = MIN(L4_Word_t, limit, FPAGE_HIGH(ent->range) + 1);
+		L4_Word_t limit = FPAGE_HIGH(map_page) + 1;
+		given = 0;
+		while(L4_Address(ent->range) < limit) {
+			int eff = L4_Rights(ent->range) & L4_Rights(map_page);
+			if(eff == 0 || unlikely(REF_SPACE(ent->parent) == 1)) {
+				goto next_entry;
+			}
+			given |= eff;
 
-			/* TODO: move the page-adding bit into a function, turn goto into
-			 * an if
-			 */
-			if(unlikely(REF_SPACE(ent->parent) == 1)) goto next_entry;
+			const L4_Word_t pos = L4_Address(ent->range) - first_addr;
+			L4_Word_t dp_addr;
+			int size_log2;
+			for_page_range(dest_addr + pos,
+				dest_addr + pos + L4_Size(ent->range),
+				dp_addr, size_log2)
+			{
+				L4_Fpage_t p = L4_FpageLog2(dp_addr, size_log2);
+				L4_Set_Rights(&p, eff);
 
-			given &= L4_Rights(ent->range);
-			L4_Word_t start = MAX(L4_Word_t, pos, L4_Address(ent->range));
-			int p_offs = (start - L4_Address(ent->range)) >> PAGE_BITS,
-				size_log2;
-			L4_Word_t r_addr;
-			for_page_range(start, end, r_addr, size_log2) {
-				/* brute force, one at a time.
-				 * should instead do a for_page_range() over the dest range.
-				 */
-				for(L4_Word_t i = 0;
-					i < 1 << size_log2;
-					i += PAGE_SIZE, p_offs++)
-				{
-					L4_Fpage_t p = L4_FpageLog2(
-						dest_addr + r_addr - L4_Address(map_page) + i,
-						PAGE_BITS);
-					L4_Set_Rights(&p, L4_Rights(ent->range) & L4_Rights(map_page));
-					if(L4_Rights(p) != 0) {
-						/* FIXME: audit both parent and child refs */
-						assert(REF_SPACE(ent->parent) != 1);
-						mapdb_add_map(to_db,
-							MAPDB_REF(from_db->ref_id,
-								L4_Address(ent->range) + p_offs * PAGE_SIZE),
-							p, ent->first_page_id + p_offs);
-						mapdb_add_child(ent,
-							MAPDB_REF(to_db->ref_id, L4_Address(p)));
-					}
-				}
+				int src_offs = dp_addr - pos - dest_addr;
+				mapdb_add_map(to_db,
+					MAPDB_REF(from_db->ref_id,
+						L4_Address(ent->range) + src_offs),
+					p, ent->first_page_id + src_offs / PAGE_SIZE);
+				mapdb_add_child(ent, MAPDB_REF(to_db->ref_id, dp_addr));
 			}
 
-next_entry: /* next entry. */
-			if(ent < &grp->entries[grp->num_entries - 1]) ent++;
-			else {
-				/* next group, even */
-				uintptr_t g_start = grp->start + GROUP_SIZE;
-				grp = NULL;
-				for(uintptr_t grp_addr = g_start;
-					grp == NULL && grp_addr <= last_addr;
-					grp_addr += GROUP_SIZE)
-				{
-					grp = group_for_addr(from_db, grp_addr);
-				}
-				ent = grp != NULL ? &grp->entries[0] : NULL;
-			}
-
-			pos = end;
+next_entry:
+			if(++ent == &grp->entries[grp->num_entries]) break;
 		}
-
-		return given;
 	}
+
+	return given;
 }
 
 
@@ -1371,6 +1361,7 @@ static struct map_entry *discontiguate(
 
 	e = probe_group_range(g, range);
 	assert(e != NULL);
+	assert(fpage_overlap(e->range, range));
 
 	return e;
 }
