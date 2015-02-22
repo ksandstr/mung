@@ -55,13 +55,11 @@ struct child_ref
 
 static size_t rehash_ref_hash(const void *, void *);
 
-static struct map_entry *discontiguate(
-	struct map_db *db,
-	struct map_group *g,
-	L4_Fpage_t range);
+static struct map_entry *fetch_entry(
+	struct map_db *db, struct map_group *g,
+	L4_Fpage_t range, bool make_exact);
 
 static struct map_group *group_for_addr(struct map_db *db, uintptr_t addr);
-
 static struct map_entry *probe_group_addr(struct map_group *g, uintptr_t addr);
 
 static bool deref_child(
@@ -882,8 +880,11 @@ int mapdb_add_map(
 				/* won't touch a special range. */
 			} else {
 				/* break it up & replace. */
-				struct map_entry *ne = discontiguate(db, g, fpage);
-				if(unlikely(ne == NULL)) return -ENOMEM;
+				struct map_entry *ne = fetch_entry(db, g, fpage, true);
+				if(unlikely(ne == NULL)) {
+					assert(probe_group_range(g, fpage) != NULL);
+					return -ENOMEM;
+				}
 				replace_map_entry(db, g, ne, parent, fpage, first_page_id);
 			}
 		} else {
@@ -1224,12 +1225,18 @@ static int distribute_children(
 			L4_Word_t off = pref_addr - L4_Address(p_ent->range);
 			L4_Fpage_t cut = L4_FpageLog2(L4_Address(r.child_entry->range)
 				+ off, L4_SizeLog2(p_ent->range));
-			struct map_entry *ent = discontiguate(r.child_db, r.group, cut);
-			/* FIXME: handle ENOMEM (once discontiguate() returns that) */
+			struct map_entry *ent = fetch_entry(r.child_db, r.group,
+				cut, true);
+			if(unlikely(ent == NULL)) {
+				assert(probe_group_range(r.group, cut) != NULL);
+				/* FIXME: attempt some kind of atomicity on failure. */
+				panic("split_entry() ran out of heap in distribute_children()");
+			}
+
 			r.child_entry = ent;
 
 			/* block output guarantee, and a required result from
-			 * discontiguate(): the child is known to exist.
+			 * fetch_entry(..., true): the child is known to exist.
 			 */
 			assert(r.child_entry != NULL);
 		}
@@ -1328,21 +1335,20 @@ static int split_entry(
 }
 
 
-/* separate a larger entry that contains @range into smaller segments, and
- * exactly one for @range. if @range contains smaller entries, they're left
- * alone. returns the first entry covered by "range".
+/* find the leftmost contained entry in @range. if @range is contained in a
+ * greater entry and @make_exact is set, attempt to break the larger entry
+ * up to return an exact match for @range; or return NULL on malloc() failure.
+ * (the caller must distinguish between "doesn't exist" and malloc-fail
+ * explicitly.)
  *
- * punts when a special range is hit. this allows things like multi-page KIPs,
- * hugepage UTCB mappings, and so forth.
- *
- * TODO: rename this to something more useful & activate splitting only if
- * given a "subdivide" parameter. it should be the primary lookup mechanism
- * for modifying map and unmap operations.
+ * returns special ranges as-is regardless of size and @make_exact. this
+ * allows things like multi-page KIPs, hugepage UTCB mappings, and so forth.
  */
-static struct map_entry *discontiguate(
+static struct map_entry *fetch_entry(
 	struct map_db *db,
 	struct map_group *g,
-	L4_Fpage_t range)
+	L4_Fpage_t range,
+	bool make_exact)
 {
 	assert(L4_Size(range) >= PAGE_SIZE);
 
@@ -1358,22 +1364,21 @@ static struct map_entry *discontiguate(
 	int esz = L4_SizeLog2(e->range), rsz = L4_SizeLog2(range);
 	if(esz <= rsz) {
 		if(esz < rsz) e = rewind_to_first(g, e, range);
-		return e;
+	} else if(make_exact) {
+		int err = split_entry(db, g, e, range);
+		if(unlikely(err < 0)) {
+			if(err != -ENOMEM) {
+				panic("split_entry() failed: non-ENOMEM error code");
+			}
+			e = NULL;
+		} else {
+			/* refetch our thing. */
+			e = probe_group_range(g, range);
+			assert(e != NULL);
+			assert(L4_Address(e->range) == L4_Address(range));
+			assert(L4_SizeLog2(e->range) == L4_SizeLog2(range));
+		}
 	}
-
-	int err = split_entry(db, g, e, range);
-	if(unlikely(err < 0)) {
-		/* FIXME: handle this properly. */
-		if(err == -ENOMEM) panic("split_entry() failed: out of kernel heap");
-		else panic("split_entry() failed: non-ENOMEM error code");
-
-		return NULL;
-	}
-
-	e = probe_group_range(g, range);
-	assert(e != NULL);
-	assert(L4_Address(e->range) == L4_Address(range));
-	assert(L4_SizeLog2(e->range) == L4_SizeLog2(range));
 
 	return e;
 }
@@ -1500,9 +1505,9 @@ int mapdb_unmap_fpage(
 		!immediate ? "non-" : "", !recursive ? "non-" : "",
 		(int)db->ref_id);
 	L4_Word_t unmap_rights = L4_Rights(range), r_end = FPAGE_HIGH(range);
-	/* this function will only call discontiguate() to modify the structure of
-	 * the map_groups it accesses when it might revoke access in the immediate
-	 * map_db.
+	/* this function will only modify the structure of the map_groups it
+	 * accesses when it might revoke access in the immediate map_db. this is
+	 * used for fetch_entry().
 	 */
 	const bool modify = immediate && unmap_rights != 0;
 	for(L4_Word_t grp_pos = L4_Address(range);
@@ -1515,26 +1520,15 @@ int mapdb_unmap_fpage(
 			continue;
 		}
 
-		struct map_entry *e = NULL;
-		if(modify) {
-			e = discontiguate(db, g, range);
-			/* FIXME: discontiguate() can also fail due to ENOMEM. in this
-			 * case the operation should be put to sleep (pending restart on
-			 * some condition) and some sort of handler invoked to acquire
-			 * more kernel memory to expand the heap, or to release allocated
-			 * memory to create sufficiently large free heap segments, in each
-			 * case triggering syscall restart.
-			 *
-			 * (for now the malloc() failure is handled with panic(). that'll
-			 * start happening once the kernel heap reaches a couple of
-			 * megabytes. the kernel address space limit doesn't matter
-			 * because of the tiny amount of free RAM, some of which will be
-			 * locked away in page tables and other recreatable structures.
-			 * the quick workaround is just to increase the kernel
-			 * allocation.)
-			 */
-		} else {
-			e = probe_group_range(g, range);
+		struct map_entry *e = fetch_entry(db, g, range, modify);
+		if(e == NULL && modify) {
+			/* distinguish between not-exist and ENOMEM from split_entry(). */
+			if(probe_group_range(g, range) != NULL) {
+				/* FIXME: implement restartable suspending somewhere along
+				 * this function's call chain.
+				 */
+				panic("malloc() failed in fetch_entry()");
+			}
 		}
 		if(e == NULL || (recursive && REF_SPACE(e->parent) == 1)) {
 			/* nonexistents are skipped. specials can't be influenced by Unmap
@@ -1621,7 +1615,7 @@ int mapdb_unmap_fpage(
 			const bool special = REF_SPACE(e->parent) == 1;
 			bool drop = special && drop_special;
 			if(modify && !special) {
-				/* ensured by discontiguate() */
+				/* ensured by split_entry() */
 				assert(FPAGE_LOW(e->range) >= FPAGE_LOW(range));
 				assert(FPAGE_LOW(e->range) < r_end);
 				assert(FPAGE_HIGH(e->range) <= r_end);
