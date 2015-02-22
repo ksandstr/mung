@@ -1120,18 +1120,9 @@ next_entry:
 }
 
 
-/* enough space = MSB(size) - 11 map_entries */
-static int make_pages_for_range(
-	L4_Fpage_t *dst,
-	L4_Word_t start,
-	L4_Word_t size)
+/* @dst should have room for MSB(size) - 11 fpages; 21 at most. */
+static int gen_range_pages(L4_Fpage_t *dst, L4_Word_t start, L4_Word_t size)
 {
-	/* this assert blows when split_entry() was given an invalid size of
-	 * fpage.
-	 *
-	 * TODO: test for invalid fpages at the kernel interface, and then remove
-	 * this comment.
-	 */
 	assert(((start | size) & PAGE_MASK) == 0);
 
 	L4_Word_t addr;
@@ -1143,8 +1134,14 @@ static int make_pages_for_range(
 }
 
 
-/* blanks appear after *entry. it is updated after group resize. */
-static int insert_blanks(
+/* free items appear after *entry, i.e. the first is at (*entry)[1]. they're
+ * left uncleared in the interest of efficiency (since calling this function
+ * implies intent to overwrite, anyway). *entry is updated after group resize.
+ *
+ * return value is 0 on success, and -ENOMEM when realloc() fails. atomic on
+ * failure (aside from an abort() inside memmove()).
+ */
+static int insert_empties(
 	struct map_group *g,
 	int num_to_add,
 	struct map_entry **entry)
@@ -1156,14 +1153,12 @@ static int insert_blanks(
 		num_tail = g->num_entries - (e - g->entries) - 1;
 	if(need > g->num_alloc) {
 		/* make moar RAMz */
-		int e_pos = e - g->entries;
-		assert(e_pos < g->num_entries);
-		int newsize = g->num_alloc * 2;
+		int e_pos = e - g->entries, newsize = g->num_alloc * 2;
 		while(newsize < need) newsize *= 2;
 		TRACE("%s: resizing group from %u to %d entries\n", __func__,
 			g->num_alloc, newsize);
 		void *ptr = realloc(g->entries, newsize * sizeof(struct map_entry));
-		if(ptr == NULL) return -ENOMEM;
+		if(unlikely(ptr == NULL)) return -ENOMEM;
 		g->entries = ptr;
 		g->num_alloc = newsize;
 		e = &g->entries[e_pos];
@@ -1172,15 +1167,10 @@ static int insert_blanks(
 	assert(g->num_alloc >= need);
 
 	if(num_tail > 0) {
-		/* poor man's memmove(3) (TODO) */
 		TRACE("%s: move %d items to %d (*entry at %d)\n", __func__, num_tail,
 			(e + num_to_add + 1) - g->entries, e - g->entries);
-		size_t len = sizeof(struct map_entry) * num_tail;
-		void *tmp = malloc(len);
-		if(tmp == NULL) return -ENOMEM;
-		memcpy(tmp, e + 1, len);
-		memcpy(e + num_to_add + 1, tmp, len);
-		free(tmp);
+		memmove(e + num_to_add + 1, e + 1,
+			sizeof(struct map_entry) * num_tail);
 	}
 
 	return 0;
@@ -1270,19 +1260,19 @@ static int split_entry(
 	L4_Word_t r_first = L4_Address(cut);
 	if(L4_Address(e->range) < r_first) {
 		/* left side */
-		p += make_pages_for_range(&pg_buf[p], L4_Address(e->range),
+		p += gen_range_pages(&pg_buf[p], L4_Address(e->range),
 			r_first - L4_Address(e->range));
 	}
 	pg_buf[p++] = cut;	/* middle */
 	L4_Word_t r_end = L4_Address(cut) + L4_Size(cut);
 	if(L4_Address(e->range) + L4_Size(e->range) > r_end) {
 		/* right side */
-		p += make_pages_for_range(&pg_buf[p], r_end,
+		p += gen_range_pages(&pg_buf[p], r_end,
 			L4_Address(e->range) + L4_Size(e->range) - r_end);
 	}
 	assert(p > 1);		/* forbid the trivial case */
 
-	int n = insert_blanks(g, p - 1, &e);
+	int n = insert_empties(g, p - 1, &e);
 	if(unlikely(n < 0)) return n;
 
 	struct map_entry saved = *e, *parent_ent = NULL;
@@ -1325,6 +1315,7 @@ static int split_entry(
 	g->num_entries += p - 1;
 
 	if(saved.num_children > 0) {
+		/* FIXME: catch -ENOMEM */
 		int n = distribute_children(db, g, cut, &saved);
 		if(n < 0) {
 			panic("distribute_children() failed in split_entry()");
