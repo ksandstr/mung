@@ -30,17 +30,7 @@
 #define GROUP_SIZE (PAGE_SIZE * MAX_ENTRIES_PER_GROUP)
 #define GROUP_ADDR(addr) ((addr) & ~(GROUP_SIZE - 1))
 
-/* the largest map_entry that appears here is 4 MiB, i.e. 2^22 bytes. if a 4
- * KiB page within it is replaced, the previous 4-meg entry is divided into at
- * most 10 more (one each of 4k, 8k, 16k, 32k, 64k, 128k, 256k, 512k, 1m, 2m;
- * the original page adds the final 4k).
- *
- * callers to entry_split_and_insert() should reserve at least this many
- * map_entry structs somewhere.
- */
-#define MAX_SPLIT 10
-
-/* maximum probe depth in map_entry->children. used by mapdb_add_child(). */
+/* maximum probe depth in map_entry->children. */
 #define MAX_PROBE_DEPTH 16
 
 
@@ -329,7 +319,7 @@ static bool flush_entry(struct map_entry *e, int access)
 {
 	const L4_Word_t *children = e->num_children > 1 ? e->children : &e->child;
 	for(int j=0; j < e->num_children && REF_DEFINED(children[j]); j++) {
-		/* TODO: deref children[j], recur */
+		/* FIXME: deref children[j], recur */
 	}
 
 	int rwx = L4_Rights(e->range);
@@ -691,7 +681,7 @@ static int insert_map_entry(
 		if(L4_Address(e) < L4_Address(fpage)) prev = i; else break;
 	}
 
-	/* FIXME: make merge_into_entry() accept a -1 `prev', too. */
+	/* TODO: make merge_into_entry() accept a -1 `prev', too. */
 	if(prev < 0 || !merge_into_entry(g, prev, parent, fpage, first_page_id)) {
 		/* the long way around. */
 		struct map_entry *pe = &g->entries[prev];
