@@ -1607,7 +1607,6 @@ int mapdb_unmap_fpage(
 			}
 			if(drop) {
 				assert(modify);
-				/* TODO: implement memmove(3), use it */
 				TRACE("%s: removing entry %#lx:%#lx\n", __func__,
 					L4_Address(e->range), L4_Size(e->range));
 				int n = reparent_children(db, e);
@@ -1629,12 +1628,8 @@ int mapdb_unmap_fpage(
 				int pos = e - g->entries;
 				if(pos < g->num_entries - 1) {
 					int copy_num = g->num_entries - 1 - pos;
-					size_t c_size = copy_num * sizeof(struct map_entry);
-					void *tmp = malloc(c_size);
-					assert(tmp != NULL);		/* FIXME */
-					memcpy(tmp, &g->entries[pos + 1], c_size);
-					memcpy(&g->entries[pos], tmp, c_size);
-					free(tmp);
+					memmove(&g->entries[pos], &g->entries[pos + 1],
+						copy_num * sizeof(struct map_entry));
 				}
 				g->num_entries--;
 				/* map_group shrinking (but don't go below 8 items) */
