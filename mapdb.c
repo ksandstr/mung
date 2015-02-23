@@ -428,6 +428,37 @@ static struct map_group *group_for_addr(struct map_db *db, uintptr_t addr)
 }
 
 
+/* finds an entry in @fpage. returns non-negative index into @g->entries on
+ * success, and -(n + 1) for an approximate position where @fpage could be
+ * inserted if nothing was found.
+ */
+static int search_group_by_range(struct map_group *g, L4_Fpage_t fpage)
+{
+	/* binary search. faster than it looks. */
+	L4_Word_t fpage_addr = L4_Address(fpage);
+	int low = 0, high = g->num_entries - 1, mid = 0;
+	while(low <= high) {
+		mid = low + (high - low) / 2;
+		if(fpage_overlap(g->entries[mid].range, fpage)) {
+			return mid;
+		} else {
+			/* branchless selection. */
+			L4_Word_t e_addr = L4_Address(g->entries[mid].range),
+				mask = (intptr_t)(e_addr - fpage_addr) >> (WORD_BITS - 1);
+			assert(e_addr >= fpage_addr || mask == ~0ul);
+			assert(e_addr <  fpage_addr || mask == 0);
+			low = (mask & (mid + 1)) | (~mask & low);
+			high = (mask & high) | (~mask & (mid - 1));
+		}
+	}
+
+	assert(no_addr_in_group(g, FPAGE_LOW(fpage)));
+	assert(no_addr_in_group(g, FPAGE_HIGH(fpage)));
+	assert(mid >= 0);
+	return -(mid + 1);
+}
+
+
 /* find first map_entry inside @range, starting from @e (which is typically a
  * return value from probe_group_range()).
  */
@@ -451,30 +482,14 @@ static inline struct map_entry *rewind_to_first(
 
 /* returns an entry that falls in @fpage; this may not be the left-most one
  * when @fpage.s > retval->range.s .
+ *
+ * TODO: inspect call sites, replace with search_group_by_range() where
+ * appropriate.
  */
 static struct map_entry *probe_group_range(struct map_group *g, L4_Fpage_t fpage)
 {
-	/* binary search. faster than it looks. */
-	L4_Word_t fpage_addr = L4_Address(fpage);
-	int low = 0, high = g->num_entries - 1, mid;
-	while(low <= high) {
-		mid = low + (high - low) / 2;
-		if(fpage_overlap(g->entries[mid].range, fpage)) {
-			return &g->entries[mid];
-		} else {
-			/* branchless selection. */
-			L4_Word_t e_addr = L4_Address(g->entries[mid].range),
-				mask = (intptr_t)(e_addr - fpage_addr) >> (WORD_BITS - 1);
-			assert(e_addr >= fpage_addr || mask == ~0ul);
-			assert(e_addr <  fpage_addr || mask == 0);
-			low = (mask & (mid + 1)) | (~mask & low);
-			high = (mask & high) | (~mask & (mid - 1));
-		}
-	}
-
-	assert(no_addr_in_group(g, FPAGE_LOW(fpage)));
-	assert(no_addr_in_group(g, FPAGE_HIGH(fpage)));
-	return NULL;
+	int ix = search_group_by_range(g, fpage);
+	return ix >= 0 ? &g->entries[ix] : NULL;
 }
 
 
@@ -490,87 +505,116 @@ static struct map_entry *probe_group_addr(struct map_group *g, uintptr_t addr)
 }
 
 
-/* pass NULL for @limit_parent except to recurse. */
-static void coalesce_entries(
-	struct map_group *g,
-	struct map_entry *ent,
-	struct map_entry *limit_parent)
+static bool can_merge(
+	const struct map_entry *e,
+	L4_Word_t parent,
+	L4_Fpage_t fpage,
+	uint32_t first_page_id)
 {
-	/* this function must check that children are never joined to become
-	 * larger than their parents. so the first iteration's parent should act
-	 * as a limit; skipping for toplevel mappings (for which this function is
-	 * quite rare).
-	 */
-	if(likely(REF_DEFINED(ent->parent))) {
-		if(limit_parent == NULL) {
-			limit_parent = lookup_ref(NULL, NULL, ent->parent);
-			assert(limit_parent != NULL);
-		}
+	bool far_side = CHECK_FLAG(L4_Address(fpage), L4_Size(fpage));
 
-		if(L4_SizeLog2(ent->range) >= L4_SizeLog2(limit_parent->range)) {
-			return;
-		}
-	}
-
-	const L4_Word_t size_mask = 1 << L4_SizeLog2(ent->range);
-	bool is_low = (L4_Address(ent->range) & size_mask) == 0;
-	int ent_ix = ent - g->entries, oth_ix = ent_ix + (is_low ? 1 : -1);
-	struct map_entry *oth = &g->entries[oth_ix];
-	if(oth_ix < 0 || oth_ix == g->num_entries
-		|| L4_Rights(oth->range) != L4_Rights(ent->range)
-		|| L4_SizeLog2(oth->range) != L4_SizeLog2(ent->range)
-		|| REF_SPACE(oth->parent) != REF_SPACE(ent->parent))
+	int n_pages = L4_Size(fpage) / PAGE_SIZE;
+	assert(POPCOUNT(n_pages) == 1);
+	if(e->first_page_id != (first_page_id ^ n_pages)
+		|| unlikely(far_side != (e->first_page_id < first_page_id)))
 	{
-		/* rejected. */
-		return;
+		/* range starts aren't n_pages apart, or are the wrong way around */
+		TRACE("%s: rejected for e->first_page_id=%u\n", __func__,
+			e->first_page_id);
+		return false;
 	}
+	assert(abs((int)e->first_page_id - (int)first_page_id) == n_pages);
 
-	if(is_low) {
-		SWAP(struct map_entry *, oth, ent);
-		SWAP(int, ent_ix, oth_ix);
-	}
-
-	if(LAST_PAGE_ID(oth) + 1 == ent->first_page_id
-		&& L4_Address(oth->range) + L4_Size(oth->range) == L4_Address(ent->range)
-		&& ((!REF_DEFINED(oth->parent) && !REF_DEFINED(ent->parent))
-			|| REF_ADDR(oth->parent) + L4_Size(oth->range) == REF_ADDR(ent->parent)))
+	if(L4_Address(e->range) != (L4_Address(fpage) ^ L4_Size(fpage))
+		|| L4_Rights(e->range) != L4_Rights(fpage)
+		|| unlikely(L4_SizeLog2(e->range) != L4_SizeLog2(fpage)))
 	{
-		TRACE("%s: hit between %#lx:%#lx and %#lx:%#lx\n",
-			__func__, L4_Address(oth->range), L4_Size(oth->range),
-			L4_Address(ent->range), L4_Size(ent->range));
+		/* wrong size, or not the neighbour, or rights aren't compatible. */
+		TRACE("%s: rejected for e->range=%#lx:%#lx (or rights)\n",
+			__func__, L4_Address(e->range), L4_Size(e->range));
+		return false;
+	}
 
-		oth->range = L4_FpageLog2(L4_Address(oth->range),
-			L4_SizeLog2(oth->range) + 1);
-		L4_Set_Rights(&oth->range, L4_Rights(ent->range));
-		assert(LAST_PAGE_ID(oth) == LAST_PAGE_ID(ent));
-		/* FIXME: handle ENOMEM in all cases! */
-		if(ent->num_children == 1 && REF_DEFINED(ent->child)) {
-			mapdb_add_child(oth, ent->child);
-		} else if(ent->num_children > 1) {
-			for(int i=0; i < ent->num_children; i++) {
-				if(!REF_DEFINED(ent->children[i])) continue;
-				mapdb_add_child(oth, ent->children[i]);
+	if((REF_DEFINED(e->parent) || REF_DEFINED(parent))
+		&& (REF_SPACE(e->parent) != REF_SPACE(parent)
+			|| REF_ADDR(e->parent) != (REF_ADDR(parent) ^ L4_Size(fpage))
+			|| far_side != (REF_ADDR(e->parent) < REF_ADDR(parent))))
+	{
+		/* either or both have a defined parent; and
+		 * they reference different parent spaces, or the addresses aren't
+		 * contiguous, or the addresses aren't in the right order.
+		 */
+		TRACE("%s: rejected for e->parent=%#lx\n", __func__, e->parent);
+		return false;
+	}
+
+	return true;
+}
+
+
+static void expand_entry(struct map_entry *e)
+{
+	uint32_t n_pages = L4_Size(e->range) >> PAGE_BITS;
+	int rights = L4_Rights(e->range);
+
+	e->parent = MAPDB_REF(REF_SPACE(e->parent),
+		REF_ADDR(e->parent) & ~L4_Size(e->range));
+	e->first_page_id &= ~n_pages;
+	e->range = L4_FpageLog2(L4_Address(e->range) & ~L4_Size(e->range),
+		L4_SizeLog2(e->range) + 1);
+	L4_Set_Rights(&e->range, rights);
+}
+
+
+/* where possible, merge @e into its compatible neighbour in @g. try to merge
+ * the resulting larger entry again, etc.
+ */
+static void coalesce_entries(struct map_group *g, struct map_entry *e)
+{
+	bool far_side = CHECK_FLAG(L4_Address(e->range), L4_Size(e->range));
+	struct map_entry *oth = &e[far_side ? -1 : 1];
+	if(oth >= &g->entries[0] && oth < &g->entries[g->num_entries]
+		&& can_merge(oth, e->parent, e->range, e->first_page_id))
+	{
+		/* always join to the left. */
+		if(far_side) SWAP(struct map_entry *, e, oth);
+		expand_entry(e);
+
+		/* move children over as well. */
+		L4_Word_t *chs = oth->num_children <= 1 ? &oth->child : oth->children;
+		for(int i=0; i < oth->num_children; i++) {
+			if(!REF_DEFINED(chs[i])) continue;
+			int n = mapdb_add_child(e, chs[i]);
+			/* FIXME: handle this atomically by pre-growing @e's child array
+			 * before expand_entry().
+			 */
+			if(unlikely(n == -ENOMEM)) {
+				panic("ENOMEM in coalesce_entries()");
 			}
-			free(ent->children);
-			ent->num_children = 0;
+			/* this loop ignores -EEXIST to fold existing children in. */
 		}
+		if(oth->num_children > 1) free(oth->children);
+		oth->num_children = 0;
 
-		/* move stuff back one step into *ent */
-		g->num_entries--;
-		for(ent_ix = ent - g->entries; ent_ix < g->num_entries; ent_ix++) {
-			g->entries[ent_ix] = g->entries[ent_ix + 1];
+		/* NOTE: an iterative version of this function could keep voodoo
+		 * indexes about the removed entries' range, and then do a single
+		 * larger memmove at the end. multiple joins are so rare that we
+		 * don't, though.
+		 */
+		int oix = oth - &g->entries[0];
+		if(oix < --g->num_entries) {
+			memmove(&g->entries[oix], &g->entries[oix + 1],
+				sizeof(struct map_entry) * (g->num_entries - oix));
 		}
+		g->entries[g->num_entries].range = L4_Nilpage;
 
-		coalesce_entries(g, oth, limit_parent);
+		coalesce_entries(g, e);
 	}
 }
 
 
 /* attempts to record the equivalent of a map_entry with the given parameters
  * by expanding an existing map_entry. returns true on success.
- *
- * FIXME: this has no way of handling @fpage.address < @g[0].address. so it
- * kind of sucks and needs a partial rewrite.
  */
 static bool merge_into_entry(
 	struct map_group *g,
@@ -579,44 +623,37 @@ static bool merge_into_entry(
 	L4_Fpage_t fpage,
 	uint32_t first_page_id)
 {
-	struct map_entry *pred = &g->entries[prev_pos],
-		*succ = &g->entries[prev_pos + 1];
-	if((L4_Address(pred->range) & (1 << L4_SizeLog2(fpage))) == 0
-		&& ((!REF_DEFINED(parent) && !REF_DEFINED(pred->parent))
-			|| (REF_SPACE(pred->parent) == REF_SPACE(parent)
-				&& REF_ADDR(pred->parent) + L4_Size(pred->range) == REF_ADDR(parent)))
-		&& L4_SizeLog2(pred->range) == L4_SizeLog2(fpage)
-		&& LAST_PAGE_ID(pred) + 1 == first_page_id
-		&& L4_Address(pred->range) + L4_Size(pred->range) == L4_Address(fpage))
-	{
-		/* backward merge. */
-		int access = L4_Rights(pred->range) | L4_Rights(fpage);
-		pred->range = L4_FpageLog2(L4_Address(pred->range),
-			L4_SizeLog2(pred->range) + 1);
-		L4_Set_Rights(&pred->range, access);
-		coalesce_entries(g, pred, NULL);
-		return true;
-	} else if(succ < &g->entries[g->num_entries]
-		&& (L4_Address(succ->range) & (1 << L4_SizeLog2(fpage))) != 0
-		&& ((!REF_DEFINED(parent) && !REF_DEFINED(pred->parent))
-			|| (REF_SPACE(succ->parent) == REF_SPACE(parent)
-				&& REF_ADDR(parent) + L4_Size(fpage) == REF_ADDR(succ->parent)))
-		&& L4_SizeLog2(succ->range) == L4_SizeLog2(fpage)
-		&& succ->first_page_id == first_page_id + 1
-		&& L4_Address(fpage) + L4_Size(fpage) == L4_Address(succ->range))
-	{
-		/* forward merge. */
-		int access = L4_Rights(succ->range) | L4_Rights(fpage);
-		succ->range = L4_FpageLog2(L4_Address(fpage), L4_SizeLog2(fpage) + 1);
-		L4_Set_Rights(&succ->range, access);
-		succ->first_page_id--;
-		succ->parent = parent;
-		assert(succ->first_page_id == first_page_id);
-		coalesce_entries(g, succ, NULL);
-		return true;
-	} else {
+	assert(prev_pos >= -1 && prev_pos < g->num_entries);
+	assert(L4_Rights(fpage) != 0);
+
+	/* the "far" page has this bit set and lies further along in the address
+	 * space.
+	 */
+	bool far_side = CHECK_FLAG(L4_Address(fpage), L4_Size(fpage));
+	TRACE("%s: far_side=%s, fpage=%#lx:%#lx, parent=%#lx, fpi=%u\n",
+		__func__, btos(far_side), L4_Address(fpage), L4_Size(fpage),
+		parent, first_page_id);
+
+	struct map_entry *e = &g->entries[far_side ? prev_pos : prev_pos + 1];
+	if(e < &g->entries[0] || e >= &g->entries[g->num_entries]) {
+		/* head-in-far, or tail-in-near case. */
+		TRACE("%s: rejected for head/tail\n", __func__);
 		return false;
 	}
+
+	if(!can_merge(e, parent, fpage, first_page_id)) return false;
+
+	expand_entry(e);
+	TRACE("%s: accepted; range'=%#lx:%#lx, fpi'=%u, parent'=%#lx\n",
+		__func__, L4_Address(e->range), L4_Size(e->range),
+		e->first_page_id, e->parent);
+
+	/* enforce maximum coalescing. this lets child mappings merge freely
+	 * without dereferencing their parent pointers to check the limit.
+	 */
+	coalesce_entries(g, e);
+
+	return true;
 }
 
 
@@ -670,20 +707,52 @@ static int insert_map_entry(
 	assert(group_for_addr(db, L4_Address(fpage)) == g);
 	assert(mapdb_probe(db, L4_Address(fpage)) == NULL);
 
-	/* TODO: change this to a clever binary search algorithm. it should
-	 * indicate the correct single insert position in @prev, or -1 if insert
-	 * should happen at the start.
+	/* this happens during boot-up.
+	 *
+	 * TODO: it should be removed; this function is along every pager's hot
+	 * path.
 	 */
-	int prev = -1;
-	for(int i=0; i < g->num_entries; i++) {
-		L4_Fpage_t e = g->entries[i].range;
-		assert(!fpage_overlap(e, fpage));
-		if(L4_Address(e) < L4_Address(fpage)) prev = i; else break;
+	if(unlikely(g->num_entries == 0)) {
+		if(g->num_alloc == 0) {
+			assert(g->entries == NULL);
+			g->entries = malloc(2 * sizeof(struct map_entry));
+			if(g->entries == NULL) return -ENOMEM;
+			g->num_alloc = 2;
+		}
+		g->entries[0] = (struct map_entry){
+			.parent = parent, .range = fpage,
+			.first_page_id = first_page_id,
+		};
+		g->entries[1].range = L4_Nilpage;
+		g->num_entries = 1;
+		return 0;
 	}
 
-	/* TODO: make merge_into_entry() accept a -1 `prev', too. */
-	if(prev < 0 || !merge_into_entry(g, prev, parent, fpage, first_page_id)) {
-		/* the long way around. */
+	/* find the page's neighbour, or its insert position. */
+	L4_Fpage_t search_page = L4_FpageLog2(
+		L4_Address(fpage) & ~L4_Size(fpage),
+		L4_SizeLog2(fpage) + 1);
+	int ix = search_group_by_range(g, search_page);
+	if(ix < 0 || !merge_into_entry(g, ix, parent, fpage, first_page_id)) {
+		int prev = abs(ix) - 1;		/* (correct for esoteric reasons.) */
+		assert(prev < g->num_entries);
+		/* scan forward or backward to find the right spot. */
+		bool back = false;
+		while(prev >= 0
+			&& L4_Address(g->entries[prev].range) > L4_Address(fpage))
+		{
+			prev--;
+			back = true;
+		}
+		while(!back && prev < g->num_entries - 1
+			&& L4_Address(g->entries[prev + 1].range) < L4_Address(fpage))
+		{
+			prev++;
+		}
+		assert(prev == -1 || !fpage_overlap(g->entries[prev].range, fpage));
+		assert(prev == g->num_entries - 1
+			|| L4_Address(g->entries[prev + 1].range) > FPAGE_HIGH(fpage));
+
 		struct map_entry *pe = &g->entries[prev];
 		int n = insert_empties(g, 1, &pe);
 		if(unlikely(n < 0)) {
@@ -1409,7 +1478,7 @@ static int reparent_children(struct map_db *db, struct map_entry *e)
 				__func__, L4_Address(cr.child_entry->range),
 				L4_Size(cr.child_entry->range), cr.child_db->ref_id);
 			cr.child_entry->parent = 0;
-			coalesce_entries(cr.group, cr.child_entry, NULL);
+			coalesce_entries(cr.group, cr.child_entry);
 		}
 
 		cs[i] = REF_TOMBSTONE;	/* idempotency guarantee */
