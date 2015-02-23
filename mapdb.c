@@ -59,6 +59,11 @@ static struct map_entry *fetch_entry(
 	struct map_db *db, struct map_group *g,
 	L4_Fpage_t range, bool make_exact);
 
+static int insert_empties(
+	struct map_group *g,
+	int num_to_add,
+	struct map_entry **entry);
+
 static struct map_group *group_for_addr(struct map_db *db, uintptr_t addr);
 static struct map_entry *probe_group_addr(struct map_group *g, uintptr_t addr);
 
@@ -573,8 +578,11 @@ static void coalesce_entries(
 
 /* attempts to record the equivalent of a map_entry with the given parameters
  * by expanding an existing map_entry. returns true on success.
+ *
+ * FIXME: this has no way of handling @fpage.address < @g[0].address. so it
+ * kind of sucks and needs a partial rewrite.
  */
-static bool merge_entries(
+static bool merge_into_entry(
 	struct map_group *g,
 	int prev_pos,
 	L4_Word_t parent,
@@ -654,6 +662,12 @@ static int add_map_group(
 }
 
 
+/* insert a map_entry for (@parent, @fpage, @first_page_id) into @g. if a
+ * compatible map_entry exists already, it'll be extended. otherwise a new
+ * entry will be inserted.
+ *
+ * returns 0 on success, or -ENOMEM on out-of-memory.
+ */
 static int insert_map_entry(
 	struct map_db *db,
 	struct map_group *g,
@@ -666,12 +680,9 @@ static int insert_map_entry(
 	assert(group_for_addr(db, L4_Address(fpage)) == g);
 	assert(mapdb_probe(db, L4_Address(fpage)) == NULL);
 
-	/* [v1] TODO: use a clever binary hoppity-skip algorithm here, and recycle
-	 * that in the split-placement case in mapdb_add_map().
-	 *
-	 * NOTE: this stuff requires that entries be tightly packed at the
-	 * beginning of g->entries[] . the algorithm won't compact holes to the
-	 * right of the right-side ("prev") entry.
+	/* TODO: change this to a clever binary search algorithm. it should
+	 * indicate the correct single insert position in @prev, or -1 if insert
+	 * should happen at the start.
 	 */
 	int prev = -1;
 	for(int i=0; i < g->num_entries; i++) {
@@ -679,37 +690,17 @@ static int insert_map_entry(
 		assert(!fpage_overlap(e, fpage));
 		if(L4_Address(e) < L4_Address(fpage)) prev = i; else break;
 	}
-	if(prev < 0 || !merge_entries(g, prev, parent,
-		fpage, first_page_id))
-	{
-		int dst_pos;
-		if(prev + 1 < g->num_alloc
-			&& L4_IsNilFpage(g->entries[prev + 1].range))
-		{
-			dst_pos = prev + 1;
-		} else {
-			if(g->num_entries + 1 >= g->num_alloc) {
-				int next_size = g->num_alloc > 0 ? g->num_alloc * 2 : 2;
-				TRACE("resizing group[%#lx] at %p from %d to %d entries\n",
-					g->start, g, g->num_alloc, next_size);
-				struct map_entry *new_ents = realloc(g->entries,
-					next_size * sizeof(struct map_entry));
-				if(unlikely(new_ents == NULL)) return -ENOMEM;
-				for(int i = g->num_alloc; i < next_size; i++) {
-					new_ents[i].range = L4_Nilpage;
-				}
-				g->num_alloc = next_size;
-				g->entries = new_ents;
-			}
-			dst_pos = prev + 1;
-			if(dst_pos < g->num_entries) {
-				struct map_entry prev_ent = g->entries[dst_pos];
-				for(int i=dst_pos + 1; i <= g->num_entries; i++) {
-					SWAP(struct map_entry, g->entries[i], prev_ent);
-				}
-			}
+
+	/* FIXME: make merge_into_entry() accept a -1 `prev', too. */
+	if(prev < 0 || !merge_into_entry(g, prev, parent, fpage, first_page_id)) {
+		/* the long way around. */
+		struct map_entry *pe = &g->entries[prev];
+		int n = insert_empties(g, 1, &pe);
+		if(unlikely(n < 0)) {
+			assert(n == -ENOMEM);
+			return -ENOMEM;
 		}
-		g->entries[dst_pos] = (struct map_entry){
+		pe[1] = (struct map_entry){
 			.parent = parent, .range = fpage,
 			.first_page_id = first_page_id,
 		};
@@ -1140,20 +1131,25 @@ static int gen_range_pages(L4_Fpage_t *dst, L4_Word_t start, L4_Word_t size)
  *
  * return value is 0 on success, and -ENOMEM when realloc() fails. atomic on
  * failure (aside from an abort() inside memmove()).
+ *
+ * NOTE: the caller must bump g->num_entries as appropriate!
  */
 static int insert_empties(
 	struct map_group *g,
 	int num_to_add,
 	struct map_entry **entry)
 {
-	assert(*entry >= g->entries && *entry < &g->entries[g->num_alloc]);
-	struct map_entry *e = *entry;
+	assert(num_to_add > 0);
 
+	const int e_pos = *entry - g->entries;
+	assert(e_pos >= -1 && e_pos < g->num_alloc);
+
+	struct map_entry *e = *entry;
 	int need = g->num_entries + num_to_add,
-		num_tail = g->num_entries - (e - g->entries) - 1;
+		num_tail = g->num_entries - e_pos - 1;
 	if(need > g->num_alloc) {
 		/* make moar RAMz */
-		int e_pos = e - g->entries, newsize = g->num_alloc * 2;
+		int newsize = MAX(int, g->num_alloc, 2) * 2;
 		while(newsize < need) newsize *= 2;
 		TRACE("%s: resizing group from %u to %d entries\n", __func__,
 			g->num_alloc, newsize);
