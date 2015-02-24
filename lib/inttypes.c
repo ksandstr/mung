@@ -1,4 +1,6 @@
 
+#define __IN_ABS_IMPL
+
 #include <stdlib.h>
 
 int abs(int j) {

@@ -20,6 +20,12 @@ extern int abs(int j);
 extern long int labs(long int j);
 extern long long int llabs(long long int j);
 
+#if defined(__GNUC__) && !defined(__IN_ABS_IMPL)
+#define abs(x) __builtin_abs((x))
+#define labs(x) __builtin_labs((x))
+#define llabs(x) __builtin_llabs((x))
+#endif
+
 extern int atexit(void (*function)(void));
 
 
