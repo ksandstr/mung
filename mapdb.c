@@ -24,7 +24,7 @@
 
 
 /* for mapdb dumps on add/remove */
-#define TRACE(fmt, ...) TRACE_MSG(TRID_MAPDB, fmt, __VA_ARGS__)
+#define TRACE(fmt, ...) TRACE_MSG(TRID_MAPDB, fmt, ##__VA_ARGS__)
 
 
 #define GROUP_SIZE (PAGE_SIZE * MAX_ENTRIES_PER_GROUP)
