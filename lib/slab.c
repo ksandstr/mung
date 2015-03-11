@@ -25,7 +25,7 @@
 #define SLAB_MAGIC 0x99274b34
 
 
-/* struct slab -> flags */
+/* <struct slab>.flags */
 #define SLAB_WAS_FULL (1 << 0)	/* no more freelist bumps */
 
 
@@ -87,7 +87,7 @@ struct kmem_cache *kmem_cache_create(
 	kmem_cache_ctor ctor,
 	kmem_cache_ctor dtor)
 {
-	assert(!CHECK_FLAG(flags, SLAB_NO_RECYCLE_CTOR) || ctor != NULL);
+	assert(!CHECK_FLAG(flags, KMEM_NO_RECYCLE_CTOR) || ctor != NULL);
 
 	/* TODO: do this in a concurrency-safe manner with an once() function */
 	static bool first = true;
@@ -130,7 +130,7 @@ void *kmem_cache_alloc(struct kmem_cache *cache)
 	if(cache->n_cached > 0) {
 		void *ret = cache->cache[--cache->n_cached];
 		if(cache->ctor != NULL
-			&& !CHECK_FLAG(cache->flags, SLAB_NO_RECYCLE_CTOR))
+			&& !CHECK_FLAG(cache->flags, KMEM_NO_RECYCLE_CTOR))
 		{
 			(*cache->ctor)(ret, cache, 0);
 		}

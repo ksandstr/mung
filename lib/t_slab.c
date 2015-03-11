@@ -209,7 +209,7 @@ START_TEST(recycling)
 	const int test_size = 200;
 	diag("test_size=%d", test_size);
 
-	/* first without the SLAB_NO_RECYCLE_CTOR flag. */
+	/* first without the KMEM_NO_RECYCLE_CTOR flag. */
 	diag("base case:");
 	struct kmem_cache *slab = kmem_cache_create("many ctor calls",
 		sizeof(struct t_object), ALIGNOF(struct t_object),
@@ -225,7 +225,7 @@ START_TEST(recycling)
 	diag("main half:");
 	slab = kmem_cache_create("many ctor calls",
 		sizeof(struct t_object), ALIGNOF(struct t_object),
-		SLAB_NO_RECYCLE_CTOR, &ct_ctor, &ct_dtor);
+		KMEM_NO_RECYCLE_CTOR, &ct_ctor, &ct_dtor);
 	ctor_count = 0; dtor_count = 0;
 	dancing_allocs(slab, test_size);
 	kmem_cache_destroy(slab);

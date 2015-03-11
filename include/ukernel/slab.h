@@ -21,15 +21,15 @@ typedef void (*kmem_cache_ctor)(void *, struct kmem_cache *, unsigned long);
 	kmem_cache_create((name), sizeof(type), ALIGNOF(type), \
 		0, NULL, NULL)
 
-/* flags parameter of kmem_cache_create() */
-#define SLAB_NO_RECYCLE_CTOR 1	/* don't call ctor on recycled objects */
+
+#define KMEM_NO_RECYCLE_CTOR 1	/* don't call ctor on recycled objects */
 
 
 extern struct kmem_cache *kmem_cache_create(
 	const char *name,
 	size_t size,
 	size_t align,
-	unsigned long flags,
+	unsigned long flags,		/* mask of KMEM_* */
 	kmem_cache_ctor ctor,
 	kmem_cache_ctor dtor);
 
