@@ -96,6 +96,28 @@ void free_heap_page(uintptr_t addr)
 }
 
 
+uintptr_t reserve_heap_range(size_t size)
+{
+	assert(size == (1 << size_to_shift(size)));
+
+	uintptr_t first = (heap_pos - size) & ~(size - 1),
+		last = first + size - 1;
+	/* recycle the useless part one page at a time.
+	 *
+	 * this is inefficient: we could instead 1) add a fpage-based subrange
+	 * type [and define free_heap_page() in terms of it], 1b) collapse
+	 * neighbour pages, 2) make it use a rb-tree for constant-time merge
+	 * checks, and 3) do this in larger chunks than PAGE_SIZE at a time.
+	 */
+	for(uintptr_t a = last + 1; a < heap_pos; a += PAGE_SIZE) {
+		free_heap_page(a);
+	}
+
+	heap_pos = first;
+	return first;
+}
+
+
 /* maps @pg into a reserve_heap_page() area. */
 void *map_vm_page(struct page *pg, int duration)
 {

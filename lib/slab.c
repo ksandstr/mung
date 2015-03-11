@@ -1,6 +1,5 @@
-
-/* per-page fixed-length allocator for management of non-heap (early) memory,
- * and kernel objects.
+/* per-page fixed-length allocator for somewhat efficient management of
+ * non-heap (early) memory, kernel objects, and whatnot.
  */
 
 #include <stdlib.h>
@@ -24,16 +23,16 @@
 #define KMEM_CACHE_MAGIC 0x61e98d0e
 #define SLAB_MAGIC 0x99274b34
 
-
 /* <struct slab>.flags */
 #define SLAB_WAS_FULL (1 << 0)	/* no more freelist bumps */
 
 
 struct kmem_cache
 {
-	size_t size, align;
-	unsigned long flags;
+	uint16_t size, align;		/* object size, alignment */
+	unsigned int flags;			/* KMEM_* */
 	kmem_cache_ctor ctor, dtor;
+	struct slab_policy_fns *pol;
 
 	struct list_head free_list, partial_list, full_list;
 	uint32_t magic;				/* for kmem_cache_find() */
@@ -109,6 +108,7 @@ struct kmem_cache *kmem_cache_create(
 	c->ctor = ctor;
 	c->dtor = dtor;
 	c->n_cached = 0;
+	c->pol = NULL;
 	list_head_init(&c->free_list);
 	list_head_init(&c->partial_list);
 	list_head_init(&c->full_list);
@@ -120,13 +120,35 @@ struct kmem_cache *kmem_cache_create(
 
 void kmem_cache_destroy(struct kmem_cache *cache)
 {
-	/* TODO */
+	/* TODO: destroy the actual cache and release all memory. for now,
+	 * half-assing.
+	 */
+
 	kmem_cache_shrink(cache);
+
+	if(cache->pol != NULL) {
+		(*cache->pol->destroy)(cache->pol);
+		cache->pol = NULL;
+	}
+}
+
+
+static void *get_new_slab(struct kmem_cache *cache) {
+	return cache->pol == NULL ? kmem_alloc_new_page()
+		: (*cache->pol->alloc_page)(cache->pol);
+}
+
+
+static void free_slab(struct kmem_cache *cache, void *slab) {
+	if(cache->pol == NULL) kmem_free_page(slab);
+	else (*cache->pol->free_page)(cache->pol, slab);
 }
 
 
 void *kmem_cache_alloc(struct kmem_cache *cache)
 {
+	assert(!CHECK_FLAG(cache->flags, KMEM_POLICY));
+
 	if(cache->n_cached > 0) {
 		void *ret = cache->cache[--cache->n_cached];
 		if(cache->ctor != NULL
@@ -141,7 +163,7 @@ void *kmem_cache_alloc(struct kmem_cache *cache)
 	if(slab == NULL) {
 		slab = list_pop(&cache->free_list, struct slab, link);
 		if(slab == NULL) {
-			void *kpage = kmem_alloc_new_page();
+			void *kpage = get_new_slab(cache);
 			if(unlikely(kpage == NULL)) return NULL;
 			slab = kpage;
 			slab->flags = 0;
@@ -275,7 +297,7 @@ int kmem_cache_shrink(struct kmem_cache *cache)
 		assert(slab->in_use == 0);
 		list_del_from(&cache->free_list, &slab->link);
 		slab->magic = 0xfaceb007u;
-		kmem_free_page(slab);
+		free_slab(cache, slab);
 		n_freed++;
 	}
 	assert(list_empty(&cache->free_list));
@@ -308,4 +330,13 @@ struct kmem_cache *kmem_cache_find(void *allocation)
 	}
 
 	return NULL;
+}
+
+
+void kmem_cache_set_policy(struct kmem_cache *cache, void *polptr)
+{
+	assert(CHECK_FLAG(cache->flags, KMEM_POLICY));
+	assert(polptr != NULL);
+	cache->pol = polptr;
+	cache->flags &= ~KMEM_POLICY;
 }
