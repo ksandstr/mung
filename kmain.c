@@ -87,19 +87,6 @@ void __assert_failure(
 }
 
 
-static struct page *find_page_by_id(uint32_t id)
-{
-	/* TODO: use a more efficient mapping than a search over a linked
-	 * list...
-	 */
-	struct page *page;
-	list_for_each(&resv_page_list, page, link) {
-		if(page->id == id) return page;
-	}
-	return NULL;
-}
-
-
 static inline uint64_t read_64bit_timer(void *ptr)
 {
 	volatile uint32_t *half = ptr;
@@ -129,6 +116,12 @@ void put_supervisor_page(uintptr_t addr, uint32_t page_id)
 	page_t *pages;
 	bool alloc_next = false;
 	if(unlikely(!CHECK_FLAG(*dir, PDIR_PRESENT))) {
+		/* NB. this code path is only here for callers from before
+		 * init_spaces(), since pdirs are always present after that.
+		 *
+		 * really this function should serve pre-init modifications only and
+		 * the others should use the pt_*() family. (TODO?)
+		 */
 		if(next_dir_page == NULL) {
 			panic("terrible recursion in put_supervisor_page()!");
 		}
@@ -147,9 +140,21 @@ void put_supervisor_page(uintptr_t addr, uint32_t page_id)
 			*high = *dir;
 		}
 	} else {
-		struct page *dir_page = find_page_by_id(*dir >> PAGE_BITS);
-		if(dir_page == NULL) panic("directory page not found!");
-		pages = dir_page->vm_addr;
+		/* linear search over the reserved-pages list. this is inefficient and
+		 * bad; we should instead use htable_get() into
+		 * kernel_space->ptab_pages, but that's unavailable before
+		 * space_finalize_kernel().
+		 */
+		bool found = false;
+		struct page *p;
+		list_for_each(&resv_page_list, p, link) {
+			if(p->id == *dir >> PAGE_BITS) {
+				found = true;
+				break;
+			}
+		}
+		if(unlikely(!found)) panic("directory page not found!");
+		pages = p->vm_addr;
 	}
 
 	int poffs = (l_addr >> 12) & 0x3ff;
@@ -461,14 +466,15 @@ void kmain(void *bigp, unsigned int magic)
 		(L4_Word_t)resv_start, (L4_Word_t)resv_end);
 	struct list_head ksp_resv = LIST_HEAD_INIT(ksp_resv);
 	init_spaces(&ksp_resv);
+	list_append_list(&resv_page_list, &ksp_resv);
 	setup_paging(resv_start, resv_end);
 
 	/* (see comment for init_spaces().) */
 	int n = mapdb_init(&kernel_space->mapdb);
 	if(n < 0) panic("mapdb_init() for the kernel space failed");
 
-	space_finalize_kernel(kernel_space, &ksp_resv);
-	list_head_init(&ksp_resv);
+	space_finalize_kernel(kernel_space, &resv_page_list);
+	assert(list_empty(&ksp_resv));
 
 	/* NOTE: malloc(), free(), etc. are only available from this line down. */
 
