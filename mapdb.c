@@ -150,15 +150,15 @@ static bool check_mapdb(struct map_db *db, int opts)
 			struct map_db *p_db = find_map_db(REF_SPACE(e->parent));
 			inv_iff1(REF_DEFINED(e->parent), p_db != NULL);
 
-			inv_iff1(REF_SPACE(e->parent) == 1, p_db == &kernel_space->mapdb);
-			inv_imply1(REF_SPACE(e->parent) == 1, e->num_children == 0);
-			inv_imply1(REF_SPACE(e->parent) == 1, REF_ADDR(e->parent) == 0);
+			inv_iff1(REF_IS_SPECIAL(e->parent), p_db == &kernel_space->mapdb);
+			inv_imply1(REF_IS_SPECIAL(e->parent), e->num_children == 0);
+			inv_imply1(REF_IS_SPECIAL(e->parent), REF_ADDR(e->parent) == 0);
 
 			const struct map_entry *p_e;
 			if(!REF_DEFINED(e->parent)) {
 				inv_log("  ... is parentless entry");
 				p_e = NULL;
-			} else if(REF_SPACE(e->parent) == 1) {
+			} else if(REF_IS_SPECIAL(e->parent)) {
 				inv_log("  ... is special entry (parent=%#lx)", e->parent);
 				p_e = NULL;
 			} else {
@@ -816,10 +816,10 @@ static bool add_map_postcond(
 	 * the parent. (could be stricter.)
 	 */
 	int n_pages = L4_Size(map_area) / PAGE_SIZE;
-	struct map_db *p_db = REF_DEFINED(parent) && !REF_SPECIAL(parent)
+	struct map_db *p_db = REF_DEFINED(parent) && !REF_IS_SPECIAL(parent)
 		? get_map_db(REF_SPACE(parent)) : NULL;
 	for(L4_Word_t addr = L4_Address(map_area), pg = 0;
-		REF_DEFINED(parent) && !REF_SPECIAL(parent) && pg < n_pages;
+		REF_DEFINED(parent) && !REF_IS_SPECIAL(parent) && pg < n_pages;
 		addr += PAGE_SIZE, pg++)
 	{
 		L4_Word_t p_addr = REF_ADDR(parent) + pg * PAGE_SIZE;
@@ -832,7 +832,7 @@ static bool add_map_postcond(
 		struct map_entry *e = mapdb_probe(db, addr);
 		assert(e != NULL);
 		assert(mapdb_page_id_in_entry(e, addr) == pg + first_page_id
-			|| REF_SPACE(e->parent) == 1);
+			|| REF_IS_SPECIAL(e->parent));
 		assert(mapdb_page_id_in_entry(p_e, p_addr) == pg + first_page_id);
 	}
 
@@ -912,7 +912,7 @@ int mapdb_add_map(
 		} else if(L4_SizeLog2(old->range) == L4_SizeLog2(fpage)) {
 			/* exact match with old entry's form. */
 			assert(L4_Address(old->range) == L4_Address(fpage));
-			if(likely(REF_SPACE(old->parent) != 1)) {
+			if(likely(!REF_IS_SPECIAL(old->parent))) {
 				replace_map_entry(db, g, old, parent, fpage, first_page_id);
 			}
 		} else if(L4_SizeLog2(old->range) > L4_SizeLog2(fpage)) {
@@ -926,7 +926,7 @@ int mapdb_add_map(
 				/* contained no-op. the condition is hugely complex, but
 				 * should succeed entirely after the first two terms.
 				 */
-			} else if(unlikely(REF_SPACE(old->parent) == 1)) {
+			} else if(unlikely(REF_IS_SPECIAL(old->parent))) {
 				/* won't touch a special range. */
 			} else {
 				/* break it up & replace. */
@@ -1119,7 +1119,7 @@ int mapdb_map_pages(
 		/* the simple case: a small fpage being mapped from inside larger or
 		 * equal-sized entry.
 		 */
-		if(unlikely(REF_SPACE(first->parent) == 1)) return 0;
+		if(unlikely(REF_IS_SPECIAL(first->parent))) return 0;
 		given = L4_Rights(first->range) & L4_Rights(map_page);
 		if(given != 0) {
 			L4_Fpage_t p = L4_FpageLog2(dest_addr, L4_SizeLog2(map_page));
@@ -1138,7 +1138,7 @@ int mapdb_map_pages(
 		given = 0;
 		while(L4_Address(ent->range) < limit) {
 			int eff = L4_Rights(ent->range) & L4_Rights(map_page);
-			if(eff == 0 || unlikely(REF_SPACE(ent->parent) == 1)) {
+			if(eff == 0 || unlikely(REF_IS_SPECIAL(ent->parent))) {
 				goto next_entry;
 			}
 			given |= eff;
@@ -1402,7 +1402,7 @@ static struct map_entry *fetch_entry(
 		L4_Address(range), L4_Size(range));
 
 	struct map_entry *e = probe_group_range(g, range);
-	if(e == NULL || unlikely(REF_SPACE(e->parent) == 1)) {
+	if(e == NULL || unlikely(REF_IS_SPECIAL(e->parent))) {
 		/* not found, or is special */
 		return e;
 	}
@@ -1576,7 +1576,7 @@ int mapdb_unmap_fpage(
 				panic("malloc() failed in fetch_entry()");
 			}
 		}
-		if(e == NULL || (recursive && REF_SPACE(e->parent) == 1)) {
+		if(e == NULL || (recursive && REF_IS_SPECIAL(e->parent))) {
 			/* nonexistents are skipped. specials can't be influenced by Unmap
 			 * and don't contribute to @rwx_seen.
 			 */
@@ -1584,7 +1584,7 @@ int mapdb_unmap_fpage(
 		}
 
 		do {
-			if(REF_SPACE(e->parent) != 1) {
+			if(!REF_IS_SPECIAL(e->parent)) {
 				/* check each native page in e->range.
 				 *
 				 * TODO: only do this if the caller provides a location for
@@ -1658,7 +1658,7 @@ int mapdb_unmap_fpage(
 				rwx_seen |= pass_rwx;
 			}
 
-			const bool special = REF_SPACE(e->parent) == 1;
+			const bool special = REF_IS_SPECIAL(e->parent);
 			bool drop = special && drop_special;
 			if(modify && !special) {
 				/* ensured by split_entry() */

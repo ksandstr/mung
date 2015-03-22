@@ -14,10 +14,13 @@
  */
 
 #define MAPDB_REF(spaceid, addr) (((spaceid) & PAGE_MASK) | ((addr) & ~PAGE_MASK))
-#define REF_DEFINED(ref) (REF_SPACE((ref)) != 0)
+#define REF_SPECIAL(addr) MAPDB_REF(1, addr)
+
 #define REF_SPACE(ref) ((ref) & PAGE_MASK)
 #define REF_ADDR(ref) ((ref) & ~PAGE_MASK)
-#define REF_SPECIAL(addr) MAPDB_REF(1, addr)
+#define REF_DEFINED(ref) (REF_SPACE((ref)) != 0)
+#define REF_IS_SPECIAL(ref) (REF_SPACE(ref) == 1)
+
 
 /* tombstone in map_entry->children */
 #define REF_TOMBSTONE MAPDB_REF(0, 1 << PAGE_BITS)
