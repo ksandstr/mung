@@ -470,11 +470,11 @@ void kmain(void *bigp, unsigned int magic)
 	setup_paging(resv_start, resv_end);
 
 	/* (see comment for init_spaces().) */
+	init_mapdb();
 	int n = mapdb_init(&kernel_space->mapdb);
 	if(n < 0) panic("mapdb_init() for the kernel space failed");
 
 	space_finalize_kernel(kernel_space, &resv_page_list);
-	assert(list_empty(&ksp_resv));
 
 	/* NOTE: malloc(), free(), etc. are only available from this line down. */
 
@@ -541,7 +541,6 @@ void kmain(void *bigp, unsigned int magic)
 
 	/* per-module inits & init-time testing */
 	init_gdt_resv();
-	init_mapdb();
 	init_ipc();
 
 	cop_init();
