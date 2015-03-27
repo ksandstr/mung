@@ -45,14 +45,6 @@ static struct kmem_cache *space_slab = NULL, *utcb_page_slab = NULL;
 static struct list_head space_list = LIST_HEAD_INIT(space_list);
 
 
-/* rehash for same */
-static size_t hash_page_by_id(const void *page_ptr, void *priv)
-{
-	const struct page *p = page_ptr;
-	return int_hash(p->id);
-}
-
-
 /* hash & cmp functions for utcb_pages */
 static size_t hash_utcb_page(const void *ptr, void *priv) {
 	const struct utcb_page *p = ptr;
@@ -98,8 +90,7 @@ static bool check_space(int opt, struct space *sp)
 	INV_CTX;
 
 	L4_ThreadId_t sp_tid = space_name(sp);
-	inv_push("space of mapdb %u (%lu:%lu)", sp->mapdb.ref_id,
-		L4_ThreadNo(sp_tid), L4_Version(sp_tid));
+	inv_push("space %lu:%lu", L4_ThreadNo(sp_tid), L4_Version(sp_tid));
 
 	inv_ok(!CHECK_FLAG_ANY(sp->flags, ~(uint16_t)(SF_PRIVILEGE)),
 		"no undefined flags");
@@ -121,12 +112,13 @@ static bool check_space(int opt, struct space *sp)
 			uint32_t pt_id = pde >> 12;
 			inv_log("pt_id %u", pt_id);
 			inv_ok1(pt_id <= max_page_id());
-			struct page *ptab_page = htable_get(&sp->ptab_pages,
-				int_hash(pt_id), &cmp_page_id_to_key, &pt_id);
-			inv_ok(ptab_page != NULL, "ptab must exist");
-			inv_ok(ptab_page->id == pt_id,
-				"expected ptab_page->id == %u, found %u",
-				pt_id, ptab_page->id);
+			uint32_t grp_addr = PT_UPPER_SIZE * i;
+			struct map_group *grp = htable_get(&sp->ptab_groups,
+				int_hash(grp_addr), &cmp_group_addr, &grp_addr);
+			inv_ok(grp != NULL, "group for i=%d must exist", i);
+			inv_ok(grp->ptab_page->id == pt_id,
+				"expected grp->ptab_page->id == %u, found %u",
+				pt_id, grp->ptab_page->id);
 		}
 		inv_pop();
 	}
@@ -146,11 +138,12 @@ static bool check_space(int opt, struct space *sp)
 			const uint32_t *ptab_mem;
 			int dir_ix = page_addr >> 22, pg_ix = (page_addr >> 12) & 0x3ff;
 			if(CHECK_FLAG(pdir_mem[dir_ix], PDIR_PRESENT)) {
-				uint32_t pt_id = pdir_mem[dir_ix] >> 12;
-				struct page *ptab_page = htable_get(&sp->ptab_pages,
-					int_hash(pt_id), &cmp_page_id_to_key, &pt_id);
-				assert(ptab_page != NULL);		/* checked earlier */
-				ptab_mem = ptab_page->vm_addr;
+				uint32_t grp_addr = page_addr & ~PT_UPPER_MASK;
+				struct map_group *grp = htable_get(&sp->ptab_groups,
+					int_hash(grp_addr), &cmp_group_addr, &grp_addr);
+				assert(grp != NULL);		/* checked earlier */
+				assert(grp->ptab_page->id == pdir_mem[dir_ix] >> 12);
+				ptab_mem = map_vm_page(grp->ptab_page, VM_SYSCALL);
 				assert(ptab_mem != NULL);		/* if-else block output */
 			} else {
 				ptab_mem = NULL;
@@ -186,11 +179,12 @@ static bool check_space(int opt, struct space *sp)
 			if(!CHECK_FLAG_ALL(pde, PDIR_PRESENT | PDIR_USER)) continue;
 
 			inv_push("pdir entry %d (%#x)", pd_ix, pde);
-			uint32_t pt_id = pde >> 12;
-			struct page *ptab_page = htable_get(&sp->ptab_pages,
-				int_hash(pt_id), &cmp_page_id_to_key, &pt_id);
-			inv_ok1(ptab_page != NULL);		/* checked earlier */
-			const uint32_t *ptab_mem = ptab_page->vm_addr;
+			uint32_t grp_addr = pd_ix * PT_UPPER_SIZE;
+			struct map_group *grp = htable_get(&sp->ptab_groups,
+				int_hash(grp_addr), &cmp_group_addr, &grp_addr);
+			assert(grp != NULL);			/* checked earlier */
+			assert(grp->ptab_page->id == pde >> 12);
+			uint32_t *ptab_mem = map_vm_page(grp->ptab_page, VM_SYSCALL);
 
 			for(int i = 0; i < 1024; i++) {
 				L4_Word_t addr = ((L4_Word_t)pd_ix << 22) | (i << 12);
@@ -205,7 +199,7 @@ static bool check_space(int opt, struct space *sp)
 
 				inv_log("probing mapdb for ix %d, address %#lx, ent %#x",
 					i, addr, ent);
-				struct map_entry *e = mapdb_probe(&sp->mapdb, addr);
+				struct map_entry *e = mapdb_probe(sp, addr);
 				inv_ok1(e != NULL);
 				inv_ok1(mapdb_page_id_in_entry(e, addr) == page_id);
 				inv_ok(!CHECK_FLAG(ent, PT_RW) ||
@@ -252,12 +246,13 @@ static void space_init(struct space *sp, struct list_head *resv_list)
 	sp->kip_area = L4_Nilpage;
 	sp->utcb_area = L4_Nilpage;
 
-	htable_init(&sp->ptab_pages, &hash_page_by_id, NULL);
 	htable_init(&sp->utcb_pages, &hash_utcb_page, NULL);
 
 	sp->pdirs = get_kern_page(0);
-	if(unlikely(resv_list != NULL)) list_add(resv_list, &sp->pdirs->link);
-	else htable_add(&sp->ptab_pages, int_hash(sp->pdirs->id), sp->pdirs);
+	if(unlikely(resv_list != NULL)) {
+		list_add(resv_list, &sp->pdirs->link);
+	}
+
 	pdir_t *dirs = sp->pdirs->vm_addr;
 	if(unlikely(resv_list != NULL)) {
 		/* creation of the kernel's <struct space>. */
@@ -320,7 +315,7 @@ struct space *space_new(void)
 
 	struct space *sp = kmem_cache_alloc(space_slab);
 	space_init(sp, NULL);
-	mapdb_init(&sp->mapdb);
+	mapdb_init(sp);
 	sp->tss = NULL;
 	sp->tss_len = 0;
 	sp->tss_seg = 0;
@@ -349,17 +344,9 @@ static void clear_utcb_pages(struct space *sp)
 
 void space_free(struct space *sp)
 {
-	mapdb_destroy(&sp->mapdb);
+	mapdb_destroy(sp);
 	clear_utcb_pages(sp);
-
-	struct htable_iter it;
-	for(struct page *p = htable_first(&sp->ptab_pages, &it);
-		p != NULL;
-		p = htable_next(&sp->ptab_pages, &it))
-	{
-		free_kern_page(p);
-	}
-	htable_clear(&sp->ptab_pages);
+	free_kern_page(sp->pdirs);
 
 	list_del_from(&space_list, &sp->link);
 
@@ -411,7 +398,7 @@ void space_remove_thread(struct space *sp, struct thread *t)
 		L4_Fpage_t fp = L4_FpageLog2(
 			L4_Address(sp->utcb_area) + up->pos * PAGE_SIZE,
 			PAGE_BITS);
-		mapdb_erase_special(&sp->mapdb, fp);
+		mapdb_erase_special(sp, fp);
 
 #ifndef NDEBUG
 		struct pt_iter it;
@@ -456,7 +443,7 @@ struct utcb_page *space_get_utcb_page(struct space *sp, uint16_t page_pos)
 				+ page_pos * PAGE_SIZE, PAGE_BITS);
 			L4_Set_Rights(&u_page, L4_Readable | L4_Writable);
 			/* TODO: pass error result from mapdb_add_map() */
-			mapdb_add_map(&sp->mapdb, REF_SPECIAL(0), u_page, up->pg->id);
+			mapdb_add_map(sp, NULL, 2, u_page, up->pg->id);
 
 #ifndef NDEBUG
 			struct pt_iter it;
@@ -540,7 +527,7 @@ int space_set_kip_area(struct space *sp, L4_Fpage_t area)
 	}
 
 	if(!L4_IsNilFpage(sp->kip_area)) {
-		mapdb_erase_special(&sp->mapdb, sp->kip_area);
+		mapdb_erase_special(sp, sp->kip_area);
 
 	/* NOTE: this may be redundant with mapdb_erase_special()'s
 	 * postconditions.
@@ -561,7 +548,7 @@ int space_set_kip_area(struct space *sp, L4_Fpage_t area)
 	L4_Set_Rights(&k_page, L4_Readable);
 	/* TODO: pass error result from mapdb_add_map() */
 	uint32_t kip_pgid = (L4_Word_t)kip_mem >> PAGE_BITS;
-	mapdb_add_map(&sp->mapdb, REF_SPECIAL(0), k_page, kip_pgid);
+	mapdb_add_map(sp, NULL, 2, k_page, kip_pgid);
 
 	/* NOTE: this may be redundant with mapdb_add_map()'s postconditions. */
 #ifndef NDEBUG
@@ -664,7 +651,16 @@ bool space_prefill_upper(struct space *space, L4_Word_t fault_addr)
 	pt_iter_init(&it, space);
 	if(pt_upper_present(&it, fault_addr)) ret = false;
 	else {
-		ret = mapdb_fill_page_table(&space->mapdb, fault_addr) > 0;
+		int n = mapdb_fill_page_table(space, fault_addr);
+		if(n < 0) {
+			/* FIXME: this function's interface can't properly communicate
+			 * -ENOMEM. rip it out in exception.c and make that call either
+			 *  pt_*() or mapdb_*() as required.
+			 */
+			printf("!!! n=%d\n", n);
+			panic("ENOMEM in space_prefill_upper()");
+		}
+		ret = n > 0;
 	}
 	pt_iter_destroy(&it);
 
@@ -712,8 +708,7 @@ size_t space_memcpy_from(
 	size_t pos = 0;
 	while(pos < size) {
 		int seg = MIN(int, size - pos, PAGE_SIZE - (address & PAGE_MASK));
-		const struct map_entry *e = mapdb_probe(&sp->mapdb,
-			address & ~PAGE_MASK);
+		const struct map_entry *e = mapdb_probe(sp, address & ~PAGE_MASK);
 		if(e == NULL) break;
 		put_supervisor_page(heap_addr, mapdb_page_id_in_entry(e, address));
 		memcpy(dest + pos, (void *)(heap_addr | (address & PAGE_MASK)), seg);
@@ -843,7 +838,7 @@ SYSCALL void sys_unmap(L4_Word_t control, void *utcb)
 	assert(check_all_spaces(0));
 
 	struct thread *current = get_current_thread();
-	struct map_db *mdb = &current->space->mapdb;
+	struct space *cur_space = current->space;
 	const bool flush = CHECK_FLAG(control, 0x40);
 	int page_count = (control & 0x3f) + 1;
 	for(int i=0; i < page_count; i++) {
@@ -859,7 +854,8 @@ SYSCALL void sys_unmap(L4_Word_t control, void *utcb)
 			TID_THREADNUM(current->id), TID_VERSION(current->id));
 #endif
 
-		L4_Set_Rights(&fp, mapdb_unmap_fpage(mdb, fp, flush, true, true));
+		int access = mapdb_unmap_fpage(cur_space, fp, flush, true, true);
+		L4_Set_Rights(&fp, access);
 		L4_VREG(utcb, L4_TCR_MR(i)) = fp.raw;
 	}
 
@@ -1072,8 +1068,20 @@ COLD void init_spaces(struct list_head *resv_list)
 }
 
 
-/* the init_spaces() parts that require the malloc heap, i.e. htable
- * operations.
+static COLD size_t hash_page_by_id(const void *page_ptr, void *priv) {
+	const struct page *p = page_ptr;
+	return int_hash(p->id);
+}
+
+
+static COLD bool cmp_page_to_id(const void *cand_ptr, void *key) {
+	const struct page *p = cand_ptr;
+	return p->id == *(const uint32_t *)key;
+}
+
+
+/* the init_spaces() parts that require the malloc heap and mapdb
+ * initialization, i.e. htable operations and map_group_slab.
  */
 COLD void space_finalize_kernel(
 	struct space *sp,
@@ -1081,10 +1089,35 @@ COLD void space_finalize_kernel(
 {
 	assert(sp == kernel_space);
 
+	/* create map_group structs for the kernel's boot-time page tables. these
+	 * won't carry any mappings (hence MGF_ROOT) as there's no justifiable
+	 * reason to have a child reference to the KIP for each address space, but
+	 * this'll let kernel_space pass consistency checks for very little cost
+	 * so it's fine.
+	 */
+	assert(map_group_slab != NULL);
+	struct htable by_id;
+	htable_init(&by_id, &hash_page_by_id, NULL);
 	struct page *p;
 	list_for_each(resv_list, p, link) {
-		htable_add(&sp->ptab_pages, int_hash(p->id), p);
+		bool ok = htable_add(&by_id, int_hash(p->id), p);
+		if(!ok) panic("borkage!");
 	}
+	const pdir_t *dirs = sp->pdirs->vm_addr;
+	for(uintptr_t i = 0; i < KERNEL_SEG_SIZE; i += PT_UPPER_SIZE) {
+		uint32_t pgid = dirs[(KERNEL_SEG_START + i) >> PT_UPPER_BITS] >> 12;
+		p = htable_get(&by_id, int_hash(pgid), &cmp_page_to_id, &pgid);
+		if(p == NULL) panic("spuriously!");		/* but also gravely. */
+		struct map_group *g = kmem_cache_alloc(map_group_slab);
+		if(g == NULL) panic("decongestuous!");
+		*g = (struct map_group){
+			.addr = (KERNEL_SEG_START + i) | MGF_ROOT,
+			.entries = NULL, .ptab_page = p, .space = sp,
+		};
+		bool ok = htable_add(&sp->ptab_groups, int_hash(MG_START(g)), g);
+		if(!ok) panic("nacritude!");
+	}
+	htable_clear(&by_id);
 
 	assert(sp->utcb_pages.priv != NULL);
 	struct utcb_page *ups = sp->utcb_pages.priv;

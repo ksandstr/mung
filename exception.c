@@ -14,6 +14,7 @@
 #include <ukernel/thread.h>
 #include <ukernel/sched.h>
 #include <ukernel/space.h>
+#include <ukernel/mapdb.h>
 #include <ukernel/ptab.h>
 #include <ukernel/slab.h>
 #include <ukernel/ipc.h>
@@ -880,8 +881,7 @@ void isr_exn_pf_bottom(struct x86_exregs *regs)
 	}
 
 #ifndef NDEBUG
-	const struct map_entry *e = mapdb_probe(&current->space->mapdb,
-		fault_addr);
+	const struct map_entry *e = mapdb_probe(current->space, fault_addr);
 	if(e != NULL && CHECK_FLAG_ALL(L4_Rights(e->range), fault_access)) {
 		printf("#PF fault_addr=%#lx, eip=%#lx\n", fault_addr, regs->eip);
 		printf("    mapdb_id=%u, ptab_id=%u\n",

@@ -101,6 +101,9 @@ extern void kmem_get_align_masks(
 /* safe conversion from ID to pointer. returns NULL when the page isn't
  * mapped. caller must validate non-NULL result to determine if it's a live
  * object or not.
+ *
+ * TODO: needs a variant that accepts @id in the bits given by `and_mask' to
+ * avoid a couple of opposing shifts.
  */
 extern void *kmem_id2ptr_safe(void *polptr, uintptr_t id);
 

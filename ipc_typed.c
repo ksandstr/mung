@@ -279,13 +279,12 @@ static int apply_mapitem(
 		goto noop;
 	}
 
-	int given = mapdb_map_pages(&source->space->mapdb,
-		&dest->space->mapdb, map_page, L4_Address(wnd));
+	int given = mapdb_map_pages(source->space,
+		dest->space, map_page, L4_Address(wnd));
 	if(is_grant && given != 0) {
 		L4_Set_Rights(&map_page, given);
 		assert((L4_Address(map_page) & 0xc00) == 0);
-		mapdb_unmap_fpage(&source->space->mapdb, map_page, true, false,
-			false);
+		mapdb_unmap_fpage(source->space, map_page, true, false, false);
 	}
 
 	m->X.snd_fpage.X.s = wnd.X.s;
@@ -430,7 +429,7 @@ static int stritem_faults(
 	 */
 	L4_Word_t addr = it.ptr & ~PAGE_MASK;
 	while(addr < it.ptr + it.len) {
-		struct map_entry *e = mapdb_probe(&sp->mapdb, addr);
+		struct map_entry *e = mapdb_probe(sp, addr);
 		if(e == NULL || !CHECK_FLAG_ALL(L4_Rights(e->range), access)) {
 			if(n_faults < faults_len) {
 				L4_Fpage_t f = L4_FpageLog2(addr, PAGE_BITS);
@@ -636,7 +635,7 @@ static int copy_interspace_stritem(L4_Fpage_t *fault_p, struct ipc_state *st)
 
 		/* TODO: avoid repeated probe */
 		uintptr_t dest_page = (dst_iter->ptr + d_off) & ~PAGE_MASK;
-		struct map_entry *e = mapdb_probe(&dest_space->mapdb, dest_page);
+		struct map_entry *e = mapdb_probe(dest_space, dest_page);
 		if(e == NULL || !CHECK_FLAG(L4_Rights(e->range), L4_Writable)) {
 			/* pop a write fault */
 			*fault_p = L4_FpageLog2(dest_page, PAGE_BITS);
@@ -760,7 +759,7 @@ static int copy_intraspace_stritem(L4_Fpage_t *fault_p, struct ipc_state *st)
 
 #ifndef NDEBUG
 		/* enforce consistency wrt mapdb */
-		struct map_entry *e = mapdb_probe(&sp->mapdb, fault_addr);
+		struct map_entry *e = mapdb_probe(sp, fault_addr);
 		assert(e == NULL
 			|| !CHECK_FLAG(L4_Rights(e->range),
 				is_write ? L4_Writable : L4_Readable));

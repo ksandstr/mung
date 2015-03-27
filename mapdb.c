@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <stdint.h>
 #include <stdlib.h>
+#include <stdalign.h>
 #include <string.h>
 #include <assert.h>
 #include <errno.h>
@@ -25,40 +26,75 @@
 /* for mapdb dumps on add/remove */
 #define TRACE(fmt, ...) TRACE_MSG(TRID_MAPDB, fmt, ##__VA_ARGS__)
 
+/* the child/parent reference format.
+ *
+ * - high 10 bits (v1: 9 with x86 PTE) index into the target group in
+ *   increments of PAGE_SIZE.
+ * - in between there are group ID bits per grp_mask_and.
+ * - the low 4 ("MISC") bits vary:
+ *   - in map_entry.parent, bit 1 (value 2) is the IS_SPECIAL indicator.
+ *     others are undefined, so left at 0;
+ *   - in map_entry.{child,children} they are copies of some of the bits of
+ *     the child's index into its parent.
+ *     - in the child array tombstone, the value is 1. the tombstone is
+ *       therefore distinct from NULL but not defined.
+ *
+ * child references are stored in the <struct map_entry>.children array at a
+ * position within MAX_PROBE_DEPTH slots from their REF_HASH() value, computed
+ * from all the bits except MISC, the probe index proceeding forward and
+ * wrapping at the array's end.
+ */
+/* constructors */
+#define REF_CTOR(ix, grp, misc) ((ix) << 22 | (grp) << grp_mask_shift | (misc))
+#define REF_SPECIAL(ix, grp, misc) REF_CTOR((ix), (grp), (misc) | 2)
+/* basic accessors */
+#define REF_INDEX(ref) (((ref) >> 22) & 0x3ff)
+#define REF_GROUP_BITS(ref) ((ref) & grp_mask_and)
+#define REF_MISC(ref) ((ref) & (sizeof(struct map_group) - 1))
+/* derived accessors */
+#define REF_IS_NULL(ref) ((ref) == 0)
+#define REF_IS_SPECIAL(ref) CHECK_FLAG(REF_MISC((ref)), 2)
+#define REF_DEFINED(ref) (REF_GROUP_BITS(ref) != 0)
+#define REF_ADDR(ref) (REF_INDEX(ref) * PAGE_SIZE)
+#define REF_GROUP_ID(ref) (REF_GROUP_BITS((ref)) >> grp_mask_shift)
+#define REF_HASH(ref) int_hash((ref) & ~0xful)
+/* constants */
+#define REF_NULL 0
+#define REF_TOMBSTONE REF_CTOR(0, 0, 1)
+
 
 #define GROUP_SIZE (PAGE_SIZE * MAX_ENTRIES_PER_GROUP)
 #define GROUP_ADDR(addr) ((addr) & ~(GROUP_SIZE - 1))
 
 /* maximum probe depth in map_entry->children. */
-#define MAX_PROBE_DEPTH 16
+#define MAX_PROBE_DEPTH 8
 
 
-/* dereferenced map_entry->children entry. */
+/* dereferenced map_entry->children entry.
+ *
+ * TODO: replace this with just two out-parameters, since group->space is now
+ * there.
+ */
 struct child_ref
 {
-	struct map_db *child_db;
 	struct map_group *group;
 	struct map_entry *child_entry;
 };
 
 
-static size_t rehash_ref_hash(const void *, void *);
-
 static struct map_entry *fetch_entry(
-	struct map_db *db, struct map_group *g,
-	L4_Fpage_t range, bool make_exact);
+	struct map_group *g, L4_Fpage_t range, bool make_exact);
 
 static int insert_empties(
 	struct map_group *g,
 	int num_to_add,
 	struct map_entry **entry);
 
-static struct map_group *group_for_addr(struct map_db *db, uintptr_t addr);
 static struct map_entry *probe_group_addr(struct map_group *g, uintptr_t addr);
 
 static bool deref_child(
 	struct child_ref *cr,
-	struct map_db *home_db,
+	struct map_group *home_grp,
 	const struct map_entry *e,
 	int child_ix);
 
@@ -66,19 +102,19 @@ static bool deref_child(
 static int mapdb_add_child(struct map_entry *ent, L4_Word_t child);
 
 
-static struct kmem_cache *map_group_slab = NULL;
-static uint32_t next_ref_id = 1;	/* also the kernel space's ID */
-static struct htable ref_hash = HTABLE_INITIALIZER(ref_hash,
-	rehash_ref_hash, NULL);
+struct kmem_cache *map_group_slab = NULL;
+static struct slab_policy *map_group_policy;
+static uintptr_t grp_mask_and, grp_mask_or;
+static unsigned short grp_mask_shift;
 
 
 static void dump_map_group(struct map_group *g)
 {
 #ifndef NDEBUG
-	TRACE("%s: group %#lx .. %#lx contains (%d ents, %d alloc):\n",
-		__func__, g->start, g->start + GROUP_SIZE - 1,
-		g->num_entries, g->num_alloc);
-	for(int i=0; i < g->num_entries; i++) {
+	TRACE("%s: group %#lx .. %#lx contains (%d ents, %lu alloc):\n",
+		__func__, MG_START(g), MG_START(g) + GROUP_SIZE - 1,
+		MG_N_ENTRIES(g), 1ul << MG_N_ALLOC_LOG2(g));
+	for(int i=0; i < MG_N_ENTRIES(g); i++) {
 		struct map_entry *e = &g->entries[i];
 		assert(!L4_IsNilFpage(e->range));
 		TRACE("  %d: [%#lx .. %#lx] (%c%c%c) from %#lx, pages [%u .. %lu]; nc %u\n", i,
@@ -94,115 +130,168 @@ static void dump_map_group(struct map_group *g)
 }
 
 
-static inline struct map_db *find_map_db(uint32_t ref_id)
-{
-	void *ptr = htable_get(&ref_hash, int_hash(ref_id),
-		&int_eq, &ref_id);
-	return ptr == NULL ? NULL : container_of(ptr, struct map_db, ref_id);
+/* tests a known-valid pointer for whether the group is also valid.
+ *
+ * XXX: a reference to a group that's both pointer-valid and alive may still
+ * end up pointing to no valid entry at all, or an entry in an unrelated
+ * space's group (because of object recycling). caveat lector.
+ */
+static bool is_group_valid(struct map_group *grp) {
+	return grp->space != NULL;
 }
 
 
-/* as above, but stricter. */
-static struct map_db *get_map_db(uint32_t ref_id)
-{
-	struct map_db *db = find_map_db(ref_id);
-	BUG_ON(db == NULL, "parameter must refer to valid map_db");
-	return db;
+static struct map_group *group_for_addr(struct space *sp, uintptr_t addr) {
+	uintptr_t key = GROUP_ADDR(addr);
+	return htable_get(&sp->ptab_groups, int_hash(key), &cmp_group_addr, &key);
 }
 
 
-/* "don't test this" bits */
+/* turn @address (within @g) into a group-id + index pair. */
+static inline L4_Word_t addr_to_ref(struct map_group *g, uintptr_t addr)
+{
+	assert(addr >= MG_START(g) && addr < MG_START(g) + GROUP_SIZE);
+	uintptr_t grp_bits = (uintptr_t)g & grp_mask_and,
+		ix = (addr - MG_START(g)) >> PAGE_BITS;
+
+	assert(ix >= 0 && ix < GROUP_SIZE / PAGE_SIZE);
+	L4_Word_t ref = grp_bits | (ix << 22);
+	assert(REF_ADDR(ref) + MG_START(g) == (addr & ~PAGE_MASK));
+	assert((REF_GROUP_BITS(ref) | grp_mask_or) == (uintptr_t)g);
+	return ref;
+}
+
+
+/* "don't test this" bits.
+ * these are used when the partial invariant is known not to pass.
+ */
 #define MOD_NO_CHILD_REFS (1 << 0)	/* don't check child refs */
 
 #ifdef DEBUG_ME_HARDER
 #include <ukernel/invariant.h>
 
 /* runtime invariant checks. */
-static bool check_mapdb(struct map_db *db, int opts)
+
+static bool check_map_entry(
+	struct map_group *grp, struct map_entry *e, int opts)
 {
 	INV_CTX;
 
-	/* database-side consistency. */
-	struct htable_iter grp_it;
-	for(void *grp_ptr = htable_first(&db->groups, &grp_it);
-		grp_ptr != NULL;
-		grp_ptr = htable_next(&db->groups, &grp_it))
-	{
-		struct map_group *grp = container_of(grp_ptr,
-			struct map_group, start);
+	/* for each entry, check that
+	 *
+	 *   - it references a valid parent entry, or that its ->parent is
+	 *     correctly special or undefined
+	 *   - it is at most as large as the parent
+	 *   - the parent has a child reference to it
+	 *     - (unless MOD_NO_CHILD_REFS \in @opts)
+	 *   - if it's special, check that space=0 appears only in sigma0 and
+	 *     that space=1 has no children.
+	 */
+	inv_push("check entry %#lx:%#lx in grp=%p; ->parent %#lx",
+		L4_Address(e->range), L4_Size(e->range), grp,
+		e->parent);
 
-		/* for each entry, check that
-		 *   - it references a valid entry (one that exists)
-		 *   - it is at most as large as the parent
-		 *   - the parent has a child reference to it
-		 *   - if it's special, check that space=0 appears only in sigma0 and
-		 *   that space=1 has no children.
-		 */
-		for(int i=0; i < grp->num_entries; i++) {
-			const struct map_entry *e = &grp->entries[i];
-			inv_ok1(L4_Rights(e->range) != 0);
+	inv_ok1(L4_Rights(e->range) != 0);
+	inv_ok1(L4_Size(e->range) <= GROUP_SIZE);
+	inv_ok1(fpage_overlap(L4_Fpage(MG_START(grp), GROUP_SIZE), e->range));
 
-			inv_push("check entry %#lx:%#lx in ref_id %u; ->parent %#lx",
-				L4_Address(e->range), L4_Size(e->range), db->ref_id,
-				e->parent);
+	struct map_group *p_grp = kmem_id2ptr_safe(map_group_policy,
+		REF_GROUP_ID(e->parent));
+	if(p_grp != NULL && p_grp->space == NULL) {
+		inv_log("p_grp=%p had NULL space -- cleared", p_grp);
+		p_grp = NULL;
+	}
+	inv_iff1(REF_DEFINED(e->parent), p_grp != NULL);
 
-			struct map_db *p_db = find_map_db(REF_SPACE(e->parent));
-			inv_iff1(REF_DEFINED(e->parent), p_db != NULL);
+	if(p_grp != NULL) {
+		L4_ThreadId_t s_name = space_name(p_grp->space);
+		inv_log("p_grp=%p, ->space=%p (%lu:%lu)",
+			p_grp, p_grp->space, L4_ThreadNo(s_name),
+			L4_Version(s_name));
+		inv_iff1(REF_IS_SPECIAL(e->parent),
+			p_grp->space == kernel_space);
+	}
+	inv_imply1(REF_IS_SPECIAL(e->parent), e->num_children == 0);
+	inv_imply1(REF_IS_SPECIAL(e->parent), REF_ADDR(e->parent) == 0);
+	inv_imply1(REF_IS_SPECIAL(e->parent), REF_GROUP_BITS(e->parent) == 0);
 
-			inv_iff1(REF_IS_SPECIAL(e->parent), p_db == &kernel_space->mapdb);
-			inv_imply1(REF_IS_SPECIAL(e->parent), e->num_children == 0);
-			inv_imply1(REF_IS_SPECIAL(e->parent), REF_ADDR(e->parent) == 0);
-
-			const struct map_entry *p_e;
-			if(!REF_DEFINED(e->parent)) {
-				inv_log("  ... is parentless entry");
-				p_e = NULL;
-			} else if(REF_IS_SPECIAL(e->parent)) {
-				inv_log("  ... is special entry (parent=%#lx)", e->parent);
-				p_e = NULL;
-			} else {
-				inv_ok1(p_db != NULL);
-				p_e = mapdb_probe(p_db, REF_ADDR(e->parent));
-				inv_ok1(p_e != NULL);
-				inv_log("parent entry %#lx:%#lx in ref_id %u",
-					L4_Address(p_e->range), L4_Size(p_e->range), p_db->ref_id);
-				inv_ok1(ADDR_IN_FPAGE(p_e->range, REF_ADDR(e->parent)));
-				inv_ok1(L4_SizeLog2(e->range) <= L4_SizeLog2(p_e->range));
-			}
-
-			if(!CHECK_FLAG(opts, MOD_NO_CHILD_REFS) && p_e != NULL) {
-				bool found = false;
-				int n_push = 0;
-				const L4_Word_t *p_cs = p_e->num_children > 1
-					? p_e->children : &p_e->child;
-				for(int j=0; j < p_e->num_children; j++) {
-					n_push++;
-					inv_log("  child %d = %#lx", j, p_cs[j]);
-					if(REF_SPACE(p_cs[j]) != db->ref_id) continue;
-					if(ADDR_IN_FPAGE(e->range, REF_ADDR(p_cs[j]))) {
-						found = true;
-
-						/* test deref_child() since the loop provides us with
-						 * known results.
-						 */
-						struct child_ref cr;
-						bool got_child = deref_child(&cr, p_db, p_e, j);
-						inv_ok1(got_child);
-						inv_ok1(cr.child_db == db);
-						inv_ok1(cr.child_entry == e);
-					}
-				}
-				inv_ok1(found);
-			}
-
-			inv_pop();
-		}
+	const struct map_entry *p_e;
+	if(!REF_DEFINED(e->parent)) {
+		inv_log("  ... is parentless entry");
+		p_e = NULL;
+	} else if(REF_IS_SPECIAL(e->parent)) {
+		inv_log("  ... is special entry (parent=%#lx)", e->parent);
+		p_e = NULL;
+	} else {
+		inv_ok1(p_grp != NULL);
+		p_e = probe_group_addr(p_grp,
+			MG_START(p_grp) + REF_ADDR(e->parent));
+		inv_ok(p_e != NULL, "must find parent for ref=[%#lx, %#lx]",
+			REF_INDEX(e->parent), REF_GROUP_BITS(e->parent));
+		inv_log("parent entry %#lx:%#lx in p_grp=%p",
+			L4_Address(p_e->range), L4_Size(p_e->range), p_grp);
+		inv_ok1(ADDR_IN_FPAGE(p_e->range,
+			MG_START(p_grp) + REF_ADDR(e->parent)));
+		inv_ok1(L4_SizeLog2(e->range) <= L4_SizeLog2(p_e->range));
 	}
 
-	/* page table consistency. */
-	/* (TODO: iterate over the tables in db->space, check that @db agrees with
-	 * pages referenced)
-	 */
+	if(!CHECK_FLAG(opts, MOD_NO_CHILD_REFS) && p_e != NULL) {
+		assert(p_grp != NULL);
+		bool found = false;
+		const L4_Word_t *p_cs = p_e->num_children > 1
+			? p_e->children : &p_e->child;
+		for(int j=0; j < p_e->num_children; j++) {
+			inv_log("  child %d = %#lx", j, p_cs[j]);
+			if(REF_GROUP_BITS(p_cs[j]) != ((uintptr_t)grp & grp_mask_and)) continue;
+			if(ADDR_IN_FPAGE(e->range, MG_START(grp) + REF_ADDR(p_cs[j]))) {
+				inv_log("  found matching entry=%#lx:%#lx",
+					L4_Address(e->range), L4_Size(e->range));
+				inv_ok(!found, "should find child only once");
+				found = true;
+
+				/* test deref_child() since the loop provides us with
+				 * known results.
+				 */
+				struct child_ref cr;
+				bool got_child = deref_child(&cr, p_grp, p_e, j);
+				inv_ok1(got_child);
+				inv_ok1(cr.group == grp);
+				inv_ok1(cr.child_entry == e);
+			}
+		}
+		inv_ok1(found);
+	}
+
+	inv_pop();
+	return true;
+
+inv_fail:
+	return false;
+}
+
+
+static bool check_map_group(struct map_group *grp, int opts)
+{
+	INV_CTX;
+
+	/* group spec. */
+	inv_ok1(MG_N_ENTRIES(grp) <= MAX_ENTRIES_PER_GROUP);
+	inv_ok1(MG_N_ENTRIES(grp) <= 1 << MG_N_ALLOC_LOG2(grp));
+	inv_ok1(MG_N_ALLOC_LOG2(grp) <= size_to_shift(MAX_ENTRIES_PER_GROUP));
+
+	for(int i=0; i < MG_N_ENTRIES(grp); i++) {
+		struct map_entry *e = &grp->entries[i];
+
+		inv_push("e->range=%#lx:%#lx",
+			L4_Address(e->range), L4_Size(e->range));
+		/* entries should appear in sorted order. */
+		inv_imply1(e > grp->entries,
+			FPAGE_HIGH(e[-1].range) < FPAGE_LOW(e->range));
+
+		inv_ok1(check_map_entry(grp, e, opts));
+
+		inv_pop();
+	}
 
 	return true;
 
@@ -211,186 +300,149 @@ inv_fail:
 }
 
 
-static bool check_mapdb_module(int opts)
+static bool check_mapdb(struct space *sp, int opts)
 {
-	struct htable_iter it;
-	for(void *ptr = htable_first(&ref_hash, &it);
-		ptr != NULL;
-		ptr = htable_next(&ref_hash, &it))
+	INV_CTX;
+
+	struct pt_iter pit;
+	pt_iter_init(&pit, sp);
+
+	uint32_t *pdir_mem = map_vm_page(sp->pdirs, VM_SYSCALL);
+	inv_ok1(pdir_mem != NULL);
+
+	struct htable_iter grp_it;
+	for(struct map_group *grp = htable_first(&sp->ptab_groups, &grp_it);
+		grp != NULL;
+		grp = htable_next(&sp->ptab_groups, &grp_it))
 	{
-		struct map_db *db = container_of(ptr, struct map_db, ref_id);
-		if(!check_mapdb(db, opts)) return false;
+		inv_push("group.start=%#lx .space=%p .n_entries=%d .n_alloc_log2=%lu",
+			MG_START(grp), grp->space, MG_N_ENTRIES(grp),
+			MG_N_ALLOC_LOG2(grp));
+
+		/* ein Maschinentest, jawohl */
+		inv_imply1(grp->ptab_page != NULL,
+			pt_upper_present(&pit, MG_START(grp)));
+
+		uint32_t pde = pdir_mem[MG_START(grp) / GROUP_SIZE];
+		inv_iff1(grp->ptab_page != NULL, CHECK_FLAG(pde, PDIR_PRESENT));
+		inv_imply1(grp->ptab_page != NULL, grp->ptab_page->id == pde >> 12);
+
+		inv_ok1(check_map_group(grp, opts));
+
+		inv_pop();
 	}
+	pt_iter_destroy(&pit);
 
 	return true;
+
+inv_fail:
+	pt_iter_destroy(&pit);
+	return false;
 }
+
 #else
-#define check_mapdb_module(foo) (true)
 #define check_mapdb(foo, bar) (true)
 #endif
 
 
-static inline struct map_entry *lookup_ref(
-	struct map_db **db_p,
-	struct map_group **group_p,
-	L4_Word_t ref)
-{
-	assert(REF_DEFINED(ref));
-
-	struct map_db *db = find_map_db(REF_SPACE(ref));
-	if(db == NULL) return NULL;
-
-	/* (same as mapdb_probe(), but we'll keep @g.) */
-	struct map_group *g = group_for_addr(db, REF_ADDR(ref));
-	if(g == NULL) return NULL;
-	assert(REF_ADDR(ref) >= g->start);
-	assert(REF_ADDR(ref) < g->start + GROUP_SIZE);
-
-	if(group_p != NULL) *group_p = g;
-	if(db_p != NULL) *db_p = db;
-	return probe_group_addr(g, REF_ADDR(ref));
-}
-
-
-/* returns false on stale child. */
+/* fetch the map_group and map_entry referenced in @e->children[@child_ix] and
+ * return true, or return false when not found or stale.
+ *
+ * @home_group is used to decide staleness per group reference and
+ * index within entry. @e need not point to inside @home_group->entries .
+ */
 static bool deref_child(
-	struct child_ref *cr,
-	struct map_db *home_db,
+	struct child_ref *cr,		/* outputs appear in *cr. */
+	struct map_group *home_group,
 	const struct map_entry *e,
 	int child_ix)
 {
 	assert(child_ix < e->num_children);
 
 	const L4_Word_t *children = e->num_children > 1 ? e->children : &e->child;
-	if(!REF_DEFINED(children[child_ix])) return false;
+	L4_Word_t ref = children[child_ix];
+	if(!REF_DEFINED(ref)) return false;
 
-	L4_Word_t child_addr = REF_ADDR(children[child_ix]);
-	uint32_t space_id = REF_SPACE(children[child_ix]);
-	assert(space_id != home_db->ref_id);
-	struct map_db *db = find_map_db(space_id);
-	if(db == NULL) {
-		TRACE("%s: mapdb ref_id %u not found\n", __func__,
-			(unsigned)space_id);
+	struct map_group *g = kmem_id2ptr_safe(map_group_policy,
+		REF_GROUP_ID(ref));
+	if(unlikely(g == NULL || !is_group_valid(g))) return false;
+	cr->child_entry = probe_group_addr(g, MG_START(g) + REF_ADDR(ref));
+	if(cr->child_entry == NULL) {
+		TRACE("%s: no entry at %#lx+%#lx=%#lx\n", __func__,
+			MG_START(g), REF_ADDR(ref), MG_START(g) + REF_ADDR(ref));
 		return false;
 	}
+	cr->group = g;
 
-	/* (same as mapdb_probe(), but we'll keep @g.) */
-	struct map_group *g = group_for_addr(db, child_addr);
-	if(g == NULL) return false;
-	assert(child_addr >= g->start);
-	assert(child_addr < g->start + GROUP_SIZE);
-	struct map_entry *ce = probe_group_addr(g, child_addr);
-	if(ce == NULL) {
-		TRACE("%s: address %#lx not found in child ref_id %u\n", __func__,
-			child_addr, space_id);
-		return false;
-	}
-
-	/* a valid child refers to the home space, and into the home range. */
-	if(REF_SPACE(ce->parent) != home_db->ref_id
-		|| !ADDR_IN_FPAGE(e->range, REF_ADDR(ce->parent)))
+	/* check the child's parent reference. it should point into @e->range
+	 * within @home_group.
+	 */
+	L4_Word_t c_pt = cr->child_entry->parent;
+	if(((uintptr_t)home_group & grp_mask_and) != REF_GROUP_BITS(c_pt)
+		|| !ADDR_IN_FPAGE(e->range, MG_START(home_group) + REF_ADDR(c_pt)))
 	{
-		TRACE("%s: backref %#lx mismatches space %u, or range %#lx .. %#lx\n",
-			__func__, ce->parent, home_db->ref_id,
+		TRACE("%s: backref %#lx mismatches group %#lx, or range %#lx..%#lx\n",
+			__func__, c_pt, (L4_Word_t)home_group & grp_mask_and,
 			FPAGE_LOW(e->range), FPAGE_HIGH(e->range));
 		return false;
 	}
 
 	/* check that the physical page is the same, too. */
-	L4_Word_t off_in_parent = REF_ADDR(ce->parent) - L4_Address(e->range);
-	uint32_t off_pages = off_in_parent >> PAGE_BITS;
-	if(ce->first_page_id != e->first_page_id + off_pages) {
-		TRACE("%s: page mismatch (child first %u, parent first %u, offset %u)\n",
-			__func__, ce->first_page_id, e->first_page_id, off_pages);
+	int pg_off = REF_INDEX(c_pt)
+		- (L4_Address(e->range) - MG_START(home_group)) / PAGE_SIZE;
+	if(cr->child_entry->first_page_id != e->first_page_id + pg_off) {
+		TRACE("%s: page mismatch (child first %u, parent first %u, offset %d)\n",
+			__func__, cr->child_entry->first_page_id, e->first_page_id, pg_off);
 		return false;
 	}
-
-	cr->child_db = db;
-	cr->group = g;
-	cr->child_entry = ce;
 
 	return true;
 }
 
 
-static bool cmp_group_addr(const void *cand, void *keyptr)
-{
-	uintptr_t key = *(uintptr_t *)keyptr;
-	const struct map_group *g = cand;
-	return g->start == key;
-}
-
-
-static size_t rehash_map_group(const void *ptr, void *priv)
-{
+static size_t rehash_map_group(const void *ptr, void *priv) {
 	const struct map_group *g = ptr;
-	return int_hash(g->start);
+	return int_hash(MG_START(g));
 }
 
 
-static size_t rehash_ref_hash(const void *elem, void *priv) {
-	const struct map_db *db = elem;
-	return int_hash(db->ref_id);
-}
-
-
-int mapdb_init(struct map_db *ptr)
+void mapdb_init(struct space *sp)
 {
-	/* FIXME: add a proper interface for enabling/disabling trace IDs.
-	 * kernel commandline perhaps?
-	 */
-#if 0
-	// trace_enable(TRID_MAPDB);
-	// trace_enable(TRID_IPC);
-	// trace_enable(TRID_SCHED);
-#endif
-
-	htable_init(&ptr->groups, &rehash_map_group, NULL);
-	ptr->ref_id = next_ref_id++;
-	bool ok = htable_add(&ref_hash, int_hash(ptr->ref_id), ptr);
-	return ok ? 0 : -ENOMEM;
+	htable_init(&sp->ptab_groups, &rehash_map_group, NULL);
 }
 
 
-void mapdb_destroy(struct map_db *db)
+void mapdb_destroy(struct space *sp)
 {
-	htable_del(&ref_hash, int_hash(db->ref_id), db);
-
 	struct htable_iter it;
-	for(struct map_group *g = htable_first(&db->groups, &it);
+	for(struct map_group *g = htable_first(&sp->ptab_groups, &it);
 		g != NULL;
-		g = htable_next(&db->groups, &it))
+		g = htable_next(&sp->ptab_groups, &it))
 	{
-		for(int i=0; i < g->num_entries; i++) {
+		for(int i=0; i < MG_N_ENTRIES(g); i++) {
 			struct map_entry *e = &g->entries[i];
 			/* FIXME: re-parent children of @e */
 			if(e->num_children > 1) free(e->children);
 		}
-		free(g->entries);
+		free(g->entries); g->entries = NULL;
+		x86_free_ptab(g);
+
+		g->space = NULL;
+		assert(!is_group_valid(g));
 		kmem_cache_free(map_group_slab, g);
 	}
-
-	htable_clear(&db->groups);
-
-	assert(check_mapdb_module(0));
+	htable_clear(&sp->ptab_groups);
 }
 
 
 /* used in postcondition asserts. brute force. */
 static bool no_addr_in_group(struct map_group *g, uintptr_t addr)
 {
-	for(int i=0; i < g->num_entries; i++) {
+	for(int i=0; i < MG_N_ENTRIES(g); i++) {
 		assert(!ADDR_IN_FPAGE(g->entries[i].range, addr));
 	}
 
 	return true;
-}
-
-
-static struct map_group *group_for_addr(struct map_db *db, uintptr_t addr)
-{
-	uintptr_t key = GROUP_ADDR(addr);
-	return htable_get(&db->groups, int_hash(key), &cmp_group_addr, &key);
 }
 
 
@@ -402,7 +454,7 @@ static int search_group_by_range(struct map_group *g, L4_Fpage_t fpage)
 {
 	/* binary search. faster than it looks. */
 	L4_Word_t fpage_addr = L4_Address(fpage);
-	int low = 0, high = g->num_entries - 1, mid = 0;
+	int low = 0, high = MG_N_ENTRIES(g) - 1, mid = 0;
 	while(low <= high) {
 		mid = low + (high - low) / 2;
 		if(fpage_overlap(g->entries[mid].range, fpage)) {
@@ -459,12 +511,16 @@ static struct map_entry *probe_group_range(struct map_group *g, L4_Fpage_t fpage
 }
 
 
+/* NOTE: @addr is _absolute_ because map_entry->range is also absolute. the
+ * common error is to pass a REF_ADDR() value, so there's an assert here to
+ * catch that.
+ */
 static struct map_entry *probe_group_addr(struct map_group *g, uintptr_t addr)
 {
-	assert(BETWEEN(g->start,
-		g->start + MAX_ENTRIES_PER_GROUP * PAGE_SIZE - 1,
+	assert(BETWEEN(MG_START(g),
+		MG_START(g) + MAX_ENTRIES_PER_GROUP * PAGE_SIZE - 1,
 		addr));
-	if(unlikely(g->num_entries == 0)) return NULL;
+	if(unlikely(MG_N_ENTRIES(g) == 0)) return NULL;
 
 	return probe_group_range(g,
 		L4_FpageLog2(addr & ~PAGE_MASK, PAGE_BITS));
@@ -502,13 +558,13 @@ static bool can_merge(
 	}
 
 	if((REF_DEFINED(e->parent) || REF_DEFINED(parent))
-		&& (REF_SPACE(e->parent) != REF_SPACE(parent)
+		&& (REF_GROUP_BITS(e->parent) != REF_GROUP_BITS(parent)
 			|| REF_ADDR(e->parent) != (REF_ADDR(parent) ^ L4_Size(fpage))
 			|| far_side != (REF_ADDR(e->parent) < REF_ADDR(parent))))
 	{
-		/* either or both have a defined parent; and
-		 * they reference different parent spaces, or the addresses aren't
-		 * contiguous, or the addresses aren't in the right order.
+		/* either or both have a defined parent; and they reference different
+		 * parent groups, or the addresses aren't contiguous, or the addresses
+		 * aren't in the right order.
 		 */
 		TRACE("%s: rejected for e->parent=%#lx\n", __func__, e->parent);
 		return false;
@@ -523,8 +579,10 @@ static void expand_entry(struct map_entry *e)
 	uint32_t n_pages = L4_Size(e->range) >> PAGE_BITS;
 	int rights = L4_Rights(e->range);
 
-	e->parent = MAPDB_REF(REF_SPACE(e->parent),
-		REF_ADDR(e->parent) & ~L4_Size(e->range));
+	int old_ix = REF_INDEX(e->parent);
+	e->parent &= (~n_pages << 22);
+	assert(REF_INDEX(e->parent) == (old_ix & ~n_pages));
+
 	e->first_page_id &= ~n_pages;
 	e->range = L4_FpageLog2(L4_Address(e->range) & ~L4_Size(e->range),
 		L4_SizeLog2(e->range) + 1);
@@ -539,7 +597,7 @@ static void coalesce_entries(struct map_group *g, struct map_entry *e)
 {
 	bool far_side = CHECK_FLAG(L4_Address(e->range), L4_Size(e->range));
 	struct map_entry *oth = &e[far_side ? -1 : 1];
-	if(oth >= &g->entries[0] && oth < &g->entries[g->num_entries]
+	if(oth >= &g->entries[0] && oth < &g->entries[MG_N_ENTRIES(g)]
 		&& can_merge(oth, e->parent, e->range, e->first_page_id))
 	{
 		/* always join to the left. */
@@ -568,11 +626,11 @@ static void coalesce_entries(struct map_group *g, struct map_entry *e)
 		 * don't, though.
 		 */
 		int oix = oth - &g->entries[0];
-		if(oix < --g->num_entries) {
+		if(oix < (--g->addr, MG_N_ENTRIES(g))) {
 			memmove(&g->entries[oix], &g->entries[oix + 1],
-				sizeof(struct map_entry) * (g->num_entries - oix));
+				sizeof(struct map_entry) * (MG_N_ENTRIES(g) - oix));
 		}
-		g->entries[g->num_entries].range = L4_Nilpage;
+		g->entries[MG_N_ENTRIES(g)].range = L4_Nilpage;
 
 		coalesce_entries(g, e);
 	}
@@ -589,7 +647,7 @@ static bool merge_into_entry(
 	L4_Fpage_t fpage,
 	uint32_t first_page_id)
 {
-	assert(prev_pos >= -1 && prev_pos < g->num_entries);
+	assert(prev_pos >= -1 && prev_pos < MG_N_ENTRIES(g));
 	assert(L4_Rights(fpage) != 0);
 
 	/* the "far" page has this bit set and lies further along in the address
@@ -601,7 +659,7 @@ static bool merge_into_entry(
 		parent, first_page_id);
 
 	struct map_entry *e = &g->entries[far_side ? prev_pos : prev_pos + 1];
-	if(e < &g->entries[0] || e >= &g->entries[g->num_entries]) {
+	if(e < &g->entries[0] || e >= &g->entries[MG_N_ENTRIES(g)]) {
 		/* head-in-far, or tail-in-near case. */
 		TRACE("%s: rejected for head/tail\n", __func__);
 		return false;
@@ -623,35 +681,47 @@ static bool merge_into_entry(
 }
 
 
-/* create a map group with a single map_entry. */
-static int add_map_group(
-	struct map_db *db,
+/* create a map group with a single map_entry. returns NULL when out of
+ * memory.
+ */
+static struct map_group *add_map_group(
+	struct space *sp,
 	L4_Word_t parent,
 	L4_Fpage_t fpage,
 	uint32_t first_page_id)
 {
-	struct map_group *g = kmem_cache_zalloc(map_group_slab);
-	if(unlikely(g == NULL)) return -ENOMEM;
-	g->entries = malloc(sizeof(struct map_entry) * 2);
-	if(unlikely(g->entries == NULL)) {
-		kmem_cache_free(map_group_slab, g);
-		return -ENOMEM;
-	}
-	g->start = GROUP_ADDR(L4_Address(fpage));
-	g->num_alloc = 2;
+	struct map_group *g = kmem_cache_alloc(map_group_slab);
+	if(unlikely(g == NULL)) return NULL;
+	assert(!is_group_valid(g));
+
+	*g = (struct map_group){
+		.addr = GROUP_ADDR(L4_Address(fpage)) | (1 << 15) | 1,
+		.space = sp,
+		.entries = malloc(sizeof(struct map_entry) * 2),
+		/* .ptab_page is left NULL for lazy creation in the pf handler */
+	};
+	if(unlikely(g->entries == NULL)) goto Enomem;
+	assert(MG_START(g) == GROUP_ADDR(L4_Address(fpage)));
+	assert(MG_N_ALLOC_LOG2(g) == 1);
+	assert(MG_N_ENTRIES(g) == 1);
 	g->entries[0] = (struct map_entry){
 		.parent = parent, .range = fpage, .first_page_id = first_page_id,
 	};
 	g->entries[1].range = L4_Nilpage;
-	g->num_entries = 1;
-	bool ok = htable_add(&db->groups, int_hash(g->start), g);
+
+	bool ok = htable_add(&sp->ptab_groups, int_hash(MG_START(g)), g);
 	if(unlikely(!ok)) {
 		free(g->entries);
-		kmem_cache_free(map_group_slab, g);
-		return -ENOMEM;
+		goto Enomem;
 	}
 
-	return 0;
+	return g;
+
+Enomem:
+	g->space = NULL;
+	assert(!is_group_valid(g));
+	kmem_cache_free(map_group_slab, g);
+	return NULL;
 }
 
 
@@ -662,7 +732,7 @@ static int add_map_group(
  * returns 0 on success, or -ENOMEM on out-of-memory.
  */
 static int insert_map_entry(
-	struct map_db *db,
+	struct space *sp,
 	struct map_group *g,
 	L4_Word_t parent,
 	L4_Fpage_t fpage,
@@ -670,27 +740,31 @@ static int insert_map_entry(
 {
 	assert(!L4_IsNilFpage(fpage));
 	assert(g != NULL);
-	assert(group_for_addr(db, L4_Address(fpage)) == g);
-	assert(mapdb_probe(db, L4_Address(fpage)) == NULL);
+	assert(group_for_addr(sp, L4_Address(fpage)) == g);
+	assert(mapdb_probe(sp, L4_Address(fpage)) == NULL);
 
 	/* this happens during boot-up.
+	 *
+	 * XXX or does it? add a panic() to check it out.
 	 *
 	 * TODO: it should be removed; this function is along every pager's hot
 	 * path.
 	 */
-	if(unlikely(g->num_entries == 0)) {
-		if(g->num_alloc == 0) {
+	if(unlikely(MG_N_ENTRIES(g) == 0)) {
+		if(MG_N_ALLOC_LOG2(g) == 0) {
 			assert(g->entries == NULL);
 			g->entries = malloc(2 * sizeof(struct map_entry));
-			if(g->entries == NULL) return -ENOMEM;
-			g->num_alloc = 2;
+			if(unlikely(g->entries == NULL)) return -ENOMEM;
+			g->addr |= (1 << 15);
+			assert(MG_N_ALLOC_LOG2(g) == 1);
 		}
 		g->entries[0] = (struct map_entry){
 			.parent = parent, .range = fpage,
 			.first_page_id = first_page_id,
 		};
 		g->entries[1].range = L4_Nilpage;
-		g->num_entries = 1;
+		g->addr |= 1;
+		assert(MG_N_ENTRIES(g) == 1);
 		return 0;
 	}
 
@@ -701,7 +775,7 @@ static int insert_map_entry(
 	int ix = search_group_by_range(g, search_page);
 	if(ix < 0 || !merge_into_entry(g, ix, parent, fpage, first_page_id)) {
 		int prev = abs(ix) - 1;		/* (correct for esoteric reasons.) */
-		assert(prev < g->num_entries);
+		assert(prev < MG_N_ENTRIES(g));
 		/* scan forward or backward to find the right spot. */
 		bool back = false;
 		while(prev >= 0
@@ -710,13 +784,13 @@ static int insert_map_entry(
 			prev--;
 			back = true;
 		}
-		while(!back && prev < g->num_entries - 1
+		while(!back && prev < MG_N_ENTRIES(g) - 1
 			&& L4_Address(g->entries[prev + 1].range) < L4_Address(fpage))
 		{
 			prev++;
 		}
 		assert(prev == -1 || !fpage_overlap(g->entries[prev].range, fpage));
-		assert(prev == g->num_entries - 1
+		assert(prev == MG_N_ENTRIES(g) - 1
 			|| L4_Address(g->entries[prev + 1].range) > FPAGE_HIGH(fpage));
 
 		struct map_entry *pe = &g->entries[prev];
@@ -729,10 +803,54 @@ static int insert_map_entry(
 			.parent = parent, .range = fpage,
 			.first_page_id = first_page_id,
 		};
-		g->num_entries++;
+		assert(MG_N_ENTRIES(g) < 0x7fff);
+		g->addr++;
 	}
 
 	return 0;
+}
+
+
+/* returns the new @e, making iteration safe if g->entries ends up shrunk
+ * by this function.
+ */
+static struct map_entry *erase_map_entry(
+	struct map_group *g,
+	struct map_entry *e)
+{
+	int n_ents = MG_N_ENTRIES(g), nal_shift = MG_N_ALLOC_LOG2(g),
+		n_alloc = 1 << nal_shift;
+	assert(n_ents > 0);
+
+	e->range = L4_Nilpage;
+
+	int pos = e - g->entries;
+	if(pos < n_ents - 1) {
+		int copy_num = n_ents - 1 - pos;
+		memmove(&g->entries[pos], &g->entries[pos + 1],
+			copy_num * sizeof(struct map_entry));
+	}
+	n_ents--;
+
+	/* map_group shrinking (but don't go below 8 items) */
+	if(n_ents <= n_alloc / 2 - n_alloc / 8 && n_alloc > 8) {
+		int e_pos = e - g->entries;
+		n_alloc >>= 1;
+		void *ptr = realloc(g->entries, n_alloc * sizeof(struct map_entry));
+		if(ptr != NULL) {
+			g->entries = ptr;
+			g->addr &= ~(0xful << 15);
+			g->addr |= (nal_shift - 1) << 15;
+			assert(1 << MG_N_ALLOC_LOG2(g) == n_alloc);
+			e = &g->entries[e_pos];
+		}
+	}
+
+	assert(MG_N_ENTRIES(g) > 0);
+	g->addr--;
+	assert(MG_N_ENTRIES(g) == n_ents);
+
+	return e;
 }
 
 
@@ -742,7 +860,6 @@ static int insert_map_entry(
  * all cases.
  */
 static void replace_map_entry(
-	struct map_db *db,
 	struct map_group *g,
 	struct map_entry *old,
 	L4_Word_t parent,
@@ -773,40 +890,44 @@ static void replace_map_entry(
 
 
 static bool add_map_postcond(
-	struct map_db *db,
+	struct space *sp,
 	L4_Word_t parent,
 	L4_Fpage_t map_area,
 	uint32_t first_page_id)
 {
-	/* the mapping database must contain the indicated range if it existed in
-	 * the parent. (could be stricter.)
-	 */
-	int n_pages = L4_Size(map_area) / PAGE_SIZE;
-	struct map_db *p_db = REF_DEFINED(parent) && !REF_IS_SPECIAL(parent)
-		? get_map_db(REF_SPACE(parent)) : NULL;
-	for(L4_Word_t addr = L4_Address(map_area), pg = 0;
-		REF_DEFINED(parent) && !REF_IS_SPECIAL(parent) && pg < n_pages;
-		addr += PAGE_SIZE, pg++)
-	{
-		L4_Word_t p_addr = REF_ADDR(parent) + pg * PAGE_SIZE;
-		struct map_entry *p_e = mapdb_probe(p_db, p_addr);
-		if(p_e == NULL) {
-			TRACE("%s: no parent entry\n", __func__);
-			continue;
-		}
+	/* @sp must contain the indicated range if it existed in the parent. */
+	struct map_group *p_grp = kmem_id2ptr_safe(map_group_policy,
+		REF_GROUP_ID(parent));
+	/* @parent may be undefined, or special. */
+	assert(p_grp == NULL || is_group_valid(p_grp));
+	assert(p_grp != NULL || !REF_DEFINED(parent) || REF_IS_SPECIAL(parent));
 
-		struct map_entry *e = mapdb_probe(db, addr);
-		assert(e != NULL);
-		assert(mapdb_page_id_in_entry(e, addr) == pg + first_page_id
-			|| REF_IS_SPECIAL(e->parent));
-		assert(mapdb_page_id_in_entry(p_e, p_addr) == pg + first_page_id);
+	if(REF_DEFINED(parent) && !REF_IS_SPECIAL(parent)) {
+		int n_pages = L4_Size(map_area) / PAGE_SIZE;
+		for(int i=0; i < n_pages; i++) {
+			L4_Word_t off = i * PAGE_SIZE,
+				p_addr = MG_START(p_grp) + REF_ADDR(parent) + off,
+				addr = L4_Address(map_area) + off;
+			struct map_entry *p_e = probe_group_addr(p_grp, p_addr);
+			if(p_e == NULL) {
+				TRACE("%s: no parent entry\n", __func__);
+				continue;
+			}
+
+			struct map_entry *e = mapdb_probe(sp, addr);
+			assert(e != NULL);
+			assert(mapdb_page_id_in_entry(e, addr) == i + first_page_id
+				|| REF_IS_SPECIAL(e->parent));
+			assert(mapdb_page_id_in_entry(p_e, p_addr) == i + first_page_id);
+		}
 	}
 
-	/* check that where map_area is present in @db's page tables, it contains
-	 * either blanks or hits along the run from @first_page_id .
+	/* check that where map_area is present in @sp's page tables, it's either
+	 * got missing lowest-level tables or the correct page IDs from
+	 * @first_page_id onward.
 	 */
 	struct pt_iter it;
-	pt_iter_init(&it, SPACE_OF_MAPDB(db));
+	pt_iter_init(&it, sp);
 	for(L4_Word_t addr = FPAGE_LOW(map_area), exp_pgid = first_page_id;
 		addr < FPAGE_HIGH(map_area);
 		addr += PAGE_SIZE, exp_pgid++)
@@ -825,12 +946,14 @@ static bool add_map_postcond(
 
 
 int mapdb_add_map(
-	struct map_db *db,
+	struct space *sp,
+	struct map_group **fpage_group_p,
 	L4_Word_t parent,
 	L4_Fpage_t fpage,
 	uint32_t first_page_id)
 {
-	assert(check_mapdb_module(0));
+	assert(L4_Size(fpage) <= GROUP_SIZE);
+	assert(check_mapdb(sp, 0));
 
 	TRACE("%s: adding fpage=%#lx:%#lx, access=%c%c%c, parent=%#lx\n",
 		__func__, L4_Address(fpage), L4_Size(fpage),
@@ -839,12 +962,17 @@ int mapdb_add_map(
 		CHECK_FLAG(L4_Rights(fpage), L4_eXecutable) ? 'x' : '-',
 		parent);
 
-	/* unparented entries may only be created with mapdb_add_map() into
-	 * sigma0_space, or while sigma0_space isn't defined. other causes of such
-	 * entries are nonrecursive flushes: grants and mappings on top of.
+	/* mapdb_add_map() will only create unparented entries in sigma0_space, in
+	 * any space while sigma0_space hasn't yet been defined, in @sp's UTCB
+	 * area, and in @sp's KIP area.
+	 *
+	 * other causes of such entries are nonrecursive flushes: grants and
+	 * mappings on top of.
 	 */
-	assert(REF_DEFINED(parent) || SPACE_OF_MAPDB(db) == sigma0_space
-		|| sigma0_space == NULL);
+	assert(REF_DEFINED(parent)
+		|| fpage_overlap(fpage, sp->utcb_area)
+		|| fpage_overlap(fpage, sp->kip_area)
+		|| sigma0_space == NULL || sp == sigma0_space);
 	/* TODO: assert that when @parent is defined and not special, then
 	 * @parent's parent isn't a special range
 	 */
@@ -864,30 +992,32 @@ int mapdb_add_map(
 	 * #4 -- entry exists and contains added map (no-op or split case)
 	 * #5 -- entry exists and is contained in added map (scan & replace case)
 	 */
-	struct map_group *g = group_for_addr(db, L4_Address(fpage));
+	struct map_group *g = group_for_addr(sp, L4_Address(fpage));
 	if(g == NULL) {
 		/* no group. */
-		int n = add_map_group(db, parent, fpage, first_page_id);
-		if(unlikely(n != 0)) return n;
+		g = add_map_group(sp, parent, fpage, first_page_id);
+		if(fpage_group_p != NULL) *fpage_group_p = g;
+		if(g == NULL) return -ENOMEM;
 	} else {
+		if(fpage_group_p != NULL) *fpage_group_p = g;
 		struct map_entry *old = probe_group_range(g, fpage);
 		if(old == NULL) {
 			/* not covered. */
-			int n = insert_map_entry(db, g, parent, fpage, first_page_id);
+			int n = insert_map_entry(sp, g, parent, fpage, first_page_id);
 			if(unlikely(n != 0)) return n;
 		} else if(L4_SizeLog2(old->range) == L4_SizeLog2(fpage)) {
 			/* exact match with old entry's form. */
 			assert(L4_Address(old->range) == L4_Address(fpage));
 			if(likely(!REF_IS_SPECIAL(old->parent))) {
-				replace_map_entry(db, g, old, parent, fpage, first_page_id);
+				replace_map_entry(g, old, parent, fpage, first_page_id);
 			}
 		} else if(L4_SizeLog2(old->range) > L4_SizeLog2(fpage)) {
 			/* "contained" case. */
 			int page_offs = (L4_Address(fpage) - L4_Address(old->range)) >> PAGE_BITS;
 			if(CHECK_FLAG_ALL(L4_Rights(old->range), L4_Rights(fpage))
 				&& old->first_page_id + page_offs == first_page_id
-				&& REF_SPACE(old->parent) == REF_SPACE(parent)
-				&& (REF_ADDR(old->parent) + page_offs * PAGE_SIZE) == REF_ADDR(parent))
+				&& REF_GROUP_BITS(old->parent) == REF_GROUP_BITS(parent)
+				&& REF_INDEX(old->parent) + page_offs == REF_INDEX(parent))
 			{
 				/* contained no-op. the condition is hugely complex, but
 				 * should succeed entirely after the first two terms.
@@ -896,12 +1026,12 @@ int mapdb_add_map(
 				/* won't touch a special range. */
 			} else {
 				/* break it up & replace. */
-				struct map_entry *ne = fetch_entry(db, g, fpage, true);
+				struct map_entry *ne = fetch_entry(g, fpage, true);
 				if(unlikely(ne == NULL)) {
 					assert(probe_group_range(g, fpage) != NULL);
 					return -ENOMEM;
 				}
-				replace_map_entry(db, g, ne, parent, fpage, first_page_id);
+				replace_map_entry(g, ne, parent, fpage, first_page_id);
 			}
 		} else {
 			assert(L4_SizeLog2(old->range) < L4_SizeLog2(fpage));
@@ -917,15 +1047,15 @@ int mapdb_add_map(
 		}
 	}
 	struct pt_iter it;
-	pt_iter_init(&it, SPACE_OF_MAPDB(db));
+	pt_iter_init(&it, sp);
 	for(int i = 0, l = L4_Size(fpage) / PAGE_SIZE; i < l; i++) {
 		pt_set_page(&it, L4_Address(fpage) + i * PAGE_SIZE,
-			first_page_id + i, L4_Rights(fpage), false);
+			first_page_id + i, L4_Rights(fpage));
 	}
 	pt_iter_destroy(&it);
 
-	assert(add_map_postcond(db, parent, fpage, first_page_id));
-	assert(check_mapdb_module(MOD_NO_CHILD_REFS));
+	assert(add_map_postcond(sp, parent, fpage, first_page_id));
+	assert(check_mapdb(sp, MOD_NO_CHILD_REFS));
 
 	return 0;
 }
@@ -955,7 +1085,7 @@ static int grow_children_array(struct map_entry *ent)
 			L4_Word_t c = ent->children[i];
 			if(!REF_DEFINED(c)) continue;
 			ok = false;
-			for(int p = int_hash(c) & mask, end = p + depth - 1;
+			for(int p = REF_HASH(c) & mask, end = p + depth - 1;
 				p <= end;
 				p++)
 			{
@@ -981,28 +1111,29 @@ static int grow_children_array(struct map_entry *ent)
 }
 
 
-/* returns 0, -ENOMEM, or -EEXIST.
+/* returns 0 or -ENOMEM.
  *
- * the probe for duplicates is done with a hashed starting position and a
- * maximum depth of MIN(num_children, 16), accessing 2 cache lines when words
- * are 32 bits wide. this means that a crowded bucket can trigger resizing of
- * the entry.
+ * overwrites the first existing entry (i.e. one with equal REF_INDEX and
+ * REF_GROUP_BITS) within the probe range until the first unused slot, and
+ * replaces the rest with tombstones.
  */
 static int mapdb_add_child(struct map_entry *ent, L4_Word_t child)
 {
 	assert(REF_DEFINED(child));
 	TRACE("mapdb: add child %#lx to entry %#lx:%#lx (%p)\n", child,
 		L4_Address(ent->range), L4_Size(ent->range), ent);
+	L4_Word_t cmp_child = child & ~0xfUL;
 	if(ent->num_children == 0
-		|| (ent->num_children == 1 && !REF_DEFINED(ent->child)))
+		|| (ent->num_children == 1 && !REF_DEFINED(ent->child))
+		|| (ent->num_children == 1 && (ent->child & ~0xfUL) == cmp_child))
 	{
 		ent->child = child;
 		ent->num_children = 1;
 	} else if(ent->num_children == 1) {
-		if(ent->child == child) return -EEXIST;
+		assert((ent->child & ~0xfUL) != cmp_child);
 		L4_Word_t *new_children = malloc(sizeof(L4_Word_t) * 2);
-		if(new_children == NULL) return -ENOMEM;
-		int slot = int_hash(child) & 1;
+		if(unlikely(new_children == NULL)) return -ENOMEM;
+		int slot = REF_HASH(child) & 1;
 		new_children[slot] = child;
 		new_children[slot ^ 1] = ent->child;
 		ent->children = new_children;
@@ -1011,22 +1142,24 @@ static int mapdb_add_child(struct map_entry *ent, L4_Word_t child)
 		L4_Word_t *got = NULL;
 		do {
 			assert(POPCOUNT(ent->num_children) == 1);
-			int mask = ent->num_children - 1, base = int_hash(child) & mask;
+			int mask = ent->num_children - 1, base = REF_HASH(child) & mask;
 			for(int i=0, md = MIN(int, MAX_PROBE_DEPTH, ent->num_children);
 				i < md;
 				i++)
 			{
 				int probe = (i + base) & mask;
 				L4_Word_t *c = &ent->children[probe];
-				if(*c == child) return -EEXIST;
-				else if(!REF_DEFINED(*c)) {
+				if(!REF_DEFINED(*c)) {
 					if(got == NULL) got = c;
-					if(*c != REF_TOMBSTONE) break;
+					if(*c == REF_NULL) break;
+				} else if((*c & ~0xfUL) == cmp_child) {
+					/* overwrite the first, tombstone the rest. */
+					if(got == NULL) got = c; else *c = REF_TOMBSTONE;
 				}
 			}
 			if(got == NULL) {
 				int n = grow_children_array(ent);
-				if(n < 0) return n;
+				if(unlikely(n < 0)) return n;
 			}
 		} while(got == NULL);
 		*got = child;
@@ -1044,12 +1177,13 @@ static int mapdb_add_child(struct map_entry *ent, L4_Word_t child)
  * FIXME: should catch and return -ENOMEM from mapdb_add_map() etc.
  */
 int mapdb_map_pages(
-	struct map_db *from_db,
-	struct map_db *to_db,
+	struct space *from_space,
+	struct space *to_space,
 	L4_Fpage_t map_page,
 	L4_Word_t dest_addr)
 {
-	assert(check_mapdb_module(0));
+	assert(check_mapdb(from_space, 0));
+	assert(check_mapdb(to_space, 0));
 
 	/* well this is a bit vile: the map_page > group_size case. recursion
 	 * recurs, baby.
@@ -1062,7 +1196,7 @@ int mapdb_map_pages(
 				L4_Address(map_page) + i * GROUP_SIZE,
 				GROUP_SIZE);
 			L4_Set_Rights(&fp, L4_Rights(map_page));
-			int n = mapdb_map_pages(from_db, to_db, fp,
+			int n = mapdb_map_pages(from_space, to_space, fp,
 				dest_addr + i * GROUP_SIZE);
 			if(unlikely(n < 0)) return n;
 			given |= n;
@@ -1070,9 +1204,9 @@ int mapdb_map_pages(
 		return given;
 	}
 
-	/* the "within a single group in @from_db" case. */
+	/* the "within a single group in @from_space" case. */
 	const L4_Word_t first_addr = L4_Address(map_page);
-	struct map_group *grp = group_for_addr(from_db, first_addr);
+	struct map_group *grp = group_for_addr(from_space, first_addr);
 	if(unlikely(grp == NULL)) return 0;
 	struct map_entry *first = probe_group_range(grp, map_page);
 	if(unlikely(first == NULL)) return 0;
@@ -1091,9 +1225,13 @@ int mapdb_map_pages(
 			L4_Fpage_t p = L4_FpageLog2(dest_addr, L4_SizeLog2(map_page));
 			L4_Set_Rights(&p, given);
 			int off = first_addr - L4_Address(first->range);
-			mapdb_add_map(to_db, MAPDB_REF(from_db->ref_id, first_addr),
-				p, first->first_page_id + (off >> PAGE_BITS));
-			mapdb_add_child(first, MAPDB_REF(to_db->ref_id, L4_Address(p)));
+			L4_Word_t parent = addr_to_ref(grp, first_addr);
+			struct map_group *dstgrp = NULL;
+			mapdb_add_map(to_space, &dstgrp, parent, p,
+				first->first_page_id + (off >> PAGE_BITS));
+			L4_Word_t child = addr_to_ref(dstgrp, L4_Address(p))
+				| ((REF_INDEX(parent) >> 1) & 0xf);
+			mapdb_add_child(first, child);
 		}
 	} else {
 		/* the complex case: the range is made up out of multiple smaller
@@ -1120,17 +1258,27 @@ int mapdb_map_pages(
 				L4_Set_Rights(&p, eff);
 
 				int src_offs = dp_addr - pos - dest_addr;
-				mapdb_add_map(to_db,
-					MAPDB_REF(from_db->ref_id,
-						L4_Address(ent->range) + src_offs),
-					p, ent->first_page_id + src_offs / PAGE_SIZE);
-				mapdb_add_child(ent, MAPDB_REF(to_db->ref_id, dp_addr));
+				/* TODO: this is nigh-equal to the sequence in the non-complex
+				 * case. see if they can be merged into an
+				 * add_map_and_child().
+				 */
+				L4_Word_t parent = addr_to_ref(grp,
+					L4_Address(ent->range) + src_offs);
+				struct map_group *dstgrp = NULL;
+				mapdb_add_map(to_space, &dstgrp, parent, p,
+					ent->first_page_id + src_offs / PAGE_SIZE);
+				L4_Word_t child = addr_to_ref(dstgrp, dp_addr)
+					| ((REF_INDEX(parent) >> 1) & 0xf);
+				mapdb_add_child(ent, child);
 			}
 
 next_entry:
-			if(++ent == &grp->entries[grp->num_entries]) break;
+			if(++ent == &grp->entries[MG_N_ENTRIES(grp)]) break;
 		}
 	}
+
+	assert(check_mapdb(from_space, 0));
+	assert(check_mapdb(to_space, 0));
 
 	return given;
 }
@@ -1157,7 +1305,7 @@ static int gen_range_pages(L4_Fpage_t *dst, L4_Word_t start, L4_Word_t size)
  * return value is 0 on success, and -ENOMEM when realloc() fails. atomic on
  * failure (aside from an abort() inside memmove()).
  *
- * NOTE: the caller must bump g->num_entries as appropriate!
+ * NOTE: the caller must bump MG_N_ENTRIES(g) as appropriate!
  */
 static int insert_empties(
 	struct map_group *g,
@@ -1167,25 +1315,29 @@ static int insert_empties(
 	assert(num_to_add > 0);
 
 	const int e_pos = *entry - g->entries;
-	assert(e_pos >= -1 && e_pos < g->num_alloc);
+	assert(e_pos >= -1 && e_pos < (1 << MG_N_ALLOC_LOG2(g)));
 
 	struct map_entry *e = *entry;
-	int need = g->num_entries + num_to_add,
-		num_tail = g->num_entries - e_pos - 1;
-	if(need > g->num_alloc) {
+	int need = MG_N_ENTRIES(g) + num_to_add,
+		num_tail = MG_N_ENTRIES(g) - e_pos - 1;
+	if(need > (1 << MG_N_ALLOC_LOG2(g))) {
 		/* make moar RAMz */
-		int newsize = MAX(int, g->num_alloc, 2) * 2;
-		while(newsize < need) newsize *= 2;
-		TRACE("%s: resizing group from %u to %d entries\n", __func__,
-			g->num_alloc, newsize);
-		void *ptr = realloc(g->entries, newsize * sizeof(struct map_entry));
+		int newlog2 = MG_N_ALLOC_LOG2(g) + 1;
+		while((1 << newlog2) < need) newlog2++;
+		TRACE("%s: resizing group from %lu to %d entries\n", __func__,
+			1ul << MG_N_ALLOC_LOG2(g), 1 << newlog2);
+		void *ptr = realloc(g->entries,
+			(1 << newlog2) * sizeof(struct map_entry));
 		if(unlikely(ptr == NULL)) return -ENOMEM;
 		g->entries = ptr;
-		g->num_alloc = newsize;
+		g->addr &= ~(0xfUL << 15);
+		g->addr |= newlog2 << 15;
+		assert(MG_N_ALLOC_LOG2(g) == newlog2);
+
 		e = &g->entries[e_pos];
 		*entry = e;
 	}
-	assert(g->num_alloc >= need);
+	assert((1 << MG_N_ALLOC_LOG2(g)) >= need);
 
 	if(num_tail > 0) {
 		TRACE("%s: move %d items to %d (*entry at %d)\n", __func__, num_tail,
@@ -1198,32 +1350,32 @@ static int insert_empties(
 }
 
 
-/* find which children in the previously-valid @from are valid, and add those
- * into the corresponding current entries in @g.
+/* dereference @from's children, and add the valid ones into entries within
+ * @g. it's assumed that @from is a copy of a larger map_entry that was
+ * previously in @g->entries, which has since been substituted with smaller
+ * entries such as from split_entry().
+ *
+ * this function is used to move a larger map_entry's numerous children into
+ * the smaller, cut-up entries that split_entry() creates.
  *
  * on alloc failure this leaves entries in an uncertain-but-valid state and
  * returns -ENOMEM. idempotent due to mapdb_add_child() being so.
  */
 static int distribute_children(
-	struct map_db *local_db,
 	struct map_group *g,
-	L4_Fpage_t cut,
 	const struct map_entry *from)
 {
 	if(from->num_children == 0) return 0;
 
-	/* TODO: this is nice for one or two children, and less so for more. when
-	 * hugepage support is written, this part should sort children by ref_id
-	 * when there are enough, and cache the corresponding database to avoid
-	 * hash table lookups -- 4M hugepages in a memory server would be mapped
-	 * to at least 1024 child pages under full utilization, for instance.
-	 */
 	for(int i=0; i < from->num_children; i++) {
 		struct child_ref r;
-		if(!deref_child(&r, local_db, from, i)) continue;
+		if(!deref_child(&r, g, from, i)) continue;
 
-		L4_Word_t pref_addr = REF_ADDR(r.child_entry->parent);
-		struct map_entry *p_ent = mapdb_probe(local_db, pref_addr);
+		L4_Word_t pref_addr = MG_START(g) + REF_ADDR(r.child_entry->parent);
+		/* FIXME: this is stupid, isn't it? probe_group_addr() would
+		 * suffice.
+		 */
+		struct map_entry *p_ent = mapdb_probe(g->space, pref_addr);
 		if(p_ent == NULL) {
 			/* discard child due to hole made in parent */
 			continue;
@@ -1236,8 +1388,7 @@ static int distribute_children(
 			L4_Word_t off = pref_addr - L4_Address(p_ent->range);
 			L4_Fpage_t cut = L4_FpageLog2(L4_Address(r.child_entry->range)
 				+ off, L4_SizeLog2(p_ent->range));
-			struct map_entry *ent = fetch_entry(r.child_db, r.group,
-				cut, true);
+			struct map_entry *ent = fetch_entry(r.group, cut, true);
 			if(unlikely(ent == NULL)) {
 				assert(probe_group_range(r.group, cut) != NULL);
 				/* FIXME: attempt some kind of atomicity on failure. */
@@ -1253,9 +1404,12 @@ static int distribute_children(
 		}
 
 		/* simple case. */
-		int n = mapdb_add_child(p_ent, MAPDB_REF(r.child_db->ref_id,
-			L4_Address(r.child_entry->range)));
-		if(n == -ENOMEM) return -ENOMEM;
+		/* (TODO: verify that the index clue is correct, somehow.) */
+		L4_Word_t child = addr_to_ref(r.group,
+			L4_Address(r.child_entry->range))
+				| ((REF_INDEX(r.child_entry->parent) >> 1) & 0xf);
+		int n = mapdb_add_child(p_ent, child);
+		if(unlikely(n == -ENOMEM)) return -ENOMEM;
 	}
 
 	return 0;
@@ -1263,7 +1417,6 @@ static int distribute_children(
 
 
 static int split_entry(
-	struct map_db *db,
 	struct map_group *g,
 	struct map_entry *e,
 	L4_Fpage_t cut)
@@ -1297,18 +1450,32 @@ static int split_entry(
 	if(unlikely(n < 0)) return n;
 
 	struct map_entry saved = *e, *parent_ent = NULL;
-	struct map_db *parent_db = NULL;
+	struct map_group *parent_g = NULL;
 	if(REF_DEFINED(saved.parent)) {
-		parent_db = find_map_db(REF_SPACE(saved.parent));
+		/* dereference the parent group unsafely, since it's always guaranteed
+		 * to stay valid.
+		 */
+		parent_g = (void *)((saved.parent & grp_mask_and) | grp_mask_or);
+		assert(parent_g == kmem_id2ptr_safe(map_group_policy,
+			REF_GROUP_ID(saved.parent)));
+
+		parent_ent = probe_group_addr(parent_g,
+			MG_START(parent_g) + REF_ADDR(saved.parent));
+		if(unlikely(parent_ent == NULL)) {
+			panic("parent reference was invalid (no entry found)!");
+		}
 	}
 	L4_Word_t addr_offset = 0;
 	for(int i=0; i < p; i++) {
+		L4_Word_t p_ref = 0;
+		assert(REF_DEFINED(saved.parent) == (parent_g != NULL));
+		if(likely(parent_g != NULL)) {
+			p_ref = addr_to_ref(parent_g,
+				MG_START(parent_g) + REF_ADDR(saved.parent) + addr_offset);
+		}
 		e[i] = (struct map_entry){
 			.range = pg_buf[i],
-			.parent = REF_DEFINED(saved.parent)
-					? MAPDB_REF(REF_SPACE(saved.parent),
-						REF_ADDR(saved.parent) + addr_offset)
-					: 0,
+			.parent = p_ref,
 			.first_page_id = saved.first_page_id + (addr_offset >> PAGE_BITS),
 			.access = saved.access,
 			.num_children = 0,
@@ -1319,25 +1486,23 @@ static int split_entry(
 			e[i].parent, e[i].first_page_id, L4_Rights(e[i].range));
 		addr_offset += L4_Size(pg_buf[i]);
 
-		/* child references for parents. */
-		if(parent_db != NULL) {
-			L4_Word_t p_addr = REF_ADDR(e[i].parent);
-			if(parent_ent == NULL
-				|| !ADDR_IN_FPAGE(parent_ent->range, p_addr))
-			{
-				parent_ent = mapdb_probe(parent_db, p_addr);
-				assert(parent_ent != NULL);
-			}
+		/* add a new child reference to the parent. the way split_entry() is
+		 * defined, the old reference will always get overwritten during this
+		 * part of the loop, which should update its MISC bits.
+		 */
+		if(likely(parent_g != NULL)) {
+			L4_Word_t child = addr_to_ref(g, L4_Address(e[i].range))
+				| ((REF_INDEX(p_ref) >> 1) & 0xf);
 			/* FIXME: catch -ENOMEM */
-			mapdb_add_child(parent_ent,
-				MAPDB_REF(db->ref_id, L4_Address(e[i].range)));
+			mapdb_add_child(parent_ent, child);
 		}
 	}
-	g->num_entries += p - 1;
+	assert(MG_N_ENTRIES(g) + p - 1 <= 1024);
+	g->addr += p - 1;
 
 	if(saved.num_children > 0) {
 		/* FIXME: catch -ENOMEM */
-		int n = distribute_children(db, g, cut, &saved);
+		int n = distribute_children(g, &saved);
 		if(n < 0) {
 			panic("distribute_children() failed in split_entry()");
 		}
@@ -1357,14 +1522,13 @@ static int split_entry(
  * allows things like multi-page KIPs, hugepage UTCB mappings, and so forth.
  */
 static struct map_entry *fetch_entry(
-	struct map_db *db,
 	struct map_group *g,
 	L4_Fpage_t range,
 	bool make_exact)
 {
 	assert(L4_Size(range) >= PAGE_SIZE);
 
-	TRACE("%s: group %#lx, range %#lx:%#lx\n", __func__, g->start,
+	TRACE("%s: group %#lx, range %#lx:%#lx\n", __func__, MG_START(g),
 		L4_Address(range), L4_Size(range));
 
 	struct map_entry *e = probe_group_range(g, range);
@@ -1377,7 +1541,7 @@ static struct map_entry *fetch_entry(
 	if(esz <= rsz) {
 		if(esz < rsz) e = rewind_to_first(g, e, range);
 	} else if(make_exact) {
-		int err = split_entry(db, g, e, range);
+		int err = split_entry(g, e, range);
 		if(unlikely(err < 0)) {
 			if(err != -ENOMEM) {
 				panic("split_entry() failed: non-ENOMEM error code");
@@ -1396,53 +1560,71 @@ static struct map_entry *fetch_entry(
 }
 
 
-static int reparent_children(struct map_db *db, struct map_entry *e)
+/* moves children of @e (which is inside @g) to be children of the entry in
+ * @e->parent.
+ *
+ * returns 0 on success, or -ENOMEM on failure, leaving a partially-completed
+ * state behind. calling the function again with the exact same parameters
+ * will resume the operation and complete into the same final state.
+ */
+static int reparent_children(struct map_group *g, struct map_entry *e)
 {
 	if(e->num_children == 0) return 0;
 
-	struct map_db *parent_db = NULL;
+	struct map_group *parent_g = NULL;
 	struct map_entry *parent_entry = NULL;
-	if(REF_DEFINED(e->parent)) {
-		parent_db = get_map_db(REF_SPACE(e->parent));
-		parent_entry = mapdb_probe(parent_db, REF_ADDR(e->parent));
-		BUG_ON(parent_entry == NULL, "parent ref must be valid");
+	if(likely(REF_DEFINED(e->parent))) {
+		parent_g = (void *)((e->parent & grp_mask_and) | grp_mask_or);
+		assert(parent_g == kmem_id2ptr_safe(map_group_policy,
+			REF_GROUP_ID(e->parent)));
+		parent_entry = probe_group_addr(parent_g,
+			MG_START(parent_g) + REF_ADDR(e->parent));
+		BUG_ON(parent_entry == NULL,
+			"parent ref=(%#lx, %#lx, %#lx) must be valid",
+			REF_INDEX(e->parent), REF_GROUP_BITS(e->parent),
+			REF_MISC(e->parent));
 	}
 
 	L4_Word_t *cs = e->num_children == 1 ? &e->child : e->children;
 	for(int i=0; i < e->num_children; i++) {
 		struct child_ref cr;
-		if(!deref_child(&cr, db, e, i)) {
+		if(!deref_child(&cr, g, e, i)) {
 			TRACE("%s: child %#lx was stale\n", __func__, cs[i]);
 			cs[i] = REF_TOMBSTONE;
 			continue;
 		}
 
-		if(parent_db != NULL) {
-			/* FIXME: almost certainly wrong. the child and parent reference
-			 * computations should incorporate the child-in-parent offset (which
-			 * should be defined properly).
-			 */
+		if(parent_g != NULL) {
 			if(L4_SizeLog2(e->range) > L4_SizeLog2(cr.child_entry->range)) {
 				/* EXPLODE! */
+				/* (FIXME: implement this case by filling child_offs in
+				 * properly. it's OK for @e to be larger than its children.)
+				 */
 				panic("massive fuckups!");
 			}
+			L4_Word_t child_offs = 0;		/* FIXME: FILL THIS SUCKER IN */
 
-			int n = mapdb_add_child(parent_entry, MAPDB_REF(cr.child_db->ref_id,
-				L4_Address(cr.child_entry->range)));
-			if(unlikely(n != 0 && n != -EEXIST)) {
-				/* on failure, this function can be called again with the same
-				 * parameters and will reach an equivalent state wrt @e, its
-				 * parent, and its children, if successful.
+			L4_Word_t parent = addr_to_ref(parent_g,
+					L4_Address(parent_entry->range) + child_offs),
+				child = addr_to_ref(cr.group,
+						L4_Address(cr.child_entry->range))
+					| ((REF_INDEX(parent) >> 1) & 0xf);
+			int n = mapdb_add_child(parent_entry, child);
+			if(unlikely(n < 0)) {
+				/* idempotent after re-do due to the child-overwriting part.
+				 * therefore it's OK to simply return on failed malloc.
 				 */
 				return n;
 			}
-			cr.child_entry->parent = MAPDB_REF(parent_db->ref_id,
-				REF_ADDR(e->parent));
+
+			/* make the new ref look alive in deref_child(). */
+			cr.child_entry->parent = parent;
 		} else {
 			/* @e is a toplevel mapping. */
-			TRACE("%s: detached second-level mapping %#lx:%#lx in ref %u\n",
+			TRACE("%s: detached second-level mapping %#lx:%#lx in grp %#lx\n",
 				__func__, L4_Address(cr.child_entry->range),
-				L4_Size(cr.child_entry->range), cr.child_db->ref_id);
+				L4_Size(cr.child_entry->range),
+				(L4_Word_t)cr.group & grp_mask_and);
 			cr.child_entry->parent = 0;
 			coalesce_entries(cr.group, cr.child_entry);
 		}
@@ -1483,7 +1665,7 @@ static void set_pt_range_rights(struct pt_iter *mod_it, L4_Fpage_t range)
 		uint32_t pgid = pt_probe(mod_it, &upper, NULL, a);
 		if(unlikely(!upper)) a = (a + PT_UPPER_SIZE) & ~PT_UPPER_MASK;
 		else {
-			pt_set_page(mod_it, a, pgid, L4_Rights(range), false);
+			pt_set_page(mod_it, a, pgid, L4_Rights(range));
 			a += PAGE_SIZE;
 		}
 	}
@@ -1491,14 +1673,14 @@ static void set_pt_range_rights(struct pt_iter *mod_it, L4_Fpage_t range)
 
 
 int mapdb_unmap_fpage(
-	struct map_db *db,
+	struct space *sp,
 	L4_Fpage_t range,
 	bool immediate,
 	bool recursive,
 	bool clear_stored_access)
 {
 	assert(recursive || immediate);	/* disallows the one-level status read */
-	assert(check_mapdb_module(0));
+	assert(check_mapdb(sp, 0));
 
 	int rwx_seen = 0;
 
@@ -1510,29 +1692,28 @@ int mapdb_unmap_fpage(
 
 	/* TODO: only initialize this if the `drop' variable becomes true */
 	struct pt_iter mod_it;
-	pt_iter_init(&mod_it, SPACE_OF_MAPDB(db));
+	pt_iter_init(&mod_it, sp);
 
-	TRACE("%s: range %#lx:%#lx, %simmediate, %srecursive, ref_id %d\n",
+	TRACE("%s: range %#lx:%#lx, %simmediate, %srecursive\n",
 		__func__, L4_Address(range), L4_Size(range),
-		!immediate ? "non-" : "", !recursive ? "non-" : "",
-		(int)db->ref_id);
+		!immediate ? "non-" : "", !recursive ? "non-" : "");
 	L4_Word_t unmap_rights = L4_Rights(range), r_end = FPAGE_HIGH(range);
 	/* this function will only modify the structure of the map_groups it
-	 * accesses when it might revoke access in the immediate map_db. this is
-	 * used for fetch_entry().
+	 * accesses when it might revoke access in the immediate space. this is
+	 * passed to fetch_entry().
 	 */
 	const bool modify = immediate && unmap_rights != 0;
 	for(L4_Word_t grp_pos = L4_Address(range);
 		grp_pos < r_end;
 		grp_pos += GROUP_SIZE)
 	{
-		struct map_group *g = group_for_addr(db, grp_pos);
+		struct map_group *g = group_for_addr(sp, grp_pos);
 		if(g == NULL) {
 			TRACE("%s: group for %#lx doesn't exist\n", __func__, grp_pos);
 			continue;
 		}
 
-		struct map_entry *e = fetch_entry(db, g, range, modify);
+		struct map_entry *e = fetch_entry(g, range, modify);
 		if(e == NULL && modify) {
 			/* distinguish between not-exist and ENOMEM from split_entry(). */
 			if(probe_group_range(g, range) != NULL) {
@@ -1582,14 +1763,11 @@ int mapdb_unmap_fpage(
 			}
 
 			/* dereference children, and call mapdb_unmap_fpage() on them when
-			 * their address in @db fits within @range.
-			 *
-			 * NOTE: do the loop in a deref_children() call to save on mapdb
-			 * ref_id lookups when @range is small compared to @e->range.
+			 * their address in @sp lies within @range.
 			 */
 			for(int i=0; recursive && i < e->num_children; i++) {
 				struct child_ref r;
-				if(!deref_child(&r, db, e, i)) {
+				if(!deref_child(&r, g, e, i)) {
 					if(e->num_children < 2) {
 						e->child = 0;
 						break;
@@ -1604,21 +1782,21 @@ int mapdb_unmap_fpage(
 					L4_Address(r.child_entry->range),
 					L4_Size(r.child_entry->range));
 
-				if(!ADDR_IN_FPAGE(range, REF_ADDR(r.child_entry->parent))) {
-					continue;
-				}
+				L4_Word_t paddr = MG_START(g) + REF_ADDR(r.child_entry->parent);
+				if(!ADDR_IN_FPAGE(range, paddr)) continue;
 				int rm_rights = L4_Rights(r.child_entry->range) & unmap_rights;
 				if(rm_rights == 0) continue;
 
+				/* TODO: call a "apply unmapping to single entry" function
+				 * instead; the unmap_fpage() loop does the group_for_addr(),
+				 * probe_group_addr() thing all over again.
+				 */
 				L4_Fpage_t fp = r.child_entry->range;
 				L4_Set_Rights(&fp, unmap_rights);
-				int pass_rwx = mapdb_unmap_fpage(r.child_db, fp,
+				int pass_rwx = mapdb_unmap_fpage(r.group->space, fp,
 					true, true, false);
 				if(pass_rwx < 0) {
 					/* FIXME: handle ENOMEM */
-					printf("%s: failed for child ref %u, fpage %#lx:%#lx\n",
-						__func__, r.child_db->ref_id, L4_Address(fp),
-						L4_Size(fp));
 					panic("recursive unmap failed!");
 				}
 				rwx_seen |= pass_rwx;
@@ -1644,7 +1822,7 @@ int mapdb_unmap_fpage(
 				assert(modify);
 				TRACE("%s: removing entry %#lx:%#lx\n", __func__,
 					L4_Address(e->range), L4_Size(e->range));
-				int n = reparent_children(db, e);
+				int n = reparent_children(g, e);
 				if(n < 0) {
 					/* ENOMEM can happen because children must be added to a
 					 * parent entry, which may return ENOMEM on hash resize.
@@ -1659,39 +1837,18 @@ int mapdb_unmap_fpage(
 				}
 
 				clear_pt_range(&mod_it, e->range);
+				e = erase_map_entry(g, e);
 
-				int pos = e - g->entries;
-				if(pos < g->num_entries - 1) {
-					int copy_num = g->num_entries - 1 - pos;
-					memmove(&g->entries[pos], &g->entries[pos + 1],
-						copy_num * sizeof(struct map_entry));
-				}
-				g->num_entries--;
-				/* map_group shrinking (but don't go below 8 items) */
-				if(g->num_entries <= g->num_alloc / 2 - g->num_alloc / 8
-					&& g->num_alloc > 8)
-				{
-					int e_pos = e - g->entries, newsize = g->num_alloc / 2;
-					void *ptr = realloc(g->entries,
-						newsize * sizeof(struct map_entry));
-					if(ptr != NULL) {
-						g->entries = ptr;
-						g->num_alloc = newsize;
-						e = &g->entries[e_pos];
-					}
-				}
-
-				/* counteract the loop bump */
-				e--;
+				e--;	/* counteract the loop bump */
 			} else {
 				e->access = clear_stored_access ? 0 : rwx_seen;
 			}
-		} while(++e < &g->entries[g->num_entries] && L4_Address(e->range) < r_end);
+		} while(++e < &g->entries[MG_N_ENTRIES(g)] && L4_Address(e->range) < r_end);
 
 		dump_map_group(g);
 	}
 
-	assert(unmap_rights == 0 || check_mapdb_module(0));
+	assert(unmap_rights == 0 || check_mapdb(sp, 0));
 
 end:
 	pt_iter_destroy(&mod_it);
@@ -1703,15 +1860,13 @@ Enomem:
 }
 
 
-struct map_entry *mapdb_probe(
-	struct map_db *db,
-	uintptr_t addr)
+struct map_entry *mapdb_probe(struct space *sp, uintptr_t addr)
 {
-	struct map_group *g = group_for_addr(db, addr);
+	struct map_group *g = group_for_addr(sp, addr);
 	if(g == NULL) return NULL;
 
-	assert(addr >= g->start);
-	assert(addr < g->start + GROUP_SIZE);
+	assert(addr >= MG_START(g));
+	assert(addr < MG_START(g) + GROUP_SIZE);
 	return probe_group_addr(g, addr);
 }
 
@@ -1720,24 +1875,30 @@ struct map_entry *mapdb_probe(
 /* TODO: flick the directory entry out to optimize for VMs that use shadowed
  * page tables; restore it when done.
  */
-int mapdb_fill_page_table(struct map_db *db, uintptr_t addr)
+int mapdb_fill_page_table(struct space *sp, uintptr_t addr)
 {
 	addr &= ~PT_UPPER_MASK;
 
 	/* TODO: force this in mapdb.h */
 	assert(MAX_ENTRIES_PER_GROUP == 1 << PT_UPPER_WIDTH);
-	struct map_group *g = group_for_addr(db, addr);
+	struct map_group *g = group_for_addr(sp, addr);
 	if(g == NULL) return 0;
+
+	if(g->ptab_page == NULL) {
+		int n = x86_alloc_ptab(g);
+		if(n < 0) return n;
+	}
 
 	int n_set = 0;
 	struct pt_iter it;
-	pt_iter_init(&it, SPACE_OF_MAPDB(db));
-	for(int i=0; i < g->num_entries; i++) {
+	pt_iter_init(&it, sp);
+	assert(pt_upper_present(&it, addr));
+	for(int i=0; i < MG_N_ENTRIES(g); i++) {
 		struct map_entry *e = &g->entries[i];
 		int n_pages = L4_Size(e->range) / PAGE_SIZE;
 		for(int j=0; j < n_pages; j++) {
 			pt_set_page(&it, L4_Address(e->range) + j * PAGE_SIZE,
-				e->first_page_id + j, L4_Rights(e->range), true);
+				e->first_page_id + j, L4_Rights(e->range));
 			n_set++;
 		}
 	}
@@ -1749,18 +1910,54 @@ int mapdb_fill_page_table(struct map_db *db, uintptr_t addr)
 
 COLD void init_mapdb(void)
 {
-	map_group_slab = KMEM_CACHE_NEW("map_group_slab", struct map_group);
+	/* FIXME: add a proper interface for enabling/disabling trace IDs.
+	 * kernel commandline perhaps?
+	 */
+#if 0
+	static bool first = true;
+	if(first) {
+		first = false;
+		// trace_enable(TRID_MAPDB);
+		// trace_enable(TRID_IPC);
+		// trace_enable(TRID_SCHED);
+	}
+#endif
+
+	/* 18 bits for the group ID + 4 bits for its content = 8 MiB of address
+	 * space.
+	 *
+	 * this gives up to 2^18 = 512K map_groups, enough to track ~680 address
+	 * spaces that populate at least one page for every 4M of space up to the
+	 * 3G mark, or to give 16k concurrent address spaces 128M of active range
+	 * at once.
+	 */
+	struct slab_policy *pol = kmem_policy_align(1 << 22,
+		sizeof(struct map_group));
+	map_group_slab = kmem_cache_create("map_group_slab",
+		sizeof(struct map_group), 1 << size_to_shift(sizeof(struct map_group)),
+		KMEM_POLICY, NULL, NULL);
+	kmem_cache_set_policy(map_group_slab, pol);
+	kmem_get_align_masks(pol, &grp_mask_and, &grp_mask_or);
+	assert(POPCOUNT(grp_mask_and) == 18);
+	grp_mask_shift = ffsl(grp_mask_and) - 1;
+	map_group_policy = pol;
 }
 
 
+/* FIXME: change the interface to this function. passing a group of page_ids
+ * is stupid because of the decode op down there.
+ *
+ * FIXME: there's also likely a good division of labour between
+ * mapdb_init_range() and mapdb_add_map(), somewhere.
+ */
 COLD void mapdb_init_range(
-	struct map_db *db,
+	struct space *sp,
 	uintptr_t start_addr,
 	const uint32_t *page_ids,
 	unsigned int num_pages,
 	int entry_flags)
 {
-	assert(check_mapdb_module(0));
+	assert(check_mapdb(sp, 0));
 
 	TRACE("%s: start_addr %#lx, num_pages %u (%#lx bytes)\n", __func__,
 		(L4_Word_t)start_addr, num_pages, num_pages * PAGE_SIZE);
@@ -1773,20 +1970,6 @@ COLD void mapdb_init_range(
 		uintptr_t range_start = MAX(uintptr_t, start_addr, g_addr),
 			range_end = MIN(uintptr_t, start_addr + num_pages * PAGE_SIZE,
 				g_addr + GROUP_SIZE) - 1;
-		struct map_group *g = group_for_addr(db, g_addr);
-		if(g == NULL) {
-			g = kmem_cache_zalloc(map_group_slab);
-			if(g == NULL) {
-				/* there's no point in handling ENOMEM in early boot. */
-				panic("mapdb_init_range() [early boot call] can't allocate map group");
-			}
-			g->start = g_addr;
-			assert((g->start & (GROUP_SIZE - 1)) == 0);
-			bool ok = htable_add(&db->groups, int_hash(g->start), g);
-			if(!ok) {
-				panic("mapdb_init_range() [early boot call] htable_add() failed");
-			}
-		}
 
 		/* - search page_ids[id_offset ...] for contiguous blocks of
 		 *   appropriate alignment (for the current address between [range_start
@@ -1816,14 +1999,16 @@ COLD void mapdb_init_range(
 			assert(seg > 0);
 			int mag = sizeof(int) * 8 - __builtin_clz(seg) - 1 + 12;
 			assert(1 << mag <= seg * PAGE_SIZE);
-			/* - then pass those one by one to mapdb_add_map(db, fpage, first_id,
-			 *   [rwx])
+			/* - then pass those one by one to mapdb_add_map(db, fpage,
+			 *   first_id, [rwx]); this creates groups and entries.
 			 */
 			L4_Fpage_t page = L4_FpageLog2(range_pos, mag);
 			assert((range_pos & (L4_Size(page) - 1)) == 0);
 			L4_Set_Rights(&page, entry_flags & L4_FullyAccessible);
-			if(mapdb_add_map(db, 0, page, page_ids[id_offset]) < 0) {
-				panic("mapdb_init_range() [early boot call] mapdb_add_map() failed");
+			int n = mapdb_add_map(sp, NULL, 0, page, page_ids[id_offset]);
+			if(n < 0) {
+				printf("!!! n=%d\n", n);
+				panic("mapdb_init_range() [early boot call] failed");
 			}
 
 			range_pos += 1 << mag;
@@ -1832,5 +2017,5 @@ COLD void mapdb_init_range(
 	}
 
 	assert(done == num_pages);
-	assert(check_mapdb_module(0));
+	assert(check_mapdb(sp, 0));
 }

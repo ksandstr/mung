@@ -9,25 +9,21 @@
 #include <ukernel/mm.h>
 
 
-/* zero is not a valid space ID. therefore a mapdb_ref of just 0 is a good
- * null value.
+/* TODO: change this per pagetable format, i.e. derive it from constants in
+ * <ukernel/ptab.h> .
  */
-
-#define MAPDB_REF(spaceid, addr) (((spaceid) & PAGE_MASK) | ((addr) & ~PAGE_MASK))
-#define REF_SPECIAL(addr) MAPDB_REF(1, addr)
-
-#define REF_SPACE(ref) ((ref) & PAGE_MASK)
-#define REF_ADDR(ref) ((ref) & ~PAGE_MASK)
-#define REF_DEFINED(ref) (REF_SPACE((ref)) != 0)
-#define REF_IS_SPECIAL(ref) (REF_SPACE(ref) == 1)
-
-
-/* tombstone in map_entry->children */
-#define REF_TOMBSTONE MAPDB_REF(0, 1 << PAGE_BITS)
-
-#define LAST_PAGE_ID(ent) ((ent)->first_page_id + (L4_Size((ent)->range) >> PAGE_BITS) - 1)
-
 #define MAX_ENTRIES_PER_GROUP 1024	/* 4 MiB in 4 KiB pages */
+
+/* map_group->addr accessors. note that MG_FLAGS() doesn't shift. */
+#define MG_START(grp) ((grp)->addr & ~(PAGE_SIZE * MAX_ENTRIES_PER_GROUP - 1))
+#define MG_N_ALLOC_LOG2(grp) (((grp)->addr >> 15) & 0xf)
+#define MG_N_ENTRIES(grp) (int)((grp)->addr & 0x7fff)
+#define MG_FLAGS(grp) ((grp)->addr & 0x380000)
+
+/* MG_FLAGS() bits. */
+#define MGF_ROOT	0x080000	/* kernel_space only; no entries present. */
+#define MGF__SPARE1	0x100000
+#define MGF__SPARE2	0x200000
 
 
 struct space;
@@ -39,6 +35,9 @@ struct space;
  * @parent.
  *
  * @range == L4_nilpage is used to indicate an empty slot in map_group.
+ *
+ * FIXME: add a specialness indicator to replace the old REF_IS_SPECIAL() in
+ * ->parent!
  */
 struct map_entry
 {
@@ -49,11 +48,11 @@ struct map_entry
 	 * space = parent space ID.
 	 *
 	 * special values:
-	 *   - when space == 0 (i.e. !defined), there is no parent. this appears
-	 *   at boot in sigma0, and entries whose immediate last parent has been
-	 *   granted away (e.g. as granted by sigma0)
-	 *   - when space == 1, the entry represents a kernel special range such
-	 *   as the UTCB or KIP area, and is not subject to unmapping, access
+	 *   - when !defined, there is no parent. this appears at boot in sigma0,
+	 *   and entries whose immediate last parent has been granted away (e.g.
+	 *   as granted by sigma0)
+	 *   - when misc & 2, the entry represents a kernel special range such as
+	 *   the UTCB or KIP area, and is not subject to unmapping, access
 	 *   querying, mapping on top of, or map/granting out of.
 	 */
 	L4_Word_t parent;
@@ -92,30 +91,38 @@ struct map_entry
 
 struct map_group
 {
-	L4_Word_t start;			/* virtual address */
-	uint16_t num_entries;
-	uint16_t num_alloc;			/* always a power of two, or 0; never 1 */
-	struct map_entry *entries;	/* at most MAX_ENTRIES_PER_GROUP */
-};
-
-
-struct map_db
-{
-	uint32_t ref_id;
-
-	/* keyed by int_hash(start), entered as <struct map_group *>.
+	/* `addr' encodes the group's start address at its architecture-dependent
+	 * size. the 21/22 lowest bits contain, high to low: flags [3 bits],
+	 * n_alloc_log2 [4 bits], and n_entries [15 bits]. use MG_START(),
+	 * MG_N_ALLOC_LOG2(), MG_N_ENTRIES(), and MG_FLAGS() to extract the named
+	 * component.
 	 *
-	 * TODO: change to a word_hash() function.
+	 * XXX: on x86, this encoding leaves 5 or 6 of the high bits of
+	 * `n_entries' for other uses.
+	 *
+	 * `n_entries' gives the number of valid entries under `entries'.
+	 * 1 << n_alloc_log2 gives the amount of space under `entries' iff
+	 * n_alloc_log2 > 0.
+	 *
+	 * n_alloc_log2 == 0 is not valid.
+	 *
+	 * 1 << n_alloc_log2 <= MAX_ENTRIES_PER_GROUP.
+	 *
+	 * TODO: move these into an invariant check in mapdb.c .
 	 */
-	struct htable groups;
+	L4_Word_t addr;
+	struct map_entry *entries;
+	struct page *ptab_page;
+	struct space *space;
 };
 
+
+extern struct kmem_cache *map_group_slab;	/* for space_finalize_kernel() */
 
 extern void init_mapdb(void);
 
-/* returns 0 on success, or -ENOMEM */
-extern int mapdb_init(struct map_db *ptr);
-extern void mapdb_destroy(struct map_db *ptr);
+extern void mapdb_init(struct space *sp);
+extern void mapdb_destroy(struct space *sp);
 
 /* on success, returns OR mask of rights that would've been granted by this
  * mapping operation (which doesn't happen in the rights extension case, but
@@ -125,8 +132,8 @@ extern void mapdb_destroy(struct map_db *ptr);
  * on failure, returns negative errno.
  */
 extern int mapdb_map_pages(
-	struct map_db *from,
-	struct map_db *to,
+	struct space *from,
+	struct space *to,
 	L4_Fpage_t src_page,
 	L4_Word_t dest_addr);
 
@@ -162,25 +169,30 @@ extern int mapdb_map_pages(
  * as false.
  */
 extern int mapdb_unmap_fpage(
-	struct map_db *db,
+	struct space *db,
 	L4_Fpage_t fpage,
 	bool immediate,
 	bool recursive,
 	bool clear_stored_access);
 
-static inline void mapdb_erase_special(struct map_db *db, L4_Fpage_t fpage) {
+static inline void mapdb_erase_special(struct space *db, L4_Fpage_t fpage) {
 	fpage = L4_FpageLog2(L4_Address(fpage) | 0x800, L4_SizeLog2(fpage));
 	L4_Set_Rights(&fpage, L4_FullyAccessible);
 	mapdb_unmap_fpage(db, fpage, true, false, false);
 }
 
 
+/* get-cmp function for struct space's ptab_groups. */
+static inline bool cmp_group_addr(const void *cand, void *keyptr) {
+	const struct map_group *g = cand;
+	return MG_START(g) == *(uint32_t *)keyptr;
+}
+
+
 /* access from the pagefault handler. returns NULL when the entry doesn't
  * exist.
  */
-extern struct map_entry *mapdb_probe(
-	struct map_db *db,
-	uintptr_t addr);
+extern struct map_entry *mapdb_probe(struct space *db, uintptr_t addr);
 
 /* map_entry accessor */
 static inline uint32_t mapdb_page_id_in_entry(
@@ -192,28 +204,40 @@ static inline uint32_t mapdb_page_id_in_entry(
 }
 
 /* writes 1 << PT_UPPER_WIDTH entries into the page table using pt_*()
- * primitives. sets @force to true, but doesn't allocate memory if no entries
- * are found for the range.
+ * primitives. doesn't alter positions that aren't present. returns number of
+ * last-level table entries written.
  */
-extern int mapdb_fill_page_table(struct map_db *db, uintptr_t addr);
+extern int mapdb_fill_page_table(struct space *db, uintptr_t addr);
 
 
-/* completely unatomic on out-of-memory; the caller is supposed to suspend and
+/* add mapping as indicated for @fpage, referencing @parent. this is a
+ * low-level call that can only be used safely from outside of mapdb.c by
+ * setting @parent to 2 or 0 (special and root mappings, respectively);
+ * anything else will introduce an invalid parent reference and blow the
+ * invariants.
+ *
+ * completely unatomic on out-of-memory; the caller is supposed to suspend and
  * re-start once malloc has a chance of succeeding.
  *
+ * L4_Size(@fpage) may be at most GROUP_SIZE.
+ *
+ * *@fpage_group_p will be filled in with the map_group pointer for @fpage in
+ * @sp iff @fpage_group_p != NULL.
+ *
  * returns either a mask of rights given (on any component of @fpage), or
- * -ENOMEM.
+ * -ENOMEM. (FIXME: actually always returns 0. no idea what this comment was.)
  */
 extern int mapdb_add_map(
-	struct map_db *db,
-	L4_Word_t parent,		/* as in struct map_entry */
+	struct space *sp,
+	struct map_group **fpage_group_p,
+	L4_Word_t parent,		/* 0 for immutables */
 	L4_Fpage_t fpage,
 	uint32_t first_page_id);
 
 
 /* kernel-mode initialization */
 extern void mapdb_init_range(
-	struct map_db *ptr,
+	struct space *ptr,
 	uintptr_t start_addr,
 	const uint32_t *page_ids,
 	unsigned int num_pages,

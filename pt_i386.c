@@ -117,21 +117,11 @@ static inline bool pt_set_page(
 	struct pt_iter *it,
 	uintptr_t addr,
 	uint32_t pgid,
-	int rights,
-	bool force)
+	int rights)
 {
-	if((addr & ~_PTAB_MASK) != it->ptab_addr
-		|| (force && it->cur_ptab == NULL))
-	{
+	if((addr & ~_PTAB_MASK) != it->ptab_addr) {
 		uint32_t *tmp = x86_get_ptab(it->sp, addr);
-		if(tmp == NULL) {
-			if(force) {
-				assert(!pt_upper_present(it, addr));
-				tmp = x86_alloc_ptab(it->sp, addr);
-			} else {
-				return false;
-			}
-		}
+		if(tmp == NULL) return false;
 		it->cur_ptab = tmp;
 		it->ptab_addr = addr & ~_PTAB_MASK;
 	}

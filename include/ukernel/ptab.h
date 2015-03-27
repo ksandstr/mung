@@ -50,21 +50,20 @@ static inline uint32_t pt_probe(
 
 
 /* write a pagetable entry. rights mask per L4_Rights().
- * allocates an upper-level table entry where required iff @force is true.
  *
  * NOTE: this cannot be used to clear a page table entry; use pt_clear_page
  * instead.
  *
- * returns true iff !force && !upper_present; a looping caller may then skip
- * to (addr + PT_UPPER_SIZE) & ~PT_UPPER_MASK, i.e. to the start of the next
- * upper-level structure, with equivalent results.
+ * returns false when accessing an address where the page table cannot be
+ * found, and true otherwise. a looping caller may then skip to (addr +
+ * PT_UPPER_SIZE) & ~PT_UPPER_MASK, i.e. to the start of the next upper-level
+ * structure, with equivalent results.
  */
 static inline bool pt_set_page(
 	struct pt_iter *iter,
 	uintptr_t addr,
 	uint32_t pgid,
-	int rights,
-	bool force);
+	int rights);
 
 /* clears a page table entry, skipping and returning false if upper level is
  * missing.

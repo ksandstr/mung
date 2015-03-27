@@ -374,17 +374,12 @@ static inline void mm_orl(uintptr_t address, uint32_t mask) {
  */
 extern uint32_t *x86_get_ptab(struct space *sp, uintptr_t ptab_addr);
 
-/* returns NULL on alloc failure; this can be failure to allocate a page, or
- * a resize failure on @sp->ptab_pages.
- */
-extern uint32_t *x86_alloc_ptab(struct space *sp, uintptr_t ptab_addr);
+/* allocate @g->ptab_page and map it. */
+struct map_group;
+extern int x86_alloc_ptab(struct map_group *g);
 
-
-/* get-cmp function for struct space's ptab_pages. */
-static inline bool cmp_page_id_to_key(const void *cand, void *key) {
-	const struct page *pg = cand;
-	return pg->id == *(uint32_t *)key;
-}
+/* free @g->ptab_page and disconnect it from @g->space->pdirs. */
+extern void x86_free_ptab(struct map_group *g);
 
 
 /* from cpu.c (should be in x86.c or some such, or in an ia32 directory

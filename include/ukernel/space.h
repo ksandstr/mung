@@ -11,7 +11,6 @@
 
 #include <ukernel/thread.h>
 #include <ukernel/mm.h>
-#include <ukernel/mapdb.h>
 #include <ukernel/setjmp.h>
 #include <ukernel/misc.h>
 
@@ -23,8 +22,6 @@
 #define UTCB_SIZE 512
 #define UTCB_PER_PAGE (PAGE_SIZE / UTCB_SIZE)
 #define NUM_UTCB_PAGES(area) (L4_Size((area)) / UTCB_SIZE / UTCB_PER_PAGE)
-
-#define SPACE_OF_MAPDB(mdb) (container_of((mdb), struct space, mapdb))
 
 
 struct thread;
@@ -65,9 +62,8 @@ struct space
 	 */
 	struct thread *redirector;
 
+	struct htable ptab_groups;	/* <struct map_group *>, by MG_START(grp) */
 	struct htable utcb_pages;	/* <struct utcb_page *>, by ->pos */
-	struct htable ptab_pages;	/* <struct page *>, by page.id */
-	struct map_db mapdb;
 
 	/* x86 specific bits */
 	struct page *pdirs;			/* toplevel page directory table */
@@ -78,10 +74,6 @@ struct space
 };
 
 
-/* kernel_space->mapdb contains mappings for all non-reserved memory seen by
- * the kernel. these mappings are subsequently granted to sigma0 during the
- * boot process as initial memory.
- */
 extern struct space *kernel_space;
 
 /* sigma0, however, is completely normal except that its pager provides

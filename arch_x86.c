@@ -1,53 +1,67 @@
 /* x86 (i386, ia32) architecture support. */
 
 #include <stdint.h>
-#include <stdbool.h>
 #include <assert.h>
+#include <errno.h>
+
 #include <ccan/htable/htable.h>
 #include <ccan/likely/likely.h>
 
-#include <ukernel/mm.h>
 #include <ukernel/space.h>
-#include <ukernel/util.h>
+#include <ukernel/mapdb.h>
 #include <ukernel/x86.h>
 
 
 uint32_t *x86_get_ptab(struct space *sp, uint32_t page_addr)
 {
+	uint32_t addr = page_addr & ~(PAGE_SIZE * MAX_ENTRIES_PER_GROUP - 1);
+	struct map_group *g = htable_get(&sp->ptab_groups, int_hash(addr),
+		&cmp_group_addr, &addr);
+	if(unlikely(g == NULL) || g->ptab_page == NULL) return NULL;
+
+#ifndef NDEBUG
 	uint32_t *pdir_mem = sp->pdirs->vm_addr;
-	if(unlikely(pdir_mem == NULL)) {
-		pdir_mem = map_vm_page(sp->pdirs, VM_SYSCALL);
-	}
+	if(pdir_mem == NULL) pdir_mem = map_vm_page(sp->pdirs, VM_SYSCALL);
 	uint32_t pde = pdir_mem[page_addr >> 22];
-	if(unlikely(!CHECK_FLAG(pde, PDIR_PRESENT))) return NULL;
+	assert((pde >> 12) == g->ptab_page->id);
+#endif
 
-	uint32_t pgid = pde >> 12;
-	struct page *pg = htable_get(&sp->ptab_pages, int_hash(pgid),
-		&cmp_page_id_to_key, &pgid);
-	if(unlikely(pg == NULL)) return NULL;	/* doesn't even exist. */
-
-	return map_vm_page(pg, VM_SYSCALL);
+	return map_vm_page(g->ptab_page, VM_SYSCALL);
 }
 
 
-uint32_t *x86_alloc_ptab(struct space *sp, uintptr_t ptab_addr)
+int x86_alloc_ptab(struct map_group *g)
 {
-	assert(x86_get_ptab(sp, ptab_addr) == NULL);
+	struct space *sp = g->space;
 
-	uint32_t *pdir_mem = sp->pdirs->vm_addr;
-	assert(pdir_mem != NULL);
-	uint32_t *pde = &pdir_mem[ptab_addr >> 22];
+	pdir_t *dirs = sp->pdirs->vm_addr;
+	assert(dirs != NULL);
+	uint32_t *pde = &dirs[(MG_START(g) >> 22) & 0x3ff];
+	assert(g->ptab_page == NULL);
 	assert(!CHECK_FLAG(*pde, PDIR_PRESENT));
-	struct page *pg = get_kern_page(0);
-	if(pg == NULL) return NULL;
-	if(!htable_add(&sp->ptab_pages, int_hash(pg->id), pg)) {
-		free_kern_page(pg);
-		return NULL;
-	}
 
-	assert(pg->vm_addr != NULL);
-	memset(pg->vm_addr, 0, PAGE_SIZE);
-	*pde = pg->id << 12 | PDIR_PRESENT | PDIR_USER | PDIR_RW;
+	g->ptab_page = get_kern_page(0);
+	if(unlikely(g->ptab_page == NULL)) return -ENOMEM;
+	uint32_t *pt = map_vm_page(g->ptab_page, VM_SYSCALL);
+	for(int i=0; i < 1024; i++) pt[i] = 0;
 
-	return map_vm_page(pg, VM_SYSCALL);
+	*pde = g->ptab_page->id << 12 | PDIR_PRESENT | PDIR_USER | PDIR_RW;
+
+	return 0;
+}
+
+
+void x86_free_ptab(struct map_group *g)
+{
+	if(g->ptab_page == NULL) return;
+
+	pdir_t *dirs = map_vm_page(g->space->pdirs, VM_SYSCALL);
+	assert(dirs != NULL);
+	uint32_t *pde = &dirs[(MG_START(g) >> 22) & 0x3ff];
+	assert(CHECK_FLAG(*pde, PDIR_PRESENT));
+	assert(g->ptab_page->id == *pde >> 12);
+	*pde = 0;
+
+	free_kern_page(g->ptab_page);
+	g->ptab_page = NULL;
 }

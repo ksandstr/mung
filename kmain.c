@@ -231,7 +231,7 @@ static void add_s0_pages(L4_Word_t start, L4_Word_t end)
 	while(done < count) {
 		int seg = MIN(int, 128, count - done);
 		for(int i=0; i < seg; i++) ids[i] = (start >> PAGE_BITS) + done + i;
-		mapdb_init_range(&sigma0_space->mapdb, start + (done << PAGE_BITS),
+		mapdb_init_range(sigma0_space, start + (done << PAGE_BITS),
 			ids, seg, L4_FullyAccessible);
 		done += seg;
 	}
@@ -389,7 +389,7 @@ static struct thread *spawn_kernel_server(
 		for(int i=0; i < num_pages; i++) {
 			ids[i] = (s0->low + i * PAGE_SIZE) >> PAGE_BITS;
 		}
-		mapdb_init_range(&t->space->mapdb, s0->low, ids, num_pages,
+		mapdb_init_range(t->space, s0->low, ids, num_pages,
 			L4_FullyAccessible);
 		free(ids);
 	}
@@ -471,9 +471,7 @@ void kmain(void *bigp, unsigned int magic)
 
 	/* (see comment for init_spaces().) */
 	init_mapdb();
-	int n = mapdb_init(&kernel_space->mapdb);
-	if(n < 0) panic("mapdb_init() for the kernel space failed");
-
+	mapdb_init(kernel_space);
 	space_finalize_kernel(kernel_space, &resv_page_list);
 
 	/* NOTE: malloc(), free(), etc. are only available from this line down. */
@@ -482,7 +480,7 @@ void kmain(void *bigp, unsigned int magic)
 	L4_KernelRootServer_t s0_mod = kcp->sigma0,
 		roottask_mod = kcp->root_server;
 
-	n = acpi_init();
+	int n = acpi_init();
 	if(n < 0) {
 		printf("ACPI initialization failed!\n");
 		panic("mung doesn't work without ACPI anymore. bawwww");
