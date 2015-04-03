@@ -2,9 +2,9 @@
 /* in-kernel tests for lib/slab.c */
 
 #include <stdio.h>
+#include <stdalign.h>
 #include <string.h>
 #include <ccan/list/list.h>
-#include <ccan/alignof/alignof.h>
 #include <ccan/str/str.h>
 
 #include <ukernel/util.h>
@@ -170,7 +170,7 @@ START_TEST(ctor_and_dtor)
 	/* part 1: ctor and dtor present */
 	ctor_count = 0; dtor_count = 0;
 	slab = kmem_cache_create("ctor and dtor present",
-		sizeof(struct t_object), ALIGNOF(struct t_object),
+		sizeof(struct t_object), alignof(struct t_object),
 		0, &ct_ctor, &ct_dtor);
 	struct t_object *ary[4];
 	for(int i=0; i < 4; i++) ary[i] = kmem_cache_alloc(slab);
@@ -215,7 +215,7 @@ START_TEST(recycling)
 	/* first without the KMEM_NO_RECYCLE_CTOR flag. */
 	diag("base case:");
 	struct kmem_cache *slab = kmem_cache_create("many ctor calls",
-		sizeof(struct t_object), ALIGNOF(struct t_object),
+		sizeof(struct t_object), alignof(struct t_object),
 		0, &ct_ctor, &ct_dtor);
 	ctor_count = 0; dtor_count = 0;
 	dancing_allocs(slab, test_size);
@@ -227,7 +227,7 @@ START_TEST(recycling)
 	/* then, with. */
 	diag("main half:");
 	slab = kmem_cache_create("many ctor calls",
-		sizeof(struct t_object), ALIGNOF(struct t_object),
+		sizeof(struct t_object), alignof(struct t_object),
 		KMEM_NO_RECYCLE_CTOR, &ct_ctor, &ct_dtor);
 	ctor_count = 0; dtor_count = 0;
 	dancing_allocs(slab, test_size);
@@ -262,7 +262,7 @@ START_TEST(pol_masks)
 {
 	plan_tests(3);
 
-	assert(ALIGNOF(struct t_object) <= 64);
+	assert(alignof(struct t_object) <= 64);
 	struct kmem_cache *c = kmem_cache_create("somewhat unpleasant",
 		sizeof(struct t_object), 64, KMEM_POLICY, NULL, NULL);
 	void *pol = kmem_policy_align(1024 * 1024, 64);
@@ -356,7 +356,7 @@ START_TEST(pol_id_casting)
 	plan_tests(1);
 	const size_t test_size = 5007;
 
-	assert(ALIGNOF(struct t_object) <= 64);
+	assert(alignof(struct t_object) <= 64);
 	struct kmem_cache *c = kmem_cache_create("malodorously latrinelike",
 		sizeof(struct t_object), 64, KMEM_POLICY, NULL, NULL);
 	void *pol = kmem_policy_align(1024 * 1024, 64);
@@ -414,7 +414,7 @@ START_TEST(pol_id2ptr_safe)
 	plan_tests(4);
 	const size_t test_size = 5005;		/* sAUcE!1! */
 
-	assert(ALIGNOF(struct t_object) <= 64);
+	assert(alignof(struct t_object) <= 64);
 	struct kmem_cache *c = kmem_cache_create("abhorrently maladious",
 		sizeof(struct t_object), 64, KMEM_POLICY, NULL, NULL);
 	void *pol = kmem_policy_align(1024 * 1024, 64);
