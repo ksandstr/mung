@@ -21,9 +21,6 @@
 
 #define CACHE_SIZE 16
 
-#define SLAB_FIRST(cache, slab) \
-	((void *)((((intptr_t)&(slab)[1]) + (cache)->align - 1) & ~((cache)->align - 1)))
-
 #define KMEM_CACHE_MAGIC 0x61e98d0e
 #define SLAB_MAGIC 0x99274b34
 
@@ -150,7 +147,11 @@ void *kmem_cache_alloc(struct kmem_cache *cache)
 			slab->flags = 0;
 		}
 
-		slab->freelist = SLAB_FIRST(cache, slab);
+		uintptr_t f_base = (uintptr_t)&slab[1];
+		slab->freelist = (void *)((f_base + cache->align - 1)
+			& ~(cache->align - 1));
+		assert(((uintptr_t)slab->freelist & (cache->align - 1)) == 0);
+
 		*(void **)slab->freelist = NULL;
 		slab->in_use = 0;
 		slab->magic = SLAB_MAGIC;
