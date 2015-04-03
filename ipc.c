@@ -10,7 +10,6 @@
 #include <errno.h>
 #include <ccan/likely/likely.h>
 #include <ccan/compiler/compiler.h>
-#include <ccan/alignof/alignof.h>
 #include <ccan/htable/htable.h>
 
 #include <l4/types.h>
@@ -70,11 +69,8 @@ static size_t hash_waited_redir(const void *threadptr, void *priv) {
 }
 
 
-COLD void init_ipc(void)
-{
-	ipc_wait_slab = kmem_cache_create("ipc_wait_slab",
-		sizeof(struct ipc_wait), ALIGNOF(struct ipc_wait),
-		0, NULL, NULL);
+COLD void init_ipc(void) {
+	ipc_wait_slab = KMEM_CACHE_NEW("ipc_wait_slab", struct ipc_wait);
 }
 
 

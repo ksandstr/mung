@@ -288,7 +288,7 @@ START_TEST(pol_alloc)
 	plan_tests(4);
 	const size_t test_size = 5000, ob_align = 64;
 
-	assert(ALIGNOF(struct t_object) <= ob_align);
+	assert(alignof(struct t_object) <= ob_align);
 	struct kmem_cache *c = kmem_cache_create("mildly horrific",
 		sizeof(struct t_object), ob_align, KMEM_POLICY, NULL, NULL);
 	void *pol = kmem_policy_align(1024 * 1024, 64);

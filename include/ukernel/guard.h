@@ -30,8 +30,6 @@
 #include <stddef.h>
 #include <string.h>
 
-#include <ccan/alignof/alignof.h>
-
 #include <ukernel/util.h>		/* for int_hash() */
 
 

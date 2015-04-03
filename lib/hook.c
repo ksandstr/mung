@@ -5,7 +5,6 @@
 #include <assert.h>
 #include <ccan/list/list.h>
 #include <ccan/container_of/container_of.h>
-#include <ccan/alignof/alignof.h>
 #include <ccan/likely/likely.h>
 
 #include <ukernel/slab.h>
@@ -38,9 +37,7 @@ void hook_init(struct hook *h, void *dataptr)
 	static bool first = true;
 	if(unlikely(first)) {
 		first = false;
-		hook_fn_slab = kmem_cache_create("hook_fn_slab",
-			sizeof(struct hook_fn), ALIGNOF(struct hook_fn),
-			0, NULL, NULL);
+		hook_fn_slab = KMEM_CACHE_NEW("hook_fn_slab", struct hook_fn);
 	}
 
 	list_head_init(&h->fn_list);

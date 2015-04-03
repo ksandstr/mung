@@ -5,7 +5,6 @@
 #include <stdbool.h>
 #include <assert.h>
 
-#include <ccan/alignof/alignof.h>
 #include <ccan/likely/likely.h>
 #include <ccan/htable/htable.h>
 #include <ccan/compiler/compiler.h>
@@ -119,8 +118,7 @@ COLD void init_threading(void)
 	for(int i=0; i < num_async_words; i++) int_async_table[0] = 0;
 
 	assert(thread_slab == NULL);
-	thread_slab = kmem_cache_create("thread_slab", sizeof(struct thread),
-		ALIGNOF(struct thread), 0, NULL, NULL);
+	thread_slab = KMEM_CACHE_NEW("thread_slab", struct thread);
 
 	assert(check_thread_module(0));
 }

@@ -9,7 +9,6 @@
 #include <ccan/likely/likely.h>
 #include <ccan/list/list.h>
 #include <ccan/htable/htable.h>
-#include <ccan/alignof/alignof.h>
 #include <ccan/compiler/compiler.h>
 
 #include <l4/types.h>
@@ -1068,10 +1067,8 @@ COLD void init_spaces(struct list_head *resv_list)
 	}
 
 	/* module inits */
-	space_slab = kmem_cache_create("space_slab", sizeof(struct space),
-		ALIGNOF(struct space), 0, NULL, NULL);
-	utcb_page_slab = kmem_cache_create("utcb_page_slab",
-		sizeof(struct utcb_page), ALIGNOF(struct utcb_page), 0, NULL, NULL);
+	space_slab = KMEM_CACHE_NEW("space_slab", struct space);
+	utcb_page_slab = KMEM_CACHE_NEW("utcb_page_slab", struct utcb_page);
 }
 
 

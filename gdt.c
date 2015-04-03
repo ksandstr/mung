@@ -7,7 +7,6 @@
 #include <string.h>
 #include <assert.h>
 #include <ccan/compiler/compiler.h>
-#include <ccan/alignof/alignof.h>
 #include <ccan/likely/likely.h>
 #include <ccan/htable/htable.h>
 
@@ -214,9 +213,7 @@ COLD void init_gdt_resv(void)
 {
 	assert(gdt_resv_slab == NULL);
 
-	gdt_resv_slab = kmem_cache_create("gdt_resv_slab",
-		sizeof(struct gdt_resv), ALIGNOF(struct gdt_resv),
-		0, NULL, NULL);
+	gdt_resv_slab = KMEM_CACHE_NEW("gdt_resv_slab", struct gdt_resv);
 	memset(gdt_free_map, ~0, sizeof(gdt_free_map));
 	gdt_free_map[0] &= ~1ul;		/* seg0 is always invalid */
 	for(int i=1; i < N_KERNEL_SEGS; i++) {

@@ -4,7 +4,7 @@
 
 #include <stdlib.h>
 #include <stdint.h>
-#include <ccan/alignof/alignof.h>
+#include <stdalign.h>
 
 
 /* from slab.c, in imitation of Linux */
@@ -18,7 +18,7 @@ typedef void (*kmem_cache_ctor)(void *, struct kmem_cache *, unsigned long);
  * ctor and dtor also)
  */
 #define KMEM_CACHE_NEW(name, type) \
-	kmem_cache_create((name), sizeof(type), ALIGNOF(type), \
+	kmem_cache_create((name), sizeof(type), alignof(type), \
 		0, NULL, NULL)
 
 

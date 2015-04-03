@@ -7,7 +7,6 @@
 #include <errno.h>
 
 #include <ccan/htable/htable.h>
-#include <ccan/alignof/alignof.h>
 #include <ccan/likely/likely.h>
 #include <ccan/container_of/container_of.h>
 
@@ -1783,9 +1782,7 @@ int mapdb_fill_page_table(struct map_db *db, uintptr_t addr)
 
 COLD void init_mapdb(void)
 {
-	map_group_slab = kmem_cache_create("map_group_slab",
-		sizeof(struct map_group), ALIGNOF(struct map_group),
-		0, NULL, NULL);
+	map_group_slab = KMEM_CACHE_NEW("map_group_slab", struct map_group);
 }
 
 

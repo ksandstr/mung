@@ -5,7 +5,6 @@
 #include <assert.h>
 #include <ccan/list/list.h>
 #include <ccan/container_of/container_of.h>
-#include <ccan/alignof/alignof.h>
 
 #include <l4/types.h>
 #include <l4/kcp.h>
@@ -233,10 +232,8 @@ void init_kernel_heap(
 	printf("uppermost reserved byte is at %#x\n", (unsigned)next_addr - 1);
 
 	/* initialize page slab & return. */
-	mm_page_cache = kmem_cache_create("mm_page_cache", sizeof(struct page),
-		ALIGNOF(struct page), 0, NULL, NULL);
-	free_as_cache = kmem_cache_create("free_as_cache", sizeof(struct as_free),
-		ALIGNOF(struct as_free), 0, NULL, NULL);
+	mm_page_cache = KMEM_CACHE_NEW("mm_page_cache", struct page);
+	free_as_cache = KMEM_CACHE_NEW("free_as_cache", struct as_free);
 	*resv_start = MIN(uintptr_t, (uintptr_t)&_start, *resv_start);
 	*resv_end = MAX(uintptr_t, next_addr - 1, *resv_end);	/* (inclusive.) */
 }

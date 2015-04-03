@@ -10,7 +10,6 @@
 #include <ccan/list/list.h>
 #include <ccan/container_of/container_of.h>
 #include <ccan/compiler/compiler.h>
-#include <ccan/alignof/alignof.h>
 #include <ccan/likely/likely.h>
 
 #include <ukernel/util.h>
@@ -67,7 +66,7 @@ static COLD void init_kmem_cache_slab(void)
 {
 	static struct kmem_cache meta_cache = {
 		.size = sizeof(struct kmem_cache),
-		.align = ALIGNOF(struct kmem_cache),
+		.align = alignof(struct kmem_cache),
 		.name = "kmem_cache",
 		.magic = KMEM_CACHE_MAGIC,
 	};
