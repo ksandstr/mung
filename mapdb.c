@@ -313,43 +313,6 @@ static bool deref_child(
 }
 
 
-/* returns true if the entry was cleared. */
-static bool flush_entry(struct map_entry *e, int access)
-{
-	const L4_Word_t *children = e->num_children > 1 ? e->children : &e->child;
-	for(int j=0; j < e->num_children && REF_DEFINED(children[j]); j++) {
-		/* FIXME: deref children[j], recur */
-	}
-
-	int rwx = L4_Rights(e->range);
-	rwx &= ~access;
-	L4_Set_Rights(&e->range, rwx);
-	if(rwx != 0) return false;
-	else {
-		/* everything was revoked. */
-		e->range = L4_Nilpage;
-		if(e->num_children > 1) free(e->children);
-		e->child = 0;
-		e->num_children = 0;
-		return true;
-	}
-}
-
-
-/* returns true if the group now has 0 pages in it. */
-static bool flush_group(struct map_db *db, struct map_group *g, int access)
-{
-	int active_maps = 0;
-	for(int i=0; i < g->num_entries; i++) {
-		struct map_entry *e = &g->entries[i];
-		if(!flush_entry(e, access)) active_maps++;
-	}
-	/* TODO: compress the range when active_maps != 0 */
-
-	return active_maps == 0;
-}
-
-
 static bool cmp_group_addr(const void *cand, void *keyptr)
 {
 	uintptr_t key = *(uintptr_t *)keyptr;
@@ -398,7 +361,11 @@ void mapdb_destroy(struct map_db *db)
 		g != NULL;
 		g = htable_next(&db->groups, &it))
 	{
-		flush_group(db, g, 0x7);
+		for(int i=0; i < g->num_entries; i++) {
+			struct map_entry *e = &g->entries[i];
+			/* FIXME: re-parent children of @e */
+			if(e->num_children > 1) free(e->children);
+		}
 		free(g->entries);
 		kmem_cache_free(map_group_slab, g);
 	}
