@@ -661,7 +661,7 @@ void return_from_exn(void)
 			/* FIXME: handle kth-on-user preemptions by scheduler entry
 			 * TODO: and maybe later a direct iret_to_scheduler()-alike
 			 */
-			printf("%s: target is kth, not preempting\n", __func__);
+			TRACE("%s: target is kth, not preempting\n", __func__);
 		} else if(current == next) {
 			/* an unlikely occurrence: the preemptor would've been switched to
 			 * anyway. skip the preemption altogether and (most likely) return
