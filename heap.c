@@ -236,6 +236,10 @@ void init_kernel_heap(
 	free_as_cache = KMEM_CACHE_NEW("free_as_cache", struct as_free);
 	*resv_start = MIN(uintptr_t, (uintptr_t)&_start, *resv_start);
 	*resv_end = MAX(uintptr_t, next_addr - 1, *resv_end);	/* (inclusive.) */
+
+	L4_Word_t siz = *resv_end + 1 - *resv_start;
+	printf("... total kernel reservation is %lu KiB (~%lu MiB).\n",
+		siz / 1024, (siz + 1024 * 1024 - 1) / (1024 * 1024));
 }
 
 
