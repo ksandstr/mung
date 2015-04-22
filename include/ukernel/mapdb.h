@@ -158,11 +158,11 @@ extern int mapdb_map_pages(
  *
  * special mappings (KIP, UTCB pages) aren't affected by mapdb_unmap_fpage()
  * in its regular forms. however, when (@fpage.address & 0xc00) == 0x800 &&
- * !@recursive && @fpage.rights == full, special mappings are removed if they
- * overlap at all with @fpage. regardless of this setting, the access bits of
- * special mappings don't contribute to the return value. (TODO: this needs
- * more testing.) when the special form isn't used, the denormal bits in
- * @fpage.address must be zero.
+ * !@recursive && @fpage.rights == full, special mappings will be removed if
+ * they're contained within @fpage, and fragmented if they are larger.
+ * regardless of this setting, the access bits of special mappings don't
+ * contribute to the return value. (TODO: this needs more testing.) when the
+ * special form isn't used, the denormal bits in @fpage.address must be zero.
  *
  * if @clear_stored_access is set, the stored access bits retrieved for @fpage
  * will be cleared in the immediate entry. for recursion it is always passed

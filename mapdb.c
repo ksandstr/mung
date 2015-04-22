@@ -34,8 +34,8 @@
  * - the low 4 ("MISC") bits vary:
  *   - in map_entry.parent, bit 1 (value 2) is the IS_SPECIAL indicator.
  *     others are undefined, so left at 0;
- *   - in map_entry.{child,children} they are copies of some of the bits of
- *     the child's index into its parent.
+ *   - in map_entry.{child,children} they are copies of bits 5..1 of the
+ *     child's position within the parent group.
  *     - in the child array tombstone, the value is 1. the tombstone is
  *       therefore distinct from NULL but not defined.
  *
@@ -1682,7 +1682,34 @@ int mapdb_unmap_fpage(
 	assert(recursive || immediate);	/* disallows the one-level status read */
 	assert(check_mapdb(sp, 0));
 
-	int rwx_seen = 0;
+	TRACE("%s: range %#lx:%#lx, %simmediate, %srecursive\n",
+		__func__, L4_Address(range), L4_Size(range),
+		!immediate ? "non-" : "", !recursive ? "non-" : "");
+
+	/* slightly bad, but much like mapdb_map_pages(), it's the only reasonable
+	 * thing to do.
+	 */
+	int n_groups = L4_Size(range) / GROUP_SIZE;
+	if(unlikely(n_groups > 1)) {
+		int acc = 0;
+		for(int i=0; i < n_groups; i++) {
+			L4_Fpage_t fp = L4_Fpage(
+				L4_Address(range) + i * GROUP_SIZE, GROUP_SIZE);
+			L4_Set_Rights(&fp, L4_Rights(range));
+			int n = mapdb_unmap_fpage(sp, fp, immediate, recursive,
+				clear_stored_access);
+			if(unlikely(n < 0)) return n;
+			acc |= n;
+		}
+		return acc;
+	}
+
+	struct map_group *g = group_for_addr(sp, L4_Address(range));
+	if(g == NULL) {
+		TRACE("%s: no group for %#lx:%#lx\n", __func__,
+			L4_Address(range), L4_Size(range));
+		return 0;
+	}
 
 	/* check "affect special ranges" form */
 	const bool drop_special = unlikely(!recursive)
@@ -1690,163 +1717,154 @@ int mapdb_unmap_fpage(
 		&& (range.raw & 0xc00) == 0x800;
 	assert(drop_special || (L4_Address(range) & 0xc00) == 0);
 
+	L4_Word_t unmap_rights = L4_Rights(range), r_end = FPAGE_HIGH(range);
+
+	/* this function will only modify the map_group it accesses when it might
+	 * revoke access in the immediate space. this is passed to fetch_entry().
+	 */
+	const bool modify = immediate && unmap_rights != 0;
+
 	/* TODO: only initialize this if the `drop' variable becomes true */
+	/* TODO: use a pt_iter_init_group() form to pass g instead of @sp */
 	struct pt_iter mod_it;
 	pt_iter_init(&mod_it, sp);
 
-	TRACE("%s: range %#lx:%#lx, %simmediate, %srecursive\n",
-		__func__, L4_Address(range), L4_Size(range),
-		!immediate ? "non-" : "", !recursive ? "non-" : "");
-	L4_Word_t unmap_rights = L4_Rights(range), r_end = FPAGE_HIGH(range);
-	/* this function will only modify the structure of the map_groups it
-	 * accesses when it might revoke access in the immediate space. this is
-	 * passed to fetch_entry().
-	 */
-	const bool modify = immediate && unmap_rights != 0;
-	for(L4_Word_t grp_pos = L4_Address(range);
-		grp_pos < r_end;
-		grp_pos += GROUP_SIZE)
-	{
-		struct map_group *g = group_for_addr(sp, grp_pos);
-		if(g == NULL) {
-			TRACE("%s: group for %#lx doesn't exist\n", __func__, grp_pos);
-			continue;
-		}
-
-		struct map_entry *e = fetch_entry(g, range, modify);
-		if(e == NULL && modify) {
-			/* distinguish between not-exist and ENOMEM from split_entry(). */
-			if(probe_group_range(g, range) != NULL) {
-				/* FIXME: implement restartable suspending somewhere along
-				 * this function's call chain.
-				 */
-				panic("malloc() failed in fetch_entry()");
-			}
-		}
-		if(e == NULL || (recursive && REF_IS_SPECIAL(e->parent))) {
-			/* nonexistents are skipped. specials can't be influenced by Unmap
-			 * and don't contribute to @rwx_seen.
+	struct map_entry *e = fetch_entry(g, range, modify);
+	if(e == NULL && modify) {
+		/* distinguish between not-exist and ENOMEM from split_entry(). */
+		if(probe_group_range(g, range) != NULL) {
+			/* FIXME: implement restartable suspending somewhere along
+			 * this function's call chain.
 			 */
-			continue;
+			panic("malloc() failed in fetch_entry()");
 		}
-
-		do {
-			if(!REF_IS_SPECIAL(e->parent)) {
-				/* check each native page in e->range.
-				 *
-				 * TODO: only do this if the caller provides a location for
-				 * the out-parameter.
-				 */
-				L4_Word_t r_pos = L4_Address(e->range),
-					r_last = r_pos + L4_Size(e->range);
-				int e_mask = 0;
-				do {
-					bool up;
-					int pmask = 0;
-					pt_probe(&mod_it, &up, &pmask, r_pos);
-					if(!up) {
-						r_pos = (r_pos + PT_UPPER_SIZE) & ~PT_UPPER_MASK;
-					} else {
-						r_pos += PAGE_SIZE;
-						if(pmask >= 0) e_mask |= pmask;
-						else {
-							assert(pmask == -ENOENT);
-						}
-					}
-				} while(r_pos < r_last);
-
-				if(e_mask != 0 && REF_DEFINED(e->parent)) {
-					/* FIXME: propagate e_mask to parent */
-				}
-
-				rwx_seen |= (e_mask | e->access);
-			}
-
-			/* dereference children, and call mapdb_unmap_fpage() on them when
-			 * their address in @sp lies within @range.
-			 */
-			for(int i=0; recursive && i < e->num_children; i++) {
-				struct child_ref r;
-				if(!deref_child(&r, g, e, i)) {
-					if(e->num_children < 2) {
-						e->child = 0;
-						break;
-					} else {
-						e->children[i] = REF_TOMBSTONE;
-						continue;
-					}
-				}
-
-				TRACE("deref child %d (%#lx) -> %#lx:%#lx\n",
-					i, e->num_children < 2 ? e->child : e->children[i],
-					L4_Address(r.child_entry->range),
-					L4_Size(r.child_entry->range));
-
-				L4_Word_t paddr = MG_START(g) + REF_ADDR(r.child_entry->parent);
-				if(!ADDR_IN_FPAGE(range, paddr)) continue;
-				int rm_rights = L4_Rights(r.child_entry->range) & unmap_rights;
-				if(rm_rights == 0) continue;
-
-				/* TODO: call a "apply unmapping to single entry" function
-				 * instead; the unmap_fpage() loop does the group_for_addr(),
-				 * probe_group_addr() thing all over again.
-				 */
-				L4_Fpage_t fp = r.child_entry->range;
-				L4_Set_Rights(&fp, unmap_rights);
-				int pass_rwx = mapdb_unmap_fpage(r.group->space, fp,
-					true, true, false);
-				if(pass_rwx < 0) {
-					/* FIXME: handle ENOMEM */
-					panic("recursive unmap failed!");
-				}
-				rwx_seen |= pass_rwx;
-			}
-
-			const bool special = REF_IS_SPECIAL(e->parent);
-			bool drop = special && drop_special;
-			if(modify && !special) {
-				/* ensured by split_entry() */
-				assert(FPAGE_LOW(e->range) >= FPAGE_LOW(range));
-				assert(FPAGE_LOW(e->range) < r_end);
-				assert(FPAGE_HIGH(e->range) <= r_end);
-
-				int old_rights = L4_Rights(e->range),
-					new_rights = old_rights & ~unmap_rights;
-				L4_Set_Rights(&e->range, new_rights);
-				if(new_rights == 0) drop = true;
-				else if(new_rights < old_rights) {
-					set_pt_range_rights(&mod_it, e->range);
-				}
-			}
-			if(drop) {
-				assert(modify);
-				TRACE("%s: removing entry %#lx:%#lx\n", __func__,
-					L4_Address(e->range), L4_Size(e->range));
-				int n = reparent_children(g, e);
-				if(n < 0) {
-					/* ENOMEM can happen because children must be added to a
-					 * parent entry, which may return ENOMEM on hash resize.
-					 *
-					 * FIXME: this is HIGHLY INSUFFICIENT because of changes
-					 * made earlier in this function. the function should be
-					 * split into a children-gathering stage and three
-					 * functional stages, each invoked according to its
-					 * corresponding bool parameter.
-					 */
-					goto Enomem;
-				}
-
-				clear_pt_range(&mod_it, e->range);
-				e = erase_map_entry(g, e);
-
-				e--;	/* counteract the loop bump */
-			} else {
-				e->access = clear_stored_access ? 0 : rwx_seen;
-			}
-		} while(++e < &g->entries[MG_N_ENTRIES(g)] && L4_Address(e->range) < r_end);
-
-		dump_map_group(g);
 	}
+	if(e == NULL || (recursive && REF_IS_SPECIAL(e->parent))) {
+		/* empty ranges are empty. specials can't be influenced by Unmap and
+		 * don't contribute to rwx_seen.
+		 */
+		return 0;
+	}
+
+	int rwx_seen = 0;
+	do {
+		if(!REF_IS_SPECIAL(e->parent)) {
+			/* check each native page in e->range.
+			 *
+			 * TODO: only do this if the caller provides a location for
+			 * the out-parameter.
+			 */
+			L4_Word_t r_pos = L4_Address(e->range),
+				r_last = r_pos + L4_Size(e->range);
+			int e_mask = 0;
+			do {
+				bool up;
+				int pmask = 0;
+				pt_probe(&mod_it, &up, &pmask, r_pos);
+				if(!up) {
+					r_pos = (r_pos + PT_UPPER_SIZE) & ~PT_UPPER_MASK;
+				} else {
+					r_pos += PAGE_SIZE;
+					if(pmask >= 0) e_mask |= pmask;
+					else {
+						assert(pmask == -ENOENT);
+					}
+				}
+			} while(r_pos < r_last);
+
+			if(e_mask != 0 && REF_DEFINED(e->parent)) {
+				/* FIXME: propagate e_mask to parent */
+			}
+
+			rwx_seen |= (e_mask | e->access);
+		}
+
+		/* dereference children, and call mapdb_unmap_fpage() on them when
+		 * their address in @sp lies within @range.
+		 */
+		for(int i=0; recursive && i < e->num_children; i++) {
+			struct child_ref r;
+			if(!deref_child(&r, g, e, i)) {
+				if(e->num_children < 2) {
+					e->child = 0;
+					break;
+				} else {
+					e->children[i] = REF_TOMBSTONE;
+					continue;
+				}
+			}
+
+			TRACE("deref child %d (%#lx) -> %#lx:%#lx\n",
+				i, e->num_children < 2 ? e->child : e->children[i],
+				L4_Address(r.child_entry->range),
+				L4_Size(r.child_entry->range));
+
+			L4_Word_t paddr = MG_START(g) + REF_ADDR(r.child_entry->parent);
+			if(!ADDR_IN_FPAGE(range, paddr)) continue;
+			int rm_rights = L4_Rights(r.child_entry->range) & unmap_rights;
+			if(rm_rights == 0) continue;
+
+			/* TODO: call a "apply unmapping to single entry" function
+			 * instead; the unmap_fpage() loop does the group_for_addr(),
+			 * probe_group_addr() thing all over again.
+			 */
+			L4_Fpage_t fp = r.child_entry->range;
+			L4_Set_Rights(&fp, unmap_rights);
+			int pass_rwx = mapdb_unmap_fpage(r.group->space, fp,
+				true, true, false);
+			if(pass_rwx < 0) {
+				/* FIXME: handle ENOMEM */
+				panic("recursive unmap failed!");
+			}
+			rwx_seen |= pass_rwx;
+		}
+
+		const bool special = REF_IS_SPECIAL(e->parent);
+		bool drop = special && drop_special;
+		if(modify && !special) {
+			/* ensured by split_entry() */
+			assert(FPAGE_LOW(e->range) >= FPAGE_LOW(range));
+			assert(FPAGE_LOW(e->range) < r_end);
+			assert(FPAGE_HIGH(e->range) <= r_end);
+
+			int old_rights = L4_Rights(e->range),
+				new_rights = old_rights & ~unmap_rights;
+			L4_Set_Rights(&e->range, new_rights);
+			if(new_rights == 0) drop = true;
+			else if(new_rights < old_rights) {
+				set_pt_range_rights(&mod_it, e->range);
+			}
+		}
+		if(drop) {
+			assert(modify);
+			TRACE("%s: removing entry %#lx:%#lx\n", __func__,
+				L4_Address(e->range), L4_Size(e->range));
+			int n = reparent_children(g, e);
+			if(n < 0) {
+				/* ENOMEM can happen because children must be added to a
+				 * parent entry, which may return ENOMEM on hash resize.
+				 *
+				 * FIXME: this is HIGHLY INSUFFICIENT because of changes
+				 * made earlier in this function. the function should be
+				 * split into a children-gathering stage and three
+				 * functional stages, each invoked according to its
+				 * corresponding bool parameter.
+				 */
+				goto Enomem;
+			}
+
+			clear_pt_range(&mod_it, e->range);
+			e = erase_map_entry(g, e);
+
+			e--;	/* counteract the loop bump */
+		} else {
+			e->access = clear_stored_access ? 0 : rwx_seen;
+		}
+	} while(++e < &g->entries[MG_N_ENTRIES(g)] && L4_Address(e->range) < r_end);
+
+#ifndef NDEBUG
+	dump_map_group(g);
+#endif
 
 	assert(unmap_rights == 0 || check_mapdb(sp, 0));
 
