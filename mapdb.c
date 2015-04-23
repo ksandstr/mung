@@ -105,7 +105,7 @@ static struct map_entry *probe_group_addr(struct map_group *g, uintptr_t addr);
 static bool deref_child(
 	struct child_ref *cr,
 	struct map_group *home_grp,
-	const struct map_entry *e,
+	struct map_entry *e,
 	int child_ix);
 
 /* (how come this function is both static, and prefixed?) */
@@ -367,18 +367,18 @@ inv_fail:
 static bool deref_child(
 	struct child_ref *cr,		/* outputs appear in *cr. */
 	struct map_group *home_group,
-	const struct map_entry *e,
+	struct map_entry *e,
 	int child_ix)
 {
 	assert(child_ix < e->num_children);
 
-	const L4_Word_t *children = e->num_children > 1 ? e->children : &e->child;
+	L4_Word_t *children = e->num_children > 1 ? e->children : &e->child;
 	L4_Word_t ref = children[child_ix];
 	if(!REF_DEFINED(ref)) return false;
 
 	struct map_group *g = kmem_id2ptr_safe(map_group_policy,
 		REF_GROUP_ID(ref));
-	if(unlikely(g == NULL || !is_group_valid(g))) return false;
+	if(unlikely(g == NULL || !is_group_valid(g))) goto tombstone;
 	cr->child_entry = probe_group_addr(g, MG_START(g) + REF_ADDR(ref));
 	if(cr->child_entry == NULL) {
 		TRACE("%s: no entry at %#lx+%#lx=%#lx\n", __func__,
@@ -397,7 +397,7 @@ static bool deref_child(
 		TRACE("%s: backref %#lx mismatches group %#lx, or range %#lx..%#lx\n",
 			__func__, c_pt, (L4_Word_t)home_group & grp_mask_and,
 			FPAGE_LOW(e->range), FPAGE_HIGH(e->range));
-		return false;
+		goto tombstone;
 	}
 
 	/* check that the physical page is the same, too. */
@@ -406,10 +406,15 @@ static bool deref_child(
 	if(cr->child_entry->first_page_id != e->first_page_id + pg_off) {
 		TRACE("%s: page mismatch (child first %u, parent first %u, offset %d)\n",
 			__func__, cr->child_entry->first_page_id, e->first_page_id, pg_off);
-		return false;
+		goto tombstone;
 	}
 
 	return true;
+
+tombstone:
+	/* when a child has been very, very naughty. */
+	children[child_ix] = REF_TOMBSTONE;
+	return false;
 }
 
 
@@ -1374,9 +1379,7 @@ static int insert_empties(
  * on alloc failure this leaves entries in an uncertain-but-valid state and
  * returns -ENOMEM. idempotent due to mapdb_add_child() being so.
  */
-static int distribute_children(
-	struct map_group *g,
-	const struct map_entry *from)
+static int distribute_children(struct map_group *g, struct map_entry *from)
 {
 	if(from->num_children == 0) return 0;
 
@@ -1701,9 +1704,8 @@ static int unmap_entry_in_group(
 {
 	struct map_entry *e = *e_p;
 	assert(GROUP_ADDR(L4_Address(e->range)) == MG_START(g));
-	assert(GROUP_ADDR(L4_Address(eff_range)) == MG_START(g));
-	assert(L4_SizeLog2(eff_range) <= L4_SizeLog2(e->range));
 	assert(fpage_overlap(eff_range, e->range));
+	assert(L4_SizeLog2(eff_range) <= L4_SizeLog2(e->range));
 
 	const bool get_access = CHECK_FLAG(mode, UM_GET_ACCESS),
 		recursive = CHECK_FLAG(mode, UM_RECURSIVE),
@@ -1771,7 +1773,6 @@ static int unmap_entry_in_group(
 				e->child = 0;
 				break;
 			} else {
-				e->children[i] = REF_TOMBSTONE;
 				continue;
 			}
 		}
