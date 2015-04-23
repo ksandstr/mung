@@ -106,7 +106,8 @@ static bool deref_child(
 	struct child_ref *cr,
 	struct map_group *home_grp,
 	struct map_entry *e,
-	int child_ix);
+	int child_ix,
+	L4_Fpage_t eff_range);		/* as given to unmap_entry_in_group() */
 
 /* (how come this function is both static, and prefixed?) */
 static int mapdb_add_child(struct map_entry *ent, L4_Word_t child);
@@ -263,7 +264,7 @@ static bool check_map_entry(
 				 * known results.
 				 */
 				struct child_ref cr;
-				bool got_child = deref_child(&cr, p_grp, p_e, j);
+				bool got_child = deref_child(&cr, p_grp, p_e, j, p_e->range);
 				inv_ok1(got_child);
 				inv_ok1(cr.group == grp);
 				inv_ok1(cr.child_entry == e);
@@ -360,21 +361,34 @@ inv_fail:
  *
  * @home_group is used to decide staleness per group reference and
  * index within entry. @e need not point to inside @home_group->entries .
- *
- * TODO: add a "parent range" restriction to skip child refs when MISC bits
- * don't match.
  */
 static bool deref_child(
 	struct child_ref *cr,		/* outputs appear in *cr. */
 	struct map_group *home_group,
 	struct map_entry *e,
-	int child_ix)
+	int child_ix,
+	L4_Fpage_t eff_range)
 {
 	assert(child_ix < e->num_children);
+	assert(fpage_overlap(eff_range, e->range));
+	assert(L4_SizeLog2(eff_range) <= L4_SizeLog2(e->range));
 
-	L4_Word_t *children = e->num_children > 1 ? e->children : &e->child;
-	L4_Word_t ref = children[child_ix];
+	L4_Word_t *children = e->num_children > 1 ? e->children : &e->child,
+		ref = children[child_ix];
 	if(!REF_DEFINED(ref)) return false;
+
+	if(eff_range.raw != e->range.raw) {
+		/* test the MISC bits. */
+		int mask = (~(L4_Size(eff_range) - 1) & (0x1e * PAGE_SIZE))
+				>> (PAGE_BITS + 1),
+			bits = (eff_range.raw >> (PAGE_BITS + 1)) & mask;
+		if((ref & mask) != bits) {
+			TRACE("%s: excluded by MISC bits (got=%#x, mask=%#x, bits=%#x)\n",
+				__func__, (unsigned)REF_MISC(ref), (unsigned)mask,
+				(unsigned)bits);
+			return false;
+		}
+	}
 
 	struct map_group *g = kmem_id2ptr_safe(map_group_policy,
 		REF_GROUP_ID(ref));
@@ -1385,7 +1399,7 @@ static int distribute_children(struct map_group *g, struct map_entry *from)
 
 	for(int i=0; i < from->num_children; i++) {
 		struct child_ref r;
-		if(!deref_child(&r, g, from, i)) continue;
+		if(!deref_child(&r, g, from, i, from->range)) continue;
 
 		L4_Word_t pref_addr = MG_START(g) + REF_ADDR(r.child_entry->parent);
 		/* FIXME: this is stupid, isn't it? probe_group_addr() would
@@ -1604,7 +1618,7 @@ static int reparent_children(struct map_group *g, struct map_entry *e)
 	L4_Word_t *cs = e->num_children == 1 ? &e->child : e->children;
 	for(int i=0; i < e->num_children; i++) {
 		struct child_ref cr;
-		if(!deref_child(&cr, g, e, i)) {
+		if(!deref_child(&cr, g, e, i, e->range)) {
 			TRACE("%s: child %#lx was stale\n", __func__, cs[i]);
 			cs[i] = REF_TOMBSTONE;
 			continue;
@@ -1768,7 +1782,7 @@ static int unmap_entry_in_group(
 	int next_mode = (mode & ~UM_DROP_SPECIAL) | UM_IMMEDIATE;
 	for(int i=0; recursive && i < e->num_children; i++) {
 		struct child_ref r;
-		if(!deref_child(&r, g, e, i)) {
+		if(!deref_child(&r, g, e, i, e->range)) {
 			if(e->num_children < 2) {
 				e->child = 0;
 				break;
