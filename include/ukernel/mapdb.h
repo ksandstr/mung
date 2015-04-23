@@ -142,12 +142,15 @@ extern int mapdb_map_pages(
  * children are moved to its parent (if any remain after recursion).
  *
  * if @immediate is true, the mappings in @db covered by @fpage will be
- * affected. thus pairs of (@immediate, @recursive) correspond to L4.X2 unmap
- * operations like this:
- *   (true, false) = grant
- *   (true, true) = flush
- *   (false, true) = unmap
- *   (false, false) = one-level status read (not used)
+ * affected. thus triples of (@immediate, @recursive, @get_access) correspond
+ * to L4.X2 unmap operations like this:
+ *   (true, true, true) = flush
+ *   (true, false, false) = grant
+ *   (false, true, true) = unmap
+ *   (false, false, _) = one-level access read (not used)
+ *   (true, true, false) = flush w/o access read (not used)
+ *   (true, false, true) = grant w/ access read (nonsensical)
+ *   (false, true, false) = unmap w/o access read (not used)
  *
  * returns the inclusive mask of access bits of the physical pages actually
  * covered by @fpage since the last call to mapdb_unmap_fpage(). if @recursive
@@ -164,16 +167,18 @@ extern int mapdb_map_pages(
  * contribute to the return value. (TODO: this needs more testing.) when the
  * special form isn't used, the denormal bits in @fpage.address must be zero.
  *
- * if @clear_stored_access is set, the stored access bits retrieved for @fpage
- * will be cleared in the immediate entry. for recursion it is always passed
- * as false.
+ * if @get_access is set, stored access bits will be recursively retrieved
+ * for @fpage and cleared in @db's corresponding entries. if not, access bits
+ * will be neither examined nor altered.
+ *
+ * notably, !@get_access && @fpage.rights == 0 is a no-op.
  */
 extern int mapdb_unmap_fpage(
 	struct space *db,
 	L4_Fpage_t fpage,
 	bool immediate,
 	bool recursive,
-	bool clear_stored_access);
+	bool get_access);
 
 static inline void mapdb_erase_special(struct space *db, L4_Fpage_t fpage) {
 	fpage = L4_FpageLog2(L4_Address(fpage) | 0x800, L4_SizeLog2(fpage));

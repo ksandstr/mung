@@ -479,8 +479,8 @@ END_TEST
  */
 START_LOOP_TEST(partial_flush, iter, 0, 1)
 {
-	/* variants */
 	const bool recursive = CHECK_FLAG(iter, 1);
+	diag("recursive=%s", btos(recursive));
 
 	plan_tests(4);
 
@@ -491,13 +491,15 @@ START_LOOP_TEST(partial_flush, iter, 0, 1)
 	L4_Fpage_t ptr_page = L4_FpageLog2((L4_Word_t)ptr, 12);
 	L4_Set_Rights(&ptr_page, L4_Writable);
 	if(recursive) {
+		diag("calling forkserv unmap");
 		unsigned num = 1;
-		int n = forkserv_unmap(L4_Pager(), &ptr_page, 1,
-			&ptr_page, &num);
+		int n = forkserv_unmap(L4_Pager(), &ptr_page, 1, &ptr_page, &num);
 		fail_unless(n == 0, "n=%d", n);
 	} else {
+		diag("calling L4_FlushFpages()");
 		L4_FlushFpages(1, &ptr_page);
 	}
+	diag("unmap returned");
 
 	uint8_t val;
 	int old_f = pg_stats->n_faults;
