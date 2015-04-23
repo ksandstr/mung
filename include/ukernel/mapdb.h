@@ -3,7 +3,6 @@
 
 #include <stdint.h>
 #include <assert.h>
-#include <ccan/htable/htable.h>
 
 #include <l4/types.h>
 #include <ukernel/mm.h>

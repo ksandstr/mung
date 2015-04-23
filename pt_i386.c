@@ -12,6 +12,7 @@
 
 #include <ukernel/mm.h>
 #include <ukernel/space.h>
+#include <ukernel/mapdb.h>
 
 
 #define PT_UPPER_WIDTH 10
@@ -22,7 +23,7 @@
 #define _PTAB_MASK ((1ul << 22) - 1)
 
 
-#define MAX_INVLS 32		/* 128k of ops, then flush */
+#define MAX_INVLS 32		/* 128k of ops, then flush (TODO: not tuned!) */
 
 
 struct pt_iter
@@ -46,9 +47,25 @@ static inline void pt_iter_init(struct pt_iter *it, struct space *sp)
 }
 
 
+static inline void pt_iter_init_group(
+	struct pt_iter *it, struct map_group *grp)
+{
+	if(unlikely(grp->ptab_page == NULL)) {
+		pt_iter_init(it, grp->space);
+	} else {
+		*it = (struct pt_iter){
+			.sp = grp->space, .n_invls = 0,
+			.is_current = (grp->space == current_space),
+			.ptab_addr = MG_START(grp) & ~_PTAB_MASK,
+			.cur_ptab = map_vm_page(grp->ptab_page, VM_SYSCALL),
+		};
+	}
+}
+
+
 static inline void pt_iter_destroy(struct pt_iter *it)
 {
-	if(it->n_invls == 0xff) x86_flush_tlbs();
+	if(it->n_invls >= MAX_INVLS) x86_flush_tlbs();
 #ifndef NDEBUG
 	memset(it, 0xbd, sizeof(*it));
 #endif
@@ -119,15 +136,8 @@ static inline bool pt_set_page(
 	uint32_t pgid,
 	int rights)
 {
-	if((addr & ~_PTAB_MASK) != it->ptab_addr) {
-		uint32_t *tmp = x86_get_ptab(it->sp, addr);
-		if(tmp == NULL) return false;
-		it->cur_ptab = tmp;
-		it->ptab_addr = addr & ~_PTAB_MASK;
-	}
-	assert(it->cur_ptab != NULL);
-
-	uint32_t *ptab_mem = it->cur_ptab;
+	uint32_t *ptab_mem = _pt_ptab(it, addr);
+	if(ptab_mem == NULL) return false;
 	assert(L4_Writable == PT_RW);
 	ptab_mem[(addr >> 12) & 0x3ff] = pgid << 12 | PT_USER | PT_PRESENT
 		| (rights & L4_Writable);

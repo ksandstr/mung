@@ -34,6 +34,8 @@ struct pt_iter;
 
 
 static inline void pt_iter_init(struct pt_iter *iter, struct space *sp);
+static inline void pt_iter_init_group(
+	struct pt_iter *iter, struct map_group *grp);
 static inline void pt_iter_destroy(struct pt_iter *iter);
 
 /* examine a pagetable entry for a given address. returns 0 when not present.

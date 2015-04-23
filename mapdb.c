@@ -13,14 +13,14 @@
 
 #include <l4/types.h>
 
+#include <ukernel/bug.h>
 #include <ukernel/misc.h>
 #include <ukernel/util.h>
 #include <ukernel/slab.h>
 #include <ukernel/trace.h>
 #include <ukernel/space.h>
-#include <ukernel/ptab.h>
-#include <ukernel/bug.h>
 #include <ukernel/mapdb.h>
+#include <ukernel/ptab.h>
 
 
 /* for mapdb dumps on add/remove */
@@ -1060,7 +1060,7 @@ int mapdb_add_map(
 		}
 	}
 	struct pt_iter it;
-	pt_iter_init(&it, sp);
+	pt_iter_init_group(&it, g);
 	for(int i = 0, l = L4_Size(fpage) / PAGE_SIZE; i < l; i++) {
 		pt_set_page(&it, L4_Address(fpage) + i * PAGE_SIZE,
 			first_page_id + i, L4_Rights(fpage));
@@ -1710,12 +1710,8 @@ static int unmap_entry_in_group(
 		immediate = CHECK_FLAG(mode, UM_IMMEDIATE),
 		drop_special = CHECK_FLAG(mode, UM_DROP_SPECIAL);
 
-	/* TODO: only initialize this if the `drop' variable becomes true */
-	/* TODO: use a pt_iter_init_group() form to pass @g instead of @g->space
-	 * (which causes a needless htable lookup).
-	 */
 	struct pt_iter mod_it;
-	pt_iter_init(&mod_it, g->space);
+	pt_iter_init_group(&mod_it, g);
 
 	int unmap_rights = (mode & UM_RIGHTS) >> 4;
 	assert(unmap_rights != L4_NoAccess || get_access);
@@ -1931,10 +1927,7 @@ int mapdb_unmap_fpage(
 		}
 	} while(++e < &g->entries[MG_N_ENTRIES(g)] && L4_Address(e->range) < r_end);
 
-#ifndef NDEBUG
 	dump_map_group(g);
-#endif
-
 	assert(unmap_rights == 0 || check_mapdb(sp, 0));
 	return rwx_seen;
 }
@@ -1949,7 +1942,6 @@ struct map_entry *mapdb_probe(struct space *sp, uintptr_t addr)
 	assert(addr < MG_START(g) + GROUP_SIZE);
 	return probe_group_addr(g, addr);
 }
-
 
 
 /* TODO: flick the directory entry out to optimize for VMs that use shadowed
@@ -1971,7 +1963,7 @@ int mapdb_fill_page_table(struct space *sp, uintptr_t addr)
 
 	int n_set = 0;
 	struct pt_iter it;
-	pt_iter_init(&it, sp);
+	pt_iter_init_group(&it, g);
 	assert(pt_upper_present(&it, addr));
 	for(int i=0; i < MG_N_ENTRIES(g); i++) {
 		struct map_entry *e = &g->entries[i];
