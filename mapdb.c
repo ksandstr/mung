@@ -68,6 +68,13 @@
 /* maximum probe depth in map_entry->children. */
 #define MAX_PROBE_DEPTH 8
 
+/* masks and convenience accessors for map_entry->sa_flags. */
+#define ME_UP_MASK		007		/* shaken, not stirred */
+#define ME_SIDE_MASK	070
+#define _ME(f, mask) (((f) & (mask)) >> (ffsl((mask)) - 1))
+#define ME_UP(f) _ME((f), ME_UP_MASK)
+#define ME_SIDE(f) _ME((f), ME_SIDE_MASK)
+
 /* mode bits for unmap_entry_in_group().
  *
  * TODO: export immediate, recursive, and get_access; and change
@@ -78,6 +85,7 @@
 #define UM_GET_ACCESS	0x4
 #define UM_DROP_SPECIAL	0x8
 #define UM_RIGHTS		0x70	/* L4_Rights() in mask */
+#define UM_CHILD		0x80	/* not a primary Unmap target */
 
 
 /* dereferenced map_entry->children entry.
@@ -1504,7 +1512,7 @@ static int split_entry(
 			.range = pg_buf[i],
 			.parent = p_ref,
 			.first_page_id = saved.first_page_id + (addr_offset >> PAGE_BITS),
-			.access = saved.access,
+			.sa_flags = saved.sa_flags,
 			.num_children = 0,
 		};
 		L4_Set_Rights(&e[i].range, L4_Rights(saved.range));
@@ -1733,13 +1741,51 @@ static int unmap_entry_in_group(
 		L4_Address(eff_range), L4_Size(eff_range), btos(immediate),
 		btos(recursive), btos(get_access), btos(drop_special));
 
-	int rwx_seen = 0;
+	int rwx_seen = 0;	/* access-query accumulator */
+
+	/* dereference children and recur.
+	 *
+	 * TODO: depending on the mapping structure, this can end up generating a
+	 * potentially infinite series of invocation frames in kernel space,
+	 * overflowing the measly one-page stack. so instead it should use a
+	 * non-recursive breadth-first algorithm.
+	 */
+	int next_mode = (mode & ~UM_DROP_SPECIAL) | UM_IMMEDIATE | UM_CHILD;
+	for(int i=0; recursive && i < e->num_children; i++) {
+		struct child_ref r;
+		if(!deref_child(&r, g, e, i, eff_range)) {
+			if(e->num_children < 2) {
+				e->child = 0;
+				break;
+			} else {
+				continue;
+			}
+		}
+
+		TRACE("deref child %d (%#lx) -> %#lx:%#lx\n",
+			i, e->num_children < 2 ? e->child : e->children[i],
+			L4_Address(r.child_entry->range),
+			L4_Size(r.child_entry->range));
+
+		int rm_rights = L4_Rights(r.child_entry->range) & unmap_rights;
+		if(!get_access && rm_rights == 0) continue;
+
+		int n = unmap_entry_in_group(r.group, &r.child_entry, next_mode,
+			r.child_entry->range);
+		if(unlikely(n < 0)) {
+			assert(n == -ENOMEM);
+			rwx_seen = n;
+			goto end;
+		}
+		rwx_seen |= n;
+	}
+
+	/* grab access data now that the children have been looked at. */
 	if(get_access && !REF_IS_SPECIAL(e->parent)) {
 		/* check each native page in e->range.
 		 *
 		 * TODO: move access fetching into a proper function.
-		 * TODO: ... and implement the side/up access buffer design
-		 * TODO: ... then reconcile @eff_range with the other pages' access
+		 * TODO: ... reconcile @eff_range with the other pages' access
 		 * bits in a smaller @e->range
 		 */
 		L4_Word_t r_pos = L4_Address(eff_range),
@@ -1760,50 +1806,17 @@ static int unmap_entry_in_group(
 			}
 		} while(r_pos < r_last);
 
-		if(e_mask != 0 && REF_DEFINED(e->parent)) {
-			/* FIXME: propagate e_mask to parent */
+		if(CHECK_FLAG(mode, UM_CHILD)) {
+			/* return-and-clear "up", accumulate into "side". */
+			rwx_seen |= ME_UP(e->sa_flags) | e_mask;
+			e->sa_flags = (e->sa_flags & ~ME_UP_MASK)
+				| e_mask << (ffsl(ME_SIDE_MASK) - 1);
+		} else {
+			/* the russian reversal. */
+			rwx_seen |= ME_SIDE(e->sa_flags) | e_mask;
+			e->sa_flags = (e->sa_flags & ~ME_SIDE_MASK)
+				| e_mask << (ffsl(ME_UP_MASK) - 1);
 		}
-
-		rwx_seen |= (e_mask | e->access);
-	}
-
-	/* dereference children and recur.
-	 *
-	 * TODO: depending on the mapping structure, this can end up generating a
-	 * potentially infinite series of invocation frames in kernel space,
-	 * overflowing the measly one-page stack. so instead it should use a
-	 * non-recursive breadth-first algorithm.
-	 */
-	int next_mode = (mode & ~UM_DROP_SPECIAL) | UM_IMMEDIATE;
-	for(int i=0; recursive && i < e->num_children; i++) {
-		struct child_ref r;
-		if(!deref_child(&r, g, e, i, eff_range)) {
-			if(e->num_children < 2) {
-				e->child = 0;
-				break;
-			} else {
-				continue;
-			}
-		}
-
-		TRACE("deref child %d (%#lx) -> %#lx:%#lx\n",
-			i, e->num_children < 2 ? e->child : e->children[i],
-			L4_Address(r.child_entry->range),
-			L4_Size(r.child_entry->range));
-
-		L4_Word_t paddr = MG_START(g) + REF_ADDR(r.child_entry->parent);
-		if(!ADDR_IN_FPAGE(eff_range, paddr)) continue;
-		int rm_rights = L4_Rights(r.child_entry->range) & unmap_rights;
-		if(rm_rights == 0) continue;
-
-		int n = unmap_entry_in_group(r.group, &r.child_entry, next_mode,
-			r.child_entry->range);
-		if(unlikely(n < 0)) {
-			assert(n == -ENOMEM);
-			rwx_seen = n;
-			goto end;
-		}
-		rwx_seen |= n;
 	}
 
 	const bool modify = immediate && unmap_rights != 0,
@@ -1843,8 +1856,6 @@ static int unmap_entry_in_group(
 		e = erase_map_entry(g, e);
 		e--;	/* counteract the caller's loop bump. */
 		*e_p = e;
-	} else {
-		e->access = get_access ? 0 : rwx_seen;
 	}
 
 end:
@@ -1927,6 +1938,7 @@ int mapdb_unmap_fpage(
 	const L4_Word_t r_end = FPAGE_HIGH(range);
 	do {
 		if(likely(!REF_IS_SPECIAL(e->parent)) || drop_special) {
+			assert(!CHECK_FLAG(mode, UM_CHILD));
 			int n = unmap_entry_in_group(g, &e, mode,
 				L4_SizeLog2(range) < L4_SizeLog2(e->range) ? range : e->range);
 			if(unlikely(n < 0)) return n;

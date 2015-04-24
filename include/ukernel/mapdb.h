@@ -30,15 +30,16 @@ struct space;
 
 struct map_entry
 {
-	/* @range == L4_nilpage is used to indicate an empty slot in map_group.
-	 *
-	 * an entry's @range is always at most as large as its parent's entry.
-	 * toplevel entries' size is limited by group size alone.
-	 */
+	/* @range == L4_nilpage indicates an empty slot in map_group. */
 	L4_Fpage_t range;		/* incl. L4 permission bits */
 	uint32_t first_page_id;
 
-	/* special values:
+	/* a child entry's reference into its parent.
+	 *
+	 * an entry's @range is always at most as large as its parent's entry.
+	 * toplevel entries' size is limited by group size alone.
+	 *
+	 * special values:
 	 *   - when !defined, there is no parent. this appears at boot in sigma0,
 	 *   and entries whose immediate last parent has been granted away (e.g.
 	 *   as granted by sigma0)
@@ -48,7 +49,21 @@ struct map_entry
 	 */
 	L4_Word_t parent;
 
-	uint16_t access;	/* temporarily wack (FIXME) */
+	/* stored access and flags field.
+	 *
+	 * the lowest 6 bits store the "up" and "side" access fields. the format
+	 * particulars are private to mapdb.c . the upper 10 bits are unused for
+	 * the time being.
+	 *
+	 * the CPU provides momentary access values in the actual page table, from
+	 * where mapdb_unmap_fpage() reads-and-clears them if the @get_access
+	 * parameter is set. depending on whether it's processing a child entry of
+	 * the primary, that function will also accumulate the momentary value in
+	 * either the "up" or "side" subfield of ->access, read-and-clear the
+	 * other accumulator, and output its value combined with the momentary
+	 * value.
+	 */
+	uint16_t sa_flags;
 
 	/* there may be fewer actual children of this map_entry; num_children only
 	 * tracks whether "child" or "children" is to be used, and how many words

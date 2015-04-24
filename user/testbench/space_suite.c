@@ -669,7 +669,6 @@ END_TEST
 START_TEST(local_access)
 {
 	plan_tests(2);
-	todo_start("not supposed to work yet");
 
 	char *testmem = valloc(PAGE_SIZE);
 	memset(testmem, 0, PAGE_SIZE);
@@ -716,7 +715,6 @@ static int get_status_from_fs(L4_Fpage_t pg)
 START_TEST(parent_access)
 {
 	plan_tests(2);
-	todo_start("known broken");
 
 	char *testmem = valloc(PAGE_SIZE);
 	memset(testmem, 0, PAGE_SIZE);
@@ -748,7 +746,6 @@ START_LOOP_TEST(access_interference, iter, 0, 1)
 	diag("parent_first=%s", btos(parent_first));
 
 	plan_tests(4);
-	todo_start("expected to fail");
 
 	char *testmem = valloc(PAGE_SIZE);
 	memset(testmem, 0, PAGE_SIZE);
