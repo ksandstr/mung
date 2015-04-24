@@ -1434,7 +1434,6 @@ static int distribute_children(struct map_group *g, struct map_entry *from)
 		}
 
 		/* simple case. */
-		/* (TODO: verify that the index clue is correct, somehow.) */
 		L4_Word_t child = addr_to_ref(r.group,
 			L4_Address(r.child_entry->range))
 				| ((REF_INDEX(r.child_entry->parent) >> 1) & 0xf);
@@ -1688,9 +1687,6 @@ static void set_pt_range_rights(struct pt_iter *mod_it, L4_Fpage_t range)
 
 	L4_Word_t a = L4_Address(range), l = a + L4_Size(range);
 	while(a < l) {
-		/* TODO: add an interface that doesn't dig through the page tables
-		 * twice. then use it here.
-		 */
 		bool upper;
 		uint32_t pgid = pt_probe(mod_it, &upper, NULL, a);
 		if(unlikely(!upper)) a = (a + PT_UPPER_SIZE) & ~PT_UPPER_MASK;
@@ -1959,14 +1955,10 @@ struct map_entry *mapdb_probe(struct space *sp, uintptr_t addr)
 }
 
 
-/* TODO: flick the directory entry out to optimize for VMs that use shadowed
- * page tables; restore it when done.
- */
 int mapdb_fill_page_table(struct space *sp, uintptr_t addr)
 {
 	addr &= ~PT_UPPER_MASK;
 
-	/* TODO: force this in mapdb.h */
 	assert(MAX_ENTRIES_PER_GROUP == 1 << PT_UPPER_WIDTH);
 	struct map_group *g = group_for_addr(sp, addr);
 	if(g == NULL) return 0;
@@ -1997,7 +1989,7 @@ int mapdb_fill_page_table(struct space *sp, uintptr_t addr)
 
 COLD void init_mapdb(void)
 {
-	/* FIXME: add a proper interface for enabling/disabling trace IDs.
+	/* TODO: add a proper interface for enabling/disabling trace IDs.
 	 * kernel commandline perhaps?
 	 */
 #if 0

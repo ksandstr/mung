@@ -28,25 +28,17 @@
 struct space;
 
 
-/* L4_SizeLog2(@range) <= L4_SizeLog2(parent->range).
- *
- * toplevel mappings, such as those granted by sigma0, have an invalid
- * @parent.
- *
- * @range == L4_nilpage is used to indicate an empty slot in map_group.
- *
- * FIXME: add a specialness indicator to replace the old REF_IS_SPECIAL() in
- * ->parent!
- */
 struct map_entry
 {
+	/* @range == L4_nilpage is used to indicate an empty slot in map_group.
+	 *
+	 * an entry's @range is always at most as large as its parent's entry.
+	 * toplevel entries' size is limited by group size alone.
+	 */
 	L4_Fpage_t range;		/* incl. L4 permission bits */
 	uint32_t first_page_id;
 
-	/* addr = address in parent space, may be in the middle of a larger range.
-	 * space = parent space ID.
-	 *
-	 * special values:
+	/* special values:
 	 *   - when !defined, there is no parent. this appears at boot in sigma0,
 	 *   and entries whose immediate last parent has been granted away (e.g.
 	 *   as granted by sigma0)
@@ -56,31 +48,23 @@ struct map_entry
 	 */
 	L4_Word_t parent;
 
-	/* this field is OR'd with the page table queries to give the access bits
-	 * returned by Unmap. it's written to when a parent recursively
-	 * queries-and-resets the page table's access bits, and when a child
-	 * resets its own access bits. it's cleared by Unmap.
-	 *
-	 * NOTE: there's some loss of precision where a parent entry is larger
-	 * than the child; i.e. some physical pages' entries end up reporting for
-	 * a larger range than their size.
-	 */
-	uint16_t access;
+	uint16_t access;	/* temporarily wack (FIXME) */
+
 	/* there may be fewer actual children of this map_entry; num_children only
 	 * tracks whether "child" or "children" is to be used, and how many words
 	 * are allocated under "children" when num_children > 1.
 	 *
-	 * empties may show up as L4_nilpage, or a reference to a child space that
-	 * either doesn't exist, has no mapping at that address, or the mapping
-	 * doesn't reference a physical page in this map_entry. (the latter are
-	 * compacted by Unmap and the large-page splitting function [which divvies
-	 * the larger page's children appropriately].)
+	 * empties may show up as a !defined ref, or a reference to a map_group
+	 * that either doesn't exist, isn't valid, has no map_entry at that index,
+	 * or the mapping doesn't reference the correct physical page in this
+	 * map_entry. invalid children will be replaced with a tombstone at
+	 * dereference.
 	 *
 	 * "children" is also used to verify that the previous mapping was made
 	 * from this entry at this address, as required by the L4.X2 criteria on
 	 * when a map/grant extends the privileges of an existing mapping.
 	 */
-	uint16_t num_children;	/* (upper 4 bits redundant) */
+	uint16_t num_children;	/* (at most 4096; upper 4 bits redundant) */
 	union {
 		L4_Word_t child;		/* when num_children <= 1 */
 		L4_Word_t *children;	/* otherwise (malloc()'d) */
@@ -163,8 +147,8 @@ extern int mapdb_map_pages(
  * !@recursive && @fpage.rights == full, special mappings will be removed if
  * they're contained within @fpage, and fragmented if they are larger.
  * regardless of this setting, the access bits of special mappings don't
- * contribute to the return value. (TODO: this needs more testing.) when the
- * special form isn't used, the denormal bits in @fpage.address must be zero.
+ * contribute to the return value. when the special form isn't used, the
+ * denormal bits in @fpage.address must be zero.
  *
  * if @get_access is set, stored access bits will be recursively retrieved
  * for @fpage and cleared in @db's corresponding entries. if not, access bits
