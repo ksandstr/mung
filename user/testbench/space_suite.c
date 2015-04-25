@@ -650,8 +650,7 @@ START_TEST(no_flush_kip_utcb)
 		ok1(L4_Rights(fp[i]) == 0);
 	}
 
-	L4_ThreadId_t tid = xstart_thread(&access_memory_fn,
-		kip_addr + 0x40);
+	L4_ThreadId_t tid = xstart_thread(&access_memory_fn, kip_addr + 0x40);
 	L4_Word_t ec = 0;
 	void *ret = join_thread_long(tid, TEST_IPC_DELAY, &ec);
 	if(!ok(ret != NULL || ec == 0, "illegal KIP access ok")) {
@@ -659,6 +658,82 @@ START_TEST(no_flush_kip_utcb)
 	}
 	if(!ok1(ret == kip_addr + 0x40)) {
 		diag("ret=%p", ret);
+	}
+}
+END_TEST
+
+
+/* local access queries. i.e. whether the local space's momentary access bits
+ * get delivered and reset per spec.
+ */
+START_TEST(local_access)
+{
+	plan_tests(2);
+	todo_start("not supposed to work yet");
+
+	char *testmem = valloc(PAGE_SIZE);
+	memset(testmem, 0, PAGE_SIZE);
+	diag("testmem=%p", testmem);
+	L4_Fpage_t pg = L4_FpageLog2((L4_Word_t)testmem, PAGE_BITS);
+	L4_GetStatus(pg);	/* clear off the access bits. */
+
+	strlcpy(testmem, "whatever", PAGE_SIZE);
+	int after_write = L4_Rights(L4_GetStatus(pg));
+	if(!ok1(CHECK_FLAG_ALL(after_write, L4_ReadWriteOnly))) {
+		diag("after_write=%#x", (unsigned)after_write);
+	}
+
+	diag("testmem contains `%s'", testmem);
+	int after_read = L4_Rights(L4_GetStatus(pg));
+	if(!ok1((after_read & L4_ReadWriteOnly) == L4_Readable)) {
+		diag("after_read=%#x", (unsigned)after_read);
+	}
+}
+END_TEST
+
+
+/* like L4_Rights(L4_GetStatus(@pg)), but indirect. */
+static int get_status_from_fs(L4_Fpage_t pg)
+{
+	L4_Set_Rights(&pg, 0);
+	unsigned num = 1;
+	int n = forkserv_unmap(L4_Pager(), &pg, 1, &pg, &num);
+	if(n < 0) {
+		diag("%s: forkserv_unmap failed, n=%d", __func__, n);
+		return 0;
+	} else if(num == 0) {
+		diag("%s: forkserv_unmap didn't return a page?", __func__);
+		return 0;
+	} else {
+		return L4_Rights(pg);
+	}
+}
+
+
+/* parent-to-child access queries. i.e. whether a child space's momentary
+ * access bits get delivered and reset per spec, to the parent.
+ */
+START_TEST(parent_access)
+{
+	plan_tests(2);
+	todo_start("known broken");
+
+	char *testmem = valloc(PAGE_SIZE);
+	memset(testmem, 0, PAGE_SIZE);
+	diag("testmem=%p", testmem);
+	L4_Fpage_t pg = L4_FpageLog2((L4_Word_t)testmem, PAGE_BITS);
+	get_status_from_fs(pg);
+
+	strlcpy(testmem, "umm and whatnot", PAGE_SIZE);
+	int after_write = get_status_from_fs(pg);
+	if(!ok1(CHECK_FLAG_ALL(after_write, L4_ReadWriteOnly))) {
+		diag("after_write=%#x", (unsigned)after_write);
+	}
+
+	diag("testmem contains `%s'", testmem);
+	int after_read = get_status_from_fs(pg);
+	if(!ok1((after_read & L4_ReadWriteOnly) == L4_Readable)) {
+		diag("after_read=%#x", (unsigned)after_read);
 	}
 }
 END_TEST
@@ -693,6 +768,8 @@ Suite *space_suite(void)
 		tcase_add_test(tc, large_flush);
 		tcase_add_test(tc, no_unmap_kip_utcb);
 		tcase_add_test(tc, no_flush_kip_utcb);
+		tcase_add_test(tc, local_access);
+		tcase_add_test(tc, parent_access);
 		suite_add_tcase(s, tc);
 	}
 
