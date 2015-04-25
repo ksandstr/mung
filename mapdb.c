@@ -383,9 +383,10 @@ static bool deref_child(
 		int mask = (~(L4_Size(eff_range) - 1) & (0x1e * PAGE_SIZE))
 				>> (PAGE_BITS + 1),
 			bits = (eff_range.raw >> (PAGE_BITS + 1)) & mask;
+		assert(L4_SizeLog2(eff_range) > PAGE_BITS + 5 || mask != 0);
 		if((ref & mask) != bits) {
-			TRACE("%s: excluded by MISC bits (got=%#x, mask=%#x, bits=%#x)\n",
-				__func__, (unsigned)REF_MISC(ref), (unsigned)mask,
+			TRACE("%s: ref=%#lx excluded by MISC bits (got=%#x, mask=%#x, bits=%#x)\n",
+				__func__, ref, (unsigned)REF_MISC(ref), (unsigned)mask,
 				(unsigned)bits);
 			return false;
 		}
@@ -398,7 +399,7 @@ static bool deref_child(
 	if(cr->child_entry == NULL) {
 		TRACE("%s: no entry at %#lx+%#lx=%#lx\n", __func__,
 			MG_START(g), REF_ADDR(ref), MG_START(g) + REF_ADDR(ref));
-		return false;
+		goto tombstone;
 	}
 	cr->group = g;
 
@@ -1785,7 +1786,7 @@ static int unmap_entry_in_group(
 	int next_mode = (mode & ~UM_DROP_SPECIAL) | UM_IMMEDIATE;
 	for(int i=0; recursive && i < e->num_children; i++) {
 		struct child_ref r;
-		if(!deref_child(&r, g, e, i, e->range)) {
+		if(!deref_child(&r, g, e, i, eff_range)) {
 			if(e->num_children < 2) {
 				e->child = 0;
 				break;
