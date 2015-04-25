@@ -739,6 +739,44 @@ START_TEST(parent_access)
 END_TEST
 
 
+/* tests whether a parent's access query will interfere with that of the
+ * child, or vice versa.
+ */
+START_LOOP_TEST(access_interference, iter, 0, 1)
+{
+	const bool parent_first = CHECK_FLAG(iter, 1);
+	diag("parent_first=%s", btos(parent_first));
+
+	plan_tests(4);
+	todo_start("expected to fail");
+
+	char *testmem = valloc(PAGE_SIZE);
+	memset(testmem, 0, PAGE_SIZE);
+	L4_Fpage_t pg = L4_FpageLog2((L4_Word_t)testmem, PAGE_BITS);
+	diag("pg=%#lx:%#lx", L4_Address(pg), L4_Size(pg));
+	get_status_from_fs(pg);
+	L4_GetStatus(pg);
+
+	strlcpy(testmem, "something or other", PAGE_SIZE);
+	unsigned parent, child;
+	if(parent_first) parent = get_status_from_fs(pg);
+	child = L4_Rights(L4_GetStatus(pg));
+	if(!parent_first) parent = get_status_from_fs(pg);
+	diag("[rw] parent=%#x, child=%#x", parent, child);
+	ok1(CHECK_FLAG_ALL(parent, L4_ReadWriteOnly));
+	ok1(CHECK_FLAG_ALL(child, L4_ReadWriteOnly));
+
+	diag("testmem contains `%s'", testmem);
+	if(parent_first) parent = get_status_from_fs(pg);
+	child = L4_Rights(L4_GetStatus(pg));
+	if(!parent_first) parent = get_status_from_fs(pg);
+	diag("[ro] child=%#x, parent=%#x", child, parent);
+	ok1((parent & L4_ReadWriteOnly) == L4_Readable);
+	ok1((child & L4_ReadWriteOnly) == L4_Readable);
+}
+END_TEST
+
+
 Suite *space_suite(void)
 {
 	Suite *s = suite_create("space");
@@ -770,6 +808,7 @@ Suite *space_suite(void)
 		tcase_add_test(tc, no_flush_kip_utcb);
 		tcase_add_test(tc, local_access);
 		tcase_add_test(tc, parent_access);
+		tcase_add_test(tc, access_interference);
 		suite_add_tcase(s, tc);
 	}
 
