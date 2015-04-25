@@ -102,6 +102,7 @@ static int insert_empties(
 
 static struct map_entry *probe_group_addr(struct map_group *g, uintptr_t addr);
 
+static int reparent_children(struct map_group *g, struct map_entry *e);
 static bool deref_child(
 	struct child_ref *cr,
 	struct map_group *home_grp,
@@ -226,7 +227,7 @@ static bool check_map_entry(
 	inv_imply1(REF_IS_SPECIAL(e->parent), REF_ADDR(e->parent) == 0);
 	inv_imply1(REF_IS_SPECIAL(e->parent), REF_GROUP_BITS(e->parent) == 0);
 
-	const struct map_entry *p_e;
+	struct map_entry *p_e;
 	if(!REF_DEFINED(e->parent)) {
 		inv_log("  ... is parentless entry");
 		p_e = NULL;
@@ -453,8 +454,10 @@ void mapdb_destroy(struct space *sp)
 	{
 		for(int i=0; i < MG_N_ENTRIES(g); i++) {
 			struct map_entry *e = &g->entries[i];
-			/* FIXME: re-parent children of @e */
-			if(e->num_children > 1) free(e->children);
+			if(e->num_children > 0) {
+				reparent_children(g, e);
+				if(e->num_children > 1) free(e->children);
+			}
 		}
 		free(g->entries); g->entries = NULL;
 		x86_free_ptab(g);
@@ -1617,11 +1620,7 @@ static int reparent_children(struct map_group *g, struct map_entry *e)
 	L4_Word_t *cs = e->num_children == 1 ? &e->child : e->children;
 	for(int i=0; i < e->num_children; i++) {
 		struct child_ref cr;
-		if(!deref_child(&cr, g, e, i, e->range)) {
-			TRACE("%s: child %#lx was stale\n", __func__, cs[i]);
-			cs[i] = REF_TOMBSTONE;
-			continue;
-		}
+		if(!deref_child(&cr, g, e, i, e->range)) continue;
 
 		if(parent_g != NULL) {
 			if(L4_SizeLog2(e->range) > L4_SizeLog2(cr.child_entry->range)) {
