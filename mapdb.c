@@ -1605,6 +1605,7 @@ static int reparent_children(struct map_group *g, struct map_entry *e)
 
 	struct map_group *parent_g = NULL;
 	struct map_entry *parent_entry = NULL;
+	int p_offs = 0;
 	if(likely(REF_DEFINED(e->parent))) {
 		parent_g = (void *)((e->parent & grp_mask_and) | grp_mask_or);
 		assert(parent_g == kmem_id2ptr_safe(map_group_policy,
@@ -1615,6 +1616,7 @@ static int reparent_children(struct map_group *g, struct map_entry *e)
 			"parent ref=(%#lx, %#lx, %#lx) must be valid",
 			REF_INDEX(e->parent), REF_GROUP_BITS(e->parent),
 			REF_MISC(e->parent));
+		p_offs = L4_Address(parent_entry->range) - MG_START(parent_g);
 	}
 
 	L4_Word_t *cs = e->num_children == 1 ? &e->child : e->children;
@@ -1623,14 +1625,16 @@ static int reparent_children(struct map_group *g, struct map_entry *e)
 		if(!deref_child(&cr, g, e, i, e->range)) continue;
 
 		if(parent_g != NULL) {
-			if(L4_SizeLog2(e->range) > L4_SizeLog2(cr.child_entry->range)) {
-				/* EXPLODE! */
-				/* (FIXME: implement this case by filling child_offs in
-				 * properly. it's OK for @e to be larger than its children.)
-				 */
-				panic("massive fuckups!");
-			}
-			L4_Word_t child_offs = 0;		/* FIXME: FILL THIS SUCKER IN */
+			/* compute cr.child_entry's location in parent_g from @e's
+			 * position in parent_entry.
+			 */
+			int child_in_e = REF_ADDR(cr.child_entry->parent)
+					- (L4_Address(e->range) - MG_START(g)),
+				e_in_parent = REF_ADDR(e->parent) - p_offs,
+				child_offs = child_in_e + e_in_parent;
+			assert(child_in_e >= 0 && e_in_parent >= 0);
+			assert(cr.child_entry->first_page_id
+				== parent_entry->first_page_id + child_offs / PAGE_SIZE);
 
 			L4_Word_t parent = addr_to_ref(parent_g,
 					L4_Address(parent_entry->range) + child_offs),
