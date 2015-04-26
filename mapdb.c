@@ -904,17 +904,19 @@ static void replace_map_entry(
 	assert(L4_Address(old->range) == L4_Address(fpage));
 	assert(L4_SizeLog2(old->range) == L4_SizeLog2(fpage));
 
-	if(old->first_page_id == first_page_id) {
-		/* matches content, also */
+	if(old->first_page_id == first_page_id && old->parent == parent) {
+		/* matches content and parentage -> expand rights */
 		L4_Set_Rights(&old->range,
 			L4_Rights(old->range) | L4_Rights(fpage));
 	} else {
-		if(old->num_children > 1) {
-			/* FIXME: revert these children to referring to this
-			 * entry's parent
-			 */
-			free(old->children);
-			old->children = NULL;
+		if(old->num_children > 0) {
+			/* FIXME: reparent replacee's children */
+			printf("%s: %d children were left dangling!\n",
+				__func__, (int)old->num_children);
+			if(old->num_children > 1) {
+				free(old->children);
+				old->children = NULL;
+			}
 		}
 		*old = (struct map_entry){
 			.parent = parent, .range = fpage,
