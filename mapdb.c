@@ -1526,8 +1526,10 @@ static int split_entry(
 		if(likely(parent_g != NULL)) {
 			L4_Word_t child = addr_to_ref(g, L4_Address(e[i].range))
 				| ((REF_INDEX(p_ref) >> 1) & 0xf);
-			/* FIXME: catch -ENOMEM */
-			mapdb_add_child(parent_ent, child);
+			int n = mapdb_add_child(parent_ent, child);
+			if(n < 0) {
+				panic("mapdb_add_child failed in split_entry()");
+			}
 		}
 	}
 	assert(MG_N_ENTRIES(g) + p - 1 <= 1024);
