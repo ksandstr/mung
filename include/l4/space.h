@@ -44,7 +44,7 @@ static inline void L4_FlushFpages(L4_Word_t n, L4_Fpage_t *fpages)
 
 static inline L4_Fpage_t L4_GetStatus(L4_Fpage_t f)
 {
-	L4_LoadMR(0, f.raw & ~0x0f);
+	L4_LoadMR(0, f.raw & ~0xful);
 	L4_Unmap(0);
 	L4_StoreMR(0, &f.raw);
 	return f;

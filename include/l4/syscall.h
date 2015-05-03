@@ -170,12 +170,13 @@ static inline L4_MsgTag_t L4_Lipc(
 static inline void L4_Unmap(L4_Word_t control)
 {
 	extern _C_ void __L4_Unmap(void);
+	L4_Word_t dummy;
 	void *utcb = __L4_Get_UtcbAddress();
 	__asm__ __volatile__ (
 		__L4_SAVE_REGS
 		"\tcall *%%ecx\n"
 		__L4_RESTORE_REGS
-		: "=S" (L4_VREG(utcb, L4_TCR_MR(0)))
+		: "=S" (L4_VREG(utcb, L4_TCR_MR(0))), "=D" (utcb), "=a" (dummy), "=c" (dummy)
 		: "S" (L4_VREG(utcb, L4_TCR_MR(0))), "D" (utcb),
 		  "a" (control), "c" (__L4_Unmap)
 		: "edx", __L4_CLOBBER_REGS);
