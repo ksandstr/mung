@@ -648,9 +648,6 @@ static void coalesce_entries(struct map_group *g, struct map_entry *e)
 			struct child_ref cr;
 			if(!deref_child(&cr, g, oth, i, oth->range)) continue;
 			int n = mapdb_add_child(e, chs[i]);
-			/* FIXME: handle this atomically by pre-growing @e's child array
-			 * before expand_entry().
-			 */
 			if(unlikely(n == -ENOMEM)) {
 				panic("ENOMEM in coalesce_entries()");
 			}
@@ -1216,7 +1213,7 @@ static int mapdb_add_child(struct map_entry *ent, L4_Word_t child)
  * sender address space within the mapping: therefore pages in the receiver
  * won't be unmapped when the sender's corresponding slot is empty.
  *
- * FIXME: should catch and return -ENOMEM from mapdb_add_map() etc.
+ * TODO: should catch and return -ENOMEM from mapdb_add_map() etc.
  */
 int mapdb_map_pages(
 	struct space *from_space,
@@ -1431,7 +1428,6 @@ static int distribute_children(struct map_group *g, struct map_entry *from)
 			struct map_entry *ent = fetch_entry(r.group, cut, true);
 			if(unlikely(ent == NULL)) {
 				assert(probe_group_range(r.group, cut) != NULL);
-				/* FIXME: attempt some kind of atomicity on failure. */
 				panic("split_entry() ran out of heap in distribute_children()");
 			}
 
@@ -1540,7 +1536,6 @@ static int split_entry(
 	g->addr += p - 1;
 
 	if(saved.num_children > 0) {
-		/* FIXME: catch -ENOMEM */
 		int n = distribute_children(g, &saved);
 		if(n < 0) {
 			panic("distribute_children() failed in split_entry()");
@@ -1916,9 +1911,6 @@ int mapdb_unmap_fpage(
 	if(e == NULL && modify) {
 		/* distinguish between not-exist and ENOMEM from split_entry(). */
 		if(probe_group_range(g, range) != NULL) {
-			/* FIXME: implement restartable suspending somewhere along
-			 * this function's call chain.
-			 */
 			panic("malloc() failed in fetch_entry()");
 		}
 	}
