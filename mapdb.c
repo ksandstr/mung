@@ -911,15 +911,8 @@ static void replace_map_entry(
 		L4_Set_Rights(&old->range,
 			L4_Rights(old->range) | L4_Rights(fpage));
 	} else {
-		if(old->num_children > 0) {
-			/* FIXME: reparent replacee's children */
-			printf("%s: %d children were left dangling!\n",
-				__func__, (int)old->num_children);
-			if(old->num_children > 1) {
-				free(old->children);
-				old->children = NULL;
-			}
-		}
+		/* TODO: this part is without test coverage. write some. */
+		reparent_children(g, old);
 		*old = (struct map_entry){
 			.parent = parent, .range = fpage,
 			.first_page_id = first_page_id,
