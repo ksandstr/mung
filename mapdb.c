@@ -639,10 +639,13 @@ static void coalesce_entries(struct map_group *g, struct map_entry *e)
 		if(far_side) SWAP(struct map_entry *, e, oth);
 		expand_entry(e);
 
-		/* move children over as well. */
+		/* move valid children over as well. these will overwrite (presumably
+		 * less or equally valid) children in @e.
+		 */
 		L4_Word_t *chs = oth->num_children <= 1 ? &oth->child : oth->children;
 		for(int i=0; i < oth->num_children; i++) {
-			if(!REF_DEFINED(chs[i])) continue;
+			struct child_ref cr;
+			if(!deref_child(&cr, g, oth, i, oth->range)) continue;
 			int n = mapdb_add_child(e, chs[i]);
 			/* FIXME: handle this atomically by pre-growing @e's child array
 			 * before expand_entry().
@@ -650,7 +653,6 @@ static void coalesce_entries(struct map_group *g, struct map_entry *e)
 			if(unlikely(n == -ENOMEM)) {
 				panic("ENOMEM in coalesce_entries()");
 			}
-			/* this loop ignores -EEXIST to fold existing children in. */
 		}
 		if(oth->num_children > 1) free(oth->children);
 		oth->num_children = 0;
