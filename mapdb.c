@@ -1409,10 +1409,8 @@ static int distribute_children(struct map_group *g, struct map_entry *from)
 		if(!deref_child(&r, g, from, i, from->range)) continue;
 
 		L4_Word_t pref_addr = MG_START(g) + REF_ADDR(r.child_entry->parent);
-		/* FIXME: this is stupid, isn't it? probe_group_addr() would
-		 * suffice.
-		 */
-		struct map_entry *p_ent = mapdb_probe(g->space, pref_addr);
+		struct map_entry *p_ent = probe_group_range(g,
+			L4_FpageLog2(pref_addr, L4_SizeLog2(r.child_entry->range)));
 		if(p_ent == NULL) {
 			/* discard child due to hole made in parent */
 			continue;
