@@ -850,7 +850,8 @@ static int insert_map_entry(
 
 
 /* returns the new @e, making iteration safe if g->entries ends up shrunk
- * by this function.
+ * by this function. this is supposed to be used in conjunction with
+ * reparent_children() to rewrite any child mappings' parent refs.
  */
 static struct map_entry *erase_map_entry(
 	struct map_group *g,
@@ -859,14 +860,15 @@ static struct map_entry *erase_map_entry(
 	int n_ents = MG_N_ENTRIES(g), nal_shift = MG_N_ALLOC_LOG2(g),
 		n_alloc = 1 << nal_shift;
 	assert(n_ents > 0);
-
-	e->range = L4_Nilpage;
+	assert(e->num_children == 0);	/* see comment */
 
 	int pos = e - g->entries;
 	if(pos < n_ents - 1) {
 		int copy_num = n_ents - 1 - pos;
 		memmove(&g->entries[pos], &g->entries[pos + 1],
 			copy_num * sizeof(struct map_entry));
+	} else {
+		e->range = L4_Nilpage;
 	}
 	n_ents--;
 
