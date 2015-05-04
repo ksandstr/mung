@@ -1055,12 +1055,12 @@ static void handle_unmap(
 	}
 
 	/* holy nested loops, batman! */
-	L4_Fpage_t local[63];
+	L4_Fpage_t local[64];
 	int outpos = 0;
-	for(int i=0, in_len = pages_len; i < in_len && outpos < 63; i++) {
+	for(int i=0, in_len = pages_len; i < in_len && outpos < 64; i++) {
 		for(L4_Word_t fp_addr = L4_Address(pages[i]),
 					  fp_max = fp_addr + L4_Size(pages[i]);
-			fp_addr < fp_max && outpos < 63;
+			fp_addr < fp_max && outpos < 64;
 			fp_addr += PAGE_SIZE)
 		{
 			struct fs_vpage *vp = htable_get(&sp->pages,
@@ -1073,9 +1073,9 @@ static void handle_unmap(
 			outpos++;
 		}
 	}
-	L4_UnmapFpages(outpos, local);
+	if(outpos > 0) L4_UnmapFpages(outpos, local);
 	for(int i=0; i < outpos; i++) {
-		L4_Set_Rights(&output[outpos], L4_Rights(local[outpos]));
+		L4_Set_Rights(&output[i], L4_Rights(local[i]));
 	}
 	*output_len = outpos;
 }
