@@ -399,7 +399,7 @@ static bool deref_child(
 
 	struct map_group *g = kmem_id2ptr_safe(map_group_policy,
 		REF_GROUP_ID(ref));
-	if(unlikely(g == NULL || !is_group_valid(g))) goto tombstone;
+	if(g == NULL || !is_group_valid(g)) goto tombstone;
 	cr->child_entry = probe_group_addr(g, MG_START(g) + REF_ADDR(ref));
 	if(cr->child_entry == NULL) {
 		TRACE("%s: no entry at %#lx+%#lx=%#lx\n", __func__,
@@ -435,6 +435,8 @@ static bool deref_child(
 
 tombstone:
 	/* when a child has been very, very naughty. */
+	TRACE("%s: child %d (%#lx) got tombstoned\n", __func__,
+		child_ix, children[child_ix]);
 	children[child_ix] = REF_TOMBSTONE;
 	return false;
 }
@@ -644,19 +646,75 @@ static bool can_merge(
 }
 
 
-static void expand_entry(struct map_entry *e)
+/* returns # of children removed.
+ *
+ * TODO: could be smarter about tombstones; it could be dropping NULLs
+ * instead where appropriate.
+ */
+static int del_child(struct map_entry *p_e, L4_Word_t child)
+{
+	if(p_e->num_children == 0) return 0;
+
+	child &= ~0xful;
+	L4_Word_t *cs = p_e->num_children > 1 ? p_e->children : &p_e->child;
+	int n_hit = 0;
+	for(int j = REF_HASH(child) & (p_e->num_children - 1), k = 0;
+		cs[j] != REF_NULL && k < MIN(int, MAX_PROBE_DEPTH, p_e->num_children);
+		j = (j + 1) & (p_e->num_children - 1), k++)
+	{
+		if(REF_DEFINED(cs[j]) && (cs[j] & ~0xful) == child) {
+			/* BOOM, mo'fo */
+			TRACE("%s: removing cs[%d]=%#lx\n", __func__, j, cs[j]);
+			cs[j] = REF_TOMBSTONE;
+			n_hit++;
+		}
+	}
+
+	return n_hit;
+}
+
+
+/* TODO: this should return -ENOMEM instead of panicing. */
+static void expand_entry(struct map_group *g, struct map_entry *e)
 {
 	uint32_t n_pages = L4_Size(e->range) >> PAGE_BITS;
 	int rights = L4_Rights(e->range);
 
+	/* only reinsert the child reference when a defined parent reference's
+	 * index field would change. indicate this with p_e != NULL.
+	 */
+	struct map_group *p_g = NULL;
+	struct map_entry *p_e = NULL;
+	L4_Word_t child = REF_NULL;
+	if(REF_DEFINED(e->parent) && CHECK_FLAG(e->parent, n_pages << 22)) {
+		p_e = deref_parent(&p_g, e->parent);
+		assert(p_e != NULL);
+		/* remove old ref so that there's only a single child reference down
+		 * to the expanded entry.
+		 */
+		child = addr_to_ref(g, L4_Address(e->range));
+		int n_hit = del_child(p_e, child);
+		assert(n_hit > 0);
+	}
+
 	int old_ix = REF_INDEX(e->parent);
-	e->parent &= (~n_pages << 22);
+	L4_Word_t old_grp = REF_GROUP_BITS(e->parent);
+	e->parent &= ~(n_pages << 22);
 	assert(REF_INDEX(e->parent) == (old_ix & ~n_pages));
+	assert(REF_GROUP_BITS(e->parent) == old_grp);
 
 	e->first_page_id &= ~n_pages;
 	e->range = L4_FpageLog2(L4_Address(e->range) & ~L4_Size(e->range),
 		L4_SizeLog2(e->range) + 1);
 	L4_Set_Rights(&e->range, rights);
+
+	if(p_e != NULL) {
+		/* add the revised child ref. */
+		child = addr_to_ref(g, L4_Address(e->range))
+			| ((REF_INDEX(e->parent) >> 1) & 0xf);
+		int n = mapdb_add_child(p_e, child);
+		if(n < 0) panic("expand_entry(): out of memory in mapdb_add_child()");
+	}
 }
 
 
@@ -672,7 +730,7 @@ static void coalesce_entries(struct map_group *g, struct map_entry *e)
 	{
 		/* always join to the left. */
 		if(far_side) SWAP(struct map_entry *, e, oth);
-		expand_entry(e);
+		expand_entry(g, e);
 
 		/* move valid children over as well. these will overwrite (presumably
 		 * less or equally valid) children in @e.
@@ -737,7 +795,7 @@ static bool merge_into_entry(
 
 	if(!can_merge(e, parent, fpage, first_page_id)) return false;
 
-	expand_entry(e);
+	expand_entry(g, e);
 	TRACE("%s: accepted; range'=%#lx:%#lx, fpi'=%u, parent'=%#lx\n",
 		__func__, L4_Address(e->range), L4_Size(e->range),
 		e->first_page_id, e->parent);
