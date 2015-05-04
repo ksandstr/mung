@@ -406,12 +406,13 @@ static bool deref_child(
 	/* check the child's parent reference. it should point into @e->range
 	 * within @home_group.
 	 */
-	L4_Word_t c_pt = cr->child_entry->parent;
+	L4_Word_t c_pt = cr->child_entry->parent,
+		c_in_pt = MG_START(home_group) + REF_ADDR(c_pt);
 	if(((uintptr_t)home_group & grp_mask_and) != REF_GROUP_BITS(c_pt)
-		|| !ADDR_IN_FPAGE(e->range, MG_START(home_group) + REF_ADDR(c_pt)))
+		|| !ADDR_IN_FPAGE(e->range, c_in_pt))
 	{
-		TRACE("%s: backref %#lx mismatches group %#lx, or range %#lx..%#lx\n",
-			__func__, c_pt, (L4_Word_t)home_group & grp_mask_and,
+		TRACE("%s: backref %#lx (addr %#lx) mismatches group %#lx or range %#lx..%#lx\n",
+			__func__, c_pt, c_in_pt, (L4_Word_t)home_group & grp_mask_and,
 			FPAGE_LOW(e->range), FPAGE_HIGH(e->range));
 		goto tombstone;
 	}
@@ -425,7 +426,7 @@ static bool deref_child(
 		goto tombstone;
 	}
 
-	return true;
+	return ADDR_IN_FPAGE(eff_range, c_in_pt);
 
 tombstone:
 	/* when a child has been very, very naughty. */
