@@ -1209,6 +1209,25 @@ static int mapdb_add_child(struct map_entry *ent, L4_Word_t child)
 }
 
 
+static int add_map_and_link(
+	struct map_entry *from_ent,
+	struct space *to_space,
+	L4_Word_t parent,
+	L4_Fpage_t dst_page,
+	uint32_t first_page_id)
+{
+	struct map_group *dstgrp = NULL;
+	int n = mapdb_add_map(to_space, &dstgrp, parent, dst_page, first_page_id);
+	if(n == 0) {
+		L4_Word_t child = addr_to_ref(dstgrp, L4_Address(dst_page))
+			| ((REF_INDEX(parent) >> 1) & 0xf);
+		n = mapdb_add_child(from_ent, child);
+	}
+
+	return n;
+}
+
+
 /* does mappings of all physical pages inside map_page. skips holes in the
  * sender address space within the mapping: therefore pages in the receiver
  * won't be unmapped when the sender's corresponding slot is empty.
@@ -1263,14 +1282,11 @@ int mapdb_map_pages(
 		if(given != 0) {
 			L4_Fpage_t p = L4_FpageLog2(dest_addr, L4_SizeLog2(map_page));
 			L4_Set_Rights(&p, given);
-			int off = first_addr - L4_Address(first->range);
+			intptr_t off = first_addr - L4_Address(first->range);
 			L4_Word_t parent = addr_to_ref(grp, first_addr);
-			struct map_group *dstgrp = NULL;
-			mapdb_add_map(to_space, &dstgrp, parent, p,
+			int n = add_map_and_link(first, to_space, parent, p,
 				first->first_page_id + (off >> PAGE_BITS));
-			L4_Word_t child = addr_to_ref(dstgrp, L4_Address(p))
-				| ((REF_INDEX(parent) >> 1) & 0xf);
-			mapdb_add_child(first, child);
+			if(n < 0) panic("add_map_and_link() failed in the simple case");
 		}
 	} else {
 		/* the complex case: the range is made up out of multiple smaller
@@ -1295,20 +1311,12 @@ int mapdb_map_pages(
 			{
 				L4_Fpage_t p = L4_FpageLog2(dp_addr, size_log2);
 				L4_Set_Rights(&p, eff);
-
-				int src_offs = dp_addr - pos - dest_addr;
-				/* TODO: this is nigh-equal to the sequence in the non-complex
-				 * case. see if they can be merged into an
-				 * add_map_and_child().
-				 */
+				intptr_t src_offs = dp_addr - pos - dest_addr;
 				L4_Word_t parent = addr_to_ref(grp,
 					L4_Address(ent->range) + src_offs);
-				struct map_group *dstgrp = NULL;
-				mapdb_add_map(to_space, &dstgrp, parent, p,
+				int n = add_map_and_link(ent, to_space, parent, p,
 					ent->first_page_id + src_offs / PAGE_SIZE);
-				L4_Word_t child = addr_to_ref(dstgrp, dp_addr)
-					| ((REF_INDEX(parent) >> 1) & 0xf);
-				mapdb_add_child(ent, child);
+				if(n < 0) panic("add_map_and_link() failed in the complex case");
 			}
 
 next_entry:
