@@ -583,7 +583,7 @@ static bool can_merge(
 	int n_pages = L4_Size(fpage) / PAGE_SIZE;
 	assert(POPCOUNT(n_pages) == 1);
 	if(e->first_page_id != (first_page_id ^ n_pages)
-		|| unlikely(far_side != (e->first_page_id < first_page_id)))
+		|| far_side != (e->first_page_id < first_page_id))
 	{
 		/* range starts aren't n_pages apart, or are the wrong way around */
 		TRACE("%s: rejected for e->first_page_id=%u\n", __func__,
@@ -594,7 +594,7 @@ static bool can_merge(
 
 	if(L4_Address(e->range) != (L4_Address(fpage) ^ L4_Size(fpage))
 		|| L4_Rights(e->range) != L4_Rights(fpage)
-		|| unlikely(L4_SizeLog2(e->range) != L4_SizeLog2(fpage)))
+		|| L4_SizeLog2(e->range) != L4_SizeLog2(fpage))
 	{
 		/* wrong size, or not the neighbour, or rights aren't compatible. */
 		TRACE("%s: rejected for e->range=%#lx:%#lx (or rights)\n",
@@ -657,7 +657,8 @@ static void coalesce_entries(struct map_group *g, struct map_entry *e)
 			struct child_ref cr;
 			if(!deref_child(&cr, g, oth, i, oth->range)) continue;
 			int n = mapdb_add_child(e, chs[i]);
-			if(unlikely(n == -ENOMEM)) {
+			if(n < 0) {
+				assert(n == -ENOMEM);
 				panic("ENOMEM in coalesce_entries()");
 			}
 		}
@@ -798,7 +799,7 @@ static int insert_map_entry(
 		if(MG_N_ALLOC_LOG2(g) == 0) {
 			assert(g->entries == NULL);
 			g->entries = malloc(2 * sizeof(struct map_entry));
-			if(unlikely(g->entries == NULL)) return -ENOMEM;
+			if(g->entries == NULL) return -ENOMEM;
 			g->addr |= (1 << 15);
 			assert(MG_N_ALLOC_LOG2(g) == 1);
 		}
@@ -1230,7 +1231,7 @@ int mapdb_map_pages(
 	 * recurs, baby.
 	 */
 	int n_groups = L4_Size(map_page) / GROUP_SIZE;
-	if(unlikely(n_groups > 1)) {
+	if(n_groups > 1) {
 		int given = 0;
 		for(int i=0; i < n_groups; i++) {
 			L4_Fpage_t fp = L4_Fpage(
@@ -1248,15 +1249,15 @@ int mapdb_map_pages(
 	/* the "within a single group in @from_space" case. */
 	const L4_Word_t first_addr = L4_Address(map_page);
 	struct map_group *grp = group_for_addr(from_space, first_addr);
-	if(unlikely(grp == NULL)) return 0;
+	if(grp == NULL) return 0;
 	struct map_entry *first = probe_group_range(grp, map_page);
-	if(unlikely(first == NULL)) return 0;
+	if(first == NULL) return 0;
 	if(L4_SizeLog2(first->range) < L4_SizeLog2(map_page)) {
 		first = rewind_to_first(grp, first, map_page);
 	}
 
 	int given;
-	if(likely(L4_SizeLog2(map_page) <= L4_SizeLog2(first->range))) {
+	if(L4_SizeLog2(map_page) <= L4_SizeLog2(first->range)) {
 		/* the simple case: a small fpage being mapped from inside larger or
 		 * equal-sized entry.
 		 */
@@ -1496,7 +1497,7 @@ static int split_entry(
 
 		parent_ent = probe_group_addr(parent_g,
 			MG_START(parent_g) + REF_ADDR(saved.parent));
-		if(unlikely(parent_ent == NULL)) {
+		if(parent_ent == NULL) {
 			panic("parent reference was invalid (no entry found)!");
 		}
 	}
@@ -1504,7 +1505,7 @@ static int split_entry(
 	for(int i=0; i < p; i++) {
 		L4_Word_t p_ref = 0;
 		assert(REF_DEFINED(saved.parent) == (parent_g != NULL));
-		if(likely(parent_g != NULL)) {
+		if(parent_g != NULL) {
 			p_ref = addr_to_ref(parent_g,
 				MG_START(parent_g) + REF_ADDR(saved.parent) + addr_offset);
 		}
@@ -1525,7 +1526,7 @@ static int split_entry(
 		 * defined, the old reference will always get overwritten during this
 		 * part of the loop, which should update its MISC bits.
 		 */
-		if(likely(parent_g != NULL)) {
+		if(parent_g != NULL) {
 			L4_Word_t child = addr_to_ref(g, L4_Address(e[i].range))
 				| ((REF_INDEX(p_ref) >> 1) & 0xf);
 			int n = mapdb_add_child(parent_ent, child);
@@ -1579,9 +1580,7 @@ static struct map_entry *fetch_entry(
 	} else if(make_exact) {
 		int err = split_entry(g, e, range);
 		if(unlikely(err < 0)) {
-			if(err != -ENOMEM) {
-				panic("split_entry() failed: non-ENOMEM error code");
-			}
+			assert(err == -ENOMEM);
 			e = NULL;
 		} else {
 			/* refetch our thing. */
@@ -1687,7 +1686,7 @@ static void clear_pt_range(struct pt_iter *drop_it, L4_Fpage_t range)
 
 static void set_pt_range_rights(struct pt_iter *mod_it, L4_Fpage_t range)
 {
-	if(unlikely(!CHECK_FLAG(L4_Rights(range), L4_Readable))) {
+	if(!CHECK_FLAG(L4_Rights(range), L4_Readable)) {
 		clear_pt_range(mod_it, range);
 		return;
 	}
@@ -1696,7 +1695,7 @@ static void set_pt_range_rights(struct pt_iter *mod_it, L4_Fpage_t range)
 	while(a < l) {
 		bool upper;
 		uint32_t pgid = pt_probe(mod_it, &upper, NULL, a);
-		if(unlikely(!upper)) a = (a + PT_UPPER_SIZE) & ~PT_UPPER_MASK;
+		if(!upper) a = (a + PT_UPPER_SIZE) & ~PT_UPPER_MASK;
 		else {
 			pt_set_page(mod_it, a, pgid, L4_Rights(range));
 			a += PAGE_SIZE;
@@ -1886,7 +1885,7 @@ int mapdb_unmap_fpage(
 	 * thing to do.
 	 */
 	int n_groups = L4_Size(range) / GROUP_SIZE;
-	if(unlikely(n_groups > 1)) {
+	if(n_groups > 1) {
 		int acc = 0;
 		for(int i=0; i < n_groups; i++) {
 			L4_Fpage_t fp = L4_Fpage(
