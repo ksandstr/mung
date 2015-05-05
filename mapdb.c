@@ -2,14 +2,12 @@
 #include <stdio.h>
 #include <stdint.h>
 #include <stdlib.h>
-#include <stdalign.h>
 #include <string.h>
 #include <assert.h>
 #include <errno.h>
 
 #include <ccan/htable/htable.h>
 #include <ccan/likely/likely.h>
-#include <ccan/container_of/container_of.h>
 
 #include <l4/types.h>
 
@@ -1610,15 +1608,13 @@ static int reparent_children(struct map_group *g, struct map_entry *e)
 	struct map_entry *parent_entry = NULL;
 	int p_offs = 0;
 	if(likely(REF_DEFINED(e->parent))) {
+		/* FIXME: use a deref_parent() here */
 		parent_g = (void *)((e->parent & grp_mask_and) | grp_mask_or);
 		assert(parent_g == kmem_id2ptr_safe(map_group_policy,
 			REF_GROUP_ID(e->parent)));
 		parent_entry = probe_group_addr(parent_g,
 			MG_START(parent_g) + REF_ADDR(e->parent));
-		BUG_ON(parent_entry == NULL,
-			"parent ref=(%#lx, %#lx, %#lx) must be valid",
-			REF_INDEX(e->parent), REF_GROUP_BITS(e->parent),
-			REF_MISC(e->parent));
+		assert(parent_entry != NULL);
 		p_offs = L4_Address(parent_entry->range) - MG_START(parent_g);
 	}
 
