@@ -1242,6 +1242,7 @@ int mapdb_map_pages(
 {
 	assert(check_mapdb(from_space, 0));
 	assert(check_mapdb(to_space, 0));
+	assert((dest_addr & (L4_Size(map_page) - 1)) == 0);
 
 	/* well this is a bit vile: the map_page > group_size case. recursion
 	 * recurs, baby.
@@ -1303,21 +1304,14 @@ int mapdb_map_pages(
 			given |= eff;
 
 			const L4_Word_t pos = L4_Address(ent->range) - first_addr;
-			L4_Word_t dp_addr;
-			int size_log2;
-			for_page_range(dest_addr + pos,
-				dest_addr + pos + L4_Size(ent->range),
-				dp_addr, size_log2)
-			{
-				L4_Fpage_t p = L4_FpageLog2(dp_addr, size_log2);
-				L4_Set_Rights(&p, eff);
-				intptr_t src_offs = dp_addr - pos - dest_addr;
-				L4_Word_t parent = addr_to_ref(grp,
-					L4_Address(ent->range) + src_offs);
-				int n = add_map_and_link(ent, to_space, parent, p,
-					ent->first_page_id + src_offs / PAGE_SIZE);
-				if(n < 0) panic("add_map_and_link() failed in the complex case");
-			}
+			assert(!CHECK_FLAG_ANY(dest_addr + pos, L4_Size(ent->range) - 1));
+			L4_Fpage_t p = L4_FpageLog2(dest_addr + pos,
+				L4_SizeLog2(ent->range));
+			L4_Set_Rights(&p, eff);
+			L4_Word_t parent = addr_to_ref(grp, L4_Address(ent->range));
+			int n = add_map_and_link(ent, to_space, parent, p,
+				ent->first_page_id);
+			if(n < 0) panic("add_map_and_link() failed in the complex case");
 
 next_entry:
 			if(++ent == &grp->entries[MG_N_ENTRIES(grp)]) break;

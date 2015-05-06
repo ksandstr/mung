@@ -127,6 +127,8 @@ extern void mapdb_destroy(struct space *sp);
  * is ignored). special ranges may not be mapped from, or over, using this
  * function; instead, such maps are ignored and the return value set to 0.
  *
+ * @dest_addr must be aligned to @src_page.size .
+ *
  * on failure, returns negative errno.
  */
 extern int mapdb_map_pages(
