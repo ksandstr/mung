@@ -2700,6 +2700,98 @@ START_LOOP_TEST(mapgrant_effect_clause, iter, 0, 15)
 END_TEST
 
 
+/* generate 2..16 aligned pages in the parent and map them into the forked
+ * child as one large page.
+ *
+ * TODO: test with grantitems also, i.e. check that they become unmapped in
+ * the parent. (this may be a tall order.)
+ */
+START_LOOP_TEST(map_smaller_pages, iter, 0, 3)
+{
+	const int num_pages = !CHECK_FLAG(iter, 1) ? 2 : 16;
+	const unsigned parent_sndbase =
+		CHECK_FLAG(iter, 2) ? PAGE_SIZE * num_pages * 2 : 0;
+	uint32_t rand_seed = L4_SystemClock().raw ^ 0xb00ba6e1;
+	diag("num_pages=%d, parent_sndbase=%u, rand_seed=%#x",
+		num_pages, parent_sndbase, rand_seed);
+
+	plan_tests(1);
+
+	L4_ThreadId_t parent_tid = L4_Myself(), child_tid;
+	int child = fork_tid(&child_tid);
+	if(child == 0) {
+		/* receive a mapping into a zeroed buffer, and compute the crc32() of
+		 * its contents.
+		 */
+		const unsigned area_size = 1 << size_to_shift(
+			128 * 1024 + parent_sndbase);
+		void *base, *buffer = alloc_aligned(&base, area_size, area_size);
+		memset(buffer, 0, area_size);
+		diag("child's buffer=%p (area_size=%#x)", buffer, area_size);
+		L4_Accept(L4_MapGrantItems(L4_Fpage((L4_Word_t)buffer, area_size)));
+		L4_MsgTag_t tag = L4_Receive_Timeout(parent_tid, TEST_IPC_DELAY);
+		if(L4_IpcFailed(tag) || L4_TypedWords(tag) < 2) {
+			diag("child ipc failed or too weird, ec=%#lx tag=%#lx",
+				L4_ErrorCode(), tag.raw);
+			exit(1);
+		}
+		L4_MapItem_t mi;
+		L4_StoreMRs(1, 2, mi.raw);
+		if(!L4_IsMapItem(mi)) {
+			diag("child message wasn't a mapitem");
+			exit(1);
+		}
+		L4_Fpage_t fp = L4_MapItemSndFpage(mi);
+		L4_Word_t sndbase = L4_MapItemSndBase(mi);
+		diag("child observes sndbase=%#lx, fp=%#lx:%#lx", sndbase,
+			L4_Address(fp), L4_Size(fp));
+		uint32_t child_crc = crc32c(0, buffer + sndbase,
+			MIN(size_t, area_size, L4_Size(L4_MapItemSndFpage(mi))));
+		L4_Accept(L4_UntypedWordsAcceptor);
+		L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 1 }.raw);
+		L4_LoadMR(1, child_crc);
+		tag = L4_Reply(parent_tid);
+		if(L4_IpcFailed(tag)) {
+			diag("child reply failed, ec=%#lx", L4_ErrorCode());
+		}
+		free(base);
+		exit(L4_IpcSucceeded(tag) ? 0 : 1);
+	}
+
+	while(CHECK_FLAG_ANY((uintptr_t)sbrk(0), PAGE_SIZE * num_pages - 1)) {
+		void *throwaway = sbrk(PAGE_SIZE);
+		fail_unless(throwaway != NULL);
+		diag("backed sbrk() to %p", throwaway);
+	}
+
+	char *testmem = sbrk(num_pages * PAGE_SIZE);
+	diag("testmem=%p", testmem);
+	fail_unless(!CHECK_FLAG_ANY((uintptr_t)testmem,
+		PAGE_SIZE * num_pages - 1));
+	random_string(testmem, num_pages * PAGE_SIZE, &rand_seed);
+	L4_Word_t refcrc = crc32c(0, testmem, num_pages * PAGE_SIZE);
+
+	L4_Fpage_t sndpage = L4_Fpage((L4_Word_t)testmem, num_pages * PAGE_SIZE);
+	L4_Set_Rights(&sndpage, L4_Readable);
+	L4_MapItem_t mi = L4_MapItem(sndpage, parent_sndbase);
+	diag("parent sends sndbase=%#lx", L4_MapItemSndBase(mi));
+	L4_LoadMR(0, (L4_MsgTag_t){ .X.t = 2 }.raw);
+	L4_LoadMRs(1, 2, mi.raw);
+	L4_MsgTag_t tag = L4_Call_Timeouts(child_tid,
+		TEST_IPC_DELAY, TEST_IPC_DELAY);
+	IPC_FAIL(tag);
+	fail_if(L4_UntypedWords(tag) < 1, "tag=%#lx", tag.raw);
+	L4_Word_t child_crc; L4_StoreMR(1, &child_crc);
+	if(!ok1(child_crc == refcrc)) {
+		diag("child_crc=%#lx, refcrc=%#lx", child_crc, refcrc);
+	}
+
+	int st = 0, dead = wait(&st);
+	fail_if(dead != child, "unexpected dead=%d (wanted %d)", dead, child);
+}
+END_TEST
+
+
 /* simple enough. fork, receive map in fork over initialized memory, check
  * if it still looks like that memory afterward, return observation.
  *
@@ -3196,6 +3288,7 @@ Suite *ipc_suite(void)
 		tcase_add_test(tc, c_bit_in_typed_words);
 		tcase_add_test(tc, mapgrant_address);
 		tcase_add_test(tc, mapgrant_effect_clause);
+		tcase_add_test(tc, map_smaller_pages);
 		/* NOTE: these must be run from within a fork; otherwise there's a
 		 * chance they screw with testbench's UTCB or KIP pages.
 		 */
