@@ -674,8 +674,14 @@ static int del_child(struct map_entry *p_e, L4_Word_t child)
 }
 
 
-/* TODO: this should return -ENOMEM instead of panicing. */
-static void expand_entry(struct map_group *g, struct map_entry *e)
+/* return value is negative errno (currently only -ENOMEM), or zero on
+ * success. this function maintains the existing child reference for @e in its
+ * parent, updating it if necessary.
+ *
+ * NOTE: this function isn't atomic on ENOMEM restart; instead the caller
+ * should arrange a child reference to be added for the new @e.
+ */
+static int expand_entry(struct map_group *g, struct map_entry *e)
 {
 	uint32_t n_pages = L4_Size(e->range) >> PAGE_BITS;
 	int rights = L4_Rights(e->range);
@@ -708,67 +714,91 @@ static void expand_entry(struct map_group *g, struct map_entry *e)
 		L4_SizeLog2(e->range) + 1);
 	L4_Set_Rights(&e->range, rights);
 
+	int n = 0;
 	if(p_e != NULL) {
 		/* add the revised child ref. */
 		child = addr_to_ref(g, L4_Address(e->range))
 			| ((REF_INDEX(e->parent) >> 1) & 0xf);
-		int n = mapdb_add_child(p_e, child);
-		if(n < 0) panic("expand_entry(): out of memory in mapdb_add_child()");
+		n = mapdb_add_child(p_e, child);
 	}
+
+	return n;
 }
 
 
 /* where possible, merge @e into its compatible neighbour in @g. try to merge
  * the resulting larger entry again, etc.
+ *
+ * returns 0 on success, -ENOMEM on failure.
  */
-static void coalesce_entries(struct map_group *g, struct map_entry *e)
+static int coalesce_entries(struct map_group *g, struct map_entry *e)
 {
 	bool far_side = CHECK_FLAG(L4_Address(e->range), L4_Size(e->range));
 	struct map_entry *oth = &e[far_side ? -1 : 1];
-	if(oth >= &g->entries[0] && oth < &g->entries[MG_N_ENTRIES(g)]
-		&& can_merge(oth, e->parent, e->range, e->first_page_id))
+	if(oth < &g->entries[0] || oth >= &g->entries[MG_N_ENTRIES(g)]
+		|| !can_merge(oth, e->parent, e->range, e->first_page_id))
 	{
-		/* always join to the left. */
-		if(far_side) SWAP(struct map_entry *, e, oth);
-		expand_entry(g, e);
-
-		/* move valid children over as well. these will overwrite (presumably
-		 * less or equally valid) children in @e.
-		 */
-		L4_Word_t *chs = oth->num_children <= 1 ? &oth->child : oth->children;
-		for(int i=0; i < oth->num_children; i++) {
-			struct child_ref cr;
-			if(!deref_child(&cr, g, oth, i, oth->range)) continue;
-			int n = mapdb_add_child(e, chs[i]);
-			if(n < 0) {
-				assert(n == -ENOMEM);
-				panic("ENOMEM in coalesce_entries()");
-			}
-		}
-		if(oth->num_children > 1) free(oth->children);
-		oth->num_children = 0;
-
-		/* NOTE: an iterative version of this function could keep voodoo
-		 * indexes about the removed entries' range, and then do a single
-		 * larger memmove at the end. multiple joins are so rare that we
-		 * don't, though.
-		 */
-		int oix = oth - &g->entries[0];
-		if(oix < (--g->addr, MG_N_ENTRIES(g))) {
-			memmove(&g->entries[oix], &g->entries[oix + 1],
-				sizeof(struct map_entry) * (MG_N_ENTRIES(g) - oix));
-		}
-		g->entries[MG_N_ENTRIES(g)].range = L4_Nilpage;
-
-		coalesce_entries(g, e);
+		/* either at the edge, or other entry isn't compatible. */
+		return 0;
 	}
+
+	/* always join to the left. */
+	if(far_side) SWAP(struct map_entry *, e, oth);
+	int n = expand_entry(g, e);
+	if(unlikely(n < 0)) return n;
+
+	/* move valid children over as well. these will overwrite (presumably
+	 * less or equally valid) children in @e.
+	 */
+	L4_Word_t *chs = oth->num_children <= 1 ? &oth->child : oth->children;
+	for(int i=0; i < oth->num_children; i++) {
+		struct child_ref cr;
+		if(!deref_child(&cr, g, oth, i, oth->range)) continue;
+		n = mapdb_add_child(e, chs[i]);
+		if(unlikely(n < 0)) {
+			/* FIXME: this can fail in the middle of the loop, after @oth has
+			 * already been eliminated. that's strictly unworkable: child refs
+			 * could be lost.
+			 */
+			return n;
+		}
+	}
+	if(oth->num_children > 1) free(oth->children);
+	oth->num_children = 0;
+	/* toss oth's child entry in the parent so that the "child only once"
+	 * invariant doesn't break.
+	 */
+	if(REF_DEFINED(oth->parent)) {
+		struct map_group *p_g;
+		struct map_entry *p_e = deref_parent(&p_g, oth->parent);
+		assert(p_e != NULL);
+		n = del_child(p_e, addr_to_ref(g, L4_Address(oth->range)));
+		assert(n > 0);
+	}
+
+	/* NOTE: an iterative version of this function could keep voodoo
+	 * indexes about the removed entries' range, and then do a single
+	 * larger memmove at the end. multiple joins are so rare that we
+	 * don't, though.
+	 */
+	int oix = oth - &g->entries[0];
+	if(oix < (--g->addr, MG_N_ENTRIES(g))) {
+		memmove(&g->entries[oix], &g->entries[oix + 1],
+			sizeof(struct map_entry) * (MG_N_ENTRIES(g) - oix));
+	}
+	g->entries[MG_N_ENTRIES(g)].range = L4_Nilpage;
+
+	return coalesce_entries(g, e);
 }
 
 
 /* attempts to record the equivalent of a map_entry with the given parameters
- * by expanding an existing map_entry. returns true on success.
+ * by expanding an existing map_entry. returns 1 on success, 0 when the merge
+ * condition wasn't met, and negative errno on failure.
+ *
+ * caller must not add a child if successful.
  */
-static bool merge_into_entry(
+static int merge_into_entry(
 	struct map_group *g,
 	int prev_pos,
 	L4_Word_t parent,
@@ -790,12 +820,13 @@ static bool merge_into_entry(
 	if(e < &g->entries[0] || e >= &g->entries[MG_N_ENTRIES(g)]) {
 		/* head-in-far, or tail-in-near case. */
 		TRACE("%s: rejected for head/tail\n", __func__);
-		return false;
+		return 0;
 	}
 
-	if(!can_merge(e, parent, fpage, first_page_id)) return false;
+	if(!can_merge(e, parent, fpage, first_page_id)) return 0;
 
-	expand_entry(g, e);
+	int n = expand_entry(g, e);
+	if(unlikely(n < 0)) return n;
 	TRACE("%s: accepted; range'=%#lx:%#lx, fpi'=%u, parent'=%#lx\n",
 		__func__, L4_Address(e->range), L4_Size(e->range),
 		e->first_page_id, e->parent);
@@ -803,9 +834,10 @@ static bool merge_into_entry(
 	/* enforce maximum coalescing. this lets child mappings merge freely
 	 * without dereferencing their parent pointers to check the limit.
 	 */
-	coalesce_entries(g, e);
+	n = coalesce_entries(g, e);
+	if(unlikely(n < 0)) return n;
 
-	return true;
+	return 1;
 }
 
 
@@ -857,7 +889,9 @@ Enomem:
  * compatible map_entry exists already, it'll be extended. otherwise a new
  * entry will be inserted.
  *
- * returns 0 on success, or -ENOMEM on out-of-memory.
+ * returns -ENOMEM on out-of-memory, or 0/1 on success; the latter indicating
+ * whether a valid child reference exists for that entry after the call. if
+ * not, the caller should insert one.
  */
 static int insert_map_entry(
 	struct space *sp,
@@ -882,7 +916,7 @@ static int insert_map_entry(
 		if(MG_N_ALLOC_LOG2(g) == 0) {
 			assert(g->entries == NULL);
 			g->entries = malloc(2 * sizeof(struct map_entry));
-			if(g->entries == NULL) return -ENOMEM;
+			if(unlikely(g->entries == NULL)) return -ENOMEM;
 			g->addr |= (1 << 15);
 			assert(MG_N_ALLOC_LOG2(g) == 1);
 		}
@@ -900,8 +934,15 @@ static int insert_map_entry(
 	L4_Fpage_t search_page = L4_FpageLog2(
 		L4_Address(fpage) & ~L4_Size(fpage),
 		L4_SizeLog2(fpage) + 1);
-	int ix = search_group_by_range(g, search_page);
-	if(ix < 0 || !merge_into_entry(g, ix, parent, fpage, first_page_id)) {
+	int ix = search_group_by_range(g, search_page), n = 0;
+	if(ix >= 0 && (n = merge_into_entry(g, ix, parent, fpage,
+			first_page_id)) == 1)
+	{
+		/* merge_into_entry() handles child refs internally. */
+		return 1;
+	} else if(unlikely(n < 0)) {
+		return n;
+	} else {
 		int prev = abs(ix) - 1;		/* (correct for esoteric reasons.) */
 		assert(prev < MG_N_ENTRIES(g));
 		/* scan forward or backward to find the right spot. */
@@ -933,9 +974,9 @@ static int insert_map_entry(
 		};
 		assert(MG_N_ENTRIES(g) < 0x7fff);
 		g->addr++;
-	}
 
-	return 0;
+		return 0;
+	}
 }
 
 
@@ -1129,7 +1170,7 @@ int mapdb_add_map(
 		if(old == NULL) {
 			/* not covered. */
 			int n = insert_map_entry(sp, g, parent, fpage, first_page_id);
-			if(unlikely(n != 0)) return n;
+			if(unlikely(n < 0)) return n;
 		} else if(L4_SizeLog2(old->range) == L4_SizeLog2(fpage)) {
 			/* exact match with old entry's form. */
 			assert(L4_Address(old->range) == L4_Address(fpage));
