@@ -279,10 +279,15 @@ static int apply_mapitem(
 		goto noop;
 	}
 
-	int given = mapdb_map_pages(source->space,
-		dest->space, map_page, L4_Address(wnd));
+	int n = mapdb_map_pages(source->space,
+		dest->space, &map_page, L4_Address(wnd));
+	if(unlikely(n < 0)) {
+		/* TODO: address this somehow */
+		panic("mapdb_map_pages() failed in typed transfer!");
+	}
+
+	int given = L4_Rights(map_page);
 	if(is_grant && given != 0) {
-		L4_Set_Rights(&map_page, given);
 		assert((L4_Address(map_page) & 0xc00) == 0);
 		mapdb_unmap_fpage(source->space, map_page, true, false, false);
 	}

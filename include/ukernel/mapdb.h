@@ -122,19 +122,22 @@ extern void init_mapdb(void);
 extern void mapdb_init(struct space *sp);
 extern void mapdb_destroy(struct space *sp);
 
-/* on success, returns OR mask of rights that would've been granted by this
- * mapping operation (which doesn't happen in the rights extension case, but
- * is ignored). special ranges may not be mapped from, or over, using this
- * function; instead, such maps are ignored and the return value set to 0.
- *
+/* map page rights covered by *@src_page in @from into @to at @dest_addr.
  * @dest_addr must be aligned to @src_page.size .
  *
+ * on success, sets @src_page->rights to the OR mask of rights that would've
+ * been granted by this mapping operation (which doesn't happen in the rights
+ * extension case, but is ignored). the return value will be nonnegative.
+ *
  * on failure, returns negative errno.
+ *
+ * special ranges may not be mapped from, or over, using this function;
+ * instead, such maps are ignored and the rights value set to 0.
  */
 extern int mapdb_map_pages(
 	struct space *from,
 	struct space *to,
-	L4_Fpage_t src_page,
+	L4_Fpage_t *src_page,
 	L4_Word_t dest_addr);
 
 /* revokes access rights for bits given and in the mappings covered by @fpage.
@@ -221,16 +224,13 @@ extern int mapdb_fill_page_table(struct space *db, uintptr_t addr);
  * anything else will introduce an invalid parent reference and blow the
  * invariants.
  *
- * completely unatomic on out-of-memory; the caller is supposed to suspend and
- * re-start once malloc has a chance of succeeding.
- *
  * L4_Size(@fpage) may be at most GROUP_SIZE.
+ *
+ * returns negative errno on failure, idempotent on retry; or nonnegative on
+ * success.
  *
  * *@fpage_group_p will be filled in with the map_group pointer for @fpage in
  * @sp iff @fpage_group_p != NULL.
- *
- * returns either a mask of rights given (on any component of @fpage), or
- * -ENOMEM. (FIXME: actually always returns 0. no idea what this comment was.)
  */
 extern int mapdb_add_map(
 	struct space *sp,
