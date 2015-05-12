@@ -47,6 +47,9 @@
 #define FSHELPER_CHOPCHOP_DONE 0x4364	/* "Cd" */
 #define FSHELPER_CHOPCHOP_REPLY 0x4372	/* "Cr" */
 
+/* debug options */
+#define PF_TRACING 0	/* helps debug mapdb */
+
 
 struct fs_thread;
 
@@ -449,7 +452,7 @@ static void handle_pf(
 
 	L4_MsgTag_t tag = muidl_get_tag();
 	L4_Word_t fault_access = tag.X.label & 0xf;
-#if 0
+#if PF_TRACING
 	L4_ThreadId_t sender = muidl_get_sender();
 	printf("forkserv: pf [%c%c%c] in %lu:%lu (ip %#lx, addr %#lx)\n",
 		CHECK_FLAG(fault_access, L4_Readable) ? 'r' : '-',
@@ -491,7 +494,7 @@ static void handle_pf(
 		page->address = page_addr;
 		page->page = alloc_new_page();
 		page->access = L4_FullyAccessible;
-#if 0
+#if PF_TRACING
 		printf("%s: new page %#lx -> %#lx (brk=%#lx)\n", __func__,
 			page->page->local_addr, page->address, sp->prog_brk);
 #endif
@@ -543,7 +546,7 @@ static void handle_pf(
 		&& !CHECK_FLAG_ALL(page->access, fault_access))
 	{
 		/* always give access. */
-#if 0
+#if PF_TRACING
 		printf("%s: expand access at %#lx: old %#x -> new %#x\n", __func__,
 			page->address, (unsigned)page->access,
 			(unsigned)(page->access | fault_access));
@@ -553,7 +556,7 @@ static void handle_pf(
 		&& CHECK_FLAG(fault_access, L4_Writable))
 	{
 		/* duplicate, drop reference, and remap on top of the old page. */
-#if 0
+#if PF_TRACING
 		printf("%s: duplicating rc %d phys page %#lx -> %#lx\n",
 			__func__, page->page->refcount, page->page->local_addr,
 			page_addr);
@@ -566,7 +569,7 @@ static void handle_pf(
 		page->page = copy;
 		page->access |= L4_Writable;
 	} else {
-#if 0
+#if PF_TRACING
 		printf("%s: remap old page %#lx -> %#lx (access %#x)\n", __func__,
 			page->page->local_addr, page_addr, (unsigned)page->access);
 #endif
