@@ -1199,6 +1199,10 @@ int mapdb_add_map(
 			assert(L4_Address(old->range) == L4_Address(fpage));
 			if(likely(!REF_IS_SPECIAL(old->parent))) {
 				replace_map_entry(g, old, parent, fpage, first_page_id);
+				/* TODO: verify that coalesce_entries() leaves g, old in a
+				 * valid state on ENOMEM since we're ignoring the error here.
+				 */
+				coalesce_entries(g, old);
 			}
 			rc = 0;
 		} else if(L4_SizeLog2(old->range) > L4_SizeLog2(fpage)) {
@@ -1227,6 +1231,7 @@ int mapdb_add_map(
 					rc = -ENOMEM;
 				} else {
 					replace_map_entry(g, ne, parent, fpage, first_page_id);
+					/* (no need to coalesce after required break.) */
 					rc = 0;
 				}
 			}
