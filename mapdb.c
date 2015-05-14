@@ -802,7 +802,7 @@ static int coalesce_entries(struct map_group *g, struct map_entry *e)
  */
 static int merge_into_entry(
 	struct map_group *g,
-	int prev_pos,
+	int prev_pos,		/* approximate (±1) position of a neighbour */
 	L4_Word_t parent,
 	L4_Fpage_t fpage,
 	uint32_t first_page_id)
@@ -810,19 +810,30 @@ static int merge_into_entry(
 	assert(prev_pos >= -1 && prev_pos < MG_N_ENTRIES(g));
 	assert(L4_Rights(fpage) != 0);
 
-	/* the "far" page has this bit set and lies further along in the address
-	 * space.
-	 */
 	bool far_side = CHECK_FLAG(L4_Address(fpage), L4_Size(fpage));
 	TRACE("%s: far_side=%s, fpage=%#lx:%#lx, parent=%#lx, fpi=%u\n",
 		__func__, btos(far_side), L4_Address(fpage), L4_Size(fpage),
 		parent, first_page_id);
 
-	struct map_entry *e = &g->entries[far_side ? prev_pos : prev_pos + 1];
-	if(e < &g->entries[0] || e >= &g->entries[MG_N_ENTRIES(g)]) {
-		/* head-in-far, or tail-in-near case. */
-		TRACE("%s: rejected for head/tail\n", __func__);
-		return 0;
+	struct map_entry *e = NULL;
+	if(prev_pos < 0) e = &g->entries[0];
+	else {
+		/* check the given position for siblinghood, or one spot backward or
+		 * forward if not.
+		 */
+		e = &g->entries[prev_pos];
+		TRACE("%s: 1st cand is %#lx:%#lx\n", __func__,
+			L4_Address(e->range), L4_Size(e->range));
+		if(L4_Address(e->range) != (L4_Address(fpage) ^ L4_Size(fpage))) {
+			e += far_side ? -1 : 1;
+			if(e < &g->entries[0] || e >= &g->entries[MG_N_ENTRIES(g)]) {
+				/* head-in-far, or tail-in-near case. */
+				TRACE("%s: step rejected for head/tail\n", __func__);
+				return false;
+			}
+			TRACE("%s: 2nd cand is %#lx:%#lx\n", __func__,
+				L4_Address(e->range), L4_Size(e->range));
+		}
 	}
 
 	if(!can_merge(e, parent, fpage, first_page_id)) return 0;
