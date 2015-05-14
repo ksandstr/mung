@@ -440,6 +440,20 @@ tombstone:
 }
 
 
+static struct map_entry *deref_parent(struct map_group **g_p, L4_Word_t ref)
+{
+	*g_p = kmem_id2ptr_safe(map_group_policy, REF_GROUP_ID(ref));
+	/* (parent refs are guaranteed valid, except where they're not. leave the
+	 * other case to the caller.)
+	 */
+	if(likely(*g_p != NULL && is_group_valid(*g_p))) {
+		return probe_group_addr(*g_p, MG_START(*g_p) + REF_ADDR(ref));
+	} else {
+		return NULL;
+	}
+}
+
+
 static size_t rehash_map_group(const void *ptr, void *priv) {
 	const struct map_group *g = ptr;
 	return int_hash(MG_START(g));
@@ -610,6 +624,20 @@ static bool can_merge(
 		 */
 		TRACE("%s: rejected for e->parent=%#lx\n", __func__, e->parent);
 		return false;
+	}
+
+	/* only allow merging if the child is smaller than its parent. special
+	 * and toplevel mappings can merge despite not having one.
+	 */
+	if(REF_DEFINED(e->parent)) {
+		struct map_group *pg;
+		struct map_entry *pe = deref_parent(&pg, e->parent);
+		if(L4_SizeLog2(pe->range) <= L4_SizeLog2(e->range)) {
+			TRACE("%s: rejected for pe->range=%#lx:%#lx <= e->range=%#lx:%#lx\n",
+				__func__, L4_Address(pe->range), L4_Size(pe->range),
+				L4_Address(e->range), L4_Size(e->range));
+			return false;
+		}
 	}
 
 	return true;
