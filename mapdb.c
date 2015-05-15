@@ -1434,11 +1434,19 @@ static int distribute_children(struct map_group *g, struct map_entry *from)
 {
 	if(from->num_children == 0) return 0;
 
+	TRACE("%s: distributing %d children from previous %#lx:%#lx\n",
+		__func__, (int)from->num_children,
+		L4_Address(from->range), L4_Size(from->range));
 	for(int i=0; i < from->num_children; i++) {
 		struct child_ref r;
 		if(!deref_child(&r, g, from, i, from->range)) continue;
 
+		/* find the child's entry in the parent. */
 		L4_Word_t pref_addr = MG_START(g) + REF_ADDR(r.child_entry->parent);
+		TRACE("%s: i=%d, looking for parent of e=%#lx:%#lx within %#lx:%#lx\n",
+			__func__, i,
+			L4_Address(r.child_entry->range), L4_Size(r.child_entry->range),
+			pref_addr, L4_Size(r.child_entry->range));
 		struct map_entry *p_ent = probe_group_range(g,
 			L4_FpageLog2(pref_addr, L4_SizeLog2(r.child_entry->range)));
 		if(p_ent == NULL) {
@@ -1448,9 +1456,10 @@ static int distribute_children(struct map_group *g, struct map_entry *from)
 
 		if(L4_SizeLog2(p_ent->range) < L4_SizeLog2(r.child_entry->range)) {
 			/* the larger page was split, and it had a child entry that no
-			 * longer fits in its parent range.
+			 * longer fits in its parent range. correct the invariant by
+			 * chopping the child up, and referencing it directly.
 			 */
-			L4_Word_t off = pref_addr - L4_Address(p_ent->range);
+			L4_Word_t off = L4_Address(p_ent->range) - pref_addr;
 			L4_Fpage_t cut = L4_FpageLog2(L4_Address(r.child_entry->range)
 				+ off, L4_SizeLog2(p_ent->range));
 			struct map_entry *ent = fetch_entry(r.group, cut, true);
@@ -1458,7 +1467,6 @@ static int distribute_children(struct map_group *g, struct map_entry *from)
 				assert(probe_group_range(r.group, cut) != NULL);
 				panic("split_entry() ran out of heap in distribute_children()");
 			}
-
 			r.child_entry = ent;
 
 			/* block output guarantee, and a required result from
@@ -1467,7 +1475,6 @@ static int distribute_children(struct map_group *g, struct map_entry *from)
 			assert(r.child_entry != NULL);
 		}
 
-		/* simple case. */
 		L4_Word_t child = addr_to_ref(r.group,
 			L4_Address(r.child_entry->range))
 				| ((REF_INDEX(r.child_entry->parent) >> 1) & 0xf);
