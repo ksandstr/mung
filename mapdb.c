@@ -1522,18 +1522,8 @@ static int split_entry(
 	struct map_entry saved = *e, *parent_ent = NULL;
 	struct map_group *parent_g = NULL;
 	if(REF_DEFINED(saved.parent)) {
-		/* dereference the parent group unsafely, since it's always guaranteed
-		 * to stay valid.
-		 */
-		parent_g = (void *)((saved.parent & grp_mask_and) | grp_mask_or);
-		assert(parent_g == kmem_id2ptr_safe(map_group_policy,
-			REF_GROUP_ID(saved.parent)));
-
-		parent_ent = probe_group_addr(parent_g,
-			MG_START(parent_g) + REF_ADDR(saved.parent));
-		if(parent_ent == NULL) {
-			panic("parent reference was invalid (no entry found)!");
-		}
+		parent_ent = deref_parent(&parent_g, saved.parent);
+		assert(parent_g != NULL);
 	}
 	L4_Word_t addr_offset = 0;
 	for(int i=0; i < p; i++) {
@@ -1561,8 +1551,24 @@ static int split_entry(
 		 * part of the loop, which should update its MISC bits.
 		 */
 		if(parent_g != NULL) {
+			/* split_entry() may be called when a parent has become too small
+			 * to contain all the pieces. wind the parent entry forward if
+			 * necessary.
+			 */
+			L4_Word_t pref_start = MG_START(parent_g) + REF_ADDR(p_ref);
+			while(FPAGE_HIGH(parent_ent->range) < pref_start) {
+				parent_ent++;
+				TRACE("%s: ... parent_ent'=%#lx:%#lx\n", __func__,
+					L4_Address(parent_ent->range), L4_Size(parent_ent->range));
+				assert(parent_ent < &parent_g->entries[MG_N_ENTRIES(parent_g)]);
+			}
+			assert(parent_ent == probe_group_addr(parent_g, pref_start));
+
 			L4_Word_t child = addr_to_ref(g, L4_Address(e[i].range))
 				| ((REF_INDEX(p_ref) >> 1) & 0xf);
+			TRACE("%s: adding child ref %#lx to p=%p (%#lx:%#lx)\n",
+				__func__, child, parent_ent,
+				L4_Address(parent_ent->range), L4_Size(parent_ent->range));
 			int n = mapdb_add_child(parent_ent, child);
 			if(n < 0) {
 				panic("mapdb_add_child failed in split_entry()");
