@@ -2087,14 +2087,20 @@ int mapdb_unmap_fpage(
 		return 0;
 	}
 
+	/* the "affect special ranges" form */
+	const bool drop_special = !recursive
+		&& L4_Rights(range) == L4_FullyAccessible
+		&& (range.raw & 0xc00) == 0x800;
+	assert(drop_special || (L4_Address(range) & 0xc00) == 0);
+
 	/* this function will only modify the map_group it accesses when it might
 	 * revoke access in the immediate space. this is passed to fetch_entry().
 	 * to contrast, unmap_entry_in_group() always receives immediate entries
 	 * as they are and never calls fetch_entry(..., true).
 	 */
 	const bool modify = immediate && unmap_rights != 0;
-	struct map_entry *e = fetch_entry(g, range, modify);
-	if(e == NULL && modify) {
+	struct map_entry *e = fetch_entry(g, range, modify && !drop_special);
+	if(e == NULL && modify && !drop_special) {
 		/* distinguish between not-exist and ENOMEM from split_entry(). */
 		if(probe_group_range(g, range) != NULL) {
 			panic("malloc() failed in fetch_entry()");
@@ -2105,23 +2111,31 @@ int mapdb_unmap_fpage(
 		return 0;
 	}
 
-	/* the "affect special ranges" form */
-	const bool drop_special = !recursive
-		&& L4_Rights(range) == L4_FullyAccessible
-		&& (range.raw & 0xc00) == 0x800;
-	assert(drop_special || (L4_Address(range) & 0xc00) == 0);
-
 	int rwx_seen = 0, mode = L4_Rights(range) << 4;
 	if(immediate) mode |= UM_IMMEDIATE;
 	if(recursive) mode |= UM_RECURSIVE;
 	if(get_access) mode |= UM_GET_ACCESS;
 	if(drop_special) mode |= UM_DROP_SPECIAL;
+	assert(!CHECK_FLAG(mode, UM_CHILD));
 	const L4_Word_t r_end = FPAGE_HIGH(range);
 	do {
-		if(likely(!REF_IS_SPECIAL(e->parent)) || drop_special) {
-			assert(!CHECK_FLAG(mode, UM_CHILD));
+		if(likely(!REF_IS_SPECIAL(e->parent))) {
 			int n = unmap_entry_in_group(g, &e, mode,
 				L4_SizeLog2(range) < L4_SizeLog2(e->range) ? range : e->range);
+			if(unlikely(n < 0)) return n;
+			rwx_seen |= n;
+		} else if(drop_special) {
+			if(L4_SizeLog2(range) < L4_SizeLog2(e->range)) {
+				TRACE("special refetch case; r=%#lx:%#lx, e->range=%#lx:%#lx\n",
+					L4_Address(range), L4_Size(range),
+					L4_Address(e->range), L4_Size(e->range));
+				e = fetch_entry(g, range, true);
+				if(e == NULL) {
+					panic("ENOMEM in unmap special-range fetch_entry()");
+				}
+				TRACE("  e'=%#lx:%#lx\n", L4_Address(e->range), L4_Size(e->range));
+			}
+			int n = unmap_entry_in_group(g, &e, mode, e->range);
 			if(unlikely(n < 0)) return n;
 			rwx_seen |= n;
 		}
