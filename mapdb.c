@@ -1595,8 +1595,10 @@ static int split_entry(
  * (the caller must distinguish between "doesn't exist" and malloc-fail
  * explicitly.)
  *
- * returns special ranges as-is regardless of size and @make_exact. this
- * allows things like multi-page KIPs, hugepage UTCB mappings, and so forth.
+ * (unlike previously, this cuts larger special entries up like everything
+ * else when @make_exact is given. this lets mapdb merge consecutive page IDs
+ * in e.g. long UTCB segments, in case the kernel ever starts allocating them
+ * in this way by more than accident.)
  */
 static struct map_entry *fetch_entry(
 	struct map_group *g,
@@ -1609,10 +1611,7 @@ static struct map_entry *fetch_entry(
 		L4_Address(range), L4_Size(range));
 
 	struct map_entry *e = probe_group_range(g, range);
-	if(e == NULL || unlikely(REF_IS_SPECIAL(e->parent))) {
-		/* not found, or is special */
-		return e;
-	}
+	if(e == NULL) goto end;
 
 	int esz = L4_SizeLog2(e->range), rsz = L4_SizeLog2(range);
 	if(esz <= rsz) {
@@ -1631,6 +1630,7 @@ static struct map_entry *fetch_entry(
 		}
 	}
 
+end:
 	return e;
 }
 
