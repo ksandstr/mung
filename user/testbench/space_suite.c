@@ -783,19 +783,23 @@ static void helpful_assistant(size_t map_size, L4_ThreadId_t p_tid);
  *
  * sensitive people may wish to avert their eyes from this point down.
  */
-START_TEST(deep_recursive_unmap)
+START_LOOP_TEST(deep_recursive_unmap, iter, 0, 1)
 {
-	/* ... apparently 11598 is the magic number where the kernel throws a
-	 * permanent hissyfit in the chain-building stage. below this, not.
+	/* previously, 11598 was a magic number where the kernel threw an
+	 * uncorrectable hissyfit in the chain-building stage. below that, not.
+	 * since the recursive unmap_entry_in_group() is structurally unable to
+	 * deal with great recursion past this point, this value cannot be
+	 * usefully tested without it shitting up test reports for the next coupla
+	 * years.
 	 *
-	 * and 28 is the length where that unmap causes severe, world-stopping UD
-	 * in the kernel, and values from 17 cause weirdness after the unmap
-	 * tcase. so we'll commit 16 and increase the number as the kernel stops
-	 * breaking.
+	 * so the test values are 10 for semi-guaranteed deep_call()
+	 * non-activation and 450 to fail in its absence, overflow any static
+	 * recursion limit, and fill up the kernel heap.
 	 */
-	/* (TODO: all these should vary.) */
-	const size_t map_size = PAGE_SIZE, chain_length = 16; //11597;
-	const bool burn_space = true;
+	const size_t chainlens[] = { 10, 450 };
+	const size_t map_size = PAGE_SIZE,	/* TODO: vary this */
+		chain_length = chainlens[iter & 0x1];
+	const bool burn_space = true;		/* TODO: this, too */
 	diag("map_size=%u, chain_length=%u, burn_space=%s",
 		map_size, chain_length, btos(burn_space));
 	plan_tests(9);
@@ -854,8 +858,6 @@ START_TEST(deep_recursive_unmap)
 	ok(headptr[123] != 0x8e, "modification base case");
 	tailptr[123] = 0x8e;
 	ok(headptr[123] == 0x8e, "modification post-case");
-
-	if(chain_length > 500) todo_start("no way broseph");
 
 	/* the destructive test. this should produce the same read-result as
 	 * earlier, but read as zero after being written to.
