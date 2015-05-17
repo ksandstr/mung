@@ -1886,12 +1886,16 @@ static void set_pt_range_rights(struct pt_iter *mod_it, L4_Fpage_t range)
 }
 
 
-static bool is_stack_safe(size_t margin)
-{
-	uintptr_t e = (uintptr_t)&e,
-		low = e & ~((uintptr_t)PAGE_SIZE - 1);
-	return e >= low + margin;
-}
+/* helper for deep_call() recursion */
+static void call_ueig(void *pptr);
+struct ueig_param {
+	struct map_group *g;
+	struct map_entry **e_p;
+	int mode;
+	L4_Fpage_t eff_range;
+
+	int retval;
+};
 
 
 /* the core of mapdb_unmap_fpage(). this avoids a hashtable lookup for every
@@ -1915,8 +1919,11 @@ static int unmap_entry_in_group(
 
 	/* prevent stack-breaking recursion. */
 	if(!is_stack_safe(0x400)) {
-		printf("WARNING: unmap skipped due to recursion!\n");
-		return 0;
+		struct ueig_param p = {
+			.g = g, .e_p = e_p, .mode = mode, .eff_range = eff_range,
+		};
+		deep_call(&call_ueig, &p);
+		return p.retval;
 	}
 
 	const bool get_access = CHECK_FLAG(mode, UM_GET_ACCESS),
@@ -2061,6 +2068,12 @@ static int unmap_entry_in_group(
 end:
 	pt_iter_destroy(&mod_it);
 	return rwx_seen;
+}
+
+
+static void call_ueig(void *pptr) {
+	struct ueig_param *p = pptr;
+	p->retval = unmap_entry_in_group(p->g, p->e_p, p->mode, p->eff_range);
 }
 
 

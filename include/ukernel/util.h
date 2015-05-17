@@ -5,6 +5,7 @@
 
 #include <assert.h>
 #include <stdint.h>
+#include <stdbool.h>
 #include <string.h>
 
 #include <l4/types.h>
@@ -108,6 +109,10 @@ static inline bool int_eq(const void *elem, void *ref) {
 	return *(const int *)elem == *(int *)ref;
 }
 
+
+/* from arch_x86.c */
+extern void deep_call(void (*fn)(void *), void *paramptr);
+extern bool is_stack_safe(size_t margin);
 
 
 /* from l4util.c */
