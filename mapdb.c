@@ -1886,6 +1886,14 @@ static void set_pt_range_rights(struct pt_iter *mod_it, L4_Fpage_t range)
 }
 
 
+static bool is_stack_safe(size_t margin)
+{
+	uintptr_t e = (uintptr_t)&e,
+		low = e & ~((uintptr_t)PAGE_SIZE - 1);
+	return e >= low + margin;
+}
+
+
 /* the core of mapdb_unmap_fpage(). this avoids a hashtable lookup for every
  * recursion, instead using the group pointer from a prior deref_child()
  * operation. @eff_range is supplied to avoid a modifying fetch_entry() in
@@ -1904,6 +1912,12 @@ static int unmap_entry_in_group(
 	assert(GROUP_ADDR(L4_Address(e->range)) == MG_START(g));
 	assert(fpage_overlap(eff_range, e->range));
 	assert(L4_SizeLog2(eff_range) <= L4_SizeLog2(e->range));
+
+	/* prevent stack-breaking recursion. */
+	if(!is_stack_safe(0x400)) {
+		printf("WARNING: unmap skipped due to recursion!\n");
+		return 0;
+	}
 
 	const bool get_access = CHECK_FLAG(mode, UM_GET_ACCESS),
 		recursive = CHECK_FLAG(mode, UM_RECURSIVE),
@@ -1926,10 +1940,15 @@ static int unmap_entry_in_group(
 
 	/* dereference children and recur.
 	 *
-	 * TODO: depending on the mapping structure, this can end up generating a
-	 * potentially infinite series of invocation frames in kernel space,
-	 * overflowing the measly one-page stack. so instead it should use a
-	 * non-recursive breadth-first algorithm.
+	 * TODO: for recursion that's both deep and broad, layers where
+	 * deep_call() comes into effect in the next call will end up always doing
+	 * that, over and over; that'll also enter the heap allocator time and
+	 * time again. the fix moves this loop into a function and invokes it with
+	 * an adaptive deep_call() mechanism, making that the canonical entry
+	 * point and not using a wrapper.
+	 *
+	 * more advancedly, parameter passing could happen with varargs. this is
+	 * the stuff dreams are made of.
 	 */
 	int next_mode = (mode & ~UM_DROP_SPECIAL) | UM_IMMEDIATE | UM_CHILD;
 	for(int i=0; recursive && i < e->num_children; i++) {
