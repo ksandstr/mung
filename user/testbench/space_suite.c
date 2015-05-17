@@ -774,6 +774,150 @@ START_LOOP_TEST(access_interference, iter, 0, 1)
 END_TEST
 
 
+static void helpful_assistant(size_t map_size, L4_ThreadId_t p_tid);
+
+/* creates a chain of mappings between two address spaces up to maximum
+ * length. this is intended to cause recursion-induced stack overflow via
+ * Unmap, and to test methods to detect it and (eventually) overcome such
+ * cases.
+ *
+ * sensitive people may wish to avert their eyes from this point down.
+ */
+START_TEST(deep_recursive_unmap)
+{
+	/* ... apparently 11598 is the magic number where the kernel throws a
+	 * permanent hissyfit in the chain-building stage. below this, not.
+	 *
+	 * and 28 is the length where that unmap causes severe, world-stopping UD
+	 * in the kernel, and values from 17 cause weirdness after the unmap
+	 * tcase. so we'll commit 16 and increase the number as the kernel stops
+	 * breaking.
+	 */
+	/* (TODO: all these should vary.) */
+	const size_t map_size = PAGE_SIZE, chain_length = 16; //11597;
+	const bool burn_space = true;
+	diag("map_size=%u, chain_length=%u, burn_space=%s",
+		map_size, chain_length, btos(burn_space));
+	plan_tests(9);
+
+	L4_ThreadId_t igor_tid, p_tid = L4_Myself();
+	int igor = fork_tid(&igor_tid);
+	if(igor == 0) {
+		helpful_assistant(map_size, p_tid);
+		exit(0);
+	}
+
+	if(burn_space) {
+		/* burn a bit of heap space so that the same addresses don't show up
+		 * for both participants, making debugging a bit easier.
+		 */
+		sbrk(MIN(size_t, 0x123456, map_size * chain_length / 8 * 11));
+	}
+
+	/* make us a chain. the pattern is simple: create some memory, map it to
+	 * the peasant, have it carry that back into our accept range (allocated
+	 * previously). rinse, repeat.
+	 */
+	void *pageptr = sbrk(map_size);
+	memset(pageptr, 0xf3, map_size);
+	uint8_t *headptr = pageptr;
+	L4_Fpage_t snd_page = L4_Fpage((L4_Word_t)pageptr, map_size);
+	L4_Set_Rights(&snd_page, L4_ReadWriteOnly);
+	bool ipc_ok = true;
+	for(size_t i=0; i < chain_length; i++) {
+		pageptr = sbrk(map_size);
+		L4_Fpage_t rcv_page = L4_Fpage((L4_Word_t)pageptr, map_size);
+		L4_MapItem_t mi = L4_MapItem(snd_page, 0);
+		L4_Accept(L4_MapGrantItems(rcv_page));
+		L4_LoadMR(0, (L4_MsgTag_t){ .X.t = 2 }.raw);
+		L4_LoadMRs(1, 2, mi.raw);
+		L4_MsgTag_t tag = L4_Call_Timeouts(igor_tid,
+			TEST_IPC_DELAY, TEST_IPC_DELAY);
+		if(L4_IpcFailed(tag)) {
+			diag("parent's ipc failed, ec=%#lx", L4_ErrorCode());
+			ipc_ok = false;
+			break;
+		}
+		snd_page = rcv_page;
+		L4_Set_Rights(&snd_page, L4_ReadWriteOnly);
+	}
+	diag("final snd_page=%#lx:%#lx", L4_Address(snd_page), L4_Size(snd_page));
+	ok(ipc_ok, "chain created");
+
+	/* confirm that the chain is properly real */
+	volatile uint8_t *tailptr = (uint8_t *)L4_Address(snd_page),
+		preflush_val = *tailptr;
+	diag("*tailptr = %#x", (unsigned)*tailptr);
+	ok1(tailptr[map_size - 1] == headptr[map_size - 1]);
+	ok1(tailptr[17] == headptr[17]);
+
+	ok(headptr[123] != 0x8e, "modification base case");
+	tailptr[123] = 0x8e;
+	ok(headptr[123] == 0x8e, "modification post-case");
+
+	if(chain_length > 500) todo_start("no way broseph");
+
+	/* the destructive test. this should produce the same read-result as
+	 * earlier, but read as zero after being written to.
+	 */
+	L4_Fpage_t flush_page = L4_Fpage((L4_Word_t)headptr, map_size);
+	L4_Set_Rights(&flush_page, L4_Writable);
+	L4_UnmapFpage(flush_page);
+	ok(tailptr[123] == 0x8e, "post-flush read 1");
+	ok(tailptr[map_size - 1] == headptr[map_size - 1], "post-flush read 2");
+	ok(*tailptr == preflush_val, "post-flush read 3");
+	/* fall down, go boom */
+	tailptr[234] = 0xff;
+	ok1(tailptr[235] == 0x00);
+
+	/* even the best help can't clean up after itself these days. what's the
+	 * world coming to
+	 */
+	send_quit(igor_tid);
+	int st, dead = wait(&st);
+	fail_if(dead != igor);
+}
+END_TEST
+
+
+/* our helpful assistant, yes. he is very simple now. */
+static void helpful_assistant(size_t map_size, L4_ThreadId_t p_tid)
+{
+	int n_timeouts = 0;
+	for(;;) {
+		void *posptr = sbrk(map_size);
+		L4_Fpage_t map_page = L4_Fpage((L4_Word_t)posptr, map_size);
+		L4_Accept(L4_MapGrantItems(map_page));
+		L4_MsgTag_t tag = L4_Receive_Timeout(p_tid, TEST_IPC_DELAY);
+
+		if(L4_IpcFailed(tag)) {
+			L4_Word_t ec = L4_ErrorCode();
+			if(ec == 3 && ++n_timeouts >= 3) {
+				diag("%s: enough timeouts in receive phase, exiting",
+					__func__);
+				return;
+			} else {
+				diag("%s: ipc failed, ec=%#lx", __func__, ec);
+				continue;
+			}
+		}
+
+		if(L4_Label(tag) == QUIT_LABEL) return;
+		L4_Set_Rights(&map_page, L4_FullyAccessible);
+		L4_MapItem_t mi = L4_MapItem(map_page, 0);
+		posptr = sbrk(map_size);
+		map_page = L4_Fpage((L4_Word_t)posptr, map_size);
+		L4_Accept(L4_MapGrantItems(map_page));
+		L4_LoadMR(0, (L4_MsgTag_t){ .X.t = 2 }.raw);
+		L4_LoadMRs(1, 2, mi.raw);
+		tag = L4_Reply(p_tid);
+		if(L4_IpcFailed(tag)) {
+			diag("%s: reply failed, ec=%#lx", __func__, L4_ErrorCode());
+		}
+	}
+}
+
+
 Suite *space_suite(void)
 {
 	Suite *s = suite_create("space");
@@ -806,6 +950,7 @@ Suite *space_suite(void)
 		tcase_add_test(tc, local_access);
 		tcase_add_test(tc, parent_access);
 		tcase_add_test(tc, access_interference);
+		tcase_add_test(tc, deep_recursive_unmap);
 		suite_add_tcase(s, tc);
 	}
 
