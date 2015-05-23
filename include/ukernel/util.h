@@ -111,7 +111,10 @@ static inline bool int_eq(const void *elem, void *ref) {
 
 
 /* from arch_x86.c */
-extern void deep_call(void (*fn)(void *), void *paramptr);
+/* deep_call() returns 0 on success, or -ENOMEM when the new stack couldn't be
+ * allocated.
+ */
+extern int deep_call(void (*fn)(void *), void *paramptr);
 extern bool is_stack_safe(size_t margin);
 
 

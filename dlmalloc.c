@@ -538,7 +538,7 @@ MAX_RELEASE_CHECK_RATE   default: 4095 unless not HAVE_MMAP
 
 extern void malloc_panic(void);
 #define ABORT malloc_panic()
-#define MALLOC_FAILURE_ACTION malloc_panic()
+#define MALLOC_FAILURE_ACTION	/* nothing */
 
 #include <errno.h>
 

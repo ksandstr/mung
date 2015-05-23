@@ -18,6 +18,7 @@
 
 
 #define N_FIRST_PAGES (2 * 1024 * 1024 / PAGE_SIZE)
+#define HEAP_MARGIN 30		/* # of pages not given to heap */
 
 
 /* a page of free address space in kernel memory. */
@@ -36,6 +37,7 @@ static struct kmem_cache *mm_page_cache = NULL,	/* <struct page> */
 	*free_as_cache = NULL;		/* <struct as_free> */
 
 static uintptr_t heap_pos = KERNEL_HEAP_TOP;
+static size_t n_free_pages = 0;
 
 
 /* TODO: make the kernel heap also contiguous in address space -- and then
@@ -48,10 +50,14 @@ static uintptr_t heap_pos = KERNEL_HEAP_TOP;
 void *sbrk(intptr_t increment)
 {
 	if(increment > 0) {
-		uintptr_t n_pages = ((uintptr_t)increment + PAGE_SIZE - 1) >> PAGE_BITS;
+		size_t n_pages = ((uintptr_t)increment + PAGE_SIZE - 1) >> PAGE_BITS;
+		if(n_free_pages < n_pages + HEAP_MARGIN) {
+			/* you fail it. your skill is not enough */
+			return (void *)~0ull;
+		}
 		heap_pos -= n_pages << PAGE_BITS;
 		const uintptr_t start_pos = heap_pos;
-		for(uintptr_t i=0; i < n_pages; i++) {
+		for(size_t i=0; i < n_pages; i++) {
 			struct page *pg = get_kern_page(start_pos + i * PAGE_SIZE);
 			assert((uintptr_t)pg->vm_addr == start_pos + i * PAGE_SIZE);
 			list_add(&k_heap_pages, &pg->link);
@@ -226,6 +232,7 @@ void init_kernel_heap(
 			pg->id = next_addr >> PAGE_BITS;
 			pg->vm_addr = (void *)next_addr;
 			list_add(&k_free_pages, &pg->link);
+			n_free_pages++;
 		}
 		next_addr += PAGE_SIZE;
 	}
@@ -256,6 +263,7 @@ struct page *get_kern_page(uintptr_t vm_addr)
 	do {
 		p = container_of(k_free_pages.n.prev, struct page, link);
 		list_del(&p->link);
+		n_free_pages--;
 		/* don't return pages with a physical address below 0x100000, as these
 		 * are special on the x86 (video memory, etc)
 		 */
@@ -302,6 +310,7 @@ void free_kern_page(struct page *page)
 	}
 	/* grow the freelist at the end for t_slab.c's sake */
 	list_add_tail(&k_free_pages, &page->link);
+	n_free_pages++;
 }
 
 

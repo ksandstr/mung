@@ -88,17 +88,10 @@ static inline void call_on_stack(void (*fn)(void *), void *stack)
 /* this low-level stuff doesn't have any better place to be in; and anyway,
  * thread stacks are per-architecture.
  */
-void deep_call(void (*fn)(void *), void *paramptr)
+int deep_call(void (*fn)(void *), void *paramptr)
 {
-	static int cur_depth = 0;
-
-	if(cur_depth > 50) {
-		printf("%s: limit reached\n", __func__);
-		return;
-	}
-
 	void *stkbase = valloc(PAGE_SIZE);
-	if(stkbase == NULL) panic("deep_call: can't allocate next stack");
+	if(unlikely(stkbase == NULL)) return -ENOMEM;
 
 	uintptr_t top = ((uintptr_t)stkbase + PAGE_SIZE - 16) & ~0xful;
 	/* FIXME: there may be some SSE fail in here. it should get fixed before
@@ -108,11 +101,11 @@ void deep_call(void (*fn)(void *), void *paramptr)
 	*(--stk) = (L4_Word_t)paramptr;
 
 	// printf("%s: new stkbase=%p, stk=%p\n", __func__, stkbase, stk);
-	cur_depth++;
 	call_on_stack(fn, (void *)stk);
-	cur_depth--;
 
 	free(stkbase);
+
+	return 0;
 }
 
 
