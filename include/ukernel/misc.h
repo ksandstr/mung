@@ -18,6 +18,7 @@
 
 
 #define SYSCALL __attribute__((regparm(3)))
+#define KERNEL_STACK_SIZE (16 * 1024)
 
 
 struct thread;
@@ -25,7 +26,6 @@ struct thread;
 
 /* from kmain.c */
 
-extern uint8_t syscall_stack[];
 /* should only be read with interrupts disabled! */
 extern uint64_t global_timer_count;		/* timer ticks */
 extern uint64_t *systemclock_p;			/* microseconds */

@@ -41,7 +41,8 @@ static struct list_head resv_page_list = LIST_HEAD_INIT(resv_page_list);
 static struct page *next_dir_page = NULL;
 
 /* system call & interrupt stack (x86 specific). */
-uint8_t syscall_stack[PAGE_SIZE] PAGE_ALIGN;
+static void *syscall_stack = NULL;
+
 uint8_t kcp_copy[PAGE_SIZE] PAGE_ALIGN;
 
 uint64_t global_timer_count = 0;
@@ -202,13 +203,16 @@ static void init_kernel_tss(struct tss *t)
 {
 	assert(sizeof(struct tss) == 104);
 
-	intptr_t stk = (intptr_t)&syscall_stack[0];
-	stk += sizeof(syscall_stack) - 16;
-	stk &= ~15ul;
+	int n = posix_memalign(&syscall_stack,
+		KERNEL_STACK_SIZE, KERNEL_STACK_SIZE);
+	if(n != 0) {
+		printf("n=%d\n", n);
+		panic("can't allocate syscall stack");
+	}
 
 	*t = (struct tss){
 		.ss0 = SEG_KERNEL_DATA << 3,
-		.esp0 = stk,
+		.esp0 = ((uintptr_t)syscall_stack + KERNEL_STACK_SIZE - 16) & ~0xful,
 		.iopb_offset = sizeof(struct tss),
 	};
 }
@@ -444,17 +448,6 @@ void kmain(void *bigp, unsigned int magic)
 	 */
 	if(x86_irq_is_enabled()) x86_irq_disable();
 
-	asm volatile ("lldt %%ax" :: "a" (0));
-	init_kernel_tss(&kernel_tss);
-
-	setup_gdt();
-	setup_idt(SEG_KERNEL_CODE, 15);		/* XT-PIC, for now */
-	init_irq();
-
-	/* set MP. clear EMulation, NoExceptions, TaskSwitch. */
-	x86_alter_cr0(~(X86_CR0_EM | X86_CR0_NE | X86_CR0_TS), X86_CR0_MP);
-	x86_init_fpu();
-
 	printf("setting up paging (kernel ram [%#lx..%#lx])\n",
 		(L4_Word_t)resv_start, (L4_Word_t)resv_end);
 	struct list_head ksp_resv = LIST_HEAD_INIT(ksp_resv);
@@ -468,6 +461,17 @@ void kmain(void *bigp, unsigned int magic)
 	space_finalize_kernel(kernel_space, &resv_page_list);
 
 	/* NOTE: malloc(), free(), etc. are only available from this line down. */
+
+	asm volatile ("lldt %%ax" :: "a" (0));
+	init_kernel_tss(&kernel_tss);
+
+	setup_gdt();
+	setup_idt(SEG_KERNEL_CODE, 15);		/* XT-PIC, for now */
+	init_irq();
+
+	/* set MP. clear EMulation, NoExceptions, TaskSwitch. */
+	x86_alter_cr0(~(X86_CR0_EM | X86_CR0_NE | X86_CR0_TS), X86_CR0_MP);
+	x86_init_fpu();
 
 	const L4_KernelConfigurationPage_t *kcp = kcp_base;
 	L4_KernelRootServer_t s0_mod = kcp->sigma0,

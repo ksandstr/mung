@@ -793,10 +793,10 @@ START_LOOP_TEST(deep_recursive_unmap, iter, 0, 1)
 	 * years.
 	 *
 	 * so the test values are 10 for semi-guaranteed deep_call()
-	 * non-activation and 450 to fail in its absence, overflow any static
-	 * recursion limit, and fill up the kernel heap.
+	 * non-activation and 400 to fail in its absence, overflow any static
+	 * recursion limit, and contaminate your precious bodily fluids.
 	 */
-	const size_t chainlens[] = { 10, 450 };
+	const size_t chainlens[] = { 10, 400 };
 	const size_t map_size = PAGE_SIZE,	/* TODO: vary this */
 		chain_length = chainlens[iter & 0x1];
 	const bool burn_space = true;		/* TODO: this, too */

@@ -90,8 +90,12 @@ static inline void call_on_stack(void (*fn)(void *), void *stack)
  */
 int deep_call(void (*fn)(void *), void *paramptr)
 {
-	void *stkbase = valloc(PAGE_SIZE);
-	if(unlikely(stkbase == NULL)) return -ENOMEM;
+	void *stkbase;
+	int n = posix_memalign(&stkbase, KERNEL_STACK_SIZE, KERNEL_STACK_SIZE);
+	if(unlikely(n != 0)) {
+		if(n == ENOMEM) return -n;
+		else panic("deep_call() posix_memalign failed");
+	}
 
 	uintptr_t top = ((uintptr_t)stkbase + PAGE_SIZE - 16) & ~0xful;
 	/* FIXME: there may be some SSE fail in here. it should get fixed before
@@ -99,12 +103,9 @@ int deep_call(void (*fn)(void *), void *paramptr)
 	 */
 	L4_Word_t *stk = (L4_Word_t *)top;
 	*(--stk) = (L4_Word_t)paramptr;
-
-	// printf("%s: new stkbase=%p, stk=%p\n", __func__, stkbase, stk);
 	call_on_stack(fn, (void *)stk);
 
 	free(stkbase);
-
 	return 0;
 }
 
@@ -112,6 +113,6 @@ int deep_call(void (*fn)(void *), void *paramptr)
 bool is_stack_safe(size_t margin)
 {
 	uintptr_t e = (uintptr_t)&e,
-		low = e & ~((uintptr_t)PAGE_SIZE - 1);
+		low = e & ~((uintptr_t)KERNEL_STACK_SIZE - 1);
 	return e >= low + margin;
 }

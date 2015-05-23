@@ -18,7 +18,7 @@
 
 
 #define N_FIRST_PAGES (2 * 1024 * 1024 / PAGE_SIZE)
-#define HEAP_MARGIN 30		/* # of pages not given to heap */
+#define HEAP_MARGIN 12		/* # of pages not given to heap */
 
 
 /* a page of free address space in kernel memory. */
