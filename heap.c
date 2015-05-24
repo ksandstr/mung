@@ -37,7 +37,7 @@ static struct list_head k_free_pages = LIST_HEAD_INIT(k_free_pages),
 static struct kmem_cache *mm_page_cache = NULL,	/* <struct page> */
 	*free_as_cache = NULL;		/* <struct as_free> */
 
-static uintptr_t heap_pos = ~0ul, resv_pos = KERNEL_HEAP_TOP;
+static uintptr_t heap_pos = ~0ul, resv_pos = KERNEL_RESV_TOP;
 static size_t n_free_pages = 0;
 static struct rb_root free_as_tree;		/* sorted by sizelog2, address */
 
@@ -112,10 +112,6 @@ static struct as_free *insert_as_free_helper(
 
 static struct as_free *insert_as_free(struct rb_root *root, struct as_free *f)
 {
-#if 0
-	printf("%s: insert %#lx:%#lx\n", __func__,
-		L4_Address(f->fp), L4_Size(f->fp));
-#endif
 	struct as_free *dupe = insert_as_free_helper(root, f);
 	if(dupe != NULL) return dupe;
 
@@ -225,6 +221,8 @@ uintptr_t reserve_heap_range(size_t size)
 void free_heap_page(uintptr_t addr)
 {
 	assert((addr & PAGE_MASK) == 0);
+	assert(addr >= resv_pos);
+	assert(addr < KERNEL_RESV_TOP);
 
 	put_supervisor_page(addr, 0);
 	put_as_free(addr, PAGE_BITS);

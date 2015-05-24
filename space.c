@@ -1046,15 +1046,22 @@ COLD void init_spaces(struct list_head *resv_list)
 	/* UTCB pages */
 	int ua_shift = size_to_shift(UTCB_SIZE * NUM_KERNEL_THREADS);
 	if(ua_shift < PAGE_BITS) ua_shift = PAGE_BITS;
-	kernel_space->utcb_area = L4_FpageLog2(
-		ALIGN_TO_SHIFT(KERNEL_HEAP_TOP, ua_shift), ua_shift);
+	uintptr_t utcb_base = reserve_heap_range(1 << ua_shift);
+	kernel_space->utcb_area = L4_FpageLog2(utcb_base, ua_shift);
+	printf("kernel UTCB area at %#lx:%#lx\n",
+		L4_Address(kernel_space->utcb_area),
+		L4_Size(kernel_space->utcb_area));
 	const int n_ups = NUM_KERN_UTCB_PAGES;
 	/* keep pointer for finalize */
 	kernel_space->utcb_pages.priv = kernel_utcb_pages;
 	for(int i=0; i < n_ups; i++) {
 		struct utcb_page *up = &kernel_utcb_pages[i];
+		/* we can't let get_kern_page() call put_supervisor_page() this early
+		 * in the boot process, because it'll encounter next_dir_page == NULL
+		 * and explode. instead we'll put these wherever for the time being,
+		 * and move them over in the post-heap init.
+		 */
 		up->pg = get_kern_page(0);
-		/* TODO: map the pages to actually appear at the UTCB area? */
 		list_add(resv_list, &up->pg->link);
 		memset(up->pg->vm_addr, 0, PAGE_SIZE);
 		up->occmap = 0;
@@ -1124,6 +1131,16 @@ COLD void space_finalize_kernel(
 	sp->utcb_pages.priv = NULL;
 	for(int i=0; i < NUM_KERN_UTCB_PAGES; i++) {
 		htable_add(&sp->utcb_pages, int_hash(ups[i].pos), &ups[i]);
+		/* move the page into the kernel's UTCB segment. this'll make a
+		 * permanent hole in the idempotent kernel reservation to avoid VM
+		 * aliasing of UTCB pages.
+		 */
+		uintptr_t old_addr = (uintptr_t)ups[i].pg->vm_addr;
+		put_supervisor_page(old_addr, 0);
+		/* (i.e. the address space needn't be free_heap_page()'d) */
+		assert(CHECK_FLAG(ups[i].pg->flags, PAGEF_INITMEM));
+		uintptr_t new_addr = L4_Address(sp->utcb_area) + i * PAGE_SIZE;
+		ups[i].pg->vm_addr = (void *)new_addr;
+		put_supervisor_page(new_addr, ups[i].pg->id);
 	}
-	/* TODO: set kernel threads' UTCB page pointers, too? */
 }

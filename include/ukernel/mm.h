@@ -17,8 +17,10 @@
 #define KERNEL_SEG_START (~KERNEL_SEG_SIZE + 1)
 
 #define RESV_UTCB_SIZE ((NUM_KERNEL_THREADS * UTCB_SIZE + PAGE_SIZE - 1) & ~PAGE_MASK)
-/* leaving uppermost 4k unused for esoteric reasons. */
-#define KERNEL_HEAP_TOP (KERNEL_SEG_SIZE - 4096 - RESV_UTCB_SIZE)
+/* the first address not used for the kernel address space reservation range.
+ * uppermost 4k left unused for esoteric reasons.
+ */
+#define KERNEL_RESV_TOP (KERNEL_SEG_SIZE - 4096)
 
 
 typedef uint32_t pdir_t;
@@ -83,6 +85,9 @@ extern void add_supervisor_pages(intptr_t heap_pos, int num_pages);
 /* TODO: change reserve_heap_range() to accept a sizelog2 instead */
 extern uintptr_t reserve_heap_range(size_t size);	/* (aligned to 2**n) */
 #define reserve_heap_page() reserve_heap_range(PAGE_SIZE)
+/* return PAGE_SIZE bytes of heap space received from reserve_heap_range().
+ * this function cannot be used for any other addresses.
+ */
 extern void free_heap_page(uintptr_t address);
 
 /* ensures @pg->vm_addr validity. duration is one of VM_*.
