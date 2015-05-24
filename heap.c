@@ -4,6 +4,7 @@
 #include <stdbool.h>
 #include <assert.h>
 #include <ccan/list/list.h>
+#include <ccan/likely/likely.h>
 #include <ccan/container_of/container_of.h>
 
 #include <l4/types.h>
@@ -339,8 +340,11 @@ void init_kernel_heap(
 		}
 		if(page_is_available(kcp, next_addr)) {
 			struct page *pg = &first_pages[got++];
-			pg->id = next_addr >> PAGE_BITS;
-			pg->vm_addr = (void *)next_addr;
+			*pg = (struct page){
+				.id = next_addr >> PAGE_BITS,
+				.vm_addr = (void *)next_addr,
+				.flags = PAGEF_INITMEM,
+			};
 			list_add(&k_free_pages, &pg->link);
 			n_free_pages++;
 		}
@@ -398,7 +402,9 @@ struct page *get_kern_page(uintptr_t vm_addr)
 			p->vm_addr = (void *)vm_addr;
 		}
 	} else {
-		if(p->vm_addr != NULL) {
+		if(p->vm_addr != NULL
+			&& likely(!CHECK_FLAG(p->flags, PAGEF_INITMEM)))
+		{
 			/* remove the heap reservation. */
 			uintptr_t addr = (uintptr_t)p->vm_addr;
 			put_supervisor_page(addr, 0);
@@ -419,7 +425,9 @@ void free_kern_page(struct page *page)
 	/* better here than at the call sites. */
 	if(page == NULL) return;
 
-	if(page->vm_addr != NULL) {
+	if(page->vm_addr != NULL
+		&& likely(!CHECK_FLAG(page->flags, PAGEF_INITMEM)))
+	{
 		free_heap_page((uintptr_t)page->vm_addr);
 		page->vm_addr = NULL;
 	}

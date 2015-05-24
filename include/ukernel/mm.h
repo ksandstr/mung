@@ -51,8 +51,15 @@ typedef uint32_t page_t;
 #define VM_SYSCALL 2	/* guaranteed valid until kernel exit */
 
 
-/* values of <struct page>.flags */
-#define PAGEF_VMREF 0x01	/* page's VM map is reference counted. */
+/* values of <struct page>.flags .
+ *
+ * note that PAGEF_INITMEM means different things to different consumers. on
+ * most pages it implies that free_heap_page() with ->vm_addr will rightly
+ * blow an assert. also note that nothing should ever clear PAGEF_INITMEM
+ * where it's been set.
+ */
+#define PAGEF_VMREF   0x1		/* page's VM map is reference counted. */
+#define PAGEF_INITMEM 0x8000	/* vm_addr is in the kernel init memory */
 
 
 /* tracks a physical page reserved by the kernel. */
