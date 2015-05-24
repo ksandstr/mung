@@ -73,8 +73,9 @@ struct page
 
 extern void add_supervisor_pages(intptr_t heap_pos, int num_pages);
 
-extern uintptr_t reserve_heap_page(void);
+/* TODO: change reserve_heap_range() to accept a sizelog2 instead */
 extern uintptr_t reserve_heap_range(size_t size);	/* (aligned to 2**n) */
+#define reserve_heap_page() reserve_heap_range(PAGE_SIZE)
 extern void free_heap_page(uintptr_t address);
 
 /* ensures @pg->vm_addr validity. duration is one of VM_*.

@@ -11,6 +11,7 @@
 #include <l4/kip.h>
 
 #include <ukernel/slab.h>
+#include <ukernel/rbtree.h>
 #include <ukernel/thread.h>
 #include <ukernel/space.h>
 #include <ukernel/misc.h>
@@ -21,32 +22,25 @@
 #define HEAP_MARGIN 12		/* # of pages not given to heap */
 
 
-/* a page of free address space in kernel memory. */
+/* a page of unused address space in the kernel. */
 struct as_free {
-	struct list_node link;
-	L4_Word_t address;
+	struct rb_node rb;	/* in free_as_tree */
+	L4_Fpage_t fp;		/* rights bits ignored */
 };
 
 
 static struct list_head k_free_pages = LIST_HEAD_INIT(k_free_pages),
 	k_slab_pages = LIST_HEAD_INIT(k_slab_pages),
-	k_heap_pages = LIST_HEAD_INIT(k_heap_pages),
-	free_as_list = LIST_HEAD_INIT(free_as_list);
+	k_heap_pages = LIST_HEAD_INIT(k_heap_pages);
 
 static struct kmem_cache *mm_page_cache = NULL,	/* <struct page> */
 	*free_as_cache = NULL;		/* <struct as_free> */
 
-static uintptr_t heap_pos = KERNEL_HEAP_TOP;
+static uintptr_t heap_pos = ~0ul, resv_pos = KERNEL_HEAP_TOP;
 static size_t n_free_pages = 0;
+static struct rb_root free_as_tree;		/* sorted by sizelog2, address */
 
 
-/* TODO: make the kernel heap also contiguous in address space -- and then
- * enable MORECORE_CONTIGUOUS in dlmalloc.c & leave DEFAULT_GRANULARITY at
- * default to minimize unused kernel RAM.
- *
- * to do this, reserve_heap_page() must allocate from the other end of the
- * kernel address range.
- */
 void *sbrk(intptr_t increment)
 {
 	if(increment > 0) {
@@ -55,37 +49,154 @@ void *sbrk(intptr_t increment)
 			/* you fail it. your skill is not enough */
 			return (void *)~0ull;
 		}
-		heap_pos -= n_pages << PAGE_BITS;
-		const uintptr_t start_pos = heap_pos;
+		uintptr_t start_pos = heap_pos;
+		heap_pos += n_pages << PAGE_BITS;
+		assert(heap_pos <= resv_pos);
 		for(size_t i=0; i < n_pages; i++) {
 			struct page *pg = get_kern_page(start_pos + i * PAGE_SIZE);
 			assert((uintptr_t)pg->vm_addr == start_pos + i * PAGE_SIZE);
 			list_add(&k_heap_pages, &pg->link);
 		}
+		printf("%s: heap extended to [%#lx..%#lx)\n", __func__,
+			(L4_Word_t)start_pos, (L4_Word_t)heap_pos);
+		return (void *)start_pos;
+	} else if(increment < 0) {
+		panic("sbrk() doesn't handle negative increment!");
+	} else {
+		return (void *)heap_pos;
 	}
-	return (void *)heap_pos;
 }
 
 
-/* reserves address space in the sbrk()-style heap, and from the list of
- * pages released with free_heap_page(), preferring the latter.
- *
- * NB: disabling recycling of old heap addresses makes for an interesting
- * one-bit way to debug kernel-space page table weirdness.
- */
-uintptr_t reserve_heap_page(void)
+static struct as_free *insert_as_free_helper(
+	struct rb_root *root,
+	struct as_free *f)
 {
-	struct as_free *f = list_pop(&free_as_list, struct as_free, link);
-	if(f != NULL) {
-		uintptr_t addr = f->address;
-		kmem_cache_free(free_as_cache, f);
-		assert((addr & PAGE_MASK) == 0);
-		return addr;
-	} else {
-		heap_pos -= PAGE_SIZE;
-		assert((heap_pos & PAGE_MASK) == 0);
-		return heap_pos;
+	struct rb_node **p = &root->rb_node, *parent = NULL;
+	while(*p != NULL) {
+		parent = *p;
+		struct as_free *oth = rb_entry(parent, struct as_free, rb);
+		int cmp = (int)L4_SizeLog2(oth->fp) - (int)L4_SizeLog2(f->fp);
+		if(cmp == 0) {
+			cmp = (intptr_t)L4_Address(oth->fp) - L4_Address(f->fp);
+			if(cmp == 0) return oth;
+		}
+		if(cmp < 0) p = &(*p)->rb_left; else p = &(*p)->rb_right;
 	}
+	rb_link_node(&f->rb, parent, p);
+	return NULL;
+}
+
+
+static struct as_free *insert_as_free(struct rb_root *root, struct as_free *f)
+{
+#if 0
+	printf("%s: insert %#lx:%#lx\n", __func__,
+		L4_Address(f->fp), L4_Size(f->fp));
+#endif
+	struct as_free *dupe = insert_as_free_helper(root, f);
+	if(dupe != NULL) return dupe;
+
+	rb_insert_color(&f->rb, root);
+	/* try to coalesce @f with its neighbour. */
+	struct rb_node *n = CHECK_FLAG(L4_Address(f->fp), L4_Size(f->fp))
+		? rb_next(&f->rb) : rb_prev(&f->rb);
+	if(n != NULL) {
+		struct as_free *oth = rb_entry(n, struct as_free, rb);
+		if(L4_SizeLog2(oth->fp) == L4_SizeLog2(f->fp)
+			&& L4_Address(oth->fp) == (L4_Address(f->fp) ^ L4_Size(f->fp)))
+		{
+			/* roight! toss both items, delete @oth, enlarge @f and
+			 * reinsert it.
+			 */
+			rb_erase(&oth->rb, root);
+			kmem_cache_free(free_as_cache, oth);
+			rb_erase(&f->rb, root);
+			f->fp = L4_FpageLog2(L4_Address(f->fp) & ~L4_Size(f->fp),
+				L4_SizeLog2(f->fp) + 1);
+			return insert_as_free(root, f);
+		}
+	}
+
+	return NULL;
+}
+
+
+static struct as_free *put_as_free(uintptr_t addr, int sizelog2)
+{
+	struct as_free *f = kmem_cache_alloc(free_as_cache);
+	f->fp = L4_FpageLog2(addr, sizelog2);
+	struct as_free *dupe = insert_as_free(&free_as_tree, f);
+	if(likely(dupe == NULL)) dupe = f; else kmem_cache_free(free_as_cache, f);
+	return dupe;
+}
+
+
+/* allocates room from the top of the kernel address space, and from a tree of
+ * free address space released with free_heap_page(), preferring the latter.
+ *
+ * FIXME: this'll happily run over the heap area in the new-allocation part.
+ */
+uintptr_t reserve_heap_range(size_t size)
+{
+	assert(size == (1 << size_to_shift(size)));
+
+	/* try to find an aligned fpage of the right size. */
+	int sizelog2 = size_to_shift(size);
+	struct rb_node *n = free_as_tree.rb_node;
+	struct as_free *f = NULL;
+	while(n != NULL) {
+		f = rb_entry(n, struct as_free, rb);
+		int cmp = (int)L4_SizeLog2(f->fp) - sizelog2;
+		if(cmp == 0) break;
+		if(cmp < 0) n = n->rb_left; else n = n->rb_right;
+	}
+	/* wind a smaller entry forward until a larger is found, or not. */
+	while(f != NULL && L4_SizeLog2(f->fp) < sizelog2) {
+		n = rb_next(&f->rb);
+		if(n == NULL) f = NULL; else f = rb_entry(n, struct as_free, rb);
+	}
+	if(f != NULL) {
+		/* (in recognition that all cases where this is true start with
+		 * rb_erase()...)
+		 */
+		rb_erase(&f->rb, &free_as_tree);
+	}
+	uintptr_t addr;
+	if(f != NULL && L4_SizeLog2(f->fp) == sizelog2) {
+		/* whole case */
+		addr = L4_Address(f->fp);
+		kmem_cache_free(free_as_cache, f);
+	} else if(f != NULL && L4_SizeLog2(f->fp) == sizelog2 + 1) {
+		/* simple split case. keep the high half, shrink the other down and
+		 * reinsert.
+		 */
+		addr = L4_Address(f->fp) + L4_Size(f->fp) / 2;
+		f->fp = L4_FpageLog2(L4_Address(f->fp),
+			L4_SizeLog2(f->fp) - 1);
+		insert_as_free(&free_as_tree, f);
+	} else if(f != NULL) {
+		/* grab ours at the upper end, & make shrapnel for rest */
+		addr = L4_Address(f->fp) + L4_Size(f->fp) - size;
+		L4_Word_t r_addr;
+		int r_sizelog2;
+		for_page_range(L4_Address(f->fp), addr, r_addr, r_sizelog2) {
+			put_as_free(r_addr, r_sizelog2);
+		}
+		kmem_cache_free(free_as_cache, f);
+	} else {
+		/* align up. or rather, down */
+		L4_Word_t r_addr;
+		int r_sizelog2;
+		for_page_range(resv_pos & ~(size - 1), resv_pos, r_addr, r_sizelog2) {
+			put_as_free(r_addr, r_sizelog2);
+		}
+		resv_pos &= ~(size - 1);
+		resv_pos -= size;
+		addr = resv_pos;
+	}
+
+	return addr;
 }
 
 
@@ -94,32 +205,7 @@ void free_heap_page(uintptr_t addr)
 	assert((addr & PAGE_MASK) == 0);
 
 	put_supervisor_page(addr, 0);
-
-	struct as_free *f = kmem_cache_alloc(free_as_cache);
-	f->address = addr;
-	list_add(&free_as_list, &f->link);
-}
-
-
-uintptr_t reserve_heap_range(size_t size)
-{
-	assert(size == (1 << size_to_shift(size)));
-
-	uintptr_t first = (heap_pos - size) & ~(size - 1),
-		last = first + size - 1;
-	/* recycle the useless part one page at a time.
-	 *
-	 * this is inefficient: we could instead 1) add a fpage-based subrange
-	 * type [and define free_heap_page() in terms of it], 1b) collapse
-	 * neighbour pages, 2) make it use a rb-tree for constant-time merge
-	 * checks, and 3) do this in larger chunks than PAGE_SIZE at a time.
-	 */
-	for(uintptr_t a = last + 1; a < heap_pos; a += PAGE_SIZE) {
-		free_heap_page(a);
-	}
-
-	heap_pos = first;
-	return first;
+	put_as_free(addr, PAGE_BITS);
 }
 
 
@@ -205,6 +291,9 @@ static COLD bool page_is_available(
 /* reserves initial memory for the kernel. this is subsequently used to
  * allocate spaces, threads, UTCB pages, page tracking structures, copies of
  * ACPI tables, etc...
+ *
+ * the kernel sbrk() heap will be positioned 2 megs after *resv_end. hopefully
+ * this leaves enough room for ACPI tables and such.
  */
 void init_kernel_heap(
 	void *kcp_base,
@@ -241,8 +330,13 @@ void init_kernel_heap(
 	/* initialize page slab & return. */
 	mm_page_cache = KMEM_CACHE_NEW("mm_page_cache", struct page);
 	free_as_cache = KMEM_CACHE_NEW("free_as_cache", struct as_free);
+	free_as_tree = RB_ROOT;
 	*resv_start = MIN(uintptr_t, (uintptr_t)&_start, *resv_start);
 	*resv_end = MAX(uintptr_t, next_addr - 1, *resv_end);	/* (inclusive.) */
+
+	const size_t heap_start_align = 2 * 1024 * 1024;
+	heap_pos = (*resv_end + heap_start_align) & ~(heap_start_align - 1);
+	printf("kernel heap starts at %#lx\n", (L4_Word_t)heap_pos);
 
 	L4_Word_t siz = *resv_end + 1 - *resv_start;
 	printf("... total kernel reservation is %lu KiB (~%lu MiB).\n",
@@ -348,3 +442,59 @@ void kmem_free_page(void *ptr)
 
 	printf("warning: %s(%p) refers to an unknown page\n", __func__, ptr);
 }
+
+
+#include <ukernel/ktest.h>
+#if KTEST
+
+/* simple and brutal: do a big alloc_range, free it all, allocate one page at
+ * a time until the tree becomes empty (which this'll observe directly).
+ */
+START_TEST(t_alloc_from_large)
+{
+	const size_t reserve_size = 1024 * 128;
+	plan_tests(2);
+
+	uintptr_t big = reserve_heap_range(reserve_size);
+	assert(big != 0);
+	diag("big=%#lx", (L4_Word_t)big);
+	for(size_t i=0; i < reserve_size; i += PAGE_SIZE) {
+		free_heap_page(big + i);
+	}
+	ok(true, "prep didn't crash");
+
+	/* count how many pages we'll get.
+	 *
+	 * TODO: vary the drain-reservation size; it could also be 8k, but then
+	 * it'd need to check for whether the tree is empty of 8k and larger
+	 * pages.
+	 */
+	int n_ptrs = 0;
+	for(struct rb_node *rb = rb_first(&free_as_tree);
+		rb != NULL;
+		rb = rb_next(rb))
+	{
+		struct as_free *f = rb_entry(rb, struct as_free, rb);
+		n_ptrs += 1 << (L4_SizeLog2(f->fp) - 12);
+	}
+	diag("n_ptrs=%d", n_ptrs);
+	uintptr_t *ptrs = malloc(sizeof(*ptrs) * n_ptrs);
+	assert(ptrs != NULL);	/* in the absence of a fail_unless(), ... */
+	for(int i=0; i < n_ptrs; i++) {
+		ptrs[i] = reserve_heap_page();
+		assert(ptrs[i] != 0);
+	}
+	ok(RB_EMPTY_ROOT(&free_as_tree), "tree became empty");
+
+	/* clean up. */
+	for(int i=0; i < n_ptrs; i++) free_heap_page(ptrs[i]);
+	free(ptrs);
+}
+END_TEST
+
+
+void ktest_heap(void) {
+	RUN(t_alloc_from_large);
+}
+
+#endif
