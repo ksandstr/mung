@@ -57,14 +57,35 @@ void *sbrk(intptr_t increment)
 			assert((uintptr_t)pg->vm_addr == start_pos + i * PAGE_SIZE);
 			list_add(&k_heap_pages, &pg->link);
 		}
-		printf("%s: heap extended to [%#lx..%#lx)\n", __func__,
-			(L4_Word_t)start_pos, (L4_Word_t)heap_pos);
 		return (void *)start_pos;
-	} else if(increment < 0) {
-		panic("sbrk() doesn't handle negative increment!");
-	} else {
-		return (void *)heap_pos;
 	}
+
+	if(increment < 0) {
+		size_t dec = -increment, n_pages = dec >> PAGE_BITS;
+		for(size_t i=1; i <= n_pages; i++) {
+			uintptr_t expect = heap_pos - i * PAGE_SIZE;
+			struct page *pg = list_pop(&k_heap_pages, struct page, link);
+			if(pg == NULL) panic("attempted to shrink heap past start!");
+			if(unlikely((L4_Word_t)pg->vm_addr != expect)) {
+				/* FIXME: prove that this never occurs, then assert against
+				 * it
+				 */
+				printf("%s: failed to shrink, exp. vm_addr %#lx, got %p\n",
+					__func__, (L4_Word_t)expect, pg->vm_addr);
+				list_add_tail(&k_heap_pages, &pg->link);
+			} else {
+				/* without these, free_kern_page() releases the address space
+				 * back into the range allocator; that isn't what we want.
+				 */
+				put_supervisor_page((uintptr_t)pg->vm_addr, 0);
+				pg->vm_addr = NULL;
+				free_kern_page(pg);
+			}
+		}
+		heap_pos -= n_pages * PAGE_SIZE;
+	}
+
+	return (void *)heap_pos;
 }
 
 
