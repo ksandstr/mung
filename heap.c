@@ -276,7 +276,6 @@ static COLD bool page_is_available(
 	L4_MemoryDesc_t *mds = (void *)kcp + kcp->MemoryInfo.MemDescPtr;
 	int md_count = kcp->MemoryInfo.n;
 	bool virt_ok = false, conv_ok = false, reserved = false;
-//	printf("%s: address %#x (%d memorydescs)...\n", __func__, addr, md_count);
 	for(int i=0; i < md_count; i++) {
 		L4_Word_t low = L4_MemoryDescLow(&mds[i]),
 			high = L4_MemoryDescHigh(&mds[i]);
@@ -284,13 +283,6 @@ static COLD bool page_is_available(
 		bool virtual = L4_IsMemoryDescVirtual(&mds[i]);
 
 		if(addr < low || addr > high) continue;
-
-#if 0
-		size_t size = (high - low + 1) / 1024;
-		printf("memdesc %d: %#x .. %#x, size %u KiB, type %x, %s\n",
-			i, low, high, (unsigned)size, type,
-			virtual ? "virtual" : "physical");
-#endif
 
 		if(!virt_ok && virtual) {
 			virt_ok = true;
@@ -451,12 +443,10 @@ void *kmem_alloc_new_page(void)
 
 void kmem_free_page(void *ptr)
 {
-	/* TODO: proper data structures, man. hash tables won't work because
-	 * kmem_alloc_new_page() will be called before the sbrk heap is ready;
-	 * so a custom solution seems to be required. (perhaps a chain of pages,
-	 * each containing 1000 or 500 pointers hashed by address. would require a
-	 * bigger test of this mechanism in t_slab.c, and also an bigger slice of
-	 * kernel-reserved memory.)
+	/* TODO: proper data structures, man. CCAN htables won't work here because
+	 * kmem_alloc_new_page() will be called before the sbrk heap is ready; so
+	 * it must be a rb-tree variant, or a chained array of pointer chunks,
+	 * values hashed by address.
 	 */
 	struct page *pg;
 	list_for_each(&k_slab_pages, pg, link) {
