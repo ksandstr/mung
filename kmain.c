@@ -218,19 +218,28 @@ static void init_kernel_tss(struct tss *t)
 }
 
 
-static void add_s0_pages(L4_Word_t start, L4_Word_t end)
+static void add_id_maps(struct space *sp, L4_Word_t start, L4_Word_t end)
 {
-	assert(sigma0_space != NULL);
+	assert(sp != NULL);
+	printf("%s: start=%#lx, end=%#lx\n", __func__, start, end);
+	end += PAGE_SIZE - 1;
 
-	uint32_t ids[128];
-	int count = (end - start + 1) >> PAGE_BITS, done = 0;
-	printf("adding %#lx .. %#lx to sigma0 (%d pages)\n", start, end, count);
-	while(done < count) {
-		int seg = MIN(int, 128, count - done);
-		for(int i=0; i < seg; i++) ids[i] = (start >> PAGE_BITS) + done + i;
-		mapdb_init_range(sigma0_space, start + (done << PAGE_BITS),
-			ids, seg, L4_FullyAccessible);
-		done += seg;
+	L4_Word_t addr;
+	int s;
+	for_page_range(start, end + 1, addr, s) {
+		//printf("%s: adding %#lx:%#lx\n", __func__, addr, 1ul << s);
+		int l = 0;
+		do {
+			L4_Fpage_t p = L4_FpageLog2(addr + l * GROUP_SIZE,
+				MIN(int, s, size_to_shift(GROUP_SIZE)));
+			L4_Set_Rights(&p, L4_FullyAccessible);
+			struct map_group *dummy = NULL;
+			int n = mapdb_add_map(sp, &dummy, 0, p, addr >> PAGE_BITS);
+			if(n != 0) {
+				printf("%s: n=%d!!!\n", __func__, n);
+				panic("argh");
+			}
+		} while(++l < (1 << s) / GROUP_SIZE);
 	}
 }
 
@@ -239,6 +248,7 @@ static void add_s0_pages(L4_Word_t start, L4_Word_t end)
  * that's reserved by the kernel, and that is covered entirely by
  * [excl_start .. excl_end].
  */
+#define add_s0_pages(s, e) add_id_maps(sigma0_space, (s), (e))
 static void add_mem_to_sigma0(
 	const L4_KernelConfigurationPage_t *kcp,
 	L4_Word_t excl_start,
@@ -381,14 +391,7 @@ static struct thread *spawn_kernel_server(
 		/* create idempotent mappings of kernel server memory. */
 		assert((s0->low & PAGE_MASK) == 0);
 		assert((s0->high & PAGE_MASK) == 0xfff);
-		int num_pages = (s0->high - s0->low + 1) >> PAGE_BITS;
-		uint32_t *ids = malloc(sizeof(uint32_t) * num_pages);
-		for(int i=0; i < num_pages; i++) {
-			ids[i] = (s0->low + i * PAGE_SIZE) >> PAGE_BITS;
-		}
-		mapdb_init_range(t->space, s0->low, ids, num_pages,
-			L4_FullyAccessible);
-		free(ids);
+		add_id_maps(t->space, s0->low, s0->high);
 	}
 
 	thread_set_spip(t, s0->sp, s0->ip);

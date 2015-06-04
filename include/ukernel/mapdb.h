@@ -12,6 +12,7 @@
  * <ukernel/ptab.h> .
  */
 #define MAX_ENTRIES_PER_GROUP 1024	/* 4 MiB in 4 KiB pages */
+#define GROUP_SIZE (PAGE_SIZE * MAX_ENTRIES_PER_GROUP)
 
 /* map_group->addr accessors. note that MG_FLAGS() doesn't shift. */
 #define MG_START(grp) ((grp)->addr & ~(PAGE_SIZE * MAX_ENTRIES_PER_GROUP - 1))
@@ -238,15 +239,5 @@ extern int mapdb_add_map(
 	L4_Word_t parent,		/* 0 for immutables */
 	L4_Fpage_t fpage,
 	uint32_t first_page_id);
-
-
-/* kernel-mode initialization */
-extern void mapdb_init_range(
-	struct space *ptr,
-	uintptr_t start_addr,
-	const uint32_t *page_ids,
-	unsigned int num_pages,
-	int entry_flags);		/* L4 Fpage access bits */
-
 
 #endif

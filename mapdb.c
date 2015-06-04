@@ -59,7 +59,6 @@
 #define REF_NULL 0
 #define REF_TOMBSTONE REF_CTOR(0, 0, 1)
 
-#define GROUP_SIZE (PAGE_SIZE * MAX_ENTRIES_PER_GROUP)
 #define GROUP_ADDR(addr) ((addr) & ~(GROUP_SIZE - 1))
 
 /* maximum probe depth in map_entry->children. */
@@ -2255,81 +2254,4 @@ COLD void init_mapdb(void)
 	assert(POPCOUNT(grp_mask_and) == 18);
 	grp_mask_shift = ffsl(grp_mask_and) - 1;
 	map_group_policy = pol;
-}
-
-
-/* FIXME: change the interface to this function. passing a group of page_ids
- * is stupid because of the decode op down there.
- *
- * FIXME: there's also likely a good division of labour between
- * mapdb_init_range() and mapdb_add_map(), somewhere.
- */
-COLD void mapdb_init_range(
-	struct space *sp,
-	uintptr_t start_addr,
-	const uint32_t *page_ids,
-	unsigned int num_pages,
-	int entry_flags)
-{
-	assert(check_mapdb(sp, 0));
-
-	TRACE("%s: start_addr %#lx, num_pages %u (%#lx bytes)\n", __func__,
-		(L4_Word_t)start_addr, num_pages, num_pages * PAGE_SIZE);
-	unsigned int done = 0;
-	for(uintptr_t g_addr = GROUP_ADDR(start_addr),
-				  g_last = GROUP_ADDR(start_addr + num_pages * PAGE_SIZE - 1);
-		g_addr <= g_last;
-		g_addr += GROUP_SIZE)
-	{
-		uintptr_t range_start = MAX(uintptr_t, start_addr, g_addr),
-			range_end = MIN(uintptr_t, start_addr + num_pages * PAGE_SIZE,
-				g_addr + GROUP_SIZE) - 1;
-
-		/* - search page_ids[id_offset ...] for contiguous blocks of
-		 *   appropriate alignment (for the current address between [range_start
-		 *   .. range_end]);
-		 */
-		uintptr_t range_pos = range_start;
-		int range_len = (range_end - range_start + 1) >> PAGE_BITS;
-		while(range_pos <= range_end) {
-			int b = ffsl(range_pos);
-			assert(b == 0
-				|| __builtin_popcount(range_pos) == 1
-				|| ffsl(range_pos & ~(1 << (b - 1))) > b);
-
-			/* 4 MiB at most */
-			if(unlikely(b == 0)) b = 22; else b = MIN(int, 22, b - 1);
-			int r_ix = (range_pos - range_start) >> PAGE_BITS,
-				seg = MIN(int, 1 << (b - 12), range_len - r_ix),
-				id_offset = (range_pos - start_addr) >> PAGE_BITS;
-			for(int i=1, last = page_ids[id_offset]; i < seg; i++) {
-				if(page_ids[id_offset + i] != last + 1) {
-					seg = i;
-					break;
-				}
-				last++;
-				assert(last == page_ids[id_offset + i]);
-			}
-			assert(seg > 0);
-			int mag = sizeof(int) * 8 - __builtin_clz(seg) - 1 + 12;
-			assert(1 << mag <= seg * PAGE_SIZE);
-			/* - then pass those one by one to mapdb_add_map(db, fpage,
-			 *   first_id, [rwx]); this creates groups and entries.
-			 */
-			L4_Fpage_t page = L4_FpageLog2(range_pos, mag);
-			assert((range_pos & (L4_Size(page) - 1)) == 0);
-			L4_Set_Rights(&page, entry_flags & L4_FullyAccessible);
-			int n = mapdb_add_map(sp, NULL, 0, page, page_ids[id_offset]);
-			if(n < 0) {
-				printf("!!! n=%d\n", n);
-				panic("mapdb_init_range() [early boot call] failed");
-			}
-
-			range_pos += 1 << mag;
-			done += 1 << (mag - 12);
-		}
-	}
-
-	assert(done == num_pages);
-	assert(check_mapdb(sp, 0));
 }
