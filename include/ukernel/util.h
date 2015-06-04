@@ -64,11 +64,11 @@
  * range (i.e. start == end) skips the loop body entirely.
  */
 #define for_page_range(_start, _end, _addr, _sizelog2) \
-	for(L4_Word_t _E = (_end), _A = (_addr) = (_start), \
-			_S = (_sizelog2) = MIN(int, ffsl(_A) - 1, MSB(_E - _A)); \
+	for(L4_Word_t _E = (_end) & ~PAGE_MASK, _A = (_addr) = (_start) & ~PAGE_MASK, \
+			_S = (_sizelog2) = MIN(unsigned, ffsl(_A) - 1, MSB(_E - _A)); \
 		_A < _E; \
 		(_addr) = (_A += (1 << _S)), \
-			(_sizelog2) = _S = MIN(int, ffsl(_A) - 1, MSB(_E - _A)))
+			(_sizelog2) = _S = MIN(unsigned, ffsl(_A) - 1, MSB(_E - _A)))
 
 
 static inline int size_to_shift(size_t size) {
