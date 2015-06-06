@@ -13,9 +13,9 @@ What what?
 A microkernel is an operating system component that hides out of sight much of
 the lowest-level detail of the x86 architecture (such as page table management,
 task switching, interrupt hardware, inter-process communication, etc.), and
-exposes the rest to the operating system personality. This one is written to
-implement the L4.X2 specification; the latest version as of 20120601 is
-available from L4Ka at
+exposes the rest to the client operating system ("personality"). Mung in
+particular is written to implement the L4.X2 specification; the latest version
+as of 20120601 is available from L4Ka at
 
     http://l4ka.org/l4ka/l4-x2-r7.pdf
 
@@ -46,7 +46,8 @@ a few Perl packages (names from the Debian repository):
     libmoose-perl libtrycatch-perl liblist-moreutils-perl libdevel-cover-perl
     libstruct-compare-perl libmodern-perl-perl
 
-To run the benchmark suite, use
+To run the benchmark suite (perhaps with a `-DNDEBUG` somewhere in config.mk),
+use
 
     mung$ make && TESTBENCH_OPTS="notest=1 bench=1" ./run.sh -nographic
 
