@@ -69,15 +69,14 @@ static int make_sysenter_stub(void *start, int sc_num, bool save_bees)
 #ifdef CONFIG_X86_SYSENTER
 	uint8_t *mem = start;
 	if(save_bees) {
-		mem[p++] = 0x55;	/* pushl %ebp */
-		mem[p++] = 0x65; mem[p++] = 0x8b;	/* movl %gs:0, %ebp */
-		mem[p++] = 0x2d; *(uint32_t *)&mem[p] = 0; p += 4;
-		mem[p++] = 0x89;	/* movl %ebx, -0x8(%ebp) */
-		mem[p++] = 0x5d;
-		mem[p++] = 0xf8;
-		mem[p++] = 0x8f;	/* popl -0x4(%ebp) */
-		mem[p++] = 0x45;
-		mem[p++] = 0xfc;
+		static const uint8_t code[] = {
+			0x55,				/* pushl %ebp */
+			0x65, 0x8b, 0x2d, 0x00, 0x00, 0x00, 0x00,	/* movl %gs:0, %ebp */
+			0x89, 0x5d, 0xf8,	/* movl %ebx, -0x8(%ebp) */
+			0x8f, 0x45, 0xfc,	/* popl -0x4(%ebp) */
+		};
+		memcpy(&mem[p], code, NUM_ELEMENTS(code));
+		p += NUM_ELEMENTS(code);
 	}
 	mem[p++] = 0xb3; mem[p++] = sc_num;	/* movb $sc_num, %bl */
 	mem[p++] = 0x89; mem[p++] = 0xe5;	/* movl %esp, %ebp */
@@ -123,39 +122,23 @@ static int make_sysexit_epilog(void *start, bool get_ecx, bool get_edx)
 /* extra clever thing where the syscall stub never enters the kernel.
  * instead, the clock tick is stored in the last 8 bytes of the KIP.
  */
-static int make_systemclock_stub(void *start)
+static int make_systemclock_stub(uint8_t *mem)
 {
-	int p = 0;
-	uint8_t *mem = start;
-	mem[p++] = 0xe8;			/* CALL rel32 */
-	*(uint32_t *)&mem[p] = 0xb;	/* past the next instructions */
-	p += 4;
-	mem[p++] = 0x8b;			/* MOV edx, [ecx + 4] */
-	mem[p++] = 0x51;
-	mem[p++] = 0x04;
-	mem[p++] = 0x8b;			/* MOV eax, [ecx] */
-	mem[p++] = 0x01;
-	mem[p++] = 0x39;			/* CMP [ecx + 4], edx */
-	mem[p++] = 0x51;
-	mem[p++] = 0x04;
-	mem[p++] = 0x75;			/* JNE to first mov */
-	mem[p++] = 0xf6;
-	mem[p++] = 0xc3;			/* RET */
-
-	/* the "read & massage EIP" sequence */
-	mem[p++] = 0x8b;			/* MOV ecx, [esp] */
-	mem[p++] = 0x0c;
-	mem[p++] = 0x24;
-	mem[p++] = 0x81;			/* OR ecx, 0xfff */
-	mem[p++] = 0xc9;
-	*(uint32_t *)&mem[p] = 0xfffU;
-	p += 4;
-	mem[p++] = 0x83;			/* AND ecx, ~7 */
-	mem[p++] = 0xe1;
-	mem[p++] = 0xf8;
-	mem[p++] = 0xc3;			/* RET */
-
-	return p;
+	static const uint8_t code[] = {
+		0xe8, 0x0b, 0x00, 0x00, 0x00,	/* call {rel32} [past the ret] */
+		0x8b, 0x51, 0x04,	/* movl 4(%ecx), %edx */
+		0x8b, 0x01,			/* movl (%ecx), %eax */
+		0x39, 0x51, 0x04,	/* cmpl %edx, 4(%ecx) */
+		0x75, 0xf6,			/* jne [back to first mov] */
+		0xc3,				/* ret */
+		/* the "read & massage EIP" sequence */
+		0x8b, 0x0c, 0x24,	/* movl (%esp), %ecx */
+		0x81, 0xc9, 0xff, 0x0f, 0x00, 0x00,	/* orl $0xfff, %ecx */
+		0x83, 0xe1, 0xf8,	/* andl $~7, %ecx */
+		0xc3,				/* ret */
+	};
+	memcpy(mem, code, NUM_ELEMENTS(code));
+	return NUM_ELEMENTS(code);
 }
 
 
