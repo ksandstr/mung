@@ -53,14 +53,15 @@ lipc_epilog:
 	#            %esi = message tag = MR0, %ebx = MR1, %ebp = MR2
 	cmpw $2, %si
 	jle 2f		# in-reg transfer of up to 2 MRs (iff no flags apply)
-	push %esi
+	pushl %esi
+	pushl %edi
 	andl $0x3f, %esi
-	movl $2, %edx		# edx = loop index register
-1:	movl 4(%eax, %edx, 4), %ecx
-	movl %ecx, 4(%edi, %edx, 4)
-	incl %edx
-	cmpl %edx, %esi
-	jne 1b
-	pop %esi
+	leal -2(%esi), %ecx	# u - 2
+	leal 12(%eax), %esi	# read from src:MR2..
+	leal 12(%edi), %edi	# write to dst:MR2..
+	rep
+	movsl
+	popl %edi
+	popl %esi
 2:	ret
 
