@@ -3,9 +3,11 @@
 #include <stdlib.h>
 #include <stdbool.h>
 #include <assert.h>
+
 #include <ccan/list/list.h>
 #include <ccan/compiler/compiler.h>
 #include <ccan/darray/darray.h>
+#include <ccan/talloc/talloc.h>
 
 #include <ukernel/util.h>
 
@@ -935,6 +937,152 @@ START_TEST(yield_timeslice_test)
 END_TEST
 
 
+
+struct chain_param {
+	L4_ThreadId_t parent, next;
+	L4_Word_t last_ec;
+	L4_Time_t rcv_timeout, reply_delay;
+	bool sleep_in_recv;
+};
+
+static void chain_thread_fn(void *param_ptr)
+{
+	struct chain_param *p = param_ptr;
+
+	bool running = true;
+	do {
+		L4_ThreadId_t sender;
+		L4_Accept(L4_UntypedWordsAcceptor);
+		L4_MsgTag_t tag = L4_Wait(&sender);
+		for(;;) {
+			if(L4_IpcFailed(tag)) {
+				diag("%s: ipc failed, ec=%#lx", __func__, L4_ErrorCode());
+				break;
+			} else if(L4_Label(tag) == QUIT_LABEL) {
+				running = false;
+				break;	/* and don't reply */
+			}
+
+			if(!L4_IsNilThread(p->next)) {
+				/* anything else we pass to the next-in-line if one exists,
+				 * and record an error for the parent's interest.
+				 */
+				L4_LoadMR(0, tag.raw);
+				L4_ThreadId_t dummy;
+				/* (akin to a L4_Lcall_Timeouts().) */
+				tag = L4_Lipc(p->next, p->next,
+					L4_Timeouts(L4_Never, p->rcv_timeout), &dummy);
+				p->last_ec = L4_IpcSucceeded(tag) ? 0 : L4_ErrorCode();
+			}
+
+			/* the tip does what? */
+			if(p->reply_delay.raw != L4_ZeroTime.raw) {
+				if(p->sleep_in_recv) {
+					L4_Receive_Timeout(L4_MyGlobalId(), p->reply_delay);
+				} else {
+					L4_Send_Timeout(L4_MyGlobalId(), p->reply_delay);
+				}
+			}
+
+#if 0
+			diag("doing LreplyWait from %lu:%lu to %#lx",
+				L4_ThreadNo(L4_MyGlobalId()), L4_Version(L4_MyGlobalId()),
+				sender.raw);
+#endif
+			L4_LoadMR(0, 0);
+			tag = L4_LreplyWait(sender, &sender);
+		}
+	} while(running);
+}
+
+
+/* test the effect of various RcvTimeout settings in Lipc.
+ *
+ * note that the L4.X2 spec prescribes that Lipc should always have a
+ * RcvTimeout=Never, but as the other values are cheap to implement as well
+ * (and useful for regular Ipc, later), we'll test them here.
+ *
+ * variables:
+ *   - do_timeout: whether the partner-chain tip tries to cause a timeout
+ *   - have_timeout: whether base specifies a receive timeout
+ *   - zero_timeout: whether base's timeout is ZeroTime or tens of ms
+ *   - long_chain: number of links in the chain; low or high
+ *   - sleep_in_recv: tip sleep mode (send phase, receive phase)
+ *   - TODO:
+ *     - tip sleep length (less/more than chain timeout minimum, n/a when
+ *       !do_timeout || zero_timeout)
+ *     - position of minimum timeout in chain (base, midpoint)
+ *     - undo the chain a bit before sleeping (no, 3/4 down)
+ *     - repeat the chain from having been replied to (no, 1/4 down)
+ */
+START_LOOP_TEST(lipc_chain_timeout, iter, 0, 31)
+{
+	const bool do_timeout = CHECK_FLAG(iter, 1),
+		have_timeout = CHECK_FLAG(iter, 2),
+		zero_timeout = CHECK_FLAG(iter, 4),
+		long_chain = CHECK_FLAG(iter, 8),
+		sleep_in_recv = CHECK_FLAG(iter, 16);
+	const size_t chain_length = !long_chain ? 4 : 45,
+		timeout_ms = 30;
+	diag("do_timeout=%s, have_timeout=%s, zero_timeout=%s, long_chain=%s",
+		btos(do_timeout), btos(have_timeout), btos(zero_timeout),
+		btos(long_chain));
+	diag("sleep_in_recv=%s", btos(sleep_in_recv));
+	diag("parent tid is %lu:%lu",
+		L4_ThreadNo(L4_Myself()), L4_Version(L4_Myself()));
+	plan_tests(2);
+
+	const L4_Time_t recvto = !have_timeout ? L4_Never
+		: (zero_timeout ? L4_ZeroTime : L4_TimePeriod(timeout_ms * 1000));
+
+	/* setup */
+	void *tctx = talloc_new(NULL);
+	L4_ThreadId_t chain_tids[chain_length];
+	struct chain_param *ps[chain_length];
+	for(int i = chain_length - 1; i >= 0; --i) {
+		const bool last = i + 1 == chain_length;
+		ps[i] = talloc(tctx, struct chain_param);
+		*ps[i] = (struct chain_param){
+			.parent = L4_MyGlobalId(),
+			.next = !last ? chain_tids[i + 1] : L4_nilthread,
+			.last_ec = ~0ul,
+			.reply_delay = !last || !do_timeout ? L4_ZeroTime
+				: L4_TimePeriod((timeout_ms + 40) * 1000),
+			.rcv_timeout = L4_Never,
+			.sleep_in_recv = !last || sleep_in_recv,
+		};
+		chain_tids[i] = L4_LocalIdOf(xstart_thread(&chain_thread_fn, ps[i]));
+	}
+
+	/* experiment */
+	L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 2, .X.label = 0xb007 }.raw);
+	L4_LoadMR(1, 0x12345678);
+	L4_LoadMR(2, 0xdefeca7e);
+	L4_ThreadId_t dummy;
+	L4_MsgTag_t tag = L4_Lipc(chain_tids[0], chain_tids[0],
+		L4_Timeouts(TEST_IPC_DELAY, recvto), &dummy);
+	L4_Word_t ec = L4_ErrorCode();
+
+	/* sync & analysis */
+	for(size_t i=0; i < chain_length; i++) send_quit(chain_tids[i]);
+	for(size_t i=0; i < chain_length; i++) xjoin_thread(chain_tids[i]);
+	if(!iff_ok1(have_timeout && do_timeout, L4_IpcFailed(tag) && ec == 0x3)) {
+		diag("tag=%#lx, ec=%#lx", tag.raw, ec);
+	}
+	int first_fail = -1;
+	for(size_t i=0; i < chain_length - 1; i++) {
+		if(ps[i]->last_ec != 0 && first_fail < 0) first_fail = i;
+	}
+	if(!ok1(first_fail < 0)) {
+		diag("first_fail=%d (ec=%#lx)", first_fail, ps[first_fail]->last_ec);
+	}
+
+	/* cleanup */
+	talloc_free(tctx);
+}
+END_TEST
+
+
 Suite *sched_suite(void)
 {
 	Suite *s = suite_create("sched");
@@ -980,6 +1128,13 @@ Suite *sched_suite(void)
 		TCase *tc = tcase_create("yield");
 		tcase_set_fork(tc, false);
 		tcase_add_test(tc, yield_timeslice_test);
+		suite_add_tcase(s, tc);
+	}
+
+	/* tests about Ipc/Lipc interactions with scheduling. */
+	{
+		TCase *tc = tcase_create("ipc");
+		tcase_add_test(tc, lipc_chain_timeout);
 		suite_add_tcase(s, tc);
 	}
 
