@@ -226,18 +226,21 @@ _sysenter_top:
 
 	# check for and process interrupts that occurred while IRQ processing
 	# was soft disabled.
+	cli
 10:	movzbl kernel_irq_deferred, %ecx
 	test %cl, %cl
 	jz 11f
+	sti
 	call int_latent
+	cli
 	jmp 10b
 
 	# now test for a pending preemption & handle it like the C part would.
 11:	movzbl kernel_preempt_pending, %ecx
+	sti
 	test %cl, %cl
 	jnz 12f
 
-	sti
 	movl %ebp, %ecx		# OUT caller %esp
 	movl %esi, %edx		# OUT epilog %eip
 	# loads from visible UTCB: %esi=MR0, %ebx=MR1, %ebp=MR2.
@@ -353,14 +356,18 @@ _sysenter_lipc_fast:
 
 	# check for and process interrupts that occurred while IRQ processing
 	# was soft disabled.
+	cli
 10:	movzbl kernel_irq_deferred, %ecx
 	test %cl, %cl
 	jz 11f
+	sti
 	call int_latent
+	cli
 	jmp 10b
 
 	# now test for a pending preemption & handle it like the C part would.
 11:	movzbl kernel_preempt_pending, %ecx
+	sti
 	test %cl, %cl
 	jnz 12f		# return_from_exn() path
 	movl THREAD_CTX_OFF+60(%ebx), %ecx	# OUT caller %esp

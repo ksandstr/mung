@@ -58,7 +58,18 @@ extern int int_clear(int intnum, struct thread *sender);
 
 extern int int_poll(struct thread *t, int intnum);
 
-/* clears kernel_irq_deferred, may set kernel_preempt_pending */
+/* clears kernel_irq_deferred, may set kernel_preempt_pending. this function
+ * must be called with interrupts enabled.
+ *
+ * also, it's tempting to rework it into an int_latent_noirq() or some such.
+ * this is a bad idea: because the function re-enables interrupts during its
+ * execution, the caller really must put itself in an interrupt-safe state
+ * before calling int_latent(). asserting for the interrupt flag enforces this
+ * fully. if it turns out that an extra cli/sti is expensive to the point of
+ * measurable significance (and int_latent() is only called at kernel exits
+ * where deferred interrupts were observed), then an optimized path might be
+ * worth more than not.
+ */
 extern void int_latent(void);
 
 extern volatile bool kernel_irq_ok, kernel_irq_deferred;
