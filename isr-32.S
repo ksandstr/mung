@@ -341,10 +341,14 @@ _sysenter_lipc_fast:
 	orb $0x10, THREAD_FLAGS_OFF(%ebx)	# set TF_SYSCALL
 	call sys_lipc		# OUT %eax=from (retval)
 
-	# we get here because either Lipc's fallback to Ipc returned
-	# immediately, or if Lipc's send-half failed or timed out immediately.
-	# otherwise sys_lipc() switches to a different thread or enters the
-	# scheduler.
+	# we get here because Lipc's fallback to Ipc failed or returned
+	# immediately. on success, sys_lipc() switches to a different thread or
+	# enters the scheduler.
+	#
+	# registers:
+	#   %eax = sys_ipc() return value, %ebx = current_thread,
+	#   %ebp = caller %esp,
+	#   %esi = caller UTCB in kernelspace, %edi = caller UTCB in userspace
 	andb $0xef, THREAD_FLAGS_OFF(%ebx)	# clear TF_SYSCALL
 
 	# check for and process interrupts that occurred while IRQ processing
@@ -359,13 +363,11 @@ _sysenter_lipc_fast:
 11:	movzbl kernel_preempt_pending, %ecx
 	test %cl, %cl
 	jnz 12f		# return_from_exn() path
-	# TODO: check latent interrupts, preemption, etc.
-	sti
-	movl %ebp, %ecx		# OUT caller %esp
-	movl THREAD_CTX_OFF+48(%ebx), %edx	# OUT caller %eip
+	movl THREAD_CTX_OFF+60(%ebx), %ecx	# OUT caller %esp
+	movl THREAD_CTX_OFF+48(%ebx), %edx	# OUT epilog %eip
 	# load MR0, MR1, MR2 from visible UTCB
 	movl 8(%esi), %ebp	# OUT MR2
-	movl 4(%esi), %ebx	# OUT MR1
+	pushl 4(%esi)		# OUT MR1 (popped before sysexit)
 	movl (%esi), %esi	# OUT MR0
 	jmp 13b			# sysexit from the Ipc fastpath
 
