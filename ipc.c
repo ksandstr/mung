@@ -1192,7 +1192,8 @@ bool ipc_recv_half(struct thread *self, void *self_utcb)
 			 * send-phase completion.
 			 */
 			sq_update_thread(self);
-			assert(self->wakeup_time == wakeup_at(L4_Never)
+			assert(self->wakeup_time == ~(uint64_t)0
+				|| self->wakeup_time == 0
 				|| self->wakeup_time > ksystemclock());
 			if(self->wakeup_time == 0) {
 				/* timeout. */
@@ -1603,10 +1604,17 @@ SYSCALL L4_Word_t sys_lipc(
 	/* TODO: the l4.x2 spec seems to imply that Lipc might do propagation.
 	 * this tests to exclude that (and doesn't inspect the VirtualSender TCR).
 	 * same for string transfers; this chucks typed transfers in general.
+	 *
+	 * NOTE: similarly the spec says that Lipc.RcvTimeout should be Never.
+	 * mung's partner scheduling should become strong enough not to give a
+	 * fuck about that though, so we'll skip that clause even while it's not
+	 * quite there yet.
+	 *
+	 * TODO: likewise nothing here cares about ProcessorNo. SMP isn't here yet
+	 * so it doesn't have to, either.
 	 */
 	L4_Word_t failmask = (to.raw & 0x3f)	/* local ID bits */
-		| (tag.raw & 0xffc0)				/* flags, t */
-		| (timeouts & 0xffff);				/* rcvtimeout */
+		| (tag.raw & 0xffc0);				/* flags, t */
 	bool pass = failmask == 0
 		&& (dest = space_find_local_thread(sender->space, to.local),
 			dest != NULL)
@@ -1623,13 +1631,23 @@ SYSCALL L4_Word_t sys_lipc(
 		return sys_ipc(to, fromspec, timeouts, utcb_ptr, mr0);
 	}
 
-	/* switch to the other thread without the return_*() family. */
+	/* switch threads without the return_to_*() family. */
 	sender->status = TS_R_RECV;
-	sender->wakeup_time = ~(uint64_t)0;
-	sender->recv_timeout = L4_Never;
 	sender->ipc_from = fromspec;
-	leaving_thread(sender);
-	sq_update_thread(sender);	/* TODO: shouldn't be scheduled at all */
+	if(likely((timeouts & 0xffff) == L4_Never.raw)) {
+		sender->recv_timeout = L4_Never;
+		sender->wakeup_time = ~(uint64_t)0;
+		leaving_thread(sender);
+		sq_update_thread(sender);	/* TODO: should be sq_remove_thread() */
+	} else {
+		/* this can be quite slow because of the ksystemclock() call within
+		 * wakeup_at().
+		 */
+		sender->recv_timeout = (L4_Time_t){ .raw = timeouts & 0xffff };
+		sender->wakeup_time = wakeup_at(sender->recv_timeout);
+		leaving_thread(sender);
+		sq_update_thread(sender);
+	}
 	entering_thread(dest);
 	dest->status = TS_RUNNING;
 	dest->wakeup_time = 0;

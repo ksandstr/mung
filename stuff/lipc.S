@@ -19,9 +19,11 @@ user_lipc:
 	movl %esi, %ebx
 	andl $0xffc0, %ebx	# mask tag.t, tag.flags
 	orl %ebx, %ebp		# %ebp |= !no_typed | !no_flags
+#if 0
 	movl %ecx, %ebx
 	andl $0xffff, %ebx	# mask RcvTimeout
 	orl %ebx, %ebp		# %ebp |= !recvto_is_never
+#endif
 	testl %ebp, %ebp
 	jne regular_old_ipc
 	# now that it's known that dest is a LTID, dig around in its UTCB.
