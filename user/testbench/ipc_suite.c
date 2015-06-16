@@ -187,22 +187,28 @@ static void sender_thread_fn(void *param_ptr)
 	L4_LoadMR(1, p->payload);
 	L4_MsgTag_t tag = L4_Send(p->parent);
 	if(L4_IpcFailed(tag)) {
-		diag("%s: send failed, ec %#lx", __func__, L4_ErrorCode());
+		diag("%s[%lu:%lu]: send failed, ec %#lx", __func__,
+			L4_ThreadNo(L4_Myself()), L4_Version(L4_Myself()),
+			L4_ErrorCode());
 	}
 
 	free(p);
 }
 
 
-static L4_ThreadId_t send_from_thread(L4_Word_t payload, L4_Time_t delay)
+static L4_ThreadId_t send_to_from_thread(
+	L4_ThreadId_t dest, L4_Word_t payload, L4_Time_t delay)
 {
 	struct sender_param *param = malloc(sizeof(*param));
 	fail_if(param == NULL);
 	*param = (struct sender_param){
-		.parent = L4_MyGlobalId(), .payload = payload, .delay = delay,
+		.parent = dest, .payload = payload, .delay = delay,
 	};
 	return xstart_thread(&sender_thread_fn, param);
 }
+
+#define send_from_thread(payload, delay) \
+	send_to_from_thread(L4_MyGlobalId(), (payload), (delay))
 
 
 static L4_ThreadId_t send_from_fork(L4_Word_t payload, L4_Time_t delay)
@@ -395,6 +401,132 @@ START_LOOP_TEST(receive_from_anylocalthread, iter, 0, 1)
 	ok(L4_IpcSucceeded(tag) && payload == 0xbaddcafe,
 		"received from fork, after");
 	close_sender(fork_sender);
+}
+END_TEST
+
+
+static void wait_and_return(void *param_ptr UNUSED) {
+	L4_ThreadId_t dummy;
+	L4_Wait_Timeout(TEST_IPC_DELAY, &dummy);
+}
+
+
+/* this tests whether Ipc's matching condition checks space first and LTID
+ * second, instead of (let's say) ignoring the address space locality question
+ * altogether.
+ *
+ * variables:
+ *   - active receive: no/yes
+ *   - receiver's source parameter: sender's local tid, or local-id pattern
+ *   - burn some thread IDs before creating the sender: no/yes
+ *
+ * TODO:
+ *   - variables:
+ *     - ipc / lipc
+ */
+START_LOOP_TEST(receive_from_false_local, iter, 0, 7)
+{
+	const bool act_receive = CHECK_FLAG(iter, 1),
+		recv_pattern = CHECK_FLAG(iter, 2),
+		burn_threads = CHECK_FLAG(iter, 4);
+	diag("act_receive=%s, recv_pattern=%s, burn_threads=%s",
+		btos(act_receive), btos(recv_pattern), btos(burn_threads));
+	const L4_Word_t good_val = 0x12345678, bad_val = 0xabcdef64;
+	plan_tests(4);
+
+	L4_ThreadId_t parent = L4_MyGlobalId();
+
+	L4_ThreadId_t burners[7];
+	for(int i=0; i < NUM_ELEMENTS(burners); i++) {
+		burners[i] = burn_threads ? xstart_thread(&wait_and_return, NULL)
+			: L4_nilthread;
+	}
+
+	/* start the real sender. it'll always wait a few ticks to let the false
+	 * sender get to the post first.
+	 */
+	L4_ThreadId_t sender = L4_LocalIdOf(send_from_thread(
+		good_val, A_SHORT_NAP));
+	diag("sender's ltid=%#lx", sender.raw);
+
+	/* fork and spawn enough threads to duplicate the sender's LTID. */
+	L4_ThreadId_t child_tid;
+	int child = fork_tid(&child_tid);
+	if(child == 0) {
+		diag("false-sender child's main TID is %lu:%lu",
+			L4_ThreadNo(L4_Myself()), L4_Version(L4_Myself()));
+		L4_ThreadId_t notsender[MAX_THREADS];
+		int num;
+		for(num = 0; num < MAX_THREADS; num++) {
+			notsender[num] = L4_LocalIdOf(send_to_from_thread(
+				parent, bad_val, L4_ZeroTime));
+			if(notsender[num].raw == sender.raw) break;
+		}
+		/* communicate to the parent whether the right child was started. */
+		L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 1 }.raw);
+		L4_LoadMR(1, num == MAX_THREADS ? 1 : 0);
+		L4_MsgTag_t tag = L4_Send_Timeout(parent, TEST_IPC_DELAY);
+		if(L4_IpcFailed(tag)) {
+			diag("child couldn't deliver status to parent");
+		}
+		for(int i=0; i <= num; i++) xjoin_thread(notsender[i]);
+		exit(0);
+	}
+
+	/* receive from the real sender. */
+	if(act_receive) {
+		/* fifty winks */
+		L4_Sleep(A_SHORT_NAP);
+		L4_Sleep(A_SHORT_NAP);
+	}
+	L4_MsgTag_t tag;
+	L4_ThreadId_t send_from;
+	if(recv_pattern) {
+		tag = L4_WaitLocal_Timeout(TEST_IPC_DELAY, &send_from);
+	} else {
+		send_from = sender;
+		tag = L4_Receive_Timeout(sender, TEST_IPC_DELAY);
+	}
+	L4_Word_t payload; L4_StoreMR(1, &payload);
+	if(!ok(L4_IpcSucceeded(tag) && L4_Label(tag) == 0xd00d, "got ipc")) {
+		diag("tag=%#lx", tag.raw);
+	}
+	if(!ok(L4_SameThreads(send_from, sender), "ipc was from local sender")) {
+		diag("send_from=%#lx", send_from.raw);
+	}
+	if(!ok1(payload == good_val)) diag("payload=%#lx", payload);
+
+	/* get status from the fork-spawner thread to confirm that it was able to
+	 * start a thread with the same local TID as the proper sender.
+	 */
+	tag = L4_Receive_Timeout(child_tid, TEST_IPC_DELAY);
+	L4_Word_t c_status; L4_StoreMR(1, &c_status);
+	ok(L4_IpcSucceeded(tag) && c_status == 0,
+		"same-LTID sender was started in other space");
+
+	/* pump the other child messages to have a cleaner output log. */
+	do {
+		L4_ThreadId_t tid;
+		tag = L4_Wait_Timeout(TEST_IPC_DELAY, &tid);
+		if(L4_IpcSucceeded(tag)) {
+			L4_StoreMR(1, &payload);
+			if(payload != bad_val) {
+				diag("got payload=%#lx from tid=%lu:%lu", payload,
+					L4_ThreadNo(tid), L4_Version(tid));
+			}
+		}
+	} while(L4_IpcSucceeded(tag));
+
+	int st, dead = wait(&st);
+	fail_unless(dead == child, "dead=%d, child=%d (st=%d)", dead, child, st);
+
+	for(int i=0; i < NUM_ELEMENTS(burners); i++) {
+		if(L4_IsNilThread(burners[i])) continue;
+		L4_LoadMR(0, 0);
+		L4_Send_Timeout(burners[i], A_SHORT_NAP);
+		xjoin_thread(burners[i]);
+	}
+	xjoin_thread(sender);
 }
 END_TEST
 
@@ -3383,6 +3515,7 @@ Suite *ipc_suite(void)
 		tcase_add_test(tc, receive_from_local);
 		tcase_add_test(tc, receive_from_foreign);
 		tcase_add_test(tc, receive_from_anylocalthread);
+		tcase_add_test(tc, receive_from_false_local);
 		suite_add_tcase(s, tc);
 	}
 
