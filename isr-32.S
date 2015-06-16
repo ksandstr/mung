@@ -237,7 +237,6 @@ _sysenter_top:
 
 	# now test for a pending preemption & handle it like the C part would.
 11:	movzbl kernel_preempt_pending, %ecx
-	sti
 	test %cl, %cl
 	jnz 12f
 
@@ -253,6 +252,7 @@ _sysenter_top:
 	movl %ebx, %es
 	movl %ebx, %fs
 	popl %ebx		# OUT MR1
+	sti
 	sysexit
 
 12:	# store caller's return info for rescheduling
@@ -268,6 +268,7 @@ _sysenter_top:
 	# function is guaranteed to never return (except if current ==
 	# scheduler_thread, but... how would it end up in the sysenter tophalf
 	# anyway).
+	sti
 	jmp return_from_exn
 
 	.align 16,0
@@ -367,7 +368,6 @@ _sysenter_lipc_fast:
 
 	# now test for a pending preemption & handle it like the C part would.
 11:	movzbl kernel_preempt_pending, %ecx
-	sti
 	test %cl, %cl
 	jnz 12f		# return_from_exn() path
 	movl THREAD_CTX_OFF+60(%ebx), %ecx	# OUT caller %esp
@@ -378,6 +378,7 @@ _sysenter_lipc_fast:
 	movl (%esi), %esi	# OUT MR0
 	jmp 13b			# sysexit from the Ipc fastpath
 
-12:	jmp return_from_exn
+12:	sti
+	jmp return_from_exn
 
 #endif
