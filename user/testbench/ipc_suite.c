@@ -341,18 +341,6 @@ START_LOOP_TEST(receive_from_anylocalthread, iter, 0, 1)
 	diag("delay_ms=%d applies to %s", delay_ms,
 		d_self ? "receiver" : "sender");
 
-	/* flush immediate senders first with vanilla IPC. */
-	bool timed_out = false;
-	for(int i=0; i < 20; i++) {
-		L4_ThreadId_t from;
-		L4_MsgTag_t tag = L4_Wait_Timeout(L4_ZeroTime, &from);
-		fail_unless(L4_IpcSucceeded(tag) || (L4_ErrorCode() & 0xf) == 3,
-			"expected receive timeout or success, got ec %#lx",
-			L4_ErrorCode());
-		if(L4_IpcFailed(tag)) timed_out = true;
-	}
-	fail_unless(timed_out, "palate-cleansing didn't take");
-
 	/* part 1 */
 	L4_ThreadId_t from;
 	L4_MsgTag_t tag = L4_WaitLocal_Timeout(TEST_IPC_DELAY, &from);
