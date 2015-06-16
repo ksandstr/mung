@@ -112,19 +112,6 @@ void set_ipc_error_thread(struct thread *t, L4_Word_t ec)
 }
 
 
-static inline bool active_send_test(
-	struct thread *dest,
-	struct thread *sender,
-	L4_ThreadId_t sender_ltid)
-{
-	return dest->ipc_from.raw == L4_anythread.raw
-		|| dest->ipc_from.raw == sender->id
-		|| dest->ipc_from.raw == sender_ltid.raw
-		|| (dest->ipc_from.raw == L4_anylocalthread.raw
-			&& dest->space == sender->space);
-}
-
-
 /* this is like resolve_tid_spec(), but in reverse. */
 static L4_ThreadId_t tid_return(struct thread *self, struct thread *t)
 {
@@ -585,8 +572,13 @@ static bool ipc_send_half(
 	}
 	assert(!propagated || vs != NULL);
 
+	/* NOTE: parts of this condition are repeated in sys_lipc(). */
+	const bool match_cond = dest->ipc_from.raw == L4_anythread.raw
+		|| dest->ipc_from.raw == self_id.raw
+		|| (dest->space == sender->space
+			&& (dest->ipc_from.raw == self_lid.raw
+				|| dest->ipc_from.raw == L4_anylocalthread.raw));
 	uint64_t now_us = ksystemclock();
-	const bool match_cond = active_send_test(dest, self, self_lid);
 
 	/* override TS_R_RECV? */
 	int status = dest->status;
@@ -1609,8 +1601,8 @@ SYSCALL L4_Word_t sys_lipc(
 	}
 
 	/* TODO: the l4.x2 spec seems to imply that Lipc might do propagation.
-	 * this tests to exclude that. same for string transfers; this chucks
-	 * typed transfers in general.
+	 * this tests to exclude that (and doesn't inspect the VirtualSender TCR).
+	 * same for string transfers; this chucks typed transfers in general.
 	 */
 	L4_Word_t failmask = (to.raw & 0x3f)	/* local ID bits */
 		| (tag.raw & 0xffc0)				/* flags, t */
@@ -1620,7 +1612,10 @@ SYSCALL L4_Word_t sys_lipc(
 			dest != NULL)
 		&& (dest->status == TS_RECV_WAIT || dest->status == TS_R_RECV)
 		&& dest->space == sender->space
-		&& active_send_test(dest, sender, sender_ltid);
+		&& (dest->ipc_from.raw == sender_ltid.raw
+			|| dest->ipc_from.raw == L4_anylocalthread.raw
+			|| dest->ipc_from.raw == sender->id
+			|| dest->ipc_from.raw == L4_anythread.raw);
 	if(unlikely(!pass)) {
 		/* fall back to regular ipc. */
 		L4_VREG(utcb_ptr, L4_TCR_MR(1)) = mr1;
