@@ -60,9 +60,9 @@ static inline uint64_t runnable_at(const struct thread *t) {
 
 
 /* this establishes a strict ordering between threads in order of
- *   - wakeup time (per microsecond)
- *   - priority
- *   - thread number (unique)
+ *   - wakeup time (ascending)
+ *   - priority (descending)
+ *   - thread number (ascending, unique)
  *
  * therefore collisions can only occur when a thread is being inserted into
  * the tree twice.
@@ -71,17 +71,25 @@ static inline int sq_cmp(const struct thread *a, const struct thread *b)
 {
 	if(a == b) return 0;
 
+	/* while it'd be nice to convert this to a subtraction as well,
+	 * wakeup_time may be ~0ull for a "never wake up" time. once these are no
+	 * longer seen in the sched queue, replace this with a stanza like the
+	 * ones below.
+	 */
 	uint64_t wa = runnable_at(a), wb = runnable_at(b);
 	if(wa < wb) return -1;
 	else if(wa > wb) return 1;
 
-	if(a->pri > b->pri) return -1;
-	else if(a->pri < b->pri) return 1;
+	/* descending priority order */
+	int n = (int)b->pri - (int)a->pri;
+	assert(n >= 0 || a->pri > b->pri);
+	assert(n <= 0 || a->pri < b->pri);
+	if(n != 0) return n;
 
-	uint32_t na = TID_THREADNUM(a->id), nb = TID_THREADNUM(b->id);
-	if(na < nb) return -1;
-	else if(na > nb) return 1;
-	else return 0;
+	n = TID_THREADNUM(a->id) - TID_THREADNUM(b->id);
+	assert(n >= 0 || TID_THREADNUM(a->id) < TID_THREADNUM(b->id));
+	assert(n <= 0 || TID_THREADNUM(a->id) > TID_THREADNUM(b->id));
+	return n;
 }
 
 
