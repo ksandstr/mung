@@ -168,6 +168,7 @@ struct thread
 
 	union {
 		L4_ThreadId_t pager;		/* before activation */
+		struct thread *partner;		/* non-kth after activation */
 		struct list_node dead_link;	/* kth after termination */
 	} u0;
 

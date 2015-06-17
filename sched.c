@@ -34,6 +34,13 @@
 static struct thread *scheduler_thread = NULL;
 static struct rb_root sched_tree = { };
 
+/* per-schedqueue attributes. */
+
+/* wakeup time in microseconds since boot. applicable iff
+ * current_thread->u0.partner != NULL.
+ */
+static uint64_t sched_chain_timeout = 0;
+
 struct thread *current_thread = NULL;
 
 /* these control the timer interrupt. write with irqs disabled only. */
@@ -153,6 +160,17 @@ void sq_remove_thread(struct thread *t)
 			break;
 		}
 	}
+	if(!found) {
+		printf("%s: called from %p\n", __func__,
+			__builtin_return_address(0));
+/* this one requires -fno-omit-frame-pointer to not completely fall over and
+ * explode.
+ */
+#if 0
+		printf("... in turn called from %p\n",
+			__builtin_return_address(1));
+#endif
+	}
 	assert(found);
 #endif
 
@@ -168,6 +186,92 @@ static bool closed_wait(struct thread *waiter, struct thread *sender)
 		|| (waiter->space == sender->space
 			&& waiter->ipc_from.raw == get_local_id(sender).raw);
 }
+
+
+/* module invariant checks. */
+#ifndef DEBUG_ME_HARDER
+#define check_sched_module() true
+#else
+
+#include <ukernel/invariant.h>
+
+/* check that @at is a valid wakeup time per all conversions of L4_Time_t to
+ * raw microseconds.
+ */
+static bool is_wakeup_valid(uint64_t at)
+{
+	/* Never, ZeroTime */
+	if(at == ~0ull || at == 0) return true;
+
+	/* others. a relative L4_Time_t gives times up to 2^31 * 1023 µs, which is
+	 * 610h 14m ~35.772s; an absolute L4_Time_t can put a wakeup at most
+	 * ~33.5s from the current time, so we'll test only the longer option.
+	 */
+	uint64_t now = ksystemclock();
+	int64_t diff = at - now;
+	return diff <= (1ull << 31) * 1023;
+}
+
+
+static bool check_sched_module(void)
+{
+	INV_CTX;
+
+	/* TODO: check states in the scheduling queue as well */
+
+	/* invariants of <struct thread> (via IpcPartnerThread). */
+	struct htable_iter it;
+	for(struct thread *s = htable_first(&thread_hash, &it);
+		s != NULL;
+		s = htable_next(&thread_hash, &it))
+	{
+		inv_push("s=%lu:%lu", TID_THREADNUM(s->id), TID_VERSION(s->id));
+		struct thread *t = s->u0.partner;
+		if(t == NULL) {
+			/* s ∉ \ran partner */
+		} else {
+			inv_push("t=%lu:%lu; ipc_from=%lu:%lu (%#lx)",
+				TID_THREADNUM(t->id), TID_VERSION(t->id),
+				L4_ThreadNo(t->ipc_from), L4_Version(t->ipc_from),
+				t->ipc_from.raw);
+			/* (t → s) ∈ partner */
+			inv_ok1(t != s);
+			/* $∃s: THREAD @ s.FromSpec = t.id$ is implied by this test. */
+			inv_ok1(t->ipc_from.raw == s->id
+				|| (t->space == s->space
+					&& t->ipc_from.raw == get_local_id(s).raw));
+			inv_ok1(t->status == TS_RECV_WAIT);
+			inv_pop();
+		}
+		inv_pop();
+	}
+
+	/* invariants of sched_chain_timeout wrt current_thread */
+	if(current_thread->u0.partner != NULL) {
+		inv_ok1(is_wakeup_valid(sched_chain_timeout));
+
+		int degree = 1;
+		for(struct thread *t = current_thread->u0.partner;
+			t != NULL;
+			t = t->u0.partner, degree++)
+		{
+			/* FIXME: our vsnprintf() doesn't support long long types. it
+			 * should. once it does, fix this shit.
+			 */
+			inv_push("partner (degree=%d), wakeup=%#lx", degree,
+				(L4_Word_t)t->wakeup_time);
+			inv_ok1(sched_chain_timeout <= t->wakeup_time);
+			inv_pop();
+		}
+	}
+
+	return true;
+
+inv_fail:
+	return false;
+}
+
+#endif
 
 
 void might_preempt(struct thread *t)
@@ -228,11 +332,26 @@ void might_preempt(struct thread *t)
 /* simple IPC timeout. signaled to exactly one thread. */
 static void timeout_ipc(struct thread *t)
 {
+	TRACE("%s: t=%lu:%lu\n", __func__,
+		TID_THREADNUM(t->id), TID_VERSION(t->id));
+
 	assert(hook_empty(&t->post_exn_call));
+	assert(check_sched_module());
 
 	bool is_send = t->status == TS_SEND_WAIT;
+	/* break partnership on receive timeout. */
+	if(!is_send) {
+		assert(!L4_IsNilThread(t->ipc_from));
+		struct thread *s = resolve_tid_spec(t->space, t->ipc_from);
+		if(s != NULL && s->u0.partner == t) {
+			TRACE("%s: breaking partnership w/ s=%lu:%lu\n", __func__,
+				TID_THREADNUM(s->id), TID_VERSION(s->id));
+			s->u0.partner = NULL;
+		}
+	}
 	thread_ipc_fail(t);
 	set_ipc_error_thread(t, (1 << 1) | (is_send ? 0 : 1));
+	assert(check_sched_module());
 }
 
 
@@ -276,7 +395,7 @@ static uint64_t next_preempt_at(
 
 
 /* dock a thread's quantum. not called for context switch on self-deletion. */
-void leaving_thread(struct thread *self)
+static void leaving_thread(struct thread *self)
 {
 	assert(self->status != TS_RUNNING);
 
@@ -287,7 +406,7 @@ void leaving_thread(struct thread *self)
 
 
 /* set preemption parameters, current_thread */
-void entering_thread(struct thread *next)
+static void entering_thread(struct thread *next)
 {
 	assert(hook_empty(&next->post_exn_call));
 
@@ -321,6 +440,60 @@ void entering_thread(struct thread *next)
 }
 
 
+/* common tail between sched_ipc_handoff_*().
+ * updates the proper scheduling of @src, and leaves @dst as it was.
+ */
+static void handoff_epilog(struct thread *src, struct thread *dst)
+{
+	entering_thread(dst);
+	assert(dst->status == TS_RUNNING);
+	if(src->u0.partner == dst) {
+		TRACE("%s: undoing partnership\n", __func__);
+		src->u0.partner = NULL;
+		/* TODO: maintain the cached timeout value */
+	}
+	assert(dst == get_current_thread());
+	sq_update_thread(src);
+}
+
+
+void sched_ipc_handoff_quick(struct thread *src, struct thread *dst)
+{
+	TRACE("handoff[quick]: %lu:%lu -> %lu:%lu\n",
+		TID_THREADNUM(src->id), TID_VERSION(src->id),
+		TID_THREADNUM(dst->id), TID_VERSION(dst->id));
+
+	assert(src->status == TS_RECV_WAIT);
+	assert(src == get_current_thread());
+	assert(check_sched_module());
+
+	src->wakeup_time = ~(uint64_t)0;
+	leaving_thread(src);
+	handoff_epilog(src, dst);
+	assert(check_sched_module());
+}
+
+
+void sched_ipc_handoff_timeout(
+	struct thread *src, struct thread *dst, L4_Time_t timeout)
+{
+	TRACE("handoff[timeout]: %lu:%lu -> %lu:%lu\n",
+		TID_THREADNUM(src->id), TID_VERSION(src->id),
+		TID_THREADNUM(dst->id), TID_VERSION(dst->id));
+	assert(src->status == TS_RECV_WAIT);
+	assert(src == get_current_thread());
+	assert(check_sched_module());
+
+	/* this can be quite slow because of the ksystemclock() call within
+	 * wakeup_at().
+	 */
+	src->wakeup_time = wakeup_at(src->recv_timeout);
+	leaving_thread(src);
+	handoff_epilog(src, dst);
+	assert(check_sched_module());
+}
+
+
 /* when this function returns NULL and *saw_zero_p is set to true, the
  * scheduler should grant all ready threads another timeslice and redo from
  * start. (the flag indicates that a thread with a zero quantum was skipped
@@ -343,11 +516,16 @@ static struct thread *schedule_next_thread(
 
 		struct thread *cand = rb_entry(cur, struct thread, sched_rb);
 		if(cand == current) continue;
+		TRACE("%s: cand=%lu:%lu, pri=%d, status=%s\n", __func__,
+			TID_THREADNUM(cand->id), TID_VERSION(cand->id), (int)cand->pri,
+			sched_status_str(cand));
 
 		assert(cand->status != TS_DEAD);
 		assert(cand->status != TS_STOPPED);
 
 		if(cand->status == TS_SEND_WAIT || cand->status == TS_RECV_WAIT) {
+			TRACE("%s: ... wakeup_time=%u ms\n", __func__,
+				(unsigned)(cand->wakeup_time / 1000));
 			if(cand->wakeup_time > now) {
 				/* no need to look any further; no candidate was found. */
 				break;
@@ -518,10 +696,8 @@ bool schedule(void)
 	entering_thread(next);
 	switch_thread(self, next);
 
-	TRACE("%s: returned to %lu:%lu from going to %lu:%lu; (current_thread is %lu:%lu)\n",
-		__func__,
-		TID_THREADNUM(self->id), TID_VERSION(self->id),
-		TID_THREADNUM(next->id), TID_VERSION(next->id),
+	TRACE("%s: resumed; last exit was to %lu:%lu; (current=%lu:%lu)\n",
+		__func__, TID_THREADNUM(next->id), TID_VERSION(next->id),
 		TID_THREADNUM(current_thread->id), TID_VERSION(current_thread->id));
 
 	assert(current_thread == self);
@@ -541,6 +717,7 @@ NORETURN void scheduler_loop(struct thread *self)
 		self->status = TS_READY;
 		if(kernel_irq_deferred) int_latent();
 		if(!schedule()) {
+			assert(check_sched_module());
 			kernel_irq_ok = true;
 			asm volatile ("hlt" ::: "memory");
 			kernel_irq_ok = false;
@@ -776,6 +953,19 @@ void return_to_other(struct thread *other)
 	}
 
 	entering_thread(other);
+	return_from_exn();
+	switch_thread_u2u(other);
+}
+
+
+NORETURN void return_to_partner(void)
+{
+	struct thread *current = get_current_thread(),
+		*other = current->u0.partner;
+	assert(current->u0.partner != NULL);
+
+	leaving_thread(current);
+	handoff_epilog(current, other);
 	return_from_exn();
 	switch_thread_u2u(other);
 }

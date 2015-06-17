@@ -61,6 +61,12 @@ extern void return_from_exn(void);
 /* see comment for check_preempt() */
 extern void return_to_preempt(void);
 
+/* called from ipc.c to un-do a part of the IPC partner chain due to a
+ * successful reply send-phase. parameters implied from current_thread and its
+ * ->u0.partner .
+ */
+extern NORETURN void return_to_partner(void);
+
 /* returns true when it's useful for the caller to prepare the current thread
  * for scheduling out of, and then call return_to_preempt(). unless preemption
  * was delayed, the latter will do a non-local exit.
@@ -81,9 +87,26 @@ static inline struct thread *get_current_thread(void) {
  */
 extern NORETURN void switch_thread_u2u(struct thread *next);
 
-/* exported for task switching in sys_lipc(). */
-extern void leaving_thread(struct thread *from);
-extern void entering_thread(struct thread *next);
+/* interface for task switching in ipc.c . these establish an IPC partnership
+ * between @src and @dst, updating the scheduling structures accordingly and
+ * letting sys_ipc() and sys_lipc() return to the receiver without going
+ * through the scheduler.
+ *
+ * precond: @src->status == RECV_WAIT (as R_RECV is only noise)
+ *          @src == get_current_thread()
+ * postcond: @dst->status == RUNNING
+ *           @dst == get_current_thread()
+ *
+ * the _quick() variant assumes that sender's receive phase won't time out,
+ * avoiding a trip through the scheduling queue. the _timeout() variant will
+ * not accept L4_Never as the third parameter.
+ *
+ * if @src->u0.partner == @dest, these functions set @src->u0.partner to NULL
+ * and perform other bookkeeping related to partner scheduling.
+ */
+extern void sched_ipc_handoff_quick(struct thread *src, struct thread *dst);
+extern void sched_ipc_handoff_timeout(
+	struct thread *src, struct thread *dst, L4_Time_t timeout);
 
 /* returns clock value that fits thread->wakeup_time */
 extern uint64_t wakeup_at(L4_Time_t period);

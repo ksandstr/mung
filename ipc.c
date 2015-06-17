@@ -506,8 +506,7 @@ static inline bool will_redirect(struct thread *t, struct thread *dst)
  * progress (sleep, string transfer fault).
  *
  * precond: @self->status != TS_STOPPED && !CHECK_FLAG(@self->flags, TF_HALT)
- * postcond: @retval -> @self->status \in {READY, R_RECV, STOPPED}
- *           !@retval -> @self->status \in {SEND_WAIT, XFER, READY, STOPPED}
+ * postcond: !@retval -> @self->status \in {SEND_WAIT, XFER, READY, STOPPED}
  */
 static bool ipc_send_half(
 	struct thread *self,
@@ -1445,11 +1444,10 @@ SYSCALL L4_Word_t sys_ipc(
 	void *utcb,
 	L4_Word_t mr0)
 {
-	TRACE("%s: to %#lx, from %#lx, timeouts %#lx, utcb %p, mr0=%#lx\n",
-		__func__, to.raw, from.raw, timeouts, utcb, mr0);
 	struct thread *current = get_current_thread();
-	TRACE("%s: called in %lu:%lu\n",
-		__func__, TID_THREADNUM(current->id), TID_VERSION(current->id));
+	TRACE("%s: current=%lu:%lu, to=%#lx, fromspec=%#lx, timeouts=%#lx, mr0=%#lx\n",
+		__func__, TID_THREADNUM(current->id), TID_VERSION(current->id),
+		to.raw, from.raw, timeouts, mr0);
 	/* TODO: carry mr0 into ipc_send_half() explicitly */
 	L4_VREG(utcb, L4_TCR_MR(0)) = mr0;
 
@@ -1524,8 +1522,21 @@ SYSCALL L4_Word_t sys_ipc(
 				/* error condition in send phase. */
 				goto err_exit;
 			}
+		} else if(current->u0.partner == dest && dest != NULL) {
+			/* reschedule previous IPC partner. */
+			TRACE("%s: returning to partner %lu:%lu\n", __func__,
+				TID_THREADNUM(dest->id), TID_VERSION(dest->id));
+			if(L4_IsNilThread(from)) {
+				current->status = TS_READY;
+				current->wakeup_time = 0;
+				L4_VREG(utcb, L4_TCR_MR(0)) = 0;
+				set_ipc_return_thread(current, utcb);
+			} else {
+				current->status = TS_R_RECV;
+				current->wakeup_time = wakeup_at(current->recv_timeout);
+			}
+			return_to_partner();
 		} else if(check_preempt()) {
-			/* TODO: do partner scheduling before preemption checks. */
 			assert(IS_READY(current->status) || current->status == TS_RUNNING);
 			if(!L4_IsNilThread(from)) {
 				/* must step off due to preemption. indicate a need for active
@@ -1591,6 +1602,10 @@ SYSCALL L4_Word_t sys_lipc(
 	L4_ThreadId_t sender_ltid = get_local_id(sender);
 	L4_Word_t kip_base = L4_Address(sender->space->kip_area);
 
+	TRACE("%s: called in %lu:%lu, to=%#lx, fromspec=%#lx, timeouts=%#lx\n",
+		__func__, TID_THREADNUM(sender->id), TID_VERSION(sender->id),
+		to.raw, fromspec.raw, timeouts);
+
 	if(USE_SYSENTER) {
 		/* set up delayed return into the Ipc epilog. this happens on
 		 * fallback-to-Ipc and reply-via-Ipc; reply-via-Lipc will replace it
@@ -1626,32 +1641,32 @@ SYSCALL L4_Word_t sys_lipc(
 			|| dest->ipc_from.raw == L4_anythread.raw);
 	if(unlikely(!pass)) {
 		/* fall back to regular ipc. */
+		TRACE("%s: fallback\n", __func__);
 		L4_VREG(utcb_ptr, L4_TCR_MR(1)) = mr1;
 		L4_VREG(utcb_ptr, L4_TCR_MR(2)) = mr2;
 		return sys_ipc(to, fromspec, timeouts, utcb_ptr, mr0);
 	}
 
-	/* switch threads without the return_to_*() family. */
-	sender->status = TS_R_RECV;
+	/* effect IPC state transition & switch threads without the return_to_*()
+	 * family.
+	 */
+	sender->status = TS_RECV_WAIT;
 	sender->ipc_from = fromspec;
+	sender->recv_timeout = (L4_Time_t){ .raw = timeouts & 0xffff };
+	/* don't accidentally become partner by way of reply! */
+	bool dest_was_partner = sender->u0.partner == dest;
 	if(likely((timeouts & 0xffff) == L4_Never.raw)) {
-		sender->recv_timeout = L4_Never;
-		sender->wakeup_time = ~(uint64_t)0;
-		leaving_thread(sender);
-		sq_update_thread(sender);	/* TODO: should be sq_remove_thread() */
+		sched_ipc_handoff_quick(sender, dest);
 	} else {
-		/* this can be quite slow because of the ksystemclock() call within
-		 * wakeup_at().
-		 */
-		sender->recv_timeout = (L4_Time_t){ .raw = timeouts & 0xffff };
-		sender->wakeup_time = wakeup_at(sender->recv_timeout);
-		leaving_thread(sender);
-		sq_update_thread(sender);
+		sched_ipc_handoff_timeout(sender, dest, sender->recv_timeout);
 	}
-	entering_thread(dest);
-	dest->status = TS_RUNNING;
-	dest->wakeup_time = 0;
-	sq_update_thread(dest);
+	assert(sender->u0.partner != dest);
+	if(to.raw == fromspec.raw && likely(!dest_was_partner)) {
+		assert(get_local_id(dest).raw == to.raw);
+		/* FIXME: call a sched_set_partner() or some such instead */
+		assert(dest->u0.partner == NULL);	/* FIXME: lift this */
+		dest->u0.partner = sender;
+	}
 	/* set the receiver's epilogue frame up. */
 	dest->ctx.edi = to.raw;
 	dest->ctx.eax = sender_ltid.raw;

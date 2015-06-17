@@ -1335,6 +1335,7 @@ SYSCALL L4_Word_t sys_threadcontrol(
 				NULL);
 			L4_VREG(dest_utcb, L4_TCR_EXCEPTIONHANDLER) = L4_nilthread.raw;
 
+			assert(dest->u0.partner == NULL);
 			sq_insert_thread(dest);
 		}
 	}
