@@ -547,8 +547,9 @@ NORETURN void scheduler_loop(struct thread *self)
 		} else if(*scheduler_mr1 != L4_nilthread.raw) {
 			/* FIXME: move this into return_from_exn()! */
 			L4_ThreadId_t prev_tid = { .raw = *scheduler_mr1 };
+			*scheduler_mr1 = L4_nilthread.raw;
 			assert(L4_IsGlobalId(prev_tid));
-			struct thread *prev = thread_find(*scheduler_mr1);
+			struct thread *prev = thread_find(prev_tid.raw);
 			if(prev == NULL
 				|| TID_VERSION(prev->id) != L4_Version(prev_tid))
 			{

@@ -153,6 +153,8 @@ void isr_irq0_bottom(struct x86_exregs *regs)
 				x86_irq_enable();
 				thread_save_ctx(current, regs);
 				current->status = TS_READY;
+				current->wakeup_time = 0;
+				sq_update_thread(current);
 				return_to_scheduler();
 				assert(false);
 			}
