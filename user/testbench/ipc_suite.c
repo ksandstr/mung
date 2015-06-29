@@ -2605,11 +2605,18 @@ END_TEST
 /* tcase "lipc" */
 static const L4_Word_t lipc_inputs[] = {
 	0xdeadbeef, 0xcafebabe, 0xdb00b1e5, 0xd00dc0de,
+	0x98765432, 0x12345678, 0x7055face, 0xb00760d5,
 };
 
 
-static void lipc_receiver_fn(void *param UNUSED)
+struct lipc_receiver_param {
+	bool reply_with_lipc;
+};
+
+
+static void lipc_receiver_fn(void *param_ptr)
 {
+	struct lipc_receiver_param *p = param_ptr;
 	void *arena = valloc(1 << 12);
 	L4_Fpage_t a_page = L4_FpageLog2((L4_Word_t)arena, 12);
 	L4_Set_Rights(&a_page, L4_FullyAccessible);
@@ -2624,17 +2631,29 @@ static void lipc_receiver_fn(void *param UNUSED)
 	L4_StoreMRs(1, n_words, words);
 	diag("%s: got u=%lu, t=%lu, label=%#lx; from=%#lx", __func__,
 		L4_UntypedWords(tag), L4_TypedWords(tag), L4_Label(tag), sender.raw);
-	/* byteswap the untyped words at this point to show that we were here. */
-	for(int i=0; i < n_words; i++) {
-		// diag("%s: mr%d=%#lx", __func__, i + 1, words[i]);
-		words[i] = bswap_32(words[i]);
-	}
+	/* byteswap the untyped words to show that we were here. */
+	for(int i=0; i < n_words; i++) words[i] = bswap_32(words[i]);
 	L4_LoadMR(0, (L4_MsgTag_t){ .X.label = tag.X.label,
 		.X.u = n_words }.raw);
 	L4_LoadMRs(1, n_words, words);
-	tag = L4_Reply(sender);
+	const char *kind;
+	if(p->reply_with_lipc && L4_IsLocalId(sender)) {
+		/* our little synthetic L4_Lreply() */
+		L4_ThreadId_t dummy;
+		tag = L4_Lipc(sender, L4_nilthread,
+			L4_Timeouts(L4_ZeroTime, L4_Never), &dummy);
+		kind = "Lipc";
+	} else {
+		tag = L4_Reply(sender);
+		kind = "Ipc";
+	}
+#if 0
+	diag("%s: did %s reply to %lu:%lu (%#lx)", __func__, kind,
+		L4_ThreadNo(sender), L4_Version(sender), sender.raw);
+#endif
 	IPC_FAIL(tag);
 
+	L4_Set_Rights(&a_page, L4_FullyAccessible);
 	L4_FlushFpage(a_page);
 	free(arena);
 }
@@ -2655,27 +2674,50 @@ static bool verify_lipc_output(L4_MsgTag_t tag, const L4_Word_t *mr)
 }
 
 
-/* TODO: add "has no receive phase" test based on this, somehow
- * (lipc_receiver_fn() needs some way to not IPC_FAIL() on the reply tag.)
+/* test a basic successful Lipc call flow with a small number of untyped
+ * words, no typed items, and no timeouts.
+ *
+ * TODO: this should get moved into a basic_untyped_call test in the "api"
+ * tcase, instead.
+ *
+ * variables:
+ *   - number of input words
+ *   - whether receiver uses Lipc
+ *   - whether sender uses Lipc
+ *   - [TODO] whether receiver thread is in local space or forked child
+ *
+ * TODO: add "has no receive phase" test based on this, once
+ * lipc_receiver_fn() reports back instead of IPC_FAIL()ing on its reply
+ * result.
  */
-START_LOOP_TEST(basic_lipc, iter, 0, 1)
+START_LOOP_TEST(basic_lipc, iter, 0, 7)
 {
 	plan_tests(2);
-	const bool low_inputs = CHECK_FLAG(iter, 1);
+	const bool low_inputs = CHECK_FLAG(iter, 1),
+		reply_with_lipc = CHECK_FLAG(iter, 2),
+		send_with_lipc = CHECK_FLAG(iter, 4);
 	const int n_inputs = low_inputs ? 2 : NUM_ELEMENTS(lipc_inputs);
-	diag("low_inputs=%s, n_inputs=%d", btos(low_inputs), n_inputs);
+	diag("low_inputs=%s, reply_with_lipc=%s, send_with_lipc=%s, n_inputs=%d",
+		btos(low_inputs), btos(reply_with_lipc), btos(send_with_lipc),
+		n_inputs);
 
-	L4_ThreadId_t oth = xstart_thread(&lipc_receiver_fn, NULL);
+	struct lipc_receiver_param *rparam = malloc(sizeof(*rparam));
+	*rparam = (struct lipc_receiver_param){
+		.reply_with_lipc = reply_with_lipc,
+	};
+	L4_ThreadId_t oth = xstart_thread(&lipc_receiver_fn, rparam);
 	L4_Sleep(L4_TimePeriod(5 * 1000));
-	diag("doing Lcall from %lu:%lu (lid=%#lx)",
+	diag("calling from %lu:%lu (lid=%#lx)",
 		L4_ThreadNo(L4_Myself()), L4_Version(L4_Myself()),
 		L4_MyLocalId().raw);
 
 	L4_Word_t mr[64];
 	memset(mr, 0, sizeof(mr));
+	L4_ThreadId_t dst_tid = send_with_lipc ? L4_LocalIdOf(oth) : oth;
 	L4_LoadMR(0, (L4_MsgTag_t){ .X.label = 0xbeef, .X.u = n_inputs }.raw);
 	L4_LoadMRs(1, n_inputs, lipc_inputs);
-	L4_MsgTag_t tag = L4_Lcall(L4_LocalIdOf(oth));
+	L4_MsgTag_t tag;
+	if(send_with_lipc) tag = L4_Lcall(dst_tid); else tag = L4_Call(oth);
 	IPC_FAIL(tag);
 	L4_StoreMRs(1, L4_UntypedWords(tag) + L4_TypedWords(tag), mr);
 	if(!ok(tag.X.u == n_inputs && tag.X.t == 0, "tag OK")) {
@@ -2684,6 +2726,7 @@ START_LOOP_TEST(basic_lipc, iter, 0, 1)
 	ok(verify_lipc_output(tag, mr), "got correct output");
 
 	xjoin_thread(oth);
+	free(rparam);
 }
 END_TEST
 
@@ -2709,7 +2752,11 @@ START_LOOP_TEST(basic_invalid_lipc, iter, 0, 7)
 		n_inputs, btos(not_ltid), btos(not_never), btos(has_typed));
 
 	void *memory = valloc(1 << 12);
-	L4_ThreadId_t oth = xstart_thread(&lipc_receiver_fn, NULL),
+	struct lipc_receiver_param *rparam = malloc(sizeof(*rparam));
+	*rparam = (struct lipc_receiver_param){
+		.reply_with_lipc = false,
+	};
+	L4_ThreadId_t oth = xstart_thread(&lipc_receiver_fn, rparam),
 		dest_tid = not_ltid ? L4_GlobalIdOf(oth) : L4_LocalIdOf(oth);
 	L4_Sleep(L4_TimePeriod(5 * 1000));
 	diag("doing Lipc from %lu:%lu", L4_ThreadNo(L4_Myself()),
@@ -2745,6 +2792,7 @@ START_LOOP_TEST(basic_invalid_lipc, iter, 0, 7)
 
 	xjoin_thread(oth);
 	free(memory);
+	free(rparam);
 }
 END_TEST
 
