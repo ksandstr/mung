@@ -618,8 +618,11 @@ NORETURN void switch_thread_u2u(struct thread *next)
 		next->flags &= ~TF_SYSCALL;
 		struct x86_exregs dummy;
 		swap_to_ring3(&dummy, &next->ctx, utcb_sel);
-		NOT_REACHED;
+		/* (nothing will recover the @dummy context, so it's effectively
+		 * NORETURN.)
+		 */
 	}
+	NOT_REACHED;
 }
 
 

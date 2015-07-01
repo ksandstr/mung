@@ -1681,6 +1681,4 @@ SYSCALL L4_Word_t sys_lipc(
 	 * instead and the sysexit-or-swap thing that _u2u() has.
 	 */
 	switch_thread_u2u(dest);
-	assert(false);
-	for(;;) panic("the loop eternal");
 }

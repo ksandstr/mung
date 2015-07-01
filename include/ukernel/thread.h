@@ -345,17 +345,16 @@ extern void swap_to_ring3(
 	const struct x86_exregs *load,
 	int gs_selector);
 
-extern NORETURN void iret_to_scheduler(
-	const struct x86_exregs *sched_ctx);
-
-/* NOTE: this doesn't fill in TCR_SYSEXIT_E[CD]X! */
-extern NORETURN void sysexit_to_ring3(
-	const struct x86_exregs *userctx,
-	int gs_selector);
-
+/* NOTE: the sysexit_*() family don't fill in TCR_SYSEXIT_E[CD]X! */
 extern void sysexit_from_kth(
 	struct x86_exregs *store,
 	const struct x86_exregs *load,
 	int gs_selector);
+
+extern NORETURN void sysexit_to_ring3(
+	const struct x86_exregs *userctx,
+	int gs_selector);
+
+extern NORETURN void iret_to_scheduler(const struct x86_exregs *sched_ctx);
 
 #endif

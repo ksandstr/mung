@@ -61,7 +61,7 @@ void NORETURN panic(const char *message)
 void NORETURN __not_reached(const char *file, int line, const char *func)
 {
 	printf("NOT_REACHED: %s:%d: function `%s'\n", file, line, func);
-	panic("NOT_REACHED");
+	panic("a `NOT_REACHED' was reached");		/* owie */
 }
 
 
