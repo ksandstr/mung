@@ -1,7 +1,6 @@
 
 #include <stdio.h>
 #include <stdlib.h>
-#include <assert.h>
 #include <ccan/list/list.h>
 #include <ccan/likely/likely.h>
 
@@ -619,7 +618,7 @@ NORETURN void switch_thread_u2u(struct thread *next)
 		next->flags &= ~TF_SYSCALL;
 		struct x86_exregs dummy;
 		swap_to_ring3(&dummy, &next->ctx, utcb_sel);
-		assert(false);		/* not reached */
+		NOT_REACHED;
 	}
 }
 

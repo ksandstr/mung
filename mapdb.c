@@ -11,6 +11,7 @@
 
 #include <l4/types.h>
 
+#include <ukernel/bug.h>
 #include <ukernel/misc.h>
 #include <ukernel/util.h>
 #include <ukernel/slab.h>

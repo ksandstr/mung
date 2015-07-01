@@ -58,6 +58,13 @@ void NORETURN panic(const char *message)
 }
 
 
+void NORETURN __not_reached(const char *file, int line, const char *func)
+{
+	printf("NOT_REACHED: %s:%d: function `%s'\n", file, line, func);
+	panic("NOT_REACHED");
+}
+
+
 void abort(void)
 {
 	/* NOTE: this may crap out if the stack is fucked. the net effect is the
