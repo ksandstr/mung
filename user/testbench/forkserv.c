@@ -939,22 +939,26 @@ static int32_t handle_fork(void)
 		cvp->access = L4_Readable;
 		cvp->page = ovp->page;
 		cvp->page->refcount++;
-		ovp->access = L4_Readable;
 		htable_add(&copy_space->pages, int_hash(cvp->address),
 			&cvp->address);
 
-		unmapbuf[num_unmap] = L4_FpageLog2(
-			ovp->page->local_addr, PAGE_BITS);
-		/* FIXME: setting this to L4_FullyAccessible (which isn't necessary
-		 * here) makes SelfThreUnca:3 blow up with an inconsistent
-		 * mapdb/pagetable fail. but not if DEBUG_ME_HARDER is set.
-		 */
-		L4_Set_Rights(&unmapbuf[num_unmap], L4_Writable);
-		num_unmap++;
+		if(CHECK_FLAG(ovp->access, L4_Writable)) {
+			ovp->access &= ~L4_Writable;
 
-		if(num_unmap == 64) {
-			L4_UnmapFpages(64, unmapbuf);
-			num_unmap = 0;
+			unmapbuf[num_unmap] = L4_FpageLog2(
+				ovp->page->local_addr, PAGE_BITS);
+			/* FIXME: setting this to L4_FullyAccessible (which isn't
+			 * necessary here) makes SelfThreUnca:3 blow up with an
+			 * inconsistent mapdb/pagetable fail. but not if DEBUG_ME_HARDER
+			 * is set.
+			 */
+			L4_Set_Rights(&unmapbuf[num_unmap], L4_Writable);
+			num_unmap++;
+
+			if(num_unmap == 64) {
+				L4_UnmapFpages(64, unmapbuf);
+				num_unmap = 0;
+			}
 		}
 	}
 	if(num_unmap > 0) L4_UnmapFpages(num_unmap, unmapbuf);
