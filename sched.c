@@ -409,6 +409,11 @@ static void entering_thread(struct thread *next)
 {
 	assert(hook_empty(&next->post_exn_call));
 
+	/* FIXME: a terrible hack that keeps everything working before timeslice
+	 * borrowing comes about.
+	 */
+	if(next->quantum <= 0) next->quantum = 10000;	/* ewwwwwww */
+
 	/* TODO: find the clock tick when this thread'll be pre-empted due to
 	 * exhausted quantum; or when the total quantum exhausted message will be
 	 * triggered (XXX: what is that?); or when a higher-priority thread's IPC
@@ -462,7 +467,7 @@ void sched_ipc_handoff_quick(struct thread *src, struct thread *dst)
 		TID_THREADNUM(src->id), TID_VERSION(src->id),
 		TID_THREADNUM(dst->id), TID_VERSION(dst->id));
 
-	assert(src->status == TS_RECV_WAIT);
+	assert(src->status == TS_RECV_WAIT || src->status == TS_R_RECV);
 	assert(src == get_current_thread());
 	assert(check_sched_module());
 
@@ -479,7 +484,7 @@ void sched_ipc_handoff_timeout(
 	TRACE("handoff[timeout]: %lu:%lu -> %lu:%lu\n",
 		TID_THREADNUM(src->id), TID_VERSION(src->id),
 		TID_THREADNUM(dst->id), TID_VERSION(dst->id));
-	assert(src->status == TS_RECV_WAIT);
+	assert(src->status == TS_RECV_WAIT || src->status == TS_R_RECV);
 	assert(src == get_current_thread());
 	assert(check_sched_module());
 
@@ -758,7 +763,8 @@ NORETURN void scheduler_loop(struct thread *self)
 				struct thread *exh = thread_get_exnh(prev, utcb);
 				if(likely(exh != NULL)) {
 					build_exn_ipc(prev, utcb, -4, &prev->ctx);
-					ipc_user(prev, exh, 0);
+					struct thread *dst = exh;
+					ipc_user(prev, &dst);
 					/* halt the thread if its exception handler is AWOL. */
 					if(!IS_IPC(prev->status)) {
 						assert(L4_VREG(utcb, L4_TCR_ERRORCODE) != 0);
@@ -977,11 +983,14 @@ void return_to_ipc(struct thread *target)
 {
 	struct thread *cur = get_current_thread();
 	assert(!hook_empty(&cur->post_exn_call));
-	ipc_user(cur, target, 0);
-
-	/* TODO: schedule the target thread next */
-
-	return_to_scheduler();
+	if(!ipc_user(cur, &target)) return_to_scheduler();
+	else {
+		bool was_partner = target->u0.partner == cur;
+		sched_ipc_handoff_quick(cur, target);
+		if(!was_partner) target->u0.partner = cur;
+		return_from_exn();
+		switch_thread_u2u(target);
+	}
 }
 
 

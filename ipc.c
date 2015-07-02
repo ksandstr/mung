@@ -503,7 +503,8 @@ static inline bool will_redirect(struct thread *t, struct thread *dst)
 
 
 /* returns true for instant success, and false for error condition, or IPC in
- * progress (sleep, string transfer fault).
+ * progress (sleep, string transfer fault). afterward *@dest_p will point to
+ * the actual destination, i.e. a redirector if that applied.
  *
  * precond: @self->status != TS_STOPPED && !CHECK_FLAG(@self->flags, TF_HALT)
  * postcond: !@retval -> @self->status \in {SEND_WAIT, XFER, READY, STOPPED}
@@ -511,7 +512,7 @@ static inline bool will_redirect(struct thread *t, struct thread *dst)
 static bool ipc_send_half(
 	struct thread *self,
 	void *self_utcb,
-	struct thread *dest)
+	struct thread **dest_p)
 {
 	/* must look this alive to attempt active send */
 	assert(!CHECK_FLAG(self->flags, TF_HALT));
@@ -529,7 +530,8 @@ static bool ipc_send_half(
 	L4_MsgTag_t *tag = (void *)&L4_VREG(self_utcb, L4_TCR_MR(0));
 	tag->X.flags &= 0x1;	/* keep the propagate flag */
 
-	if(dest == NULL) {
+	assert(dest_p != NULL);
+	if(*dest_p == NULL) {
 		assert(CHECK_FLAG(self->flags, TF_INTR));
 		assert(is_interrupt(self->ipc_to));
 		assert(!CHECK_FLAG(self->space->flags, SF_REDIRECT));
@@ -538,6 +540,7 @@ static bool ipc_send_half(
 		err_code = int_clear(L4_ThreadNo(self->ipc_to), self);
 		if(err_code == 0) return true; else goto error;
 	}
+	struct thread *dest = *dest_p;
 
 	/* get matching variables, incl. propagation */
 	L4_ThreadId_t self_id = { .raw = self->id },
@@ -559,6 +562,7 @@ static bool ipc_send_half(
 						&& vs->space == self->space)))
 			{
 				vs->ipc_from = tid_return(vs, dest);
+				if(vs->u0.partner == self) vs->u0.partner = dest;
 			}
 
 			sender = vs;
@@ -653,7 +657,7 @@ static bool ipc_send_half(
 				tag->X.flags |= 0x2;		/* set redirect bit */
 				redirected = true;
 				saved_dest = dest;
-				dest = red;
+				*dest_p = dest = red;
 				/* redirect a closed IPC's receive phase. this'll be
 				 * re-redirected to saved_dest if the redirector passes the
 				 * IPC as-is, or replied to if the redirector returns a
@@ -809,7 +813,8 @@ bool redo_ipc_send_half(struct thread *t)
 		return true;
 	}
 
-	bool done = ipc_send_half(t, utcb, dest);
+	struct thread *target = dest;
+	bool done = ipc_send_half(t, utcb, &target);
 	if(done && t->status == TS_READY && !L4_IsNilThread(t->ipc_from)) {
 		sq_remove_thread(t);
 		t->wakeup_time = wakeup_at(t->recv_timeout);
@@ -822,30 +827,27 @@ bool redo_ipc_send_half(struct thread *t)
 }
 
 
-void ipc_user(
-	struct thread *from,
-	struct thread *to,
-	uint64_t xferto_at)
+bool ipc_user(struct thread *from, struct thread **to_p)
 {
 	/* this must be a global ID so that cancel_ipc_to()'s receiver search
 	 * will find it.
 	 */
-	from->ipc_to.raw = to->id;
-	from->ipc_from.raw = to->id;
+	from->ipc_to.raw = (*to_p)->id;
+	from->ipc_from.raw = (*to_p)->id;
 	from->send_timeout = L4_Never;
 	from->recv_timeout = L4_Never;
 
 	void *from_utcb = thread_get_utcb(from);
-	if(ipc_send_half(from, from_utcb, to)) {
-		/* TODO: this can only succeed with a propagated passive send, so put
-		 * @from in R_RECV and return to partner instead.
+	if(!ipc_send_half(from, from_utcb, to_p)) return false;
+	else {
+		/* this needs R_RECV because of the possibility of a propagated
+		 * passive send, which should succeed at that point, despite being
+		 * quite weird a case indeed.
 		 */
-		ipc_recv_half(from, from_utcb);
-	}
-
-	if(xferto_at > 0 && IS_IPC(from->status)) {
-		from->wakeup_time = xferto_at;
+		from->status = TS_R_RECV;
+		from->wakeup_time = ~0ull;
 		sq_update_thread(from);
+		return true;
 	}
 }
 
@@ -1393,7 +1395,7 @@ L4_MsgTag_t kipc(
 			return tag;
 		}
 
-		if(!ipc_send_half(current, utcb, dest)) {
+		if(!ipc_send_half(current, utcb, &dest)) {
 			if(current->status == TS_SEND_WAIT) {
 				/* passive send. */
 				thread_sleep(current, current->send_timeout);
@@ -1512,7 +1514,7 @@ SYSCALL L4_Word_t sys_ipc(
 	if(!L4_IsNilThread(to)) {
 		/* send phase. */
 		TRACE("%s: IPC send phase.\n", __func__);
-		if(!ipc_send_half(current, utcb, dest)) {
+		if(!ipc_send_half(current, utcb, &dest)) {
 			/* didn't complete. either READY, SEND_WAIT, STOPPED, or XFER. */
 			assert(current->status != TS_STOPPED);	/* (would be weird.) */
 			if(IS_IPC(current->status)) {

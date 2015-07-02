@@ -579,9 +579,13 @@ static void send_xfer_fault(
 	 * works in L4.X2, that's completely safe.)
 	 */
 	hook_push_back(&t->post_exn_call, &prexfer_ipc_hook, NULL);
-	ipc_user(t, pager, xferto_abs);
-	assert(xferto_abs == 0 || t->wakeup_time == xferto_abs);
+	struct thread *dst = pager;
+	ipc_user(t, &dst);
+
 	assert(IS_IPC(t->status));
+	assert(xferto_abs > 0);
+	t->wakeup_time = xferto_abs;
+	sq_update_thread(t);
 }
 
 

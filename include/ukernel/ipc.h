@@ -15,14 +15,17 @@ struct ipc_state;
 
 extern void init_ipc(void);
 
-/* no timeouts, always call-and-wait. puts @from in sendwait, recvwait, or
- * r_ready (when preempted at send phase). uses an absolute xfer timeout when
- * @xferto_abs > 0.
+/* IPC by kernelspace to userspace on @from's behalf. used to send exception &
+ * pagefault messages to the exception handler or pager in *@to_p. there's
+ * always both a send and receive phase, and timeouts are always Never.
+ * (ipc_typed.c also overwrites wakeup_time afterward.)
+ *
+ * return value is true when the send-phase succeeded and false otherwise;
+ * callers may exit into *@to_p in the former case (iff @from == current), and
+ * schedule in either. *@to_p may be altered in the case that redirection
+ * applies in @from's address space towards the old value of *@to_p .
  */
-extern void ipc_user(
-	struct thread *from,
-	struct thread *to,
-	uint64_t xferto_abs);
+extern bool ipc_user(struct thread *from, struct thread **to_p);
 
 /* effect a string transfer timeout on the ongoing IPC transaction and its
  * peers. drops both out of IPC, sets error code, destroys @st, makes peers
