@@ -158,6 +158,22 @@ typedef union {
 	} __attribute__((packed)) X;
 } L4_Clock_t;
 
+static inline L4_Bool_t L4_IsClockEarlier(L4_Clock_t a, L4_Clock_t b) {
+	return a.raw < b.raw;
+}
+
+static inline L4_Bool_t L4_IsClockLater(L4_Clock_t a, L4_Clock_t b) {
+	return a.raw > b.raw;
+}
+
+static inline L4_Bool_t L4_IsClockEqual(L4_Clock_t a, L4_Clock_t b) {
+	return a.raw == b.raw;
+}
+
+static inline L4_Bool_t L4_IsClockNotEqual(L4_Clock_t a, L4_Clock_t b) {
+	return a.raw != b.raw;
+}
+
 
 /* time. derived from L4Ka::Pistachio. */
 
