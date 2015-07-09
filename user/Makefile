@@ -6,7 +6,7 @@ LDFLAGS=-e_start -N -nostdlib
 CFLAGS:=$(subst -D__KERNEL__,,$(CFLAGS))
 
 
-all: sigma0
+all: sigma0 lib/l4/libl4.a
 	+@make -C testbench all
 
 
@@ -25,6 +25,14 @@ sigma0: sigma0.ld crt0.o sigma0.o syscalls.o ccan-list.o
 	@$(LD) $(LDFLAGS) -T sigma0.ld $(filter %.o,$^) $(LIBS) -o $@ \
 		-L $(CFGDIR)/lib -lukernel_util \
 		$(shell gcc $(CFLAGS) -print-libgcc-file-name)
+
+
+lib/l4/libl4.a: syscalls.o
+	@echo "  AR $@"
+	@ar cr $@ $<
+	@echo "  RANLIB $@"
+	@ranlib $@
+
 
 
 include $(wildcard .deps/*.d)
