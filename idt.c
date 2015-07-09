@@ -8,46 +8,34 @@
 #include <ukernel/config.h>
 
 
-static void set_int_gate(
+static inline void set_idt_gate(
 	struct idt_entry *ints,
 	int vector,
 	void (*tophalf)(void),
-	int selector)
+	int selector,
+	int type_attr)
 {
 	ints[vector] = (struct idt_entry){
 		.offset_1 = (uintptr_t)tophalf & 0xffff,
 		.offset_2 = (uintptr_t)tophalf >> 16,
 		.selector = selector,
-		.type_attr = IDT_PRESENT | 0xe,		/* 32-bit interrupt gate */
+		.type_attr = IDT_PRESENT | type_attr,
 	};
 }
 
 
-static void set_trap_gate(
-	struct idt_entry *ints,
-	int vector,
-	void (*tophalf)(void),
-	int selector)
-{
-	ints[vector] = (struct idt_entry){
-		.offset_1 = (uintptr_t)tophalf & 0xffff,
-		.offset_2 = (uintptr_t)tophalf >> 16,
-		.selector = selector,
-		.type_attr = IDT_PRESENT | 0xf,		/* 32-bit trap gate */
-	};
-}
-
-
+/* 0xe = 32-bit interrupt gate */
 #define IRQ_GATE(ints, sel, num) \
 	do { \
 		extern void isr_irq##num##_top(void); \
-		set_int_gate((ints), 0x20 + (num), &isr_irq##num##_top, (sel)); \
+		set_idt_gate((ints), 0x20 + (num), &isr_irq##num##_top, (sel), 0xe); \
 	} while(false)
 
+/* 0xf = 32-bit trap gate */
 #define EXN_GATE(ints, sel, num, name) \
 	do { \
 		extern void isr_exn_##name##_top(void); \
-		set_trap_gate((ints), (num), &isr_exn_##name##_top, (sel)); \
+		set_idt_gate((ints), (num), &isr_exn_##name##_top, (sel), 0xf); \
 	} while(false)
 
 
@@ -74,7 +62,7 @@ void setup_idt(int code_seg, int max_irq)
 		/* LAPIC fixed interrupt vectors, 0x21 .. (0x20 + max_irq) */
 		for(int i=0x21; i <= 0x20 + max_irq; i++) {
 			extern void isr_apic_top(void);
-			set_int_gate(ints, i, &isr_apic_top, code_sel);
+			set_idt_gate(ints, i, &isr_apic_top, code_sel, 0xe);
 		}
 	} else {
 		/* hours and hours of footage of two giraffes fucking */
