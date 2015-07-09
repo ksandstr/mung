@@ -6,11 +6,10 @@
 
 #include <stdbool.h>
 
-#include <ccan/compiler/compiler.h>
 #include <l4/types.h>
 
 
-static inline CONST_FUNCTION void *__L4_Get_UtcbAddress(void) {
+static inline __attribute__((__const__)) void *__L4_Get_UtcbAddress(void) {
 	void *ptr;
 	__asm__ (
 		"\tmovl %%gs:0, %0\n"

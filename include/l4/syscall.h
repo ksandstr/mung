@@ -2,8 +2,6 @@
 #ifndef __L4__SYSCALL_H__
 #define __L4__SYSCALL_H__
 
-#include <ccan/compiler/compiler.h>
-
 #include <l4/types.h>
 #include <l4/message.h>
 #include <l4/vregs.h>
