@@ -72,14 +72,9 @@
 #define ME_UP(f) _ME((f), ME_UP_MASK)
 #define ME_SIDE(f) _ME((f), ME_SIDE_MASK)
 
-/* mode bits for unmap_entry_in_group().
- *
- * TODO: export immediate, recursive, and get_access; and change
- * mapdb_unmap_fpage() to accept their mask instead of 3 bools.
+/* mode bits for unmap_entry_in_group(), in addition to the ones given for
+ * mapdb_unmap_fpage().
  */
-#define UM_IMMEDIATE	0x1
-#define UM_RECURSIVE	0x2
-#define UM_GET_ACCESS	0x4
 #define UM_DROP_SPECIAL	0x8
 #define UM_RIGHTS		0x70	/* L4_Rights() in mask */
 #define UM_CHILD		0x80	/* not a primary Unmap target */
@@ -1891,7 +1886,7 @@ static void call_ueig(void *pptr);
 struct ueig_param {
 	struct map_group *g;
 	struct map_entry **e_p;
-	int mode;
+	unsigned mode;
 	L4_Fpage_t eff_range;
 
 	int retval;
@@ -1909,7 +1904,7 @@ struct ueig_param {
 static int unmap_entry_in_group(
 	struct map_group *g,
 	struct map_entry **e_p,
-	int mode,
+	unsigned mode,
 	L4_Fpage_t eff_range)
 {
 	struct map_entry *e = *e_p;
@@ -1957,7 +1952,7 @@ static int unmap_entry_in_group(
 	 * more advancedly, parameter passing could happen with varargs. this is
 	 * the stuff dreams are made of.
 	 */
-	int next_mode = (mode & ~UM_DROP_SPECIAL) | UM_IMMEDIATE | UM_CHILD;
+	unsigned next_mode = (mode & ~UM_DROP_SPECIAL) | UM_IMMEDIATE | UM_CHILD;
 	for(int i=0; recursive && i < e->num_children; i++) {
 		struct child_ref r;
 		if(!deref_child(&r, g, e, i, eff_range)) {
@@ -2077,13 +2072,11 @@ static void call_ueig(void *pptr) {
 }
 
 
-int mapdb_unmap_fpage(
-	struct space *sp,
-	L4_Fpage_t range,
-	bool immediate,
-	bool recursive,
-	bool get_access)
+int mapdb_unmap_fpage(struct space *sp, L4_Fpage_t range, unsigned arg_mode)
 {
+	const bool immediate = CHECK_FLAG(arg_mode, UM_IMMEDIATE),
+		recursive = CHECK_FLAG(arg_mode, UM_RECURSIVE),
+		get_access = CHECK_FLAG(arg_mode, UM_GET_ACCESS);
 	assert(recursive || immediate);	/* disallows the one-level status read */
 	assert(check_mapdb(sp, 0));
 
@@ -2105,8 +2098,7 @@ int mapdb_unmap_fpage(
 			L4_Fpage_t fp = L4_Fpage(
 				L4_Address(range) + i * GROUP_SIZE, GROUP_SIZE);
 			L4_Set_Rights(&fp, L4_Rights(range));
-			int n = mapdb_unmap_fpage(sp, fp, immediate, recursive,
-				get_access);
+			int n = mapdb_unmap_fpage(sp, fp, arg_mode);
 			if(unlikely(n < 0)) return n;
 			acc |= n;
 		}
@@ -2143,10 +2135,7 @@ int mapdb_unmap_fpage(
 		return 0;
 	}
 
-	int rwx_seen = 0, mode = L4_Rights(range) << 4;
-	if(immediate) mode |= UM_IMMEDIATE;
-	if(recursive) mode |= UM_RECURSIVE;
-	if(get_access) mode |= UM_GET_ACCESS;
+	int rwx_seen = 0, mode = (arg_mode & 0x7) | (L4_Rights(range) << 4);
 	if(drop_special) mode |= UM_DROP_SPECIAL;
 	assert(!CHECK_FLAG(mode, UM_CHILD));
 	const L4_Word_t r_end = FPAGE_HIGH(range);

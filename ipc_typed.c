@@ -289,7 +289,7 @@ static int apply_mapitem(
 	int given = L4_Rights(map_page);
 	if(is_grant && given != 0) {
 		assert((L4_Address(map_page) & 0xc00) == 0);
-		mapdb_unmap_fpage(source->space, map_page, true, false, false);
+		mapdb_unmap_fpage(source->space, map_page, UM_IMMEDIATE);
 	}
 
 	m->X.snd_fpage.X.s = wnd.X.s;

@@ -841,14 +841,15 @@ SYSCALL void sys_unmap(L4_Word_t control, void *utcb)
 
 	struct thread *current = get_current_thread();
 	struct space *cur_space = current->space;
-	const bool flush = CHECK_FLAG(control, 0x40);
 	int page_count = (control & 0x3f) + 1;
+	unsigned mode = UM_RECURSIVE | UM_GET_ACCESS;
+	if(CHECK_FLAG(control, 0x40)) mode |= UM_IMMEDIATE;	/* flush bit */
 	for(int i=0; i < page_count; i++) {
 		L4_Fpage_t fp = { .raw = L4_VREG(utcb, L4_TCR_MR(i)) };
 		if(L4_SizeLog2(fp) < PAGE_BITS) continue;
 #if 0
 		printf("  %s %#x:%#x (%c%c%c) for thread %lu:%lu\n",
-			flush ? "flushing" : "unmapping",
+			CHECK_FLAG(mode, UM_IMMEDIATE) ? "flushing" : "unmapping",
 			(unsigned)L4_Address(fp), (unsigned)L4_Size(fp),
 			CHECK_FLAG(L4_Rights(fp), L4_Readable) ? 'r' : '-',
 			CHECK_FLAG(L4_Rights(fp), L4_Writable) ? 'w' : '-',
@@ -856,7 +857,7 @@ SYSCALL void sys_unmap(L4_Word_t control, void *utcb)
 			TID_THREADNUM(current->id), TID_VERSION(current->id));
 #endif
 
-		int access = mapdb_unmap_fpage(cur_space, fp, flush, true, true);
+		int access = mapdb_unmap_fpage(cur_space, fp, mode);
 		L4_Set_Rights(&fp, access);
 		L4_VREG(utcb, L4_TCR_MR(i)) = fp.raw;
 	}

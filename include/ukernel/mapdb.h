@@ -25,6 +25,11 @@
 #define MGF__SPARE1	0x100000
 #define MGF__SPARE2	0x200000
 
+/* the @mode parameter's flags for mapdb_unmap_fpage(). */
+#define UM_IMMEDIATE	0x1
+#define UM_RECURSIVE	0x2
+#define UM_GET_ACCESS	0x4
+
 
 struct space;
 
@@ -180,14 +185,12 @@ extern int mapdb_map_pages(
 extern int mapdb_unmap_fpage(
 	struct space *db,
 	L4_Fpage_t fpage,
-	bool immediate,
-	bool recursive,
-	bool get_access);
+	unsigned mode);
 
 static inline void mapdb_erase_special(struct space *db, L4_Fpage_t fpage) {
 	fpage = L4_FpageLog2(L4_Address(fpage) | 0x800, L4_SizeLog2(fpage));
 	L4_Set_Rights(&fpage, L4_FullyAccessible);
-	mapdb_unmap_fpage(db, fpage, true, false, false);
+	mapdb_unmap_fpage(db, fpage, UM_IMMEDIATE);
 }
 
 
