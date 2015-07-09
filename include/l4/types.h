@@ -4,9 +4,6 @@
 #ifndef __L4__TYPES_H__
 #define __L4__TYPES_H__
 
-#include <stdint.h>
-#include <stdbool.h>
-
 #ifdef _L4_DEBUG_ME_HARDER
 #include <assert.h>
 #define _L4_ASSERT(x) assert((x))
@@ -16,11 +13,10 @@
 
 
 typedef unsigned long L4_Word_t;
-typedef uint8_t L4_Word8_t;
-typedef uint16_t L4_Word16_t;
-typedef uint32_t L4_Word32_t;
-typedef uint64_t L4_Word64_t;
-
+typedef unsigned char L4_Word8_t;
+typedef unsigned short L4_Word16_t;
+typedef unsigned int L4_Word32_t;
+typedef unsigned long long L4_Word64_t;
 
 typedef L4_Word_t L4_Bool_t;
 
@@ -94,15 +90,15 @@ static inline L4_ThreadId_t L4_GlobalId(L4_Word_t tnum, L4_Word_t vers) {
 }
 
 
-static inline bool L4_IsNilThread(L4_ThreadId_t tid) {
+static inline L4_Bool_t L4_IsNilThread(L4_ThreadId_t tid) {
 	return tid.raw == 0;
 }
 
-static inline bool L4_IsLocalId(L4_ThreadId_t tid) {
+static inline L4_Bool_t L4_IsLocalId(L4_ThreadId_t tid) {
 	return tid.local.X.zeros == 0;
 }
 
-static inline bool L4_IsGlobalId(L4_ThreadId_t tid) {
+static inline L4_Bool_t L4_IsGlobalId(L4_ThreadId_t tid) {
 	return tid.local.X.zeros != 0;
 }
 
@@ -119,7 +115,7 @@ static inline L4_Word_t L4_Version(L4_ThreadId_t tid) {
 }
 
 
-static inline bool L4_IsNilFpage(L4_Fpage_t fp) {
+static inline L4_Bool_t L4_IsNilFpage(L4_Fpage_t fp) {
 	return fp.raw == 0;
 }
 
@@ -243,7 +239,7 @@ static inline L4_Time_t L4_TimePoint2_NP(L4_Clock_t base, L4_Clock_t at)
 
 	if(at.raw - base.raw > (0x3ff << 15)) return L4_Never;
 
-	uint32_t us = at.raw - base.raw;
+	L4_Word32_t us = at.raw - base.raw;
 	int exp = 22 - __builtin_clz(us);
 	if(exp < 0) exp = 0;
 	_L4_ASSERT(exp <= 15);
@@ -261,12 +257,12 @@ static inline L4_Time_t L4_TimePoint2_NP(L4_Clock_t base, L4_Clock_t at)
 
 
 /* these don't appear in L4Ka::Pistachio either. */
-static inline bool L4_IsTimePoint_NP(L4_Time_t t) {
+static inline L4_Bool_t L4_IsTimePoint_NP(L4_Time_t t) {
 	return t.point.a == 1;
 }
 
 
-static inline bool L4_IsTimePeriod_NP(L4_Time_t t) {
+static inline L4_Bool_t L4_IsTimePeriod_NP(L4_Time_t t) {
 	return t.period.a == 0;
 }
 
@@ -275,10 +271,10 @@ static inline L4_Clock_t L4_PointClock_NP(L4_Clock_t base, L4_Time_t t)
 {
 	_L4_ASSERT(L4_IsTimePoint_NP(t));
 
-	uint64_t clk = base.raw >> (t.point.e + 10);
+	L4_Word64_t clk = base.raw >> (t.point.e + 10);
 	clk += ((int)clk & 1) ^ t.point.c;
 	return (L4_Clock_t){
-		.raw = (clk << (t.point.e + 10)) | ((uint32_t)t.point.m << t.point.e),
+		.raw = (clk << (t.point.e + 10)) | ((L4_Word32_t)t.point.m << t.point.e),
 	};
 }
 

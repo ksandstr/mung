@@ -164,12 +164,12 @@ static inline L4_StringItem_t L4_StringItem(int size, void *address) {
 }
 
 
-static inline bool L4_IsStringItem(L4_StringItem_t *s) {
+static inline L4_Bool_t L4_IsStringItem(L4_StringItem_t *s) {
 	return (s->X.__type & 0x04) == 0;
 }
 
 
-static inline bool L4_CompoundString(L4_StringItem_t *s) {
+static inline L4_Bool_t L4_CompoundString(L4_StringItem_t *s) {
 	return s->X.c != 0;
 }
 
@@ -193,7 +193,7 @@ static inline L4_StringItem_t *__L4_EndOfString(
 		prev = s;
 		s = (L4_StringItem_t *)&s->X.str.substring_ptr[s->X.j + 1];
 	} while(prev->X.c);
-	if(p != NULL) *p = prev;
+	if(p != (L4_StringItem_t **)0) *p = prev;
 	return s;
 }
 
@@ -272,11 +272,11 @@ static inline L4_Acceptor_t L4_RemoveAcceptor(
 #define L4_RemoveAcceptorFrom(a, b) L4_RemoveAcceptor((a), (b))
 
 
-static inline bool L4_HasStringItems(L4_Acceptor_t a) {
+static inline L4_Bool_t L4_HasStringItems(L4_Acceptor_t a) {
 	return a.X.s != 0;
 }
 
-static inline bool L4_HasMapGrantItems(L4_Acceptor_t a) {
+static inline L4_Bool_t L4_HasMapGrantItems(L4_Acceptor_t a) {
 	return a.X.RcvWindow != 0;
 }
 

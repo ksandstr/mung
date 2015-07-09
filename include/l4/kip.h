@@ -210,6 +210,12 @@ static inline void *L4_GetKernelInterface(void)
 }
 
 
+static inline L4_Word_t L4_PageSizeMask(void *kip_ptr) {
+	L4_KernelInterfacePage_t *kip = kip_ptr;
+	return kip->PageInfo.X.page_size_mask << 10;
+}
+
+
 static inline L4_Word_t L4_BootInfo(void *kip_ptr)
 {
 	L4_KernelInterfacePage_t *kip = kip_ptr;
