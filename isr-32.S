@@ -7,44 +7,10 @@
 	 * handled by interrupt service routines, unlike %es and %ds are.
 	 */
 
-	/* ISR_IRQ produces IRQ interrupt handlers that call a common bottom
-	 * half while pushing $vecn as the "reason" field in the parameter
-	 * <struct x86_exregs *>. this is useful in the common case because
-	 * non-fast IRQs being caught generally indicates that a device driver,
-	 * running at a higher priority than the current thread, will
-	 * immediately pre-empt the running thread.
-	 */
-	.macro ISR_IRQ vecn, name
-	.global isr_\name\()_top
-	.type isr_\name\()_top, @function
-	.align 16,0
-isr_\name\()_top:
-	subl $4, %esp		# trash error
-	pushal
-	pushl %ds
-	pushl %es
-	pushl $\vecn
-	pushl %esp
-	movl $(SEG_KERNEL_DATA_HIGH << 3), %eax
-	movl %eax, %ds
-	movl %eax, %es
-	jmp isr_irq_common
-	.endm
 
-
-	.align 16,0
-isr_irq_common:
-	call isr_irq_bottom
-	addl $8, %esp		# pop regs, reason parameters
-	popl %es
-	popl %ds
-	popal
-	addl $4, %esp		# pop trash error
-	iret
-
-
-	/* ISR_IRQ_FAST produces the same as ISR_IRQ, but calls a specific
-	 * bottom half.
+	/* ISR_IRQ_FAST produces IRQ interrupt handlers that call a specific
+	 * bottom half. it puts $vecn in the "reason" field of the parameter
+	 * <struct x86_exregs *>.
 	 */
 	.macro ISR_IRQ_FAST vecn, name
 	.global isr_\name\()_top
@@ -61,7 +27,7 @@ isr_\name\()_top:
 	movl %eax, %ds
 	movl %eax, %es
 	call isr_\name\()_bottom
-	addl $8, %esp
+	addl $8, %esp		# pop regs, reason parameters
 	popl %es
 	popl %ds
 	popal
@@ -72,12 +38,8 @@ isr_\name\()_top:
 	# timer interrupt is consumed by microkernel. applications may bind to
 	# interrupt 0, but it'll never fire.
 	ISR_IRQ_FAST 0x20, irq0
-	ISR_IRQ 0x21, irq1		# keyboard
-	# TODO: add the other XT-PIC things. perhaps a routine that checks the
-	# interrupt service field in the PIC to find out which one fired,
-	# rather than optimizing it by the vector.
-
-	ISR_IRQ_FAST 0x30, apic	# fixed interrupts via the I/O APIC
+	ISR_IRQ_FAST 0xb00bface, xtpic	# ye olde XT-PIC (or two)
+	ISR_IRQ_FAST 0xdeadd065, apic	# fixed interrupts via the I/O APIC
 
 
 	.equ USER_DATA_SEL, (SEG_USER_DATA << 3 + 3)

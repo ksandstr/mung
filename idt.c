@@ -25,7 +25,7 @@ static inline void set_idt_gate(
 
 
 /* 0xe = 32-bit interrupt gate */
-#define IRQ_GATE(ints, sel, num) \
+#define STATIC_IRQ_GATE(ints, sel, num) \
 	do { \
 		extern void isr_irq##num##_top(void); \
 		set_idt_gate((ints), 0x20 + (num), &isr_irq##num##_top, (sel), 0xe); \
@@ -56,18 +56,23 @@ void setup_idt(int code_seg, int max_irq)
 	EXN_GATE(ints, code_sel, 16, mf);	/* x87 floating-point exception */
 	EXN_GATE(ints, code_sel, 19, xm);	/* SIMD floating-point exception */
 
-	IRQ_GATE(ints, code_sel, 0);	/* IRQ0 (timer) */
+	STATIC_IRQ_GATE(ints, code_sel, 0);	/* IRQ0 (timer) */
 
+	void (*irq_top_fn)(void);
+	int int_low, int_high;
 	if(apic_enabled) {
-		/* LAPIC fixed interrupt vectors, 0x21 .. (0x20 + max_irq) */
-		for(int i=0x21; i <= 0x20 + max_irq; i++) {
-			extern void isr_apic_top(void);
-			set_idt_gate(ints, i, &isr_apic_top, code_sel, 0xe);
-		}
+		/* LAPIC fixed interrupt vectors appear in 0x21 .. (0x20 + max_irq) */
+		extern void isr_apic_top(void);
+		irq_top_fn = &isr_apic_top;
+		int_low = 0x21; int_high = 0x20 + max_irq;
 	} else {
-		/* hours and hours of footage of two giraffes fucking */
-		IRQ_GATE(ints, code_sel, 1);
-		/* FIXME: add the rest */
+		/* per pic.c, olde-timey irqs appear in 0x20..0x2f. */
+		extern void isr_xtpic_top(void);
+		irq_top_fn = &isr_xtpic_top;
+		int_low = 0x21; int_high = 0x2f;
+	}
+	for(int i=int_low; i <= int_high; i++) {
+		set_idt_gate(ints, i, irq_top_fn, code_sel, 0xe);
 	}
 
 	/* softint vectors. disabled when unnecessary; the kernel interface is a

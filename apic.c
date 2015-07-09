@@ -215,8 +215,6 @@ void isr_apic_bottom(struct x86_exregs *regs)
 	}
 #endif
 
-	/* cold-up fake being an XT-PIC ISR. */
-	extern void isr_irq_bottom(struct x86_exregs *);
 	regs->reason = vecnum;
 	isr_irq_bottom(regs);
 	return;

@@ -3,6 +3,7 @@
 
 #include <stdio.h>
 #include <stdint.h>
+#include <string.h>
 #include <assert.h>
 
 #include <ukernel/ioport.h>
@@ -19,6 +20,8 @@
 #define ICW1_ICW4 0x01
 #define ICW4_8086 0x01		/* 8086 mode */
 
+#define PIC_READ_IRR 0x0a	/* OCW3 irq ready next CMD read */
+#define PIC_READ_ISR 0x0b	/* OCW3 irq service next CMD read */
 #define PIC_EOI 0x20		/* end-of-interrupt */
 
 
@@ -95,6 +98,45 @@ void pic_unmask_irq(int irq, bool act_high, bool level_trig)
 	} else {
 		outb(IO_PIC1_DATA, inb(IO_PIC1_DATA) & ~(1 << irq));
 	}
+}
+
+
+/* routines courtesy of the osdev wiki (slightly modified) */
+
+static uint16_t __pic_get_irq_reg(int ocw3)
+{
+	/* OCW3 to PIC CMD to get the register values. PIC2 is chained, and
+	 * represents IRQs 8-15. PIC1 is IRQs 0-7, with 2 being the chain
+	 */
+	outb(IO_PIC1_CMD, ocw3);
+	outb(IO_PIC2_CMD, ocw3);
+	return (inb(IO_PIC2_CMD) << 8) | inb(IO_PIC1_CMD);
+}
+
+
+/* read interrupt request register (i.e. pending mask) */
+static inline uint16_t pic_get_irr(void) {
+	return __pic_get_irq_reg(PIC_READ_IRR);
+}
+
+
+/* read interrupt service register (i.e. the current interrupt) */
+static inline uint16_t pic_get_isr(void) {
+	return __pic_get_irq_reg(PIC_READ_ISR);
+}
+
+
+/* called from ISR tophalf context. interrupts are disabled. */
+void isr_xtpic_bottom(struct x86_exregs *regs)
+{
+	uint16_t serv_mask = pic_get_isr();
+	if(serv_mask == 0) {
+		/* spurious. */
+		pic_send_eoi(15);	/* EOIs both chips */
+		return;
+	}
+	regs->reason = 0x20 + ffsl(serv_mask) - 1;
+	isr_irq_bottom(regs);
 }
 
 

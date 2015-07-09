@@ -397,4 +397,16 @@ extern int apic_probe(void);	/* depends on CPUID; ret < 0 when no APIC */
 extern int ioapic_route_legacy_irq(int irqnum, int ioa_vector);
 
 
+/* from irq.c */
+
+/* general interrupt-handling function called from the controller-specific ISR
+ * bottom-half. @regs->reason should indicate the interrupt vector number plus
+ * 0x20, so 0x20..0x2f for the XT-PIC and 0x20 .. 0x20 + n_apics*32 - 1 for
+ * APICs.
+ *
+ * this must be called with interrupts disabled. it returns the same way.
+ */
+extern void isr_irq_bottom(struct x86_exregs *regs);
+
+
 #endif
