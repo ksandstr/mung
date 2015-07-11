@@ -144,9 +144,7 @@ static inline L4_Bool_t L4_IsNilFpage(L4_Fpage_t fp) {
 	return fp.raw == 0;
 }
 
-static inline L4_Fpage_t L4_FpageLog2(L4_Word_t address, int shift)
-{
-	_L4_ASSERT((address & ((1 << shift) - 1)) == 0);
+static inline L4_Fpage_t L4_FpageLog2(L4_Word_t address, int shift) {
 	return (L4_Fpage_t){ .X = { .s = shift, .b = address >> 10 } };
 }
 
@@ -154,7 +152,6 @@ static inline L4_Fpage_t L4_Fpage(L4_Word_t address, L4_Word_t size) {
 	/* GCC intrinsics. */
 	int msb = sizeof(L4_Word_t) * 8 - __builtin_clzl(size) - 1,
 		shift = (1ul << msb) <= size ? msb : msb + 1;
-	_L4_ASSERT((address & ((1 << shift) - 1)) == 0);
 	return (L4_Fpage_t){ .X = { .s = shift, .b = address >> 10 } };
 }
 
