@@ -12,7 +12,7 @@ all: sigma0 lib/l4/libl4.a
 
 clean:
 	+@make -C testbench clean
-	@rm -f *.o
+	@rm -f *.o lib/l4/*.a lib/l4/*.o
 
 
 distclean:
@@ -27,9 +27,9 @@ sigma0: sigma0.ld crt0.o sigma0.o syscalls.o ccan-list.o
 		$(shell gcc $(CFLAGS) -print-libgcc-file-name)
 
 
-lib/l4/libl4.a: syscalls.o
+lib/l4/libl4.a: syscalls.o lib/l4/sigma0_stub.o
 	@echo "  AR $@"
-	@ar cr $@ $<
+	@ar cr $@ $^
 	@echo "  RANLIB $@"
 	@ranlib $@
 

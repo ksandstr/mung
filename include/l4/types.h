@@ -131,6 +131,14 @@ static inline L4_Word_t L4_Version(L4_ThreadId_t tid) {
 	return tid.raw & 0x3fff;
 }
 
+static inline L4_Bool_t L4_IsThreadEqual(L4_ThreadId_t l, L4_ThreadId_t r) {
+	return l.raw == r.raw;
+}
+
+static inline L4_Bool_t L4_IsThreadNotEqual(L4_ThreadId_t l, L4_ThreadId_t r) {
+	return l.raw != r.raw;
+}
+
 
 static inline L4_Bool_t L4_IsNilFpage(L4_Fpage_t fp) {
 	return fp.raw == 0;

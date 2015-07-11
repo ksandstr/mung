@@ -203,10 +203,14 @@ typedef struct {
 } __attribute__((__packed__)) L4_KernelInterfacePage_t;
 
 
-static inline void *L4_GetKernelInterface(void)
-{
+static inline void *L4_GetKernelInterface(void) {
 	L4_Word_t dummy;
 	return L4_KernelInterface(&dummy, &dummy, &dummy);
+}
+
+static inline L4_Word_t L4_NumMemoryDescriptors(void *kip_ptr) {
+	const L4_KernelInterfacePage_t *kip = kip_ptr;
+	return kip->MemoryInfo.n;
 }
 
 
@@ -250,7 +254,7 @@ static inline L4_MemoryDesc_t *L4_MemoryDesc(void *kip_ptr, L4_Word_t num)
 		return (L4_MemoryDesc_t *)(kip_ptr + kip->MemoryInfo.MemDescPtr) + num;
 	} else {
 		/* past the last one. */
-		return NULL;
+		return (L4_MemoryDesc_t *)0;
 	}
 }
 
