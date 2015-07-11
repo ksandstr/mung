@@ -199,10 +199,10 @@ size_t strlen(const char *str)
 }
 
 
-size_t strnlen(const char *str, size_t n) {
-	size_t len = 0;
-	while(len < n && str[n] != '\0') len++;
-	return len;
+size_t strnlen(const char *str, size_t max) {
+	size_t n = 0;
+	while(n < max && str[n] != '\0') n++;
+	return n;
 }
 
 
