@@ -163,13 +163,14 @@ static int sigma0_ipc_loop(void *kip_base)
 				L4_LoadMR(1, idemp.raw[0]);
 				L4_LoadMR(2, idemp.raw[1]);
 			} else if((tag.X.label & 0xfff0) == 0xffa0
-				&& tag.X.u == 2 && tag.X.t == 0)
+				&& tag.X.t == 0 && (tag.X.u == 2 || tag.X.u == 3))
 			{
 				/* s0 user protocol: fpage request */
 				L4_Fpage_t req_fpage;
-				L4_Word_t req_attr;
+				L4_Word_t req_attr, req_high;
 				L4_StoreMR(1, &req_fpage.raw);
 				L4_StoreMR(2, &req_attr);
+				L4_StoreMR(3, &req_high);
 #ifdef DEBUG_ME_HARDER
 				printf("roottask (tid %d:%d) requested page %#lx:%#lx attr %#lx\n",
 					sender.global.X.thread_no, sender.global.X.version,
