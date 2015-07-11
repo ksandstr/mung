@@ -228,20 +228,19 @@ static void init_kernel_tss(struct tss *t)
 static void add_id_maps(struct space *sp, L4_Word_t start, L4_Word_t end)
 {
 	assert(sp != NULL);
-	printf("%s: start=%#lx, end=%#lx\n", __func__, start, end);
 	end += PAGE_SIZE - 1;
 
 	L4_Word_t addr;
 	int s;
 	for_page_range(start, end + 1, addr, s) {
-		//printf("%s: adding %#lx:%#lx\n", __func__, addr, 1ul << s);
 		int l = 0;
 		do {
-			L4_Fpage_t p = L4_FpageLog2(addr + l * GROUP_SIZE,
+			L4_Word_t sub_addr = addr + l * GROUP_SIZE;
+			L4_Fpage_t p = L4_FpageLog2(sub_addr,
 				MIN(int, s, size_to_shift(GROUP_SIZE)));
 			L4_Set_Rights(&p, L4_FullyAccessible);
 			struct map_group *dummy = NULL;
-			int n = mapdb_add_map(sp, &dummy, 0, p, addr >> PAGE_BITS);
+			int n = mapdb_add_map(sp, &dummy, 0, p, sub_addr >> PAGE_BITS);
 			if(n != 0) {
 				printf("%s: n=%d!!!\n", __func__, n);
 				panic("argh");
@@ -292,6 +291,25 @@ static void add_mem_to_sigma0(
 			}
 		}
 	}
+
+#ifndef NDEBUG
+	struct htable_iter it;
+	for(struct map_group *g = htable_first(&sigma0_space->ptab_groups, &it);
+		g != NULL;
+		g = htable_next(&sigma0_space->ptab_groups, &it))
+	{
+		L4_Word_t g_addr = g->addr & ~(0x400000 - 1);
+		int n_entries = g->addr & 0x7fff;
+		for(int i=0; i < n_entries; i++) {
+			struct map_entry *e = &g->entries[i];
+			if(CHECK_FLAG(e->parent, 2)) continue;	/* skip specials */
+			L4_Word_t phys = (L4_Word_t)e->first_page_id << PAGE_BITS;
+			assert(L4_Address(e->range) >= g_addr
+				&& L4_Address(e->range) + L4_Size(e->range) <= g_addr + GROUP_SIZE);
+			assert(phys == L4_Address(e->range));
+		}
+	}
+#endif
 }
 
 
