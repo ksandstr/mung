@@ -1163,6 +1163,7 @@ SYSCALL L4_Word_t sys_threadcontrol(
 		&& TID_VERSION(dest_tid.raw) == 1
 		&& TID_THREADNUM(dest_tid.raw) <= last_int_threadno())
 	{
+		TRACE("%s: calling interrupt_ctl()\n", __func__);
 		result = interrupt_ctl(&ec, current, dest_tid, pager);
 		goto end;
 	}
@@ -1170,12 +1171,15 @@ SYSCALL L4_Word_t sys_threadcontrol(
 	if(unlikely(L4_IsLocalId(dest_tid)
 		|| L4_ThreadNo(dest_tid) < first_user_threadno()))
 	{
+		TRACE("%s: dest_tid unavailable to user\n", __func__);
 		goto unav_thread;
 	}
 	if(!L4_IsNilThread(spacespec)
 		&& unlikely(L4_IsLocalId(spacespec)
 			|| L4_ThreadNo(spacespec) < first_user_threadno()))
 	{
+		TRACE("%s: spacespec=%lu:%lu is invalid\n", __func__,
+			L4_ThreadNo(spacespec), L4_Version(spacespec));
 		goto invd_space;
 	}
 
@@ -1343,11 +1347,6 @@ SYSCALL L4_Word_t sys_threadcontrol(
 	assert(!L4_IsNilThread(dest->scheduler));
 	assert(L4_IsGlobalId(dest->scheduler));
 
-dead:
-	if(unlikely(dest == current)) {
-		assert(check_thread_module(0));
-		return_from_dead();
-	}
 	result = 1;
 
 end:
@@ -1357,6 +1356,14 @@ end:
 
 	assert(check_thread_module(0));
 	return result;
+
+dead:
+	if(unlikely(dest == current)) {
+		assert(check_thread_module(0));
+		return_from_dead();
+	}
+	result = 1;
+	goto end;
 
 out_of_mem:
 	ec = 8;
