@@ -26,9 +26,7 @@
 
 
 static inline void *L4_KernelInterface(
-	L4_Word_t *apiver,
-	L4_Word_t *apiflags,
-	L4_Word_t *kernelid)
+	L4_Word_t *apiver, L4_Word_t *apiflags, L4_Word_t *kernelid)
 {
 	L4_Word_t baseaddr;
 	__asm__ __volatile__ (
@@ -308,8 +306,7 @@ static inline L4_Word_t L4_ProcessorControl(
 
 
 static inline L4_Word_t L4_MemoryControl(
-	L4_Word_t control,
-	const L4_Word_t *attributes)
+	L4_Word_t control, const L4_Word_t *attributes)
 {
 	extern _C_ void __L4_MemoryControl(void);
 	void *utcb = __L4_Get_UtcbAddress();
@@ -334,6 +331,14 @@ static inline L4_Word_t L4_MemoryControl(
 
 	return result;
 }
+
+
+/* ia32 memory attributes for MemoryControl */
+#define L4_WriteBackMemory 1
+#define L4_WriteThroughMemory 2
+#define L4_UncacheableMemory 4
+#define L4_WriteCombiningMemory 5
+#define L4_WriteProtectedMemory 8
 
 
 #endif

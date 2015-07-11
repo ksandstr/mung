@@ -215,6 +215,26 @@ static inline L4_Word_t L4_PageSizeMask(void *kip_ptr) {
 	return kip->PageInfo.X.page_size_mask << 10;
 }
 
+static inline L4_Word_t L4_PageRights(void *kip_ptr) {
+	L4_KernelInterfacePage_t *kip = kip_ptr;
+	return kip->PageInfo.X.rwx;
+}
+
+static inline L4_Word_t L4_ThreadIdBits(void *kip_ptr) {
+	L4_KernelInterfacePage_t *kip = kip_ptr;
+	return kip->ThreadInfo.X.t;
+}
+
+static inline L4_Word_t L4_ThreadIdSystemBase(void *kip_ptr) {
+	L4_KernelInterfacePage_t *kip = kip_ptr;
+	return kip->ThreadInfo.X.SystemBase;
+}
+
+static inline L4_Word_t L4_ThreadIdUserBase(void *kip_ptr) {
+	L4_KernelInterfacePage_t *kip = kip_ptr;
+	return kip->ThreadInfo.X.UserBase;
+}
+
 
 static inline L4_Word_t L4_BootInfo(void *kip_ptr)
 {
@@ -264,6 +284,15 @@ static inline L4_Word_t L4_UtcbAlignmentLog2(void *kip_ptr) {
 static inline L4_Word_t L4_UtcbSize(void *kip_ptr) {
 	L4_KernelInterfacePage_t *kip = kip_ptr;
 	return (1 << kip->UtcbAreaInfo.X.a) * kip->UtcbAreaInfo.X.m;
+}
+
+static inline L4_Word_t L4_KipAreaSizeLog2(void *kip_ptr) {
+	L4_KernelInterfacePage_t *kip = kip_ptr;
+	return kip->KipAreaInfo.X.s;
+}
+
+static inline L4_Word_t L4_KipAreaSize(void *kip_ptr) {
+	return 1ul << L4_KipAreaSizeLog2(kip_ptr);
 }
 
 

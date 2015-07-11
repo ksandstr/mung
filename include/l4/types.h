@@ -56,6 +56,23 @@ static inline L4_Fpage_t L4_Set_Rights(L4_Fpage_t *fp, L4_Word_t rwx) {
 	return *fp;
 }
 
+static inline L4_Fpage_t L4_FpageAddRights(L4_Fpage_t f, L4_Word_t rwx) {
+	f.X.rwx |= rwx;
+	return f;
+}
+
+static inline L4_Fpage_t L4_FpageAddRightsTo(L4_Fpage_t *f, L4_Word_t rwx) {
+	f->X.rwx |= rwx;
+	return *f;
+}
+
+static inline L4_Fpage_t L4_FpageRemoveRightsFrom(
+	L4_Fpage_t *f, L4_Word_t rwx)
+{
+	f->X.rwx &= ~rwx;
+	return *f;
+}
+
 
 typedef union {
 	L4_Word_t raw;
@@ -172,6 +189,14 @@ static inline L4_Bool_t L4_IsClockEqual(L4_Clock_t a, L4_Clock_t b) {
 
 static inline L4_Bool_t L4_IsClockNotEqual(L4_Clock_t a, L4_Clock_t b) {
 	return a.raw != b.raw;
+}
+
+static inline L4_Clock_t L4_ClockAddUsec(L4_Clock_t a, L4_Word64_t us) {
+	return (L4_Clock_t){ .raw = a.raw + us };
+}
+
+static inline L4_Clock_t L4_ClockSubUsec(L4_Clock_t a, L4_Word64_t us) {
+	return (L4_Clock_t){ .raw = a.raw - us };
 }
 
 

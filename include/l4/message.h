@@ -269,6 +269,11 @@ typedef struct L4_CacheAllocationHint_s {
 
 #define L4_UseDefaultCacheAllocation ((L4_CacheAllocationHint_t){ .raw = 0 })
 
+/* ia32 CAHs per L4Ka::Pistachio (ugly as heck though) */
+#define L4_AllocateNewCacheLines ((L4_CacheAllocationHint_t){ .raw = 1 })
+#define L4_DoNotAllocateNewCacheLines ((L4_CacheAllocationHint_t){ .raw = 2 })
+#define L4_AllocateOnlyNewL1CacheLines ((L4_CacheAllocationHint_t){ .raw = 3 })
+
 static inline L4_CacheAllocationHint_t L4_CacheAllocationHint(
 	const L4_StringItem_t s)
 {

@@ -343,4 +343,19 @@ static inline void L4_Set_PagerOf(L4_ThreadId_t dest, L4_ThreadId_t pager)
 }
 
 
+/* special ThreadControl for interrupt de-/assoc */
+
+static inline L4_Word_t L4_AssociateInterrupt(
+	L4_ThreadId_t int_tid, L4_ThreadId_t handler_tid)
+{
+	return L4_ThreadControl(int_tid, int_tid, L4_nilthread, handler_tid,
+		(void *)-1);
+}
+
+static inline L4_Word_t L4_DeassociateInterrupt(L4_ThreadId_t int_tid) {
+	return L4_ThreadControl(int_tid, int_tid, L4_nilthread,
+		int_tid, (void *)-1);
+}
+
+
 #endif
