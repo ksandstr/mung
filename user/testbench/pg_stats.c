@@ -13,8 +13,7 @@
 #include "test.h"
 
 
-static void reset_stats(struct pager_stats *stats)
-{
+static void reset_stats(struct pager_stats *stats) {
 	*stats = (struct pager_stats){
 		.log_top = LOG_SIZE - 1,	/* start at 0 */
 	};
@@ -136,10 +135,11 @@ static void stats_pager_fn(void *param_ptr)
 L4_ThreadId_t start_stats_pager(struct pager_stats *stats_mem)
 {
 	stats_mem->n_faults = 12345;
-	L4_ThreadId_t pg_tid = start_thread(&stats_pager_fn, stats_mem);
-	fail_if(L4_IsNilThread(pg_tid), "can't setup stats pager");
-	for(int i=0; i < 10; i++) L4_ThreadSwitch(pg_tid);
-	fail_if(stats_mem->n_faults != 0, "stats pager acting weird");
+	L4_ThreadId_t pg_tid = xstart_thread(&stats_pager_fn, stats_mem);
+	/* synchronize with the reset label. */
+	bool ok = send_reset(pg_tid);
+	fail_unless(ok, "stats pager synch failed, ec=%#lx", L4_ErrorCode());
+	fail_unless(stats_mem->n_faults == 0, "stats pager acting weird");
 
 	return pg_tid;
 }
