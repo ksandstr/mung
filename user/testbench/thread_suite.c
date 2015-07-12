@@ -1,4 +1,3 @@
-
 /* unit tests concerning the ThreadControl and ExchangeRegister system calls,
  * and TCR access.
  */
@@ -7,7 +6,9 @@
 #include <stdlib.h>
 #include <stdint.h>
 #include <string.h>
+
 #include <ccan/compiler/compiler.h>
+#include <ccan/talloc/talloc.h>
 
 #include <l4/types.h>
 #include <l4/kip.h>
@@ -716,6 +717,70 @@ START_LOOP_TEST(suicide, iter, 0, 1)
 END_TEST
 
 
+/* modify self to set scheduler or pager. */
+START_LOOP_TEST(modify_self, iter, 0, 1)
+{
+	const bool set_scheduler = CHECK_FLAG(iter, 1);
+	diag("set_scheduler=%s", btos(set_scheduler));
+	plan_tests(3);
+	void *tctx = talloc_new(NULL);
+
+	struct pager_stats *stats = talloc(tctx, struct pager_stats);
+	const L4_ThreadId_t safe_pager = start_stats_pager(stats),
+		old_pager = L4_Pager();
+
+	L4_ThreadId_t self = L4_Myself();
+	diag("self=%lu:%lu, safe_pager=%lu:%lu, old_pager=%lu:%lu",
+		L4_ThreadNo(self), L4_Version(self),
+		L4_ThreadNo(safe_pager), L4_Version(safe_pager),
+		L4_ThreadNo(old_pager), L4_Version(old_pager));
+
+	/* change it forward. */
+	L4_Word_t ret = L4_ThreadControl(self, self,
+		set_scheduler ? safe_pager : L4_nilthread,
+		!set_scheduler ? safe_pager : L4_nilthread,
+		(void *)-1);
+	/* implies that current thread was resumed */
+	L4_Word_t ec = L4_ErrorCode();
+	if(!ok1(ret == 1)) {
+		diag("ThreadControl failed, ret=%lu, ec=%#lx", ret, ec);
+	}
+
+	imply_ok1(!set_scheduler, L4_SameThreads(L4_Pager(), safe_pager));
+
+	const int old_faults = stats->n_faults;
+
+	/* cause a pagefault.
+	 *
+	 * TODO: also cause a scheduling event, and make the stats pager record
+	 * that also.
+	 */
+	const size_t fault_size = PAGE_SIZE * 16;
+	void *memory = talloc_array(tctx, uint8_t, fault_size);
+	memset(memory, 0, fault_size);
+	L4_Fpage_t fp = L4_FpageLog2(
+		((L4_Word_t)memory + PAGE_SIZE - 1) & ~PAGE_MASK, PAGE_BITS);
+	L4_Set_Rights(&fp, L4_Writable);
+	L4_FlushFpage(fp);
+	memset(memory, 0xba, fault_size);
+
+	/* measure the fault. */
+	if(!imply_ok1(!set_scheduler, stats->n_faults > old_faults)) {
+		diag("old_faults=%d, stats->n_faults=%d",
+			old_faults, stats->n_faults);
+	}
+
+	/* change the pager back. */
+	ret = L4_ThreadControl(self, self, L4_nilthread, old_pager, (void *)-1);
+	fail_if(ret != 1, "ret=%u, ec=%#lx", ret, L4_ErrorCode());
+	fail_unless(L4_SameThreads(L4_Pager(), old_pager));
+
+	stop_stats_pager(safe_pager);
+	talloc_free(tctx);
+}
+END_TEST
+
+
 /* thread that may be queried wrt the global ID it sees for itself. it'll also
  * report roughly where its stack frame is.
  *
@@ -1385,6 +1450,8 @@ Suite *thread_suite(void)
 		tcase_add_test(tc, relocate_utcb);
 		tcase_add_test(tc, deletion);
 		tcase_add_test(tc, suicide);
+		tcase_add_test(tc, modify_self);
+		/* TODO: add modify_other */
 		tcase_add_test(tc, version_stomp);
 		suite_add_tcase(s, tc);
 	}
