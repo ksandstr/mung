@@ -12,6 +12,7 @@ use Mung::Ctrl;
 use Mung::Loop;
 use Mung::ProcessModule;
 use Mung::Restarting;
+use Mung::LogModuleOutput;
 use Mung::TTYOutput;
 use Mung::TextReport;
 
@@ -24,7 +25,7 @@ $| = 1;
 
 
 # parameters affecting the test process.
-my @roles;
+my @roles;	# roles on the sink object
 my @test_args;
 my @ctrl_param = ( max_ids_len => 70 );
 if($ENV{TEST_SLOWER}) {
@@ -42,6 +43,7 @@ my $sink = Mung::Sink->new(output => Mung::TTYOutput->new);
 my $ctrl = Mung::Ctrl->new(@ctrl_param, sink => $sink);
 $sink->on_complete_fn(sub { $ctrl->completed($_[0], $_[1]->iter); });
 
+apply_all_roles($module, 'Mung::LogModuleOutput') if $ENV{LOG_OUTPUT};
 apply_all_roles($sink, @roles) if @roles;
 my $loop = Mung::Loop->new(module => $module, sink => $sink,
 	ctrl => $ctrl, test_args => \@test_args);
