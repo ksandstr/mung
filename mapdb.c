@@ -675,6 +675,12 @@ static int del_child(struct map_entry *p_e, L4_Word_t child)
 		}
 	}
 
+#ifndef NDEBUG
+	for(int i=0; i < p_e->num_children; i++) {
+		assert((cs[i] & ~0xful) != child);
+	}
+#endif
+
 	return n_hit;
 }
 
@@ -771,15 +777,18 @@ static int coalesce_entries(struct map_group *g, struct map_entry *e)
 	}
 	if(oth->num_children > 1) free(oth->children);
 	oth->num_children = 0;
-	/* toss oth's child entry in the parent so that the "child only once"
-	 * invariant doesn't break.
+	/* toss oth's child entry in the parent, where applicable, so that the
+	 * "child only once" invariant doesn't break.
+	 *
+	 * (notably, there's no need to assert() against del_child()'s return
+	 * value: coalesce_entries() may have been called on an @e that's not got
+	 * a child link in its parent yet.)
 	 */
 	if(REF_DEFINED(oth->parent)) {
 		struct map_group *p_g;
 		struct map_entry *p_e = deref_parent(&p_g, oth->parent);
 		assert(p_e != NULL);
-		n = del_child(p_e, addr_to_ref(g, L4_Address(oth->range)));
-		assert(n > 0);
+		del_child(p_e, addr_to_ref(g, L4_Address(oth->range)));
 	}
 
 	/* NOTE: an iterative version of this function could keep voodoo
