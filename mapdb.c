@@ -300,6 +300,15 @@ static bool check_map_group(struct map_group *grp, int opts)
 		inv_imply1(e > grp->entries,
 			FPAGE_HIGH(e[-1].range) < FPAGE_LOW(e->range));
 
+		/* an entry's range may not duplicate the range of another entry. */
+		for(int j=0; j < MG_N_ENTRIES(grp); j++) {
+			struct map_entry *o = &grp->entries[j];
+			if(o == e) continue;
+			inv_ok(!fpage_overlap(e->range, o->range),
+				"mustn't overlap o=%#lx:%#lx",
+				L4_Address(o->range), L4_Size(o->range));
+		}
+
 		inv_ok1(check_map_entry(grp, e, opts));
 
 		inv_pop();
@@ -817,8 +826,9 @@ static int merge_into_entry(
 		 * forward if not.
 		 */
 		e = &g->entries[prev_pos];
-		TRACE("%s: 1st cand is %#lx:%#lx\n", __func__,
-			L4_Address(e->range), L4_Size(e->range));
+		TRACE("%s: 1st cand is %#lx:%#lx, parent=%#lx, fpi=%u\n",
+			__func__, L4_Address(e->range), L4_Size(e->range),
+			e->parent, e->first_page_id);
 		if(L4_Address(e->range) != (L4_Address(fpage) ^ L4_Size(fpage))) {
 			e += far_side ? -1 : 1;
 			if(e < &g->entries[0] || e >= &g->entries[MG_N_ENTRIES(g)]) {
@@ -1379,12 +1389,21 @@ static int add_map_and_link(
 {
 	struct map_group *dstgrp = NULL;
 	int n = mapdb_add_map(to_space, &dstgrp, parent, dst_page, first_page_id);
-	if(n == 0) {
+	if(n >= 0) {
 		L4_Word_t child = addr_to_ref(dstgrp, L4_Address(dst_page))
 			| ((REF_INDEX(parent) >> 1) & 0xf);
-		n = mapdb_add_child(from_ent, child);
-	} else if(n == 1) {
-		TRACE("%s: not adding link child!\n", __func__);
+
+		if(n == 0) n = mapdb_add_child(from_ent, child);
+		else {
+			assert(n == 1);
+			if(CHECK_FLAG(L4_Address(dst_page), L4_Size(dst_page))) {
+				int n_gone = del_child(from_ent, child);
+				TRACE("%s: removed %d stale children (merge case)\n",
+					__func__, n_gone);
+			} else {
+				TRACE("%s: not adding link child (merge case)\n", __func__);
+			}
+		}
 	}
 
 	return n;
