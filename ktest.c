@@ -110,7 +110,7 @@ void run_all_tests(void) {
 	SUITE(slab);
 	SUITE(heap);
 	SUITE(kth);
-	_run_ktest(NULL, NULL, NULL);
+	SUITE(memdesc);
 }
 
 
