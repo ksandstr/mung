@@ -30,6 +30,16 @@ extern void run_all_tests(void);
 extern void describe_all_tests(void);
 
 
+/* utility routines from lib/test_util.c */
+
+extern unsigned factorial(unsigned x);	/* computes x! */
+
+/* generates a numbered permutation of [0, n). outputs distinct sequences
+ * while @perm < n! .
+ */
+extern void gen_perm(unsigned *buf, unsigned n, unsigned perm);
+
+
 #endif
 
 #endif

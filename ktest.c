@@ -106,6 +106,7 @@ void _run_ktest(
 	} while(0)
 
 void run_all_tests(void) {
+	SUITE(test_util);
 	SUITE(slab);
 	SUITE(heap);
 	SUITE(kth);
