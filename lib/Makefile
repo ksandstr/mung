@@ -6,8 +6,9 @@ TEST_SOURCE:=$(wildcard t_*.c)
 TEST_OBJS=$(patsubst %.c,%.o,$(TEST_SOURCE))
 
 # the library is shared between userspace and kernel, so no MMX/SSE/AVX
-# malarkey please.
-CFLAGS+=-mno-mmx -mno-sse -mno-avx
+# malarkey please. (also, let t_*.c get at user/testbench/test.h .)
+CFLAGS+=-mno-mmx -mno-sse -mno-avx \
+	-I $(CFGDIR)
 
 
 all: libukernel_util.a

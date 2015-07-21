@@ -32,12 +32,11 @@ static void end_suite(void)
 
 
 void _run_ktest(
-	void (*testfn)(void),
+	const struct test_info *info,
 	const char *file,
-	const char *func,
-	const char *testname)
+	const char *func)
 {
-	if(testfn == NULL) {
+	if(info == NULL) {
 		/* flush current suite and tcase. */
 		if(cur_tcase != NULL) end_tcase();
 		if(cur_suite != NULL) end_suite();
@@ -73,12 +72,21 @@ void _run_ktest(
 		}
 	}
 
+	const char *testname = info->name;
 	if(strstarts(testname, "t_")) testname += 2;
 	if(!describe_mode) {
-		tap_reset();
-		printf("*** begin test `%s'\n", testname);
-		(*testfn)();
-		printf("*** end test `%s' rc %d\n", testname, exit_status());
+		for(int i = info->iter_low; i <= info->iter_high; i++) {
+			tap_reset();
+			printf("*** begin test `%s'", testname);
+			if(info->iter_low < info->iter_high) {
+				printf(" iter %d", i);
+			} else {
+				assert(i == 0);
+			}
+			printf("\n");
+			(*info->test_fn)(i);
+			printf("*** end test `%s' rc %d\n", testname, exit_status());
+		}
 	} else {
 		/* kernel tests cannot be selected by id, so this can be as long as
 		 * it ends up being.
@@ -101,7 +109,7 @@ void run_all_tests(void) {
 	SUITE(slab);
 	SUITE(heap);
 	SUITE(kth);
-	_run_ktest(NULL, NULL, NULL, NULL);
+	_run_ktest(NULL, NULL, NULL);
 }
 
 
