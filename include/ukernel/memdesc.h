@@ -51,4 +51,22 @@ extern L4_Fpage_t mdb_query(
 	L4_Word_t start, L4_Word_t end,		/* query range is [start, end] */
 	bool virtual, bool dedicated, L4_Word_t t);
 
+
+/* adds and/or alters memory descriptors within a memdescbuf. the way this
+ * works is that 1) virtual and non-virtual memory are treated as completely
+ * separate, 2) shared memory may co-exist with any memory type, 3)
+ * dedicated-or-reserved, conventional, bootloader-defined, and
+ * architecture-dependent memory types conflict, and 4) bootloader/archdep
+ * memory ranges conflict with one another if their L4_MemoryDescType()s don't
+ * match exactly.
+ *
+ * returns false on out-of-memory, which occurs when @mdb->len + 1 ==
+ * @mdb->size, the operation isn't a no-op, and the operation cannot be
+ * performed as a modification of an existing MemoryDesc.
+ */
+extern bool mdb_set(
+	struct memdescbuf *mdb,
+	L4_Word_t start, L4_Word_t end,		/* [start, end] */
+	bool virtual, L4_Word_t type, L4_Word_t subtype);
+
 #endif

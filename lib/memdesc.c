@@ -124,3 +124,13 @@ L4_Fpage_t mdb_query(
 		return mdb_query(mdb, neg_e + 1, q_end, virtual, dedicated, t);
 	}
 }
+
+
+bool mdb_set(
+	struct memdescbuf *mdb,
+	L4_Word_t start, L4_Word_t end,
+	bool virtual, L4_Word_t type, L4_Word_t subtype)
+{
+	/* TODO: make this not a stub */
+	return true;
+}
