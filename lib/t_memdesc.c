@@ -7,6 +7,7 @@
 #include <l4/types.h>
 #include <l4/kip.h>
 
+#include <ukernel/mm.h>
 #include <ukernel/util.h>
 #include <ukernel/memdesc.h>
 #include <ukernel/ktest.h>
@@ -28,6 +29,15 @@
  *   - ... once the modification API comes in, tests that mdb_query()'s result
  *     on the modified buffer matches the mods performed.
  */
+
+
+/* whether there aren't any nil MemoryDescs in @mdb. */
+static bool is_mdb_dense(struct memdescbuf *mdb) {
+	for(int i=0; i < mdb->len; i++) {
+		if(mdb->ptr[i].x.low == mdb->ptr[i].x.high) return false;
+	}
+	return true;
+}
 
 
 /* shuffle a memdescbuf according to a permutation number. */
@@ -179,11 +189,136 @@ START_LOOP_TEST(basic_full_enum, iter, 0, 5)
 END_TEST
 
 
+/* tests on mdb_set() [modification]. */
+
+/* check that mdb_set() returns false for a full (i.e. all-zero) buffer. */
+START_TEST(basic_zero_buf)
+{
+	plan_tests(1);
+	todo_start("mdb_set() unimplemented");
+
+	struct memdescbuf buf = { };
+	assert(buf.size == 0 && buf.len == 0);
+	bool ok = mdb_set(&buf, 0, PAGE_SIZE * 8 - 1,
+		false, L4_ConventionalMemoryType, 0);
+	ok(!ok, "set() in zero buffer should fail");
+}
+END_TEST
+
+
+/* queries a range. returns true iff there were no gaps in that range, and its
+ * end was seen.
+ */
+static bool q_range_present(
+	struct memdescbuf *buf,
+	L4_Word_t q_start, L4_Word_t q_end,
+	bool virtual, bool dedicated, L4_Word_t typ)
+{
+	bool have_gap = false, end_seen = false;
+	for(;;) {
+		L4_Fpage_t part = mdb_query(buf, q_start, q_end,
+			virtual, dedicated, typ);
+		if(L4_IsNilFpage(part)) break;
+
+		if(FPAGE_LOW(part) > q_start) have_gap = true;
+		if(FPAGE_HIGH(part) == q_end) end_seen = true;
+		q_start = L4_Address(part) + L4_Size(part);
+	}
+	return !have_gap && end_seen;
+}
+
+
+/* simplest modification. starts with a empty database and adds two descs,
+ * testing coverage in between.
+ *
+ * variables:
+ *   - whether non-conventional is reserved or dedicated
+ *   - order of setting operations [conventional first, or not]
+ *   - whether overlap is to the side, or entirely contained
+ *   - which side / which one is bigger, depending on above
+ */
+START_LOOP_TEST(basic_modify, iter, 0, 15)
+{
+	const bool oth_dedicated = CHECK_FLAG(iter, 1),
+		oth_last = CHECK_FLAG(iter, 2),
+		over_contained = CHECK_FLAG(iter, 4),
+		over_right = CHECK_FLAG(iter, 8);
+	diag("oth_dedicated=%s, oth_last=%s, over_contained=%s, over_right=%s",
+		btos(oth_dedicated), btos(oth_last), btos(over_contained),
+		btos(over_right));
+	plan_tests(6);
+	todo_start("mdb_set() unimplemented");
+
+	struct memdescbuf buf = { .size = 20 };
+	buf.ptr = malloc(sizeof(L4_MemoryDesc_t) * buf.size);
+	assert(buf.ptr != NULL);
+
+	/* operational parameters */
+	const L4_Word_t oth_type = oth_dedicated ? L4_DedicatedMemoryType
+		: L4_ReservedMemoryType;
+	L4_Word_t fst_start = 0x1000, fst_end = PAGE_SIZE * 400 - 1,
+		oth_start = over_contained ? fst_start + PAGE_SIZE * 12
+			: fst_end - PAGE_SIZE * 113 + 1,
+		oth_end = over_contained ? fst_end - PAGE_SIZE * 97
+			: oth_start + PAGE_SIZE * 400 - 1;
+	if(over_right) {
+		SWAP(L4_Word_t, fst_start, oth_start);
+		SWAP(L4_Word_t, fst_end, oth_end);
+	}
+
+	/* base case: there's nothing in fst or oth. */
+	ok(!q_range_present(&buf, fst_start, fst_end,
+			false, false, L4_ConventionalMemoryType),
+		"fst=[%#lx, %#lx] not present", fst_start, fst_end);
+	ok(!q_range_present(&buf, oth_start, oth_end,
+			false, oth_dedicated, oth_type),
+		"oth=[%#lx, %#lx] not present", oth_start, oth_end);
+
+	/* modify. */
+	bool ok;
+	if(!oth_last) {
+		ok = mdb_set(&buf, oth_start, oth_end, false, oth_type, 0);
+		assert(ok);
+	}
+	ok = mdb_set(&buf, fst_start, fst_end, false,
+		L4_ConventionalMemoryType, 0);
+	assert(ok);
+	if(oth_last) {
+		ok = mdb_set(&buf, oth_start, oth_end, false, oth_type, 0);
+		assert(ok);
+	}
+	imply_ok1(!over_contained || (over_right != oth_last), buf.len >= 2);
+	ok1(is_mdb_dense(&buf));
+
+	/* measure the result. */
+
+	/* the full range between fst_start and fst_end should show up as
+	 * conventional memory iff !oth_last.
+	 */
+	bool fst_present = q_range_present(&buf, fst_start, fst_end,
+		false, false, L4_ConventionalMemoryType);
+	iff_ok1(fst_present, !oth_last);
+
+	/* searching for dedicated memory should turn up oth_start..oth_end iff
+	 * oth_last && oth_dedicated.
+	 */
+	bool oth_ded_found = q_range_present(&buf, oth_start, oth_end,
+		false, true, L4_DedicatedMemoryType);
+	iff_ok1(oth_ded_found, oth_last && oth_dedicated);
+
+	free(buf.ptr);
+}
+END_TEST
+
+
 void ktest_memdesc(void)
 {
 	RUN(basic_empty_query);
 	RUN(basic_simple_query);
 	RUN(basic_full_enum);
+
+	RUN(basic_zero_buf);
+	RUN(basic_modify);
 }
 
 #endif
