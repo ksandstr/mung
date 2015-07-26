@@ -195,7 +195,6 @@ END_TEST
 START_TEST(basic_zero_buf)
 {
 	plan_tests(1);
-	todo_start("mdb_set() unimplemented");
 
 	struct memdescbuf buf = { };
 	assert(buf.size == 0 && buf.len == 0);
@@ -247,7 +246,6 @@ START_LOOP_TEST(basic_modify, iter, 0, 15)
 		btos(oth_dedicated), btos(oth_last), btos(over_contained),
 		btos(over_right));
 	plan_tests(6);
-	todo_start("mdb_set() unimplemented");
 
 	struct memdescbuf buf = { .size = 20 };
 	buf.ptr = malloc(sizeof(L4_MemoryDesc_t) * buf.size);
@@ -326,7 +324,6 @@ START_LOOP_TEST(merge_left_right_between, iter, 0, 1)
 	const bool overlap = CHECK_FLAG(iter, 1);
 	diag("overlap=%s", btos(overlap));
 	plan_tests(5);
-	todo_start("mdb_set() unimplemented");
 
 	L4_MemoryDesc_t descs[8];
 	struct memdescbuf buf = { .ptr = descs, .size = NUM_ELEMENTS(descs) };
@@ -383,7 +380,6 @@ START_LOOP_TEST(merge_inside, iter, 0, 1)
 	const bool swapped = CHECK_FLAG(iter, 1);
 	diag("swapped=%s", btos(swapped));
 	plan_tests(2);
-	todo_start("mdb_set() unimplemented");
 
 	L4_Word_t fst_start = 0x10000, fst_end = 0x1ffff,
 		snd_start = 0x13000, snd_end = 0x1dfff;
