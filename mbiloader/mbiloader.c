@@ -13,15 +13,17 @@
 #include <ukernel/x86.h>
 #include <ukernel/16550.h>
 #include <ukernel/mm.h>
+#include <ukernel/memdesc.h>
 #include <ukernel/util.h>
 
+#include "defs.h"
 #include "multiboot.h"
 #include "elf.h"
 
 
 /* TODO: add dynamic memory allocation? */
 #define MAX_BOOT_MODS 32
-#define MAX_MMAP_ENTS 32
+#define MAX_MMAP_ENTS 512
 
 
 /* when @end == 0, module is invalid. */
@@ -113,6 +115,10 @@ void abort(void) {
 
 /* construct a 32-bit kernel configuration page.
  * TODO: handle kdebug also.
+ *
+ * @plat_mmap_fn receives the memdescbuf after fill_kcp() has communicated the
+ * MBI memory maps and boot-module dedicated segments in it. the idea is that
+ * e.g. VGA video memory gets dedicated 
  */
 static void fill_kcp(
 	uint8_t *kcp_base,
@@ -120,8 +126,8 @@ static void fill_kcp(
 	struct boot_module *s0_mod,
 	struct boot_module *s1_mod,
 	struct boot_module *roottask_mod,
-	int mmap_count,
-	const struct multiboot_mmap_entry *mm)
+	const struct multiboot_mmap_entry *mm, int mmap_count,
+	bool (*plat_mmap_fn)(struct memdescbuf *mdb, void *priv), void *fn_priv)
 {
 	memset(kcp_base, 0, PAGE_SIZE);
 
@@ -168,35 +174,36 @@ static void fill_kcp(
 		.size = sizeof(L4_BootInfo_t),
 	};
 
-	/* memory descriptors. the bootloader passes just conventional and
-	 * reserved memory.
+	/* memory descriptors. the bootloader passes only non-virtual conventional
+	 * and reserved memory; other memory types, and the virtual address
+	 * space's shape, come from per-platform code.
+	 *
+	 * this bumps resv_pos after mdbuf has been filled.
 	 */
 	const int md_pos = resv_pos;
-	L4_MemoryDesc_t *mdbuf = (L4_MemoryDesc_t *)&kcp_base[resv_pos];
-	int p = 0;
-	/* the x86 virtual address space. */
-	mdbuf[p++] = (L4_MemoryDesc_t){
-		.x.type = L4_ConventionalMemoryType, .x.v = 1,
-		.x.low = 0, .x.high = ~0ul >> 10,
+	struct memdescbuf mdb = {
+		.ptr = (L4_MemoryDesc_t *)&kcp_base[md_pos],
+		.size = (PAGE_SIZE - md_pos) / sizeof(L4_MemoryDesc_t),
 	};
 	for(int i=0; i < mmap_count; i++) {
+		bool ok;
 		if(mm[i].type != MULTIBOOT_MEMORY_AVAILABLE) {
 			/* bootloader specific, pass type as seen */
-			mdbuf[p++] = (L4_MemoryDesc_t){
-				.x.type = L4_BootLoaderSpecificMemoryType,
-				.x.t = mm[i].type, .x.v = 0,
-				.x.low = mm[i].addr >> 10,
-				.x.high = (mm[i].addr + mm[i].len - 1) >> 10,
-			};
+			ok = mdb_set(&mdb, mm[i].addr, mm[i].addr + mm[i].len - 1,
+				false, L4_BootLoaderSpecificMemoryType, mm[i].type);
 		} else {
 			/* available memory. pass as conventional. */
-			mdbuf[p++] = (L4_MemoryDesc_t){
-				.x.type = L4_ConventionalMemoryType, .x.v = 0,
-				.x.low = mm[i].addr >> 10,
-				.x.high = (mm[i].addr + mm[i].len - 1) >> 10,
-			};
+			ok = mdb_set(&mdb, mm[i].addr, mm[i].addr + mm[i].len - 1,
+				false, L4_ConventionalMemoryType, 0);
 		}
+		if(!ok) panic("ran out of MemoryDesc space!");
 	}
+	/* platform details */
+	if(!(*plat_mmap_fn)(&mdb, fn_priv)) {
+		/* TODO: dump mdb contents so far */
+		panic("platform memory map couldn't be constructed");
+	}
+
 	/* dedicate memory for the idempotently mapped kernel/root servers */
 	struct boot_module *bms[] = {
 		s0_mod, s1_mod, roottask_mod, kernel_mod
@@ -209,13 +216,15 @@ static void fill_kcp(
 			 */
 			printf("dedicating %#lx .. %#lx for boot module %d\n",
 				m->load_start, m->load_end, i);
-			mdbuf[p++] = (L4_MemoryDesc_t){
-				.x.type = L4_DedicatedMemoryType, .x.v = 0,
-				.x.low = m->load_start >> 10, .x.high = m->load_end >> 10,
-			};
+			if(!mdb_set(&mdb, m->load_start, m->load_end, false,
+				L4_DedicatedMemoryType, 0))
+			{
+				panic("ran out of MemoryDesc space!");
+			}
 		}
 	}
-	/* and for the other boot modules. (also collects those boot modules that
+
+	/* and for other boot modules. (also collects those boot modules that
 	 * should be passed to the root server.)
 	 */
 	const struct boot_module *list_mods[num_boot_mods];
@@ -234,18 +243,25 @@ static void fill_kcp(
 				hi = (m->end - 1) | PAGE_MASK;
 			printf("dedicating [%#lx, %#lx] for module `%s'\n",
 				lo, hi, m->cmdline);
-			mdbuf[p++] = (L4_MemoryDesc_t){
-				.x.type = L4_DedicatedMemoryType, .x.v = 0,
-				.x.low = lo >> 10, .x.high = hi >> 10,
-			};
+			if(!mdb_set(&mdb, lo, hi, false, L4_DedicatedMemoryType, 0)) {
+				panic("ran out of MemoryDesc space!");
+			}
 			list_mods[num_list++] = m;
 		}
 	}
-	resv_pos += sizeof(L4_MemoryDesc_t) * p;
 
-	/* MemoryInfo */
+	/* MemoryInfo, resv_pos bump */
+	mdb_sort(&mdb);
 	assert(offsetof(L4_KernelConfigurationPage_t, MemoryInfo) == 0x54);
-	*(L4_Word_t *)&kcp_base[0x54] = md_pos << 16 | p;
+	*(L4_Word_t *)&kcp_base[0x54] = md_pos << 16 | mdb.len;
+	resv_pos += mdb.len * sizeof(L4_MemoryDesc_t);
+	printf("KCP MemoryDesc dump:\n");
+	for(int i=0; i < mdb.len; i++) {
+		printf("i=%02d\t%s range=[%#lx, %#lx], type=%#lx\n",
+			i, L4_IsMemoryDescVirtual(&mdb.ptr[i]) ? "virt" : "phys",
+			L4_MemoryDescLow(&mdb.ptr[i]), L4_MemoryDescHigh(&mdb.ptr[i]),
+			L4_MemoryDescType(&mdb.ptr[i]));
+	}
 
 	/* BootRecs */
 	binf->num_entries = num_list;
@@ -385,45 +401,47 @@ static void check_boot_modules(L4_Word_t *reloc_addr)
 }
 
 
+/* crawls over the MBI mmap entries & figures out how many KiB of low (< 640Ki)
+ * and extended (> 1Mi) memory the computer has.
+ */
+static void scan_mbi_mmaps(
+	size_t *low_p, size_t *high_p,
+	const struct multiboot_mmap_entry *ents,
+	int num_ents)
+{
+	*low_p = *high_p = 0;
+	for(int i=0; i < num_ents; i++) {
+		const struct multiboot_mmap_entry *e = &ents[i];
+		if(e->type != MULTIBOOT_MEMORY_AVAILABLE) continue;
+
+		if(e->addr >= 0x100000) *high_p += e->len / 1024;
+		else if(e->addr < 640 * 1024) {
+			uintptr_t end = MIN(uintptr_t, e->addr + e->len, 640 * 1024);
+			*low_p += (end - e->addr) / 1024;
+		}
+		/* NOTE: skips over entries that straddle the 640k..1m high-mem
+		 * boundary.
+		 */
+	}
+}
+
+
 int bootmain(multiboot_info_t *mbi, uint32_t magic)
 {
 	printf("mbiloader says hello!\n");
 
-	/* find top of physical memory. */
-	uintptr_t ram_top = 0;
+	/* find top of physical memory after 1 MiB. */
 	size_t mem_before_640k = 0, mem_after_1m = 0;
 	int mmap_count = 0;
-	struct multiboot_mmap_entry mmap_ents[MAX_MMAP_ENTS];
+	static struct multiboot_mmap_entry mmap_ents[MAX_MMAP_ENTS];
 	if(CHECK_FLAG(mbi->flags, MULTIBOOT_INFO_MEM_MAP)) {
-		printf("MBI mmap_length=%#x, mmap_addr=%#x\n",
-			mbi->mmap_length, mbi->mmap_addr);
-		mmap_count = mbi->mmap_length / sizeof(struct multiboot_mmap_entry);
-		/* copy them off. */
+		mmap_count = MIN(int, MAX_MMAP_ENTS,
+			mbi->mmap_length / sizeof(struct multiboot_mmap_entry));
+		/* duplicate them for private use ;) */
 		memcpy(mmap_ents, (void *)mbi->mmap_addr,
 			mmap_count * sizeof(struct multiboot_mmap_entry));
-		struct multiboot_mmap_entry *mme = (void *)mbi->mmap_addr;
-		for(int i=0; i < mmap_count; i++) {
-			printf("  %s: addr %#x, len %#x (%d MiB)\n",
-				mme[i].type == MULTIBOOT_MEMORY_AVAILABLE
-					? "available" : "reserved",
-				(unsigned)mme[i].addr, (unsigned)mme[i].len,
-				(int)(mme[i].len / (1024 * 1024)));
-			if(mme[i].type != MULTIBOOT_MEMORY_AVAILABLE) continue;
-
-			if(mme[i].addr >= 0x100000) mem_after_1m += mme[i].len / 1024;
-			else if(mme[i].addr < 640 * 1024) {
-				uintptr_t end = MIN(uintptr_t, mme[i].addr + mme[i].len,
-					640 * 1024);
-				mem_before_640k += (end - mme[i].addr) / 1024;
-			}
-
-			if(mme[i].addr + mme[i].len > 0xffffffffull) {
-				ram_top = ~0ul;
-			} else {
-				ram_top = MAX(uintptr_t, ram_top, mme[i].addr + mme[i].len);
-			}
-		}
-		printf("... ram_top is %#lx\n", (unsigned long)ram_top);
+		scan_mbi_mmaps(&mem_before_640k, &mem_after_1m,
+			mmap_ents, mmap_count);
 	} else {
 		printf("multiboot memory-map info not present!\n");
 	}
@@ -440,6 +458,9 @@ int bootmain(multiboot_info_t *mbi, uint32_t magic)
 		if(mbi->mem_lower > 0) mem_before_640k = mbi->mem_lower;
 		if(mbi->mem_upper > 0) mem_after_1m = mbi->mem_upper;
 	}
+
+	printf("seeing %u KiB of low memory + %u KiB of high memory\n",
+		(unsigned)mem_before_640k, (unsigned)mem_after_1m);
 
 	/* scan boot modules, noting their load-ranges. */
 	uintptr_t r_start = ~0ul, r_end = 0;
@@ -465,8 +486,7 @@ int bootmain(multiboot_info_t *mbi, uint32_t magic)
 	} else {
 		panic("no multiboot modules found!");
 	}
-	printf("multiboot modules are between %#x and %#x inclusive.\n",
-		r_start, r_end);
+	printf("multiboot modules are inside [%#x, %#x]\n", r_start, r_end);
 
 	L4_Word_t heap_start = r_end;
 	for(int i=0; i < num_boot_mods; i++) {
@@ -506,10 +526,11 @@ int bootmain(multiboot_info_t *mbi, uint32_t magic)
 	if(s1_mod != NULL) load_elf_module(s1_mod);
 	if(roottask_mod != NULL) load_elf_module(roottask_mod);
 
+	/* designate and fill a kernel configuration page. */
 	void *kcp_base = (void *)heap_start;
 	heap_start += PAGE_SIZE;
 	fill_kcp(kcp_base, kernel_mod, s0_mod, s1_mod, roottask_mod,
-		mmap_count, mmap_ents);
+		mmap_ents, mmap_count, &plat_pc_mmap, NULL);
 
 	/* the x86 boot parameter "*P"; we'll recycle some unspecified KCP fields
 	 * for this.

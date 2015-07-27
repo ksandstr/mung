@@ -20,7 +20,7 @@ distclean:
 	@rm -rf .deps
 
 
-mbiloader: mbiloader.ld crt0.o mbiloader.o
+mbiloader: mbiloader.ld crt0.o mbiloader.o plat_pc.o
 	@echo "  LD $@"
 	@$(LD) $(LDFLAGS) -T mbiloader.ld $(filter %.o,$^) $(LIBS) -o $@ \
 		-L $(CFGDIR)/lib -lukernel_util \

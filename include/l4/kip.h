@@ -32,6 +32,14 @@ typedef union {
 #define L4_ArchitectureSpecificMemoryType 15
 
 
+/* L4_ArchitectureSpecificMemoryType subtypes from mung's "mbiloader". these
+ * designate areas that aren't conventional, dedicated, or reserved ordinary
+ * memory, or regions shared with host and device.
+ */
+#define L4_BIOSRegion 0xc			/* real-mode BIOS IVT, data area, etc. */
+#define L4_ReadOnlyBIOSRegion 0xd	/* e.g. VGA BIOS, motherboard BIOS */
+
+
 typedef union {
 	L4_Word_t raw;
 	struct {
