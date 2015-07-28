@@ -69,4 +69,22 @@ extern bool mdb_set(
 	L4_Word_t start, L4_Word_t end,		/* [start, end] */
 	bool virtual, L4_Word_t type, L4_Word_t subtype);
 
+
+/* sort a memdescbuf's contents. this can be used to canonicalize a memdescbuf
+ * by running mdb_normalize() on it first, or if the mdb was built only with
+ * mdb_set() from when it was empty.
+ *
+ * order by .x.v desc, .x.low asc, .x.type asc, .x.t asc, .x.high desc.
+ */
+extern void mdb_sort(struct memdescbuf *mdb);
+
+
+/* create an empty memdescbuf, reinsert @mdb's contents into it, and copy
+ * those contents over. allocates temporary space with malloc(). does not sort
+ * @mdb.
+ *
+ * returns false on malloc failure.
+ */
+extern bool mdb_normalize(struct memdescbuf *mdb);
+
 #endif

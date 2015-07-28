@@ -10,6 +10,8 @@
  */
 
 #include <stdio.h>
+#include <stdlib.h>
+#include <stdbool.h>
 #include <string.h>
 
 #include <ukernel/mm.h>
@@ -324,5 +326,57 @@ bool mdb_set(
 	}
 	mdb->ptr[output_pos] = newdesc;
 
+	return true;
+}
+
+
+static int cmp_md(const void *aptr, const void *bptr)
+{
+	const L4_MemoryDesc_t *a = aptr, *b = bptr;
+	int n = (int)b->x.v - (int)a->x.v;
+	if(n != 0) return n;
+
+	n = (long)a->x.low - (long)b->x.low;
+	if(n != 0) return n;
+
+	n = (int)a->x.type - (int)b->x.type;
+	if(n != 0) return n;
+	n = (int)a->x.t - (int)b->x.t;
+	if(n != 0) return n;
+
+	n = (long)a->x.high - (long)b->x.high;
+	if(n != 0) return n;
+
+	return 0;	/* well i'll be. */
+}
+
+
+void mdb_sort(struct memdescbuf *mdb) {
+	qsort(mdb->ptr, mdb->len, sizeof(L4_MemoryDesc_t), &cmp_md);
+}
+
+
+bool mdb_normalize(struct memdescbuf *mdb)
+{
+	struct memdescbuf tmp = { .size = mdb->len * 2 + 7 };
+	tmp.ptr = malloc(sizeof(L4_MemoryDesc_t) * tmp.size);
+	if(tmp.ptr == NULL) return false;
+	tmp.len = 0;
+
+	for(int i=0; i < mdb->len; i++) {
+		L4_MemoryDesc_t *d = &mdb->ptr[i];
+		bool ok = mdb_set(&tmp, L4_MemoryDescLow(d), L4_MemoryDescHigh(d),
+			!!L4_IsMemoryDescVirtual(d), L4_MemoryDescType(d) & 0xf,
+			(L4_MemoryDescType(d) & 0xf0) >> 4);
+		if(!ok) {
+			printf("%s: out of space!\n", __func__);
+			free(tmp.ptr);
+			return false;
+		}
+	}
+
+	memcpy(mdb->ptr, tmp.ptr, sizeof(L4_MemoryDesc_t) * tmp.len);
+	mdb->len = tmp.len;
+	free(tmp.ptr);
 	return true;
 }
