@@ -29,4 +29,9 @@ extern long long int llabs(long long int j);
 extern int atexit(void (*function)(void));
 
 
+extern void qsort(
+	void *data, size_t count, size_t size,
+	int (*compare_fn)(const void *, const void *));
+
+
 #endif

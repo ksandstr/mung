@@ -23,7 +23,7 @@ distclean:
 
 libukernel_util.a: hash.o string.o strlcat.o strlcpy.o vsnprintf.o \
 		slab.o slab_policy.o fake_stdio.o ser_io.o rbtree.o inttypes.o \
-		bug.o hook.o l4util.o $(TEST_OBJS)
+		bug.o hook.o l4util.o sort.o $(TEST_OBJS)
 	@echo "  AR $@"
 	@ar cr $@ $^
 	@echo "  RANLIB $@"
