@@ -38,6 +38,7 @@ struct boot_module
 
 static int num_boot_mods = 0;
 static struct boot_module boot_mods[MAX_BOOT_MODS];
+static uintptr_t heap_low = 0;
 
 
 /* rudimentary serial port output from µiX (via kmain.c) */
@@ -100,13 +101,31 @@ void __assert_failure(
 #endif
 
 
-void *malloc(size_t size) {
-	panic("malloc(3) not implemented in mbiloader");
+void *sbrk(intptr_t increment)
+{
+	if(heap_low == 0) {
+		panic("sbrk called in pre-heap part");
+	}
+
+	void *prev = (void *)heap_low;
+	heap_low += increment;
+	return prev;
 }
 
-void free(void *ptr) {
-	panic("free(3) not implemented in mbiloader");
+
+/* primitive page-grain malloc via an equally primitive sbrk(). */
+void *malloc(size_t size)
+{
+	int shift = MAX(int, 12, size_to_shift(size));
+	heap_low = (heap_low + PAGE_SIZE - 1) & ~PAGE_MASK;
+	return sbrk(1 << shift);
 }
+
+
+void free(void *ptr) {
+	/* stubbity stubbing stub */
+}
+
 
 void abort(void) {
 	panic("mbiloader abort() called!");
@@ -251,6 +270,7 @@ static void fill_kcp(
 	}
 
 	/* MemoryInfo, resv_pos bump */
+	mdb_normalize(&mdb);
 	mdb_sort(&mdb);
 	assert(offsetof(L4_KernelConfigurationPage_t, MemoryInfo) == 0x54);
 	*(L4_Word_t *)&kcp_base[0x54] = md_pos << 16 | mdb.len;
@@ -348,9 +368,9 @@ static void load_elf_module(struct boot_module *mod)
  * another, or with a later module's MBI load address, or with mbiloader's own
  * range.
  *
- * in the second case affected modules are moved to after reloc_addr.
+ * in the second case affected modules are moved to malloc()'d sections.
  */
-static void check_boot_modules(L4_Word_t *reloc_addr)
+static void check_boot_modules(void)
 {
 	extern char _start, _end;
 	const L4_Word_t this_start = (L4_Word_t)&_start,
@@ -387,14 +407,13 @@ static void check_boot_modules(L4_Word_t *reloc_addr)
 			if(RANGE_OVERLAP(m->load_start, m->load_end,
 				boot_mods[j].start, boot_mods[j].end - 1))
 			{
-				printf("moving module %d (`%s') to %#lx\n",
-					j, boot_mods[j].cmdline, *reloc_addr);
 				size_t length = boot_mods[j].end - boot_mods[j].start + 1;
-				memcpy((void *)*reloc_addr, (void *)boot_mods[j].start, length);
-				boot_mods[j].start = *reloc_addr;
-				boot_mods[j].end = *reloc_addr + length - 1;
-				*reloc_addr += length;
-				*reloc_addr = (*reloc_addr + PAGE_SIZE - 1) & ~PAGE_MASK;
+				void *reloc_addr = sbrk(length);
+				printf("moving module %d (`%s') to %p\n",
+					j, boot_mods[j].cmdline, reloc_addr);
+				memcpy(reloc_addr, (void *)boot_mods[j].start, length);
+				boot_mods[j].start = (uintptr_t)reloc_addr;
+				boot_mods[j].end = (uintptr_t)reloc_addr + length - 1;
 			}
 		}
 	}
@@ -486,15 +505,15 @@ int bootmain(multiboot_info_t *mbi, uint32_t magic)
 	} else {
 		panic("no multiboot modules found!");
 	}
-	printf("multiboot modules are inside [%#x, %#x]\n", r_start, r_end);
+	printf("multiboot modules are between [%#x, %#x]\n", r_start, r_end);
 
-	L4_Word_t heap_start = r_end;
+	heap_low = r_end;
 	for(int i=0; i < num_boot_mods; i++) {
-		heap_start = MAX(uintptr_t, heap_start, boot_mods[i].load_end + 1);
+		heap_low = MAX(uintptr_t, heap_low, boot_mods[i].load_end + 1);
 	}
-	heap_start = (heap_start + PAGE_SIZE - 1) & ~PAGE_MASK;
-	printf("relocation heap starts at %#lx\n", heap_start);
-	check_boot_modules(&heap_start);
+	heap_low = (heap_low + PAGE_SIZE - 1) & ~PAGE_MASK;
+	printf("sbrk() heap starts at %#x\n", heap_low);
+	check_boot_modules();
 
 	/* locate kernel, sigma0, sigma1, roottask modules.
 	 *
@@ -527,10 +546,12 @@ int bootmain(multiboot_info_t *mbi, uint32_t magic)
 	if(roottask_mod != NULL) load_elf_module(roottask_mod);
 
 	/* designate and fill a kernel configuration page. */
-	void *kcp_base = (void *)heap_start;
-	heap_start += PAGE_SIZE;
+	void *kcp_base = sbrk(PAGE_SIZE);
+	assert(!CHECK_FLAG_ANY((uintptr_t)kcp_base, PAGE_MASK));
 	fill_kcp(kcp_base, kernel_mod, s0_mod, s1_mod, roottask_mod,
 		mmap_ents, mmap_count, &plat_pc_mmap, NULL);
+
+	printf("mbiloader heap ends at %#x\n", heap_low);
 
 	/* the x86 boot parameter "*P"; we'll recycle some unspecified KCP fields
 	 * for this.
