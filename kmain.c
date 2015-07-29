@@ -1,6 +1,7 @@
 
 #include <stdio.h>
 #include <stdbool.h>
+#include <string.h>
 #include <assert.h>
 #include <ccan/likely/likely.h>
 #include <ccan/compiler/compiler.h>
@@ -25,6 +26,7 @@
 #include <ukernel/kth.h>
 #include <ukernel/sched.h>
 #include <ukernel/mapdb.h>
+#include <ukernel/memdesc.h>
 #include <ukernel/kip.h>
 #include <ukernel/bug.h>
 #include <ukernel/ktest.h>
@@ -178,7 +180,12 @@ void put_supervisor_page(uintptr_t addr, uint32_t page_id)
 }
 
 
-static void setup_paging(uintptr_t id_start, uintptr_t id_end)
+static COLD void idmap_supervisor_page(struct page *p, void *priv) {
+	put_supervisor_page(p->id << PAGE_BITS, p->id);
+}
+
+
+static COLD void setup_paging(uintptr_t id_start, uintptr_t id_end)
 {
 	assert(kernel_space != NULL);
 
@@ -190,6 +197,13 @@ static void setup_paging(uintptr_t id_start, uintptr_t id_end)
 	id_end = (id_end + PAGE_SIZE - 1) & ~PAGE_MASK;
 	for(uintptr_t addr = id_start; addr < id_end; addr += PAGE_SIZE) {
 		put_supervisor_page(addr, addr >> PAGE_BITS);
+	}
+
+	/* also map the kernel initial pages. */
+	heap_for_each_init_page(&idmap_supervisor_page, NULL);
+	struct page *p;
+	list_for_each(&resv_page_list, p, link) {
+		idmap_supervisor_page(p, NULL);
 	}
 
 	/* load the supervisor page table (kernel_pdirs into CR3), then enable
@@ -228,7 +242,7 @@ static void init_kernel_tss(struct tss *t)
 static void add_id_maps(struct space *sp, L4_Word_t start, L4_Word_t end)
 {
 	assert(sp != NULL);
-	end += PAGE_SIZE - 1;
+	end |= PAGE_SIZE - 1;
 
 	L4_Word_t addr;
 	int s;
@@ -241,7 +255,7 @@ static void add_id_maps(struct space *sp, L4_Word_t start, L4_Word_t end)
 			L4_Set_Rights(&p, L4_FullyAccessible);
 			struct map_group *dummy = NULL;
 			int n = mapdb_add_map(sp, &dummy, 0, p, sub_addr >> PAGE_BITS);
-			if(n != 0) {
+			if(n < 0) {
 				printf("%s: n=%d!!!\n", __func__, n);
 				panic("argh");
 			}
@@ -250,44 +264,62 @@ static void add_id_maps(struct space *sp, L4_Word_t start, L4_Word_t end)
 }
 
 
-/* the algorithm is intentionally simple. there'll only be a single range
- * that's reserved by the kernel, and that is covered entirely by
- * [excl_start .. excl_end].
+/* adds all contiguous PAGE_SIZE chunks of conventional, shared,
+ * bootloader-specified, and architecture-specific memory to sigma0.
  */
-#define add_s0_pages(s, e) add_id_maps(sigma0_space, (s), (e))
-static void add_mem_to_sigma0(
-	const L4_KernelConfigurationPage_t *kcp,
-	L4_Word_t excl_start,
-	L4_Word_t excl_end)
+static void add_mem_to_sigma0(const L4_KernelInterfacePage_t *kip)
 {
-	printf("%s: excl_start %#lx, excl_end %#lx\n", __func__,
-		excl_start, excl_end);
-	const L4_MemoryDesc_t *mds = (void *)kcp + kcp->MemoryInfo.MemDescPtr;
-	int md_count = kcp->MemoryInfo.n;
-	for(int i=0; i < md_count; i++) {
-		L4_Word_t start = L4_MemoryDescLow(&mds[i]),
-			end = L4_MemoryDescHigh(&mds[i]);
-		if(L4_MemoryDescType(&mds[i]) != L4_ConventionalMemoryType
-			|| L4_IsMemoryDescVirtual(&mds[i])
-			|| end - start + 1 < PAGE_SIZE)
-		{
-			continue;
-		}
+	static const L4_Word_t types[] = {
+		L4_ConventionalMemoryType,
+		L4_SharedMemoryType,
+		L4_BootLoaderSpecificMemoryType,
+		L4_ArchitectureSpecificMemoryType,
+	};
+	struct memdescbuf mdb = {
+		.ptr = (void *)kip + kip->MemoryInfo.MemDescPtr,
+		.len = kip->MemoryInfo.n, .size = kip->MemoryInfo.n,
+	};
 
-		if(start > excl_end || end < excl_start) {
-			add_s0_pages(start, end);
-		} else if(start >= excl_start && end <= excl_end) {
-			/* skip entirely */
-		} else if(start >= excl_start) {
-			add_s0_pages(excl_end + 1, end);
-		} else if(end <= excl_end) {
-			add_s0_pages(start, excl_start - 1);
-		} else {
-			/* brute force. */
-			for(L4_Word_t p = start; p < end; p += PAGE_SIZE) {
-				if(p < excl_start || p > excl_end) {
-					add_s0_pages(p, p + PAGE_SIZE - 1);
-				}
+	printf("KIP MemoryDesc dump:\n");
+	int b_subs = 0, arch_subs = 0;
+	for(int i=0; i < mdb.len; i++) {
+		printf("i=%02d\t%s range=[%#lx, %#lx], type=%#lx\n",
+			i, L4_IsMemoryDescVirtual(&mdb.ptr[i]) ? "virt" : "phys",
+			L4_MemoryDescLow(&mdb.ptr[i]), L4_MemoryDescHigh(&mdb.ptr[i]),
+			L4_MemoryDescType(&mdb.ptr[i]));
+		L4_Word_t t = L4_MemoryDescType(&mdb.ptr[i]);
+		if((t & 0xf) == L4_BootLoaderSpecificMemoryType) {
+			b_subs |= 1 << (t >> 4);
+		} else if((t & 0xf) == L4_ArchitectureSpecificMemoryType) {
+			arch_subs |= 1 << (t >> 4);
+		}
+	}
+	b_subs &= ~4;		/* don't assign MBI reserved ranges. */
+
+	for(int i=0; i < NUM_ELEMENTS(types); i++) {
+		L4_Word_t type = types[i], subs;
+		switch(type) {
+			case L4_BootLoaderSpecificMemoryType: subs = b_subs; break;
+			case L4_ArchitectureSpecificMemoryType: subs = arch_subs; break;
+			default: subs = 1;
+		}
+		while(subs != 0) {
+			int subtype = ffsl(subs) - 1;
+			assert(CHECK_FLAG(subs, 1 << subtype));
+			subs &= ~(1 << subtype);
+			L4_Word_t q_start = 0, q_end = ~(L4_Word_t)0;
+			for(;;) {
+				L4_Fpage_t part = mdb_query(&mdb, q_start, q_end,
+					false, false, (type & 0xf) | (subtype << 4));
+				if(L4_IsNilFpage(part)) break;
+				q_start = FPAGE_HIGH(part) + 1;
+				if(L4_SizeLog2(part) < 12) continue;
+				/* NOTE: this form of rounding drops those 4k pages that have
+				 * a sub-4k boundary in them.
+				 */
+				add_id_maps(sigma0_space,
+					(FPAGE_LOW(part) + PAGE_SIZE - 1) & ~PAGE_MASK,
+					((FPAGE_HIGH(part) + 1) & ~PAGE_MASK) - 1);
 			}
 		}
 	}
@@ -465,8 +497,10 @@ void kmain(void *bigp, unsigned int magic)
 	memcpy(kcp_copy, kcp_base, PAGE_SIZE);
 	kcp_base = &kcp_copy[0];
 
-	uintptr_t resv_start = ~0ul, resv_end = 0;
-	init_kernel_heap(kcp_base, &resv_start, &resv_end);
+	extern char _start, _end;
+	L4_Word_t kern_start = (L4_Word_t)&_start & ~PAGE_MASK,
+		kern_end = (L4_Word_t)&_end | PAGE_MASK;
+	init_kernel_heap(kcp_base, kern_end + 1);
 
 	scan_cpuid();
 	if(!CHECK_FLAG(get_features()->edx, 1)) panic("math is hard!");
@@ -476,12 +510,12 @@ void kmain(void *bigp, unsigned int magic)
 	 */
 	if(x86_irq_is_enabled()) x86_irq_disable();
 
-	printf("setting up paging (kernel ram [%#lx..%#lx])\n",
-		(L4_Word_t)resv_start, (L4_Word_t)resv_end);
+	printf("setting up paging (kernel loaded into [%#lx..%#lx])\n",
+		kern_start, kern_end);
 	struct list_head ksp_resv = LIST_HEAD_INIT(ksp_resv);
 	init_spaces(&ksp_resv);
 	list_append_list(&resv_page_list, &ksp_resv);
-	setup_paging(resv_start, resv_end);
+	setup_paging(kern_start, kern_end);
 
 	/* (see comment for init_spaces().) */
 	init_mapdb();
@@ -535,8 +569,7 @@ void kmain(void *bigp, unsigned int magic)
 	/* initialize KIP & vaguely related bits */
 	kip_mem = kcp_base;
 	assert(kcp_base == (void *)&kcp_copy[0]);
-	make_kip(kip_mem, resv_start & ~PAGE_MASK, resv_end | PAGE_MASK, max_irq,
-		L4_TimePeriod(1000));
+	make_kip(kip_mem, kern_start, kern_end, max_irq, L4_TimePeriod(1000));
 	systemclock_p = kip_mem + PAGE_SIZE - sizeof(uint64_t);
 	*systemclock_p = 0;
 	global_timer_count = 0;
@@ -551,11 +584,9 @@ void kmain(void *bigp, unsigned int magic)
 	setup_gdt();
 	setup_idt(SEG_KERNEL_CODE_HIGH, max_irq);
 
-	/* then unmap the low space. */
-	int last_resv_dir = (resv_end + (1 << 22) - 1) >> 22;
+	/* then unmap the low space by chucking its directories. */
 	pdir_t *kernel_pdirs = kernel_space->pdirs->vm_addr;
-	assert(kernel_pdirs[last_resv_dir + 1] == 0);
-	for(int i=0; i <= last_resv_dir; i++) {
+	for(int i=0; i < KERNEL_SEG_START >> 22; i++) {
 		kernel_pdirs[i] = 0;
 	}
 	x86_flush_tlbs();
@@ -597,7 +628,7 @@ void kmain(void *bigp, unsigned int magic)
 	/* FIXME: pass KernelInterfacePage_t pointer instead. for now the KIP
 	 * passes for the KCP.
 	 */
-	add_mem_to_sigma0(kip_mem, resv_start & ~PAGE_MASK, resv_end | PAGE_MASK);
+	add_mem_to_sigma0(kip_mem);
 	if(!space_add_ioperm(s0_thread->space, 0, 65536)) {
 		panic("can't create sigma0 I/O bitmap");
 	}

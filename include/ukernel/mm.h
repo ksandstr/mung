@@ -97,13 +97,11 @@ extern void *map_vm_page(struct page *pg, int duration);
 extern void unref_vm_page(struct page *p);
 
 
-/* kernel heap initialization. the caller must identitymap between *resv_start
- * and *resv_end when it enables paging.
- */
-extern void init_kernel_heap(
-	void *kcp_base,
-	uintptr_t *resv_start,
-	uintptr_t *resv_end);
+/* kernel heap initialization. reserves memory starting from @first_addr. */
+extern void init_kernel_heap(void *kcp_base, uintptr_t first_addr);
+
+extern void heap_for_each_init_page(
+	void (*fn)(struct page *, void *), void *priv);
 
 
 /* supervisor page table access from kmain.c */

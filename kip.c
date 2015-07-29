@@ -5,6 +5,7 @@
 #include <string.h>
 
 #include <l4/types.h>
+#include <l4/bootinfo.h>
 #include <l4/kcp.h>
 #include <l4/kip.h>
 
@@ -13,6 +14,7 @@
 #include <ukernel/thread.h>
 #include <ukernel/cpu.h>
 #include <ukernel/util.h>
+#include <ukernel/memdesc.h>
 #include <ukernel/kip.h>
 #include <ukernel/config.h>
 
@@ -241,54 +243,106 @@ static int make_lipc_epilog(uint8_t *mem)
 }
 
 
+struct rip_param {
+	struct memdescbuf *mdb;
+	bool ok_acc;
+};
+
+
+static COLD void reserve_init_page(struct page *page, void *priv)
+{
+	struct rip_param *p = priv;
+	L4_Word_t addr = page->id << PAGE_BITS;
+	p->ok_acc &= mdb_set(p->mdb, addr, addr + PAGE_SIZE - 1, false,
+		L4_ReservedMemoryType, 0);
+}
+
+
+/* this un-dedicates all simple boot modules. it panics if any lie within the
+ * kernel reserved ranges.
+ *
+ * it does absolutely nothing about SimpleExecs, the EFI header, or the MBI
+ * pointer.
+ */
+static COLD bool export_bootmodule(struct memdescbuf *mdb, L4_BootRec_t *rec)
+{
+	if(rec->type != L4_BootInfo_Module) return true;
+
+	L4_Boot_Module_t *mod = (void *)rec;
+	L4_Word_t start = mod->start,
+		end = (mod->start + mod->size - 1) | PAGE_MASK;
+
+	if(!L4_IsNilFpage(mdb_query(mdb, start, end, false, false,
+		L4_ReservedMemoryType)))
+	{
+		panic("boot module overlaps kernel reserved space");
+	}
+
+	return mdb_set(mdb, start, end, false, L4_ConventionalMemoryType, 0);
+}
+
+
+static COLD void modify_kernel_memdescs(
+	struct memdescbuf *mdb,
+	L4_KernelConfigurationPage_t *kcp,
+	L4_Word_t kern_start, L4_Word_t kern_end)
+{
+	/* un-dedicate, un-reserve roottask memory. */
+	bool ok = mdb_set(mdb, kcp->root_server.low, kcp->root_server.high,
+		false, L4_ConventionalMemoryType, 0);
+
+	/* same for the user boot modules. we'll assume that mbiloader puts
+	 * BootInfo on the KCP, so that we can translate the physical address into
+	 * kmain.c's copy.
+	 */
+	if(kcp->BootInfo != 0) {
+		L4_BootInfo_t *binf = (void *)kcp + (kcp->BootInfo & PAGE_MASK);
+		printf("BootInfo=%#lx, kcp=%p, binf=%p\n", kcp->BootInfo, kcp, binf);
+		printf("  magic=%#lx, version=%#lx\n", binf->magic, binf->version);
+		if(L4_BootInfo_Valid(binf) && binf->first_entry != 0) {
+			L4_BootRec_t *rec = (void *)binf + binf->first_entry;
+			for(int i=0; i < binf->num_entries; i++) {
+				ok &= export_bootmodule(mdb, rec);
+				if(rec->offset_next == 0) break;
+				rec = L4_BootRec_Next(rec);
+			}
+		}
+	}
+
+	/* the kernel high VM segment. */
+	ok &= mdb_set(mdb, KERNEL_SEG_START, ~0ul,
+		true, L4_ReservedMemoryType, 0);
+
+	/* set the kernel's load range to reserved instead of dedicated. */
+	ok &= mdb_set(mdb, kern_start, kern_end, false, L4_ReservedMemoryType, 0);
+
+	/* kernel reserved pages. */
+	struct rip_param p = { .mdb = mdb, .ok_acc = ok };
+	heap_for_each_init_page(&reserve_init_page, &p);
+	ok = p.ok_acc;
+
+	if(!ok) panic("mdb_set() failed");
+}
+
+
 /* compose a 32-bit little-endian kernel interface page. */
 void make_kip(
 	void *mem,
-	L4_Word_t kern_start,
-	L4_Word_t kern_end,
+	L4_Word_t kern_start, L4_Word_t kern_end,
 	int max_irq,
 	L4_Time_t sched_prec)
 {
-	/* preserve memorydescs from the KCP, while adding two entries at the
-	 * front: the virtual address space, and the kernel's reserved slice
-	 * therein.
+	/* copy the KCP's memorydescs into a buffer so that we can modify them to
+	 * indicate e.g. the ia32 kernel high segment, kernel memory reservations,
+	 * and so forth.
 	 */
 	L4_KernelConfigurationPage_t *kcp = mem;
-	int num_mds = kcp->MemoryInfo.n;
-	L4_MemoryDesc_t mds[num_mds + 3];
-	mds[0] = (L4_MemoryDesc_t){
-		.x.v = 1, .x.type = L4_ConventionalMemoryType,
-		.x.low = 0, .x.high = ~(L4_Word_t)0 >> 10,
-	};
-	mds[1] = (L4_MemoryDesc_t){
-		.x.v = 1, .x.type = L4_ReservedMemoryType,
-		.x.low = KERNEL_SEG_START >> 10, .x.high = ~(L4_Word_t)0 >> 10,
-	};
-	memcpy(&mds[2], mem + kcp->MemoryInfo.MemDescPtr,
-		sizeof(L4_Word_t) * 2 * num_mds);
-	num_mds += 2;
-
-	/* also, add a reserved region for the kernel's initial heap. this may be
-	 * further restricted by the bootloader's dedicated regions; that's fine.
-	 */
-	int first_ded = 0;
-	while(first_ded < num_mds
-		&& L4_MemoryDescType(&mds[first_ded]) != L4_DedicatedMemoryType)
-	{
-		first_ded++;
-	}
-	if(first_ded < num_mds) {
-		/* move other descriptors up. */
-		int count = num_mds - first_ded;
-		L4_MemoryDesc_t tmp[count];
-		memcpy(tmp, &mds[first_ded], count * sizeof(L4_MemoryDesc_t));
-		memcpy(&mds[first_ded + 1], tmp, count * sizeof(L4_MemoryDesc_t));
-	}
-	mds[first_ded] = (L4_MemoryDesc_t){
-		.x.v = 0, .x.type = L4_ReservedMemoryType,
-		.x.low = kern_start >> 10, .x.high = kern_end >> 10,
-	};
-	num_mds++;
+	struct memdescbuf mdb = { .size = kcp->MemoryInfo.n + 15 };
+	mdb.ptr = malloc(sizeof(L4_MemoryDesc_t) * mdb.size);
+	mdb.len = kcp->MemoryInfo.n;
+	memcpy(mdb.ptr, mem + kcp->MemoryInfo.MemDescPtr,
+		sizeof(L4_MemoryDesc_t) * kcp->MemoryInfo.n);
+	modify_kernel_memdescs(&mdb, kcp, kern_start, kern_end);
 
 	/* fill in KernelInterfacePage */
 	L4_KernelInterfacePage_t *kip = mem;
@@ -437,11 +491,15 @@ void make_kip(
 	*(L4_Word_t *)(mem + 0xf0) = kip_pos;
 	kip_pos += (len + 63) & ~63;
 
+	/* MemoryInfo */
+	mdb_sort(&mdb);			/* sort to combine shrapnel in normalize */
+	mdb_normalize(&mdb);
+	mdb_sort(&mdb);
 	void *memdesc_base = mem + kip_pos;
-	memcpy(memdesc_base, mds, sizeof(L4_Word_t) * 2 * num_mds);
-	kip_pos += sizeof(L4_Word_t) * 2 * num_mds;
-	kip->MemoryInfo.n = num_mds;
-	kip->MemoryInfo.MemDescPtr = (L4_Word_t)(memdesc_base - mem);
+	memcpy(memdesc_base, mdb.ptr, sizeof(L4_MemoryDesc_t) * mdb.len);
+	kip_pos += sizeof(L4_MemoryDesc_t) * mdb.len;
+	kip->MemoryInfo.n = mdb.len;
+	kip->MemoryInfo.MemDescPtr = memdesc_base - mem;
 
 	/* KernelDesc */
 	L4_KernelDesc_t *kdesc = mem + kip_pos;

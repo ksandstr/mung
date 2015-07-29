@@ -166,7 +166,6 @@ static void fill_kcp(
 		.magic = L4_BOOTINFO_MAGIC,
 		.version = L4_BOOTINFO_VERSION,
 		.size = sizeof(L4_BootInfo_t),
-		.first_entry = 0, .num_entries = 0,
 	};
 
 	/* memory descriptors. the bootloader passes just conventional and
@@ -275,6 +274,7 @@ static void fill_kcp(
 		} else {
 			prev->offset_next = (uint8_t *)mod - (uint8_t *)prev;
 		}
+		binf->size += sizeof(*mod) + cl_resv;
 		assert(offsetof(L4_Boot_Module_t, offset_next)
 			== offsetof(L4_BootRec_t, offset_next));
 		prev = (L4_BootRec_t *)mod;

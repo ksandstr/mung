@@ -17,6 +17,7 @@
 #include <ukernel/space.h>
 #include <ukernel/misc.h>
 #include <ukernel/mm.h>
+#include <ukernel/memdesc.h>
 
 
 #define N_FIRST_PAGES (2 * 1024 * 1024 / PAGE_SIZE)
@@ -29,6 +30,9 @@ struct as_free {
 	L4_Fpage_t fp;		/* rights bits ignored */
 };
 
+
+/* used by init_kernel_heap(), accessed in heap_for_each_init_page() */
+static struct page first_pages[N_FIRST_PAGES];
 
 static struct list_head k_free_pages = LIST_HEAD_INIT(k_free_pages),
 	k_slab_pages = LIST_HEAD_INIT(k_slab_pages),
@@ -268,61 +272,36 @@ void unref_vm_page(struct page *pg)
 }
 
 
-static COLD bool page_is_available(
+static bool page_is_available(
 	const L4_KernelConfigurationPage_t *kcp,
 	L4_Word_t addr)
 {
-	assert(offsetof(L4_KernelConfigurationPage_t, MemoryInfo) == 0x54);
-	L4_MemoryDesc_t *mds = (void *)kcp + kcp->MemoryInfo.MemDescPtr;
-	int md_count = kcp->MemoryInfo.n;
-	bool virt_ok = false, conv_ok = false, reserved = false;
-	for(int i=0; i < md_count; i++) {
-		L4_Word_t low = L4_MemoryDescLow(&mds[i]),
-			high = L4_MemoryDescHigh(&mds[i]);
-		int type = L4_MemoryDescType(&mds[i]);
-		bool virtual = L4_IsMemoryDescVirtual(&mds[i]);
-
-		if(addr < low || addr > high) continue;
-
-		if(!virt_ok && virtual) {
-			virt_ok = true;
-		} else if(!virtual && type == L4_ConventionalMemoryType
-			&& virt_ok && !conv_ok)
-		{
-			conv_ok = true;
-		} else if(!virtual && conv_ok && type != L4_ConventionalMemoryType) {
-			reserved = true;
-			break;
-		}
-	}
-
-	return virt_ok && conv_ok && !reserved;
+	struct memdescbuf mdb = {
+		.ptr = (void *)kcp + kcp->MemoryInfo.MemDescPtr,
+		.size = kcp->MemoryInfo.n, .len = kcp->MemoryInfo.n,
+	};
+	L4_Fpage_t p = mdb_query(&mdb, addr & ~PAGE_MASK, addr | PAGE_MASK,
+		false, false, L4_ConventionalMemoryType);
+	return !L4_IsNilFpage(p) && L4_SizeLog2(p) >= PAGE_BITS;
 }
 
 
-/* reserves initial memory for the kernel. this is subsequently used to
- * allocate spaces, threads, UTCB pages, page tracking structures, copies of
- * ACPI tables, etc...
+/* reserves initial memory for the kernel. this can then be used to allocate
+ * further memory for e.g. tracking of non-initial memory.
  *
- * the kernel sbrk() heap will be positioned 2 megs after *resv_end. hopefully
- * this leaves enough room for ACPI tables and such.
+ * the kernel sbrk() heap will be positioned at the closest 2-MiB mark after
+ * the last reserved page.
  */
-void init_kernel_heap(
-	void *kcp_base,
-	uintptr_t *resv_start,
-	uintptr_t *resv_end)
+void init_kernel_heap(void *kcp_base, uintptr_t first_addr)
 {
 	const L4_KernelConfigurationPage_t *kcp = kcp_base;
 
-	/* grab early pages from conventional memory that isn't reserved by a
+	/* grab early pages from conventional memory that's not reserved by a
 	 * bootloader-defined object.
 	 */
-	extern char _start, _end;
-	L4_Word_t next_addr = (L4_Word_t)&_end;	/* ... or the kernel binary. */
-	next_addr = (next_addr + PAGE_SIZE - 1) & ~PAGE_MASK;
-	printf("kernel early memory low address is %#x\n", (unsigned)next_addr);
+	L4_Word_t next_addr = (first_addr + PAGE_SIZE - 1) & ~PAGE_MASK;
+	printf("kernel early-mem scan starts at %#lx\n", next_addr);
 	int got = 0;
-	static struct page first_pages[N_FIRST_PAGES];
 	while(got < N_FIRST_PAGES) {
 		if(next_addr > (64 * 1024 * 1024)) {
 			/* stop at the 64 MiB mark. */
@@ -335,27 +314,45 @@ void init_kernel_heap(
 				.vm_addr = (void *)next_addr,
 				.flags = PAGEF_INITMEM,
 			};
-			list_add(&k_free_pages, &pg->link);
+			list_add_tail(&k_free_pages, &pg->link);
 			n_free_pages++;
+		} else {
+			printf("%s: next_addr=%#lx wasn't available\n",
+				__func__, next_addr);
 		}
 		next_addr += PAGE_SIZE;
 	}
+	assert(got == N_FIRST_PAGES);
 	printf("uppermost reserved byte is at %#x\n", (unsigned)next_addr - 1);
 
 	/* initialize page slab & return. */
 	mm_page_cache = KMEM_CACHE_NEW("mm_page_cache", struct page);
 	free_as_cache = KMEM_CACHE_NEW("free_as_cache", struct as_free);
 	free_as_tree = RB_ROOT;
-	*resv_start = MIN(uintptr_t, (uintptr_t)&_start, *resv_start);
-	*resv_end = MAX(uintptr_t, next_addr - 1, *resv_end);	/* (inclusive.) */
 
 	const size_t heap_start_align = 2 * 1024 * 1024;
-	heap_pos = (*resv_end + heap_start_align) & ~(heap_start_align - 1);
-	printf("kernel heap starts at %#lx\n", (L4_Word_t)heap_pos);
+	heap_pos = (next_addr + heap_start_align) & ~(heap_start_align - 1);
+	printf("kernel VM heap starts at %#lx\n", (L4_Word_t)heap_pos);
 
-	L4_Word_t siz = *resv_end + 1 - *resv_start;
+	int n_pages = 0;
+	struct page *cur;
+	list_for_each(&k_free_pages, cur, link) {
+		n_pages++;
+	}
+	L4_Word_t siz = n_pages * PAGE_SIZE;
 	printf("... total kernel reservation is %lu KiB (~%lu MiB).\n",
-		siz / 1024, (siz + 1024 * 1024 - 1) / (1024 * 1024));
+		siz / 1024, (siz + 1024 * 512) / (1024 * 1024));
+}
+
+
+/* iterates over initial memory grabbed in init_kernel_heap(). */
+void heap_for_each_init_page(void (*fn)(struct page *, void *), void *priv)
+{
+	for(int i=0; i < N_FIRST_PAGES; i++) {
+		struct page *cur = &first_pages[i];
+		assert(CHECK_FLAG(cur->flags, PAGEF_INITMEM));
+		(*fn)(cur, priv);
+	}
 }
 
 
