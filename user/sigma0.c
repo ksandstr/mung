@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <stdarg.h>
 #include <stdbool.h>
+#include <string.h>
 #include <ccan/likely/likely.h>
 #include <ccan/list/list.h>
 #include <ccan/compiler/compiler.h>
@@ -20,6 +21,7 @@
 #include <ukernel/slab.h>
 #include <ukernel/util.h>
 #include <ukernel/rbtree.h>
+#include <ukernel/memdesc.h>
 
 
 #define NUM_SEED_PAGES 12
@@ -31,7 +33,7 @@ struct track_page
 	struct rb_node rb;		/* in pages_by_range */
 	struct list_node link;
 	L4_Fpage_t page;
-	bool dedicated;
+	bool dedicated:1, readonly:1;
 };
 
 
@@ -42,9 +44,11 @@ static LIST_HEAD(reuse_trk_list);		/* for static <struct track_page> */
 static struct kmem_cache *track_page_slab = NULL;
 
 
-static void *get_free_page(int size_log2);
-static void *get_free_page_at(L4_Word_t address, int size_log2);
-static void free_phys_page(void *ptr, int size_log2, bool dedicate);
+static L4_Fpage_t get_free_page(int size_log2);
+static L4_Fpage_t get_free_page_at(L4_Word_t address, int size_log2);
+static void free_phys_page(
+	void *ptr, int size_log2,
+	bool dedicate, bool readonly);
 static struct track_page *find_page_by_range(L4_Fpage_t range);
 
 
@@ -146,15 +150,14 @@ static int sigma0_ipc_loop(void *kip_base)
 				} else {
 					last_fault = addr;
 				}
-				void *ptr = get_free_page_at(addr & ~PAGE_MASK, 12);
-				if(ptr == NULL) {
+				L4_Fpage_t page = get_free_page_at(addr & ~PAGE_MASK,
+					PAGE_BITS);
+				if(L4_IsNilFpage(page)) {
 					printf("page at %#lx not found (sender=%lu:%lu, ip=%#lx)\n",
 						addr, L4_ThreadNo(sender), L4_Version(sender), ip);
 					break;
 				}
-				assert((L4_Word_t)ptr == (addr & ~PAGE_MASK));
-				L4_Fpage_t page = L4_FpageLog2(addr & ~PAGE_MASK, PAGE_BITS);
-				L4_Set_Rights(&page, L4_FullyAccessible);
+				assert(L4_Address(page) == (addr & ~PAGE_MASK));
 				L4_GrantItem_t idemp = L4_GrantItem(page, addr & ~PAGE_MASK);
 				L4_LoadMR(0, (L4_MsgTag_t){ .X.t = 2 }.raw);
 				L4_LoadMR(1, idemp.raw[0]);
@@ -172,23 +175,21 @@ static int sigma0_ipc_loop(void *kip_base)
 					sender.global.X.thread_no, sender.global.X.version,
 					L4_Address(req_fpage), L4_Size(req_fpage), req_attr);
 #endif
-				void *ptr;
+				L4_Fpage_t map_page;
 				if((req_fpage.raw & (~0u << PAGE_BITS)) == (~0u << PAGE_BITS)) {
-					ptr = get_free_page(L4_SizeLog2(req_fpage));
+					map_page = get_free_page(L4_SizeLog2(req_fpage));
 				} else {
-					ptr = get_free_page_at(L4_Address(req_fpage),
+					map_page = get_free_page_at(L4_Address(req_fpage),
 						L4_SizeLog2(req_fpage));
 				}
-				if(ptr == NULL) {
+				if(L4_IsNilFpage(map_page)) {
 					/* reject */
 					L4_LoadMR(0, (L4_MsgTag_t){ .X.t = 2 }.raw);
 					L4_LoadMR(1, 0x8);
 					L4_LoadMR(2, L4_Nilpage.raw);
 				} else {
-					L4_Fpage_t map_page = L4_FpageLog2((L4_Word_t)ptr,
-						L4_SizeLog2(req_fpage));
-					L4_Set_Rights(&map_page, L4_FullyAccessible);
-					L4_GrantItem_t map = L4_GrantItem(map_page, (L4_Word_t)ptr);
+					L4_GrantItem_t map = L4_GrantItem(map_page,
+						L4_Address(map_page));
 					L4_LoadMR(0, (L4_MsgTag_t){ .X.t = 2 }.raw);
 					L4_LoadMR(1, map.raw[0]);
 					L4_LoadMR(2, map.raw[1]);
@@ -274,28 +275,27 @@ static struct track_page *find_page_by_range(L4_Fpage_t key)
 
 
 static void free_page_range(
-	L4_Word_t start,
-	L4_Word_t length,
-	bool dedicate)
+	L4_Word_t start, L4_Word_t length,
+	bool dedicate, bool readonly)
 {
 	int bit;
 	L4_Word_t addr;
 	for_page_range(start, start + length, addr, bit) {
-		free_phys_page((void *)addr, bit, dedicate);
+		free_phys_page((void *)addr, bit, dedicate, readonly);
 	}
 }
 
 
-static void *get_free_page_at(L4_Word_t address, int want_size_log2)
+static L4_Fpage_t get_free_page_at(L4_Word_t address, int want_size_log2)
 {
 	assert((address & PAGE_MASK) == 0);
 
-	struct track_page *pg = find_page_by_range(
-		L4_FpageLog2(address, want_size_log2));
-	if(pg == NULL) return NULL;
+	L4_Fpage_t outfp = L4_FpageLog2(address, want_size_log2);
+	struct track_page *pg = find_page_by_range(outfp);
+	if(pg == NULL) return L4_Nilpage;
 
 	L4_Fpage_t page = pg->page;
-	bool dedicated = pg->dedicated;
+	bool dedicated = pg->dedicated, readonly = pg->readonly;
 	rb_erase(&pg->rb, &pages_by_range);
 	if(!dedicated) {
 		list_del_from(&free_pages[L4_SizeLog2(pg->page) - PAGE_BITS],
@@ -306,31 +306,34 @@ static void *get_free_page_at(L4_Word_t address, int want_size_log2)
 	if(L4_Address(page) != address || L4_SizeLog2(page) != want_size_log2) {
 		/* complex case. */
 		L4_Word_t start_len = address - L4_Address(page);
-		free_page_range(L4_Address(page), start_len, dedicated);
+		free_page_range(L4_Address(page), start_len, dedicated, readonly);
 		L4_Word_t top = address + (1 << want_size_log2),
 			pg_top = L4_Address(page) + L4_Size(page);
 		if(top < pg_top) {
-			free_page_range(top, pg_top - top, dedicated);
+			free_page_range(top, pg_top - top, dedicated, readonly);
 		}
 	}
 
-	return (void *)address;
+	L4_Set_Rights(&outfp, readonly ? L4_ReadeXecOnly : L4_FullyAccessible);
+	return outfp;
 }
 
 
-static void *get_free_page(int size_log2)
+static L4_Fpage_t get_free_page(int size_log2)
 {
 	struct track_page *pg = NULL;
 	for(int i=size_log2 - PAGE_BITS; i < PAGE_BUCKETS; i++) {
 		pg = list_pop(&free_pages[i], struct track_page, link);
 		if(pg != NULL) break;
 	}
-	if(pg == NULL) return NULL;
+	if(pg == NULL) return L4_Nilpage;
 
 	assert(!pg->dedicated);
-	void *ret;
+	assert(!pg->readonly);
+	L4_Fpage_t ret;
 	if(L4_SizeLog2(pg->page) == size_log2) {
-		ret = (void *)L4_Address(pg->page);
+		ret = pg->page;
+		L4_Set_Rights(&ret, L4_FullyAccessible);
 	} else {
 		/* FIXME: implement splitting for propers */
 		printf("can't handle complex get_free_page() yet! %#lx:%#lx dropped.\n",
@@ -372,7 +375,9 @@ static struct track_page *insert_track_page(struct track_page *pg)
 }
 
 
-static void free_phys_page(void *ptr, int size_log2, bool dedicate)
+static void free_phys_page(
+	void *ptr, int size_log2,
+	bool dedicate, bool readonly)
 {
 	if(track_page_slab == NULL) {
 		track_page_slab = KMEM_CACHE_NEW("track_page_slab", struct track_page);
@@ -387,6 +392,7 @@ static void free_phys_page(void *ptr, int size_log2, bool dedicate)
 	}
 
 	pg->dedicated = dedicate;
+	pg->readonly = readonly;
 	pg->page = L4_FpageLog2((L4_Word_t)ptr, size_log2);
 	if(insert_track_page(pg) != NULL) {
 		printf("warning: track_page for %#lx:%#lx already exists!\n",
@@ -422,7 +428,10 @@ static void build_heap(void *kip_base)
 
 	L4_Word_t meminfo = *(L4_Word_t *)(kip_base + 0x54),
 		num_mds = meminfo & 0xffff;
-	L4_MemoryDesc_t *mds = kip_base + (meminfo >> 16);
+	struct memdescbuf mds = {
+		.ptr = kip_base + (meminfo >> 16),
+		.len = num_mds, .size = num_mds,
+	};
 #ifdef DEBUG_ME_HARDER
 	printf("%d memory descriptors at %p\n", (int)num_mds, mds);
 #endif
@@ -430,115 +439,84 @@ static void build_heap(void *kip_base)
 	/* discover system memory.
 	 *
 	 * the way this works is, it finds ranges of conventional memory that
-	 * overlap virtual memory and don't overlap a reserved range. memory at
-	 * those addresses was added to sigma0's address space by the microkernel
-	 * before sigma0's first thread was started.
+	 * overlap virtual memory and don't overlap a reserved or dedicated range.
+	 * the former criteria is because sigma0 currently cannot access physical
+	 * memory outside of its virtual memory space, and the latter follows from
+	 * the kernel not assigning reserved or dedicated memory to sigma0
+	 * (besides program pages belonging to sigma0).
 	 *
-	 * ranges that further overlap dedicated memory are added only to the tree
-	 * but not the freelists, so they'll only be handed out at specific
-	 * request. ranges that don't are considered ordinary memory and are are
-	 * added to both the freelists and the pages_by_range tree.
-	 *
-	 * FIXME: hurr durr apparently v_start and v_end aren't used after the for
-	 * loop. the assignments in the if-clause are dead according to the clang
-	 * static analyzer.
+	 * ranges of shared, bootloader-defined, and architecture-specific memory
+	 * are added only to the pages_by_range tree but not the freelists, so
+	 * they'll only be handed out at request.
 	 */
-	L4_Word_t v_start = 0, v_end = 0;
-	int v_at = -1;
-	for(int i=0; i < num_mds; i++) {
-		if(L4_IsMemoryDescVirtual(&mds[i])) {
-			v_start = L4_MemoryDescLow(&mds[i]);
-			v_end = L4_MemoryDescHigh(&mds[i]);
-			if(v_end - v_start > 1024 * 1024 * 1024) {
-				v_at = i;
+	L4_Word_t v_low = ~0ul, v_high = 0, q_start = 0, q_end = ~0ul;
+	for(;;) {
+		L4_Fpage_t part = mdb_query(&mds, q_start, q_end,
+			true, false, L4_ConventionalMemoryType);
+		if(L4_IsNilFpage(part)) break;
+		if(v_low == ~0ul) v_low = L4_Address(part);
+		v_high = MAX(L4_Word_t, FPAGE_HIGH(part), v_high);
+		q_start = FPAGE_HIGH(part) + 1;
+	}
+	printf("virtual address space is %#lx..%#lx\n", v_low, v_high);
+
+	int as_mask = 0, b_mask = 0;
+	for(int i=0; i < mds.len; i++) {
+		L4_Word_t t = L4_MemoryDescType(&mds.ptr[i]);
+		switch(t & 0xf) {
+			case L4_ArchitectureSpecificMemoryType:
+				as_mask |= 1 << (t >> 4);
 				break;
-			}
+			case L4_BootLoaderSpecificMemoryType:
+				b_mask |= 1 << (t >> 4);
+				break;
 		}
 	}
-	if(v_at < 0) {
-		printf("virtual address space isn't declared in KIP; assuming lower 3 GiB\n");
-		v_start = 0;
-		v_end = 0xc0000000ul - 1;
-	}
-	for(int i = v_at + 1; i < num_mds; i++) {
+
+	static const L4_Word_t types[] = {
+		L4_ConventionalMemoryType,
+		L4_SharedMemoryType,
+		L4_BootLoaderSpecificMemoryType,
+		L4_ArchitectureSpecificMemoryType,
+	};
+	int t_masks[] = { 1, 1, b_mask, as_mask };
+	assert(NUM_ELEMENTS(types) == NUM_ELEMENTS(t_masks));
+	for(int i=0; i < NUM_ELEMENTS(types); i++) {
+		while(t_masks[i]) {
+			L4_Word_t subtype = ffsl(t_masks[i]) - 1;
+			assert(CHECK_FLAG(t_masks[i], 1 << subtype));
+			t_masks[i] &= ~(1 << subtype);
+			q_start = v_low; q_end = v_high;
+			for(;;) {
+				L4_Fpage_t part = mdb_query(&mds, q_start, q_end,
+					false, false, types[i] | (subtype << 4));
+				if(L4_IsNilFpage(part)) break;
 #ifdef DEBUG_ME_HARDER
-		printf("range %#lx .. %#lx: type %lu, virtual %d\n",
-			L4_MemoryDescLow(&mds[i]), L4_MemoryDescHigh(&mds[i]),
-			L4_MemoryDescType(&mds[i]), L4_IsMemoryDescVirtual(&mds[i]));
+				printf("memdesc part=[%#lx, %#lx] (%lu KiB), type=%#lx\n",
+					FPAGE_LOW(part), FPAGE_HIGH(part), L4_Size(part) / 1024,
+					types[i] | (subtype << 4));
 #endif
-
-		if(L4_MemoryDescType(&mds[i]) != L4_ConventionalMemoryType
-			|| L4_IsMemoryDescVirtual(&mds[i]))
-		{
-			/* skip non-conventional, or non-physical memory */
-			continue;
-		}
-
-		/* FIXME: handle x86 low memory. */
-		L4_Word_t last_start = MAX(L4_Word_t, 0x100000,
-			L4_MemoryDescLow(&mds[i]));
-		bool last_ded = false;
-		for(L4_Word_t addr = last_start;
-			addr < L4_MemoryDescHigh(&mds[i]);
-			addr += PAGE_SIZE)
-		{
-			bool dedicate = false, skip = false;
-			for(int j = i + 1; j < num_mds && !skip; j++) {
-				const L4_MemoryDesc_t *sub = &mds[j];
-				if(L4_IsMemoryDescVirtual(sub)
-					|| L4_MemoryDescLow(sub) > (addr | PAGE_BITS)
-					|| L4_MemoryDescHigh(sub) < addr)
-				{
-					continue;
+				if(L4_SizeLog2(part) >= PAGE_BITS) {
+					free_phys_page((void *)L4_Address(part), L4_SizeLog2(part),
+						types[i] != L4_ConventionalMemoryType,
+						types[i] == L4_BootLoaderSpecificMemoryType
+							&& subtype == L4_ReadOnlyBIOSRegion);
 				}
-
-				switch(L4_MemoryDescType(sub)) {
-					case L4_ConventionalMemoryType:
-						/* stacked? that's OK. */
-						break;
-
-					/* NOTE: should this also include SharedMemoryType? if
-					 * it's actual, mappable memory then the root server would
-					 * likely want to have access and whatnot. same for
-					 * ArchitectureSpecificMemoryType.
-					 */
-					case L4_DedicatedMemoryType:
-					case L4_BootLoaderSpecificMemoryType:
-						dedicate = true;
-						break;
-
-					default:
-						skip = true;
-						break;
-				}
-			}
-
-			if(skip) {
-				free_page_range(last_start, addr - last_start, last_ded);
-				last_start = addr + PAGE_SIZE;
-				continue;
-			}
-
-			if(dedicate != last_ded) {
-				free_page_range(last_start, addr - last_start, last_ded);
-				last_ded = dedicate;
-				last_start = addr;
+				q_start = FPAGE_HIGH(part) + 1;
 			}
 		}
-
-		free_page_range(last_start,
-			L4_MemoryDescHigh(&mds[i]) + 1 - last_start, last_ded);
 	}
 }
 
 
 /* support interface for the slab allocator */
 void *kmem_alloc_new_page(void) {
-	return get_free_page(12);
+	L4_Fpage_t p = get_free_page(12);
+	return L4_IsNilFpage(p) ? NULL : (void *)L4_Address(p);
 }
 
 void kmem_free_page(void *ptr) {
-	free_phys_page(ptr, 12, false);
+	free_phys_page(ptr, 12, false, false);
 }
 
 
