@@ -275,6 +275,7 @@ static void fill_kcp(
 	assert(offsetof(L4_KernelConfigurationPage_t, MemoryInfo) == 0x54);
 	*(L4_Word_t *)&kcp_base[0x54] = md_pos << 16 | mdb.len;
 	resv_pos += mdb.len * sizeof(L4_MemoryDesc_t);
+#if 0
 	printf("KCP MemoryDesc dump:\n");
 	for(int i=0; i < mdb.len; i++) {
 		printf("i=%02d\t%s range=[%#lx, %#lx], type=%#lx\n",
@@ -282,6 +283,7 @@ static void fill_kcp(
 			L4_MemoryDescLow(&mdb.ptr[i]), L4_MemoryDescHigh(&mdb.ptr[i]),
 			L4_MemoryDescType(&mdb.ptr[i]));
 	}
+#endif
 
 	/* BootRecs */
 	binf->num_entries = num_list;

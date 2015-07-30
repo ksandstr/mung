@@ -300,7 +300,6 @@ void init_kernel_heap(void *kcp_base, uintptr_t first_addr)
 	 * bootloader-defined object.
 	 */
 	L4_Word_t next_addr = (first_addr + PAGE_SIZE - 1) & ~PAGE_MASK;
-	printf("kernel early-mem scan starts at %#lx\n", next_addr);
 	int got = 0;
 	while(got < N_FIRST_PAGES) {
 		if(next_addr > (64 * 1024 * 1024)) {
@@ -316,9 +315,6 @@ void init_kernel_heap(void *kcp_base, uintptr_t first_addr)
 			};
 			list_add_tail(&k_free_pages, &pg->link);
 			n_free_pages++;
-		} else {
-			printf("%s: next_addr=%#lx wasn't available\n",
-				__func__, next_addr);
 		}
 		next_addr += PAGE_SIZE;
 	}

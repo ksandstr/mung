@@ -280,13 +280,17 @@ static void add_mem_to_sigma0(const L4_KernelInterfacePage_t *kip)
 		.len = kip->MemoryInfo.n, .size = kip->MemoryInfo.n,
 	};
 
+#ifdef DEBUG_ME_HARDER
 	printf("KIP MemoryDesc dump:\n");
+#endif
 	int b_subs = 0, arch_subs = 0;
 	for(int i=0; i < mdb.len; i++) {
+#ifdef DEBUG_ME_HARDER
 		printf("i=%02d\t%s range=[%#lx, %#lx], type=%#lx\n",
 			i, L4_IsMemoryDescVirtual(&mdb.ptr[i]) ? "virt" : "phys",
 			L4_MemoryDescLow(&mdb.ptr[i]), L4_MemoryDescHigh(&mdb.ptr[i]),
 			L4_MemoryDescType(&mdb.ptr[i]));
+#endif
 		L4_Word_t t = L4_MemoryDescType(&mdb.ptr[i]);
 		if((t & 0xf) == L4_BootLoaderSpecificMemoryType) {
 			b_subs |= 1 << (t >> 4);

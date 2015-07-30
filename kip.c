@@ -297,8 +297,6 @@ static COLD void modify_kernel_memdescs(
 	 */
 	if(kcp->BootInfo != 0) {
 		L4_BootInfo_t *binf = (void *)kcp + (kcp->BootInfo & PAGE_MASK);
-		printf("BootInfo=%#lx, kcp=%p, binf=%p\n", kcp->BootInfo, kcp, binf);
-		printf("  magic=%#lx, version=%#lx\n", binf->magic, binf->version);
 		if(L4_BootInfo_Valid(binf) && binf->first_entry != 0) {
 			L4_BootRec_t *rec = (void *)binf + binf->first_entry;
 			for(int i=0; i < binf->num_entries; i++) {
