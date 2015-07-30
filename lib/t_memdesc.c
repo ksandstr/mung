@@ -311,6 +311,106 @@ START_LOOP_TEST(basic_modify, iter, 0, 15)
 END_TEST
 
 
+/* test that mdb_set() merges items into similar neighbours. this covers the
+ * case where there's one on either side of a middle range.
+ *
+ * variables:
+ *   - whether boundaries are exact, or if there's overlap.
+ *
+ * todo:
+ *   - that it doesn't merge into dissimilar ones.
+ *   - merging into a gap between two items
+ */
+START_LOOP_TEST(merge_left_right_between, iter, 0, 1)
+{
+	const bool overlap = CHECK_FLAG(iter, 1);
+	diag("overlap=%s", btos(overlap));
+	plan_tests(5);
+	todo_start("mdb_set() unimplemented");
+
+	L4_MemoryDesc_t descs[8];
+	struct memdescbuf buf = { .ptr = descs, .size = NUM_ELEMENTS(descs) };
+
+	const L4_Word_t mid_start = 0x4000, mid_end = 0xffff;
+	bool ok = mdb_set(&buf, mid_start, mid_end, false,
+		L4_ConventionalMemoryType, 0);
+	if(!ok1(ok && buf.len == 1)) {
+		diag("ok=%s, buf.len=%u", btos(ok), (unsigned)buf.len);
+	}
+
+	/* merge on the left of the given range. */
+	ok = mdb_set(&buf, (!overlap ? mid_end : mid_end - 0x2000) + 1,
+		0x1d000, false, L4_ConventionalMemoryType, 0);
+	if(!ok(ok && buf.len == 1, "one item after left merge")) {
+		diag("ok=%s, buf.len=%u", btos(ok), (unsigned)buf.len);
+	}
+
+	/* and the right. */
+	ok = mdb_set(&buf, 0x1000,
+		(!overlap ? mid_start : mid_start + 0x2000) - 1,
+		false, L4_ConventionalMemoryType, 0);
+	if(!ok(ok && buf.len == 1, "one item after right merge")) {
+		diag("ok=%s, buf.len=%u", btos(ok), (unsigned)buf.len);
+	}
+
+	/* split the range up down the middle w/ a reserved range. */
+	const L4_Word_t cut_start = 0x3000, cut_end = 0x1afff;
+	ok = mdb_set(&buf, cut_start, cut_end, false, L4_ReservedMemoryType, 0);
+	if(!ok(ok && buf.len == 3, "three items after split")) {
+		diag("ok=%s, buf.len=%u", btos(ok), (unsigned)buf.len);
+	}
+
+	/* and join them back up again. */
+	ok = mdb_set(&buf,
+		overlap ? cut_start - 0x1000 : cut_start,
+		overlap ? cut_end + 0x1000 : cut_end,
+		false, L4_ConventionalMemoryType, 0);
+	if(!ok(ok && buf.len == 1, "one item after fixup")) {
+		diag("ok=%s, buf.len=%u", btos(ok), (unsigned)buf.len);
+	}
+}
+END_TEST
+
+
+/* test that mdb_set() merges two items of the same type, that overlap on both
+ * sides.
+ *
+ * variables:
+ *   - which one goes in first.
+ */
+START_LOOP_TEST(merge_inside, iter, 0, 1)
+{
+	const bool swapped = CHECK_FLAG(iter, 1);
+	diag("swapped=%s", btos(swapped));
+	plan_tests(2);
+	todo_start("mdb_set() unimplemented");
+
+	L4_Word_t fst_start = 0x10000, fst_end = 0x1ffff,
+		snd_start = 0x13000, snd_end = 0x1dfff;
+	if(swapped) {
+		SWAP(L4_Word_t, fst_start, snd_start);
+		SWAP(L4_Word_t, fst_end, snd_end);
+	}
+
+	L4_MemoryDesc_t descs[16];
+	struct memdescbuf buf = { .ptr = descs, .size = NUM_ELEMENTS(descs) };
+
+	bool ok = mdb_set(&buf, fst_start, fst_end, false,
+		L4_ConventionalMemoryType, 0);
+	assert(ok);
+	ok = mdb_set(&buf, snd_start, snd_end, false,
+		L4_ConventionalMemoryType, 0);
+	if(!ok(ok && buf.len == 1, "merged into single item")) {
+		diag("ok=%s, buf.len=%u", btos(ok), (unsigned)buf.len);
+	}
+	ok(ok && q_range_present(&buf, MIN(L4_Word_t, fst_start, snd_start),
+			MAX(L4_Word_t, fst_end, snd_end), false, false,
+			L4_ConventionalMemoryType),
+		"full range is present");
+}
+END_TEST
+
+
 void ktest_memdesc(void)
 {
 	RUN(basic_empty_query);
@@ -319,6 +419,8 @@ void ktest_memdesc(void)
 
 	RUN(basic_zero_buf);
 	RUN(basic_modify);
+	RUN(merge_left_right_between);
+	RUN(merge_inside);
 }
 
 #endif
