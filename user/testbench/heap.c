@@ -12,6 +12,7 @@
 #include <l4/ipc.h>
 #include <l4/kip.h>
 
+#include <ukernel/memdesc.h>
 #include <ukernel/util.h>
 
 #include "defs.h"
@@ -126,22 +127,20 @@ void *sbrk(intptr_t increment)
 COLD L4_Word_t find_phys_mem_top(void)
 {
 	L4_KernelInterfacePage_t *kip = L4_GetKernelInterface();
-	int n_descs = kip->MemoryInfo.n;
-	L4_Word_t high = 0;
-	for(int i=0; i < n_descs; i++) {
-		const L4_MemoryDesc_t *desc = L4_MemoryDesc(kip, i);
-		if(L4_IsMemoryDescVirtual(desc)) {
-			if(high == 0) high = L4_MemoryDescHigh(desc);
-		} else if(L4_MemoryDescType(desc) == L4_ConventionalMemoryType
-			&& L4_MemoryDescHigh(desc) > 0x200000)
-		{
-			high = MIN(L4_Word_t, L4_MemoryDescHigh(desc), high);
-		}
+	struct memdescbuf mds = {
+		.ptr = (void *)kip + kip->MemoryInfo.MemDescPtr,
+		.len = kip->MemoryInfo.n, .size = kip->MemoryInfo.n,
+	};
+	L4_Word_t q_pos = 0, high = 0;
+	for(;;) {
+		L4_Fpage_t part = mdb_query(&mds, q_pos, ~0ul,
+			false, false, L4_ConventionalMemoryType);
+		if(L4_IsNilFpage(part)) break;
+		q_pos = FPAGE_HIGH(part) + 1;
+		if(L4_SizeLog2(part) < PAGE_BITS) continue;
+		high = MAX(L4_Word_t, FPAGE_HIGH(part), high);
 	}
 
-	/* return value is "last valid address", i.e. offset bits hardwired to
-	 * all-ones.
-	 */
 	return high;
 }
 
