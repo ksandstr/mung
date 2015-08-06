@@ -54,7 +54,7 @@ static struct track_page *find_page_by_range(L4_Fpage_t range);
 
 static bool invariants(void)
 {
-#ifdef NDEBUG
+#ifndef NDEBUG
 	/* 1. all pages in free_pages[] should have `!dedicated', and appear in
 	 * pages_by_range.
 	 */
@@ -72,8 +72,8 @@ static bool invariants(void)
 	struct track_page *pg;
 	list_for_each(&slab_page_list, pg, link) {
 		assert(find_page_by_range(pg->page) == NULL);
-		assert(get_free_page_at(L4_Address(pg->page),
-			L4_SizeLog2(pg->page)) == NULL);
+		assert(L4_IsNilFpage(get_free_page_at(
+			L4_Address(pg->page), L4_SizeLog2(pg->page))));
 	}
 #endif
 
