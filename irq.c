@@ -17,25 +17,27 @@
 
 /* temporary stack for when interrupts occur in kernel space -- i.e. during a
  * syscall. (or possibly NMIs during a regular interrupt, but that's a TODO.)
+ *
+ * this is preallocated and used for kernel-mode interrupts because the kernel
+ * stack can be arbitrarily far along due to e.g. deep_call() call sites. an
+ * interrupt cannot call malloc(), so deep_call() is out of the question.
  */
 static void *irq_stack = NULL;
 
 
-static inline bool irq_switched_stack(void)
-{
-	char foo = 0;
-	intptr_t pos = (intptr_t)&foo;
-	return (pos & ~PAGE_MASK) == (kernel_tss.esp0 & ~PAGE_MASK);
+static inline bool irq_in_kernel(const struct x86_exregs *frame) {
+	/* ring0 interrupts push a short stack frame. */
+	return x86_frame_len(frame) < sizeof(*frame);
 }
 
 
-static void isr_irq_bottom_soft(void *parameter)
+static void irq_bottom_real(void *parameter)
 {
 	struct x86_exregs *regs = parameter;
 	int irq = regs->reason - 0x20;
 
 	assert(irq >= 0 && irq <= 15);
-	if(unlikely(!int_trigger(irq, !irq_switched_stack()))) {
+	if(unlikely(!int_trigger(irq, irq_in_kernel(regs)))) {
 		printf("got unexpected irq# %#x\n", (unsigned)irq);
 		static int last = -1, repeat = 0;
 		if(irq != last) {
@@ -66,11 +68,11 @@ void isr_irq_bottom(struct x86_exregs *regs)
 {
 	const int vecn = regs->reason, irq = vecn - 0x20;
 	(*global_pic.send_eoi)(irq);
-	if(irq_switched_stack()) {
+	if(!irq_in_kernel(regs)) {
 		/* user thread was interrupted. stack is the interrupt handler and
 		 * syscall stack, which can support isr_irq_bottom_soft().
 		 */
-		isr_irq_bottom_soft(regs);
+		irq_bottom_real(regs);
 	} else {
 		/* interrupt occurred in kernel space. the frame is on the
 		 * previously-installed kernel stack, which may be the syscall stack
@@ -80,7 +82,7 @@ void isr_irq_bottom(struct x86_exregs *regs)
 		void *stk_top = irq_stack + PAGE_SIZE;
 		stk_top -= sizeof(struct x86_exregs *);
 		*(struct x86_exregs **)stk_top = regs;
-		call_on_stack(&isr_irq_bottom_soft, stk_top);
+		call_on_stack(&irq_bottom_real, stk_top);
 	}
 }
 
