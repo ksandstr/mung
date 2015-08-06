@@ -117,6 +117,8 @@ static inline bool int_eq(const void *elem, void *ref) {
 extern int deep_call(void (*fn)(void *), void *paramptr);
 extern bool is_stack_safe(size_t margin);
 
+extern void call_on_stack(void (*fn)(void *), void *sp);
+
 
 /* from l4util.c */
 extern size_t stritemlen(L4_StringItem_t *si);

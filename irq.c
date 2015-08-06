@@ -51,19 +51,6 @@ static void irq_bottom_real(void *parameter)
 }
 
 
-static inline void call_on_stack(void (*fn)(void *), void *stack)
-{
-	/* this trick relies on ebx being a callee-saved register. */
-	asm volatile (
-		"\txchgl %%ebx, %%esp\n"
-		"\tcall *%%edi\n"
-		"\tmovl %%ebx, %%esp\n"
-		: "=b" (stack)
-		: "0" (stack), "D" (fn)
-		: "memory", "cc", "edx", "ecx", "eax");
-}
-
-
 void isr_irq_bottom(struct x86_exregs *regs)
 {
 	const int vecn = regs->reason, irq = vecn - 0x20;

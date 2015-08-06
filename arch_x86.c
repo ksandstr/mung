@@ -69,10 +69,7 @@ void x86_free_ptab(struct map_group *g)
 }
 
 
-/* FIXME: duplicated from irq.c! move this off somewhere they have in
- * common.
- */
-static inline void call_on_stack(void (*fn)(void *), void *stack)
+void call_on_stack(void (*fn)(void *), void *stack)
 {
 	/* this trick relies on ebx being a callee-saved register. */
 	asm volatile (
