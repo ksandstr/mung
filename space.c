@@ -52,7 +52,7 @@ static size_t hash_utcb_page(const void *ptr, void *priv) {
 }
 
 
-static bool cmp_utcb_page(const void *cand, void *key) {
+static inline bool cmp_utcb_page(const void *cand, void *key) {
 	const struct utcb_page *p = cand;
 	return p->pos == *(uint16_t *)key;
 }
@@ -566,7 +566,9 @@ struct thread *space_find_local_thread(struct space *sp, L4_LthreadId_t ltid)
 {
 	assert(ltid.X.zeros == 0);
 
-	intptr_t off = (intptr_t)ltid.raw - L4_Address(sp->utcb_area) - 256;
+	/* (this micro-optimization saves 3 insns.) */
+	assert((sp->utcb_area.raw & ~PAGE_MASK) == L4_Address(sp->utcb_area));
+	intptr_t off = (intptr_t)ltid.raw - (sp->utcb_area.raw & ~PAGE_MASK) - 256;
 
 	/* check malformed LTID */
 	if(unlikely((off & (UTCB_SIZE - 1)) != 0)) return NULL;
