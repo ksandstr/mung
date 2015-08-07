@@ -281,12 +281,8 @@ static inline void for_each_thread_in_space(
 		up != NULL;
 		up = htable_next(&sp->utcb_pages, &it))
 	{
-		unsigned occmap = up->occmap;
-		while(occmap != 0) {
-			int slot = ffsl(occmap) - 1;
-			occmap &= ~(1 << slot);
-			assert(up->slots[slot] != NULL);
-			if(!(*fn)(up->slots[slot], priv)) return;
+		for(int i=0; i < UTCB_PER_PAGE; i++) {
+			if(up->slots[i] != NULL && !(*fn)(up->slots[i], priv)) return;
 		}
 	}
 }
@@ -566,27 +562,24 @@ int space_set_kip_area(struct space *sp, L4_Fpage_t area)
 }
 
 
-struct thread *space_find_local_thread(
-	struct space *sp,
-	L4_LthreadId_t ltid)
+struct thread *space_find_local_thread(struct space *sp, L4_LthreadId_t ltid)
 {
 	assert(ltid.X.zeros == 0);
 
 	intptr_t off = (intptr_t)ltid.raw - L4_Address(sp->utcb_area) - 256;
-	if((off & (UTCB_SIZE - 1)) != 0) return NULL;	/* malformed LTID */
+
+	/* check malformed LTID */
+	if(unlikely((off & (UTCB_SIZE - 1)) != 0)) return NULL;
 
 	uint16_t page_pos = off / PAGE_SIZE;
-	struct utcb_page *up = htable_get(&sp->utcb_pages, int_hash(page_pos),
-		&cmp_utcb_page, &page_pos);
-	if(up != NULL) {
+	struct utcb_page *up = htable_get(&sp->utcb_pages,
+		int_hash(page_pos), &cmp_utcb_page, &page_pos);
+	if(likely(up != NULL)) {
 		int slot = (off / UTCB_SIZE) % UTCB_PER_PAGE;
-		if(CHECK_FLAG(up->occmap, 1 << slot)) {
-			struct thread *t = up->slots[slot];
-			assert(t != NULL);
-			assert(t->utcb_pos == off / UTCB_SIZE);
-			assert(t->space == sp);
-			return t;
-		}
+		struct thread *t = up->slots[slot];
+		assert(t == NULL || t->utcb_pos == off / UTCB_SIZE);
+		assert(t == NULL || t->space == sp);
+		return t;
 	}
 
 	return NULL;
