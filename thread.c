@@ -226,7 +226,7 @@ bool thread_ctor(struct thread *t, thread_id tid)
 		.max_delay = 0,
 		.ts_len = L4_TimePeriod(10000),		/* 10 ms */
 		.quantum = 0,
-		.total_quantum = 0,
+		.total_quantum = ~(uint64_t)0,		/* useful default */
 
 		/* x86 malarkey for non-kernel threads. */
 		.ctx = {

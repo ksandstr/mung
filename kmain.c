@@ -641,7 +641,7 @@ void kmain(void *bigp, unsigned int magic)
 
 	first_thread->pri = 0;
 	first_thread->sens_pri = 0;
-	first_thread->total_quantum = 0;
+	first_thread->total_quantum = ~(uint64_t)0;
 	first_thread->quantum = 10000;
 	first_thread->ts_len = L4_TimePeriod(10000);
 	sq_update_thread(first_thread);

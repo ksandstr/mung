@@ -111,7 +111,11 @@ struct thread
 	uint16_t max_delay;
 	L4_Time_t ts_len;
 	uint32_t quantum;			/* # of µs left (goes up to 1h 6m) */
-	uint64_t total_quantum;		/* # of µs left */
+
+	/* # of µs left before message to scheduler. ~0 for infinite. threads with
+	 * a zero total_quantum will not schedule until total_quantum is reset.
+	 */
+	uint64_t total_quantum;
 
 	/* parameters of the ongoing IPC operation
 	 * (i.e. copies of TCR values at time of IPC syscall)
