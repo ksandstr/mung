@@ -414,16 +414,15 @@ static void spinner_fn(void *param_ptr)
 
 
 static L4_ThreadId_t start_spinner(
-	int priority,
-	int spin_ms,
-	L4_Time_t timeslice,
-	bool signal_preempt,
-	bool is_polite,
-	bool delay_pe)
+	int priority, int spin_ms,
+	L4_Time_t timeslice, L4_Time_t total_quantum,
+	bool signal_preempt, bool is_polite, bool delay_pe)
 {
 	assert(spin_ms > 0);
 	assert(time_in_us(timeslice) >= 1000);
 	assert(priority >= 0 && priority <= 0xff);
+	assert(total_quantum.raw != L4_ZeroTime.raw);
+	assert(L4_IsTimePeriod_NP(total_quantum));
 
 	struct spinner_param *p = malloc(sizeof(*p));
 	if(p == NULL) return L4_nilthread;
@@ -432,11 +431,10 @@ static L4_ThreadId_t start_spinner(
 		.parent = L4_Myself(),
 		.spin_ms = spin_ms,
 		.signal_preempt = signal_preempt,
-		.is_polite = is_polite,
-		.delay_pe = delay_pe,
+		.is_polite = is_polite, .delay_pe = delay_pe,
 	};
 	L4_ThreadId_t spinner = start_thread_long(&spinner_fn, p,
-		priority, timeslice, L4_Never);
+		priority, timeslice, total_quantum);
 	if(L4_IsNilThread(spinner)) free(p);
 	return spinner;
 }
@@ -498,7 +496,7 @@ static void preempt_exn_case(
 
 	int my_pri = find_own_priority();
 	L4_ThreadId_t spinner = start_spinner(my_pri - 2, spin_time_ms,
-		spinner_ts, signal_preempt, false, false);
+		spinner_ts, L4_Never, signal_preempt, false, false);
 	fail_unless(!L4_IsNilThread(spinner));
 
 	L4_ThreadId_t preempt;
@@ -831,7 +829,7 @@ static bool delay_preempt_case(
 
 	L4_ThreadId_t spinner = start_spinner(my_pri - 2, 25,
 		small_ts ? L4_TimePeriod(12 * 1000) : L4_TimePeriod(50 * 1000),
-		true, polite, delay_pe);
+		L4_Never, true, polite, delay_pe);
 	if(L4_IsNilThread(spinner)) return false;
 	/* TODO: could split delay_pe into two flags: one controlling whether the
 	 * delay_preemption flag is set in the spinner's TCR, and the other
@@ -897,13 +895,84 @@ static bool delay_preempt_case(
 }
 
 
+/* start a thread that spins for longer than its total quantum. this should
+ * cause a preemption message.
+ */
+START_TEST(total_quantum_exhaust_rpc)
+{
+	int my_pri = find_own_priority();
+	const L4_Time_t ts_len = L4_TimePeriod(6 * 1000),
+		tq_len = L4_TimePeriod(13 * 1000);
+
+	diag("my_pri=%d", my_pri);
+	plan_tests(5);
+	todo_start("no implementation");
+
+	L4_ThreadId_t spinner = start_spinner(my_pri - 2, 20,
+		ts_len, tq_len, false, false, false);
+	/* wait for the message. or not. */
+	bool msg_got = false, sync_got = false;
+	L4_Clock_t msg_clock = { .raw = 0 }, ipc_at_clock = { .raw = 0 },
+		start_clock = L4_SystemClock();
+	L4_ThreadId_t msg_from = L4_nilthread;
+	for(;;) {
+		L4_ThreadId_t sender;
+		L4_MsgTag_t tag = L4_Wait_Timeout(TEST_IPC_DELAY, &sender);
+		if(L4_IpcFailed(tag)) {
+			diag("ipc failed: ec=%#lx", L4_ErrorCode());
+			break;
+		} else if(L4_Label(tag) == 0xffd0) {
+			L4_Word_t mr[2]; L4_StoreMRs(1, 2, mr);
+			ipc_at_clock = L4_SystemClock();
+			msg_clock.raw = (L4_Word64_t)mr[0] | (L4_Word64_t)mr[1];
+			msg_got = true;
+			msg_from = sender;
+			diag("resetting total_quantum for %lu:%lu",
+				L4_ThreadNo(sender), L4_Version(sender));
+			L4_Word_t ret = L4_Set_Timeslice(sender, ts_len, tq_len);
+			if(ret == 0) {
+				diag("  Schedule failed, ec=%lu", L4_ErrorCode());
+			}
+		} else if(tag.raw == 0 && L4_SameThreads(sender, spinner)) {
+			/* spinner's exit signal. */
+			sync_got = true;
+			break;
+		} else {
+			diag("unrecognized tag=%#lx from %lu:%lu",
+				tag.raw, L4_ThreadNo(sender), L4_Version(sender));
+		}
+	}
+	L4_Clock_t end_clock = L4_SystemClock();
+
+	L4_Word64_t t = end_clock.raw - start_clock.raw,
+		msg_t = msg_clock.raw - start_clock.raw,
+		ipc_t = ipc_at_clock.raw - start_clock.raw;
+
+	ok(msg_got, "got total_quantum message");
+	if(msg_got) {
+		diag("t=%lu, msg_t=%lu, ipc_t=%lu",
+			(unsigned long)t, (unsigned long)msg_t, (unsigned long)ipc_t);
+	}
+	ok(L4_SameThreads(msg_from, spinner), "came from spinner");
+
+	todo_start("fajskfdjaslkfdjsal");
+	ok1(msg_t >= L4_PeriodUs_NP(tq_len));
+	ok1(ipc_t >= L4_PeriodUs_NP(tq_len));
+
+	ok(sync_got, "got clean exit message");
+
+	xjoin_thread(spinner);
+}
+END_TEST
+
+
 /* returns the difference between spinner switch and return therefrom. */
 static int yield_timeslice_case(bool preempt_spinner)
 {
 	int my_pri = find_own_priority();
 
 	L4_ThreadId_t spinner = start_spinner(my_pri - 2, 15,
-		L4_TimePeriod(2 * 1000), false, false, false);
+		L4_TimePeriod(2 * 1000), L4_Never, false, false, false);
 
 	L4_ThreadId_t preempt = L4_nilthread;
 	if(preempt_spinner) {
@@ -1120,6 +1189,7 @@ Suite *sched_suite(void)
 		tcase_add_test(tc, simple_preempt_test);
 		tcase_add_test(tc, preempt_exn_test);
 		tcase_add_test(tc, delay_preempt);
+		tcase_add_test(tc, total_quantum_exhaust_rpc);
 		suite_add_tcase(s, tc);
 	}
 
