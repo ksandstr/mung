@@ -852,6 +852,42 @@ bool ipc_user(struct thread *from, struct thread **to_p)
 }
 
 
+static bool ipc_user_oneway(struct thread *from, struct thread **to_p)
+{
+	/* this must be a global ID so that cancel_ipc_to()'s receiver search
+	 * will find it.
+	 */
+	from->ipc_to.raw = (*to_p)->id;
+	from->ipc_from.raw = L4_nilthread.raw;
+	from->send_timeout = L4_Never;
+	from->recv_timeout = L4_ZeroTime;
+
+	void *from_utcb = thread_get_utcb(from);
+	if(!ipc_send_half(from, from_utcb, to_p)) return false;
+	else {
+		/* clear the post-ipc hook immediately. */
+		post_exn_ok(from);
+		return true;
+	}
+}
+
+
+bool send_tq_ipc(
+	struct thread *sender, struct thread *dest,
+	L4_Clock_t body)
+{
+	void *utcb = thread_get_utcb(sender);
+	save_ipc_regs(sender, utcb, 3);
+	L4_VREG(utcb, L4_TCR_BR(0)) = L4_UntypedWordsAcceptor.raw;
+	L4_VREG(utcb, L4_TCR_MR(0)) = (L4_MsgTag_t){
+			.X.label = 0xffd0, .X.u = 2,
+		}.raw;
+	L4_VREG(utcb, L4_TCR_MR(1)) = body.raw;
+	L4_VREG(utcb, L4_TCR_MR(2)) = body.raw >> sizeof(L4_Word_t) * 8;
+	return ipc_user_oneway(sender, &dest);
+}
+
+
 /* add `w' to redir_hash under `holdup', then remove `w' from sendwait_hash
  * and free it. this makes sure that a held passive send can be restarted
  * through the `holdup' redirector's active receive when the ultimate
@@ -1328,8 +1364,11 @@ bool ipc_recv_half(struct thread *self, void *self_utcb)
 			/* userspace threads operate via a state machine. */
 			if(L4_IsNilThread(from->ipc_from)) {
 				/* no receive phase. */
-				set_ipc_return_thread(from, from_utcb);
 				thread_wake(from);
+				if(!post_exn_ok(from)) {	/* clear total_quantum RPC */
+					/* only set regs in syscall-generated IPC */
+					set_ipc_return_thread(from, from_utcb);
+				}
 			} else {
 				/* (the only special thread state transition in this
 				 * module.)

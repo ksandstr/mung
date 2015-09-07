@@ -125,6 +125,15 @@ extern void set_ipc_return_regs(
 	struct thread *current,
 	void *utcb);
 
+/* wraps ipc_user() to send a total_quantum exhaustion message to @sched from
+ * @t. returns true if the send phase succeeded immediately, false otherwise.
+ *
+ * NOTE: callers should set an IPC hook to set @t to a descheduled-READY
+ * status before calling send_tq_ipc().
+ */
+extern bool send_tq_ipc(
+	struct thread *t, struct thread *sched,
+	L4_Clock_t body);
 
 /* actually from exception.c */
 extern void set_pf_msg(

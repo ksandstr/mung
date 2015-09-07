@@ -393,7 +393,32 @@ static uint64_t next_preempt_at(
 }
 
 
-/* dock a thread's quantum. not called for context switch on self-deletion. */
+static void desched_ready(struct hook *h, uintptr_t code, void *unused)
+{
+	struct thread *self = container_of(h, struct thread, post_exn_call);
+
+	if(unlikely(code != 0)) {
+		printf("%s: ipc failed (code=%lu, status=%s)\n", __func__,
+			(unsigned long)code, sched_status_str(self));
+		/* should come out of SEND_WAIT. */
+		self->status = TS_READY;
+	}
+
+	/* put thread in tq-stop: remove from sched if ready, leave as is if
+	 * stopped
+	 */
+	assert(self->status == TS_READY || self->status == TS_STOPPED);
+	if(self->status == TS_READY) {
+		sq_remove_thread(self);
+	}
+	hook_detach(h);
+}
+
+
+/* dock a thread's quantums. not called for context switch on
+ * self-deletion. may cause @self to halt or become READY outside the
+ * scheduling queue (pending total_quantum refill).
+ */
 static void leaving_thread(struct thread *self)
 {
 	assert(self->status != TS_RUNNING);
@@ -401,6 +426,27 @@ static void leaving_thread(struct thread *self)
 	uint32_t passed = (read_global_timer() - task_switch_time) * 1000;
 	if(passed > self->quantum) self->quantum = 0;
 	else self->quantum -= passed;
+
+	if(self->total_quantum != ~(uint64_t)0) {
+		if(passed < self->total_quantum) self->total_quantum -= passed;
+		else {
+			self->total_quantum = 0;
+			struct thread *sched;
+			sched = L4_IsNilThread(self->scheduler)
+				? NULL : thread_find(self->scheduler.raw);
+			if(sched == NULL) {
+				printf("WARNING: no scheduler for %lu:%lu! thread stopped.\n",
+					TID_THREADNUM(self->id), TID_VERSION(self->id));
+				thread_halt(self);
+			} else {
+				L4_Clock_t sw_at = { .raw = ksystemclock() };
+				hook_push_front(&self->post_exn_call, &desched_ready, NULL);
+				if(!send_tq_ipc(self, sched, sw_at)) {
+					assert(self->status == TS_SEND_WAIT);
+				}
+			}
+		}
+	}
 }
 
 
@@ -429,7 +475,8 @@ static void entering_thread(struct thread *next)
 	uint64_t preempt_at = next_preempt_at(&preempt_pri, next,
 		task_switch_time * 1000);
 	if(next->ts_len.raw != L4_Never.raw) {
-		uint64_t q_end = task_switch_time * 1000 + next->quantum;
+		uint64_t q_end = task_switch_time * 1000
+			+ MIN(uint64_t, next->quantum, next->total_quantum);
 		if(preempt_at == 0 || preempt_at > q_end) preempt_at = q_end;
 	}
 
@@ -1133,8 +1180,16 @@ SYSCALL L4_Word_t sys_schedule(
 			dest->quantum = slice;
 		}
 		if(total_quantum.raw != 0xffff) {
-			dest->total_quantum = time_in_us(total_quantum);
+			bool re_act = dest->status == TS_READY
+				&& dest->total_quantum == 0;
+			if(total_quantum.raw == L4_Never.raw) {
+				dest->total_quantum = ~(uint64_t)0;
+			} else {
+				dest->total_quantum = time_in_us(total_quantum);
+			}
 			dest->quantum = time_in_us(dest->ts_len);
+
+			if(re_act) sq_insert_thread(dest);
 		}
 	}
 

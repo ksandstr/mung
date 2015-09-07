@@ -906,7 +906,6 @@ START_TEST(total_quantum_exhaust_rpc)
 
 	diag("my_pri=%d", my_pri);
 	plan_tests(5);
-	todo_start("no implementation");
 
 	L4_ThreadId_t spinner = start_spinner(my_pri - 2, 20,
 		ts_len, tq_len, false, false, false);
@@ -955,7 +954,6 @@ START_TEST(total_quantum_exhaust_rpc)
 	}
 	ok(L4_SameThreads(msg_from, spinner), "came from spinner");
 
-	todo_start("fajskfdjaslkfdjsal");
 	ok1(msg_t >= L4_PeriodUs_NP(tq_len));
 	ok1(ipc_t >= L4_PeriodUs_NP(tq_len));
 
