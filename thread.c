@@ -401,8 +401,11 @@ void thread_halt(struct thread *t)
 		|| t->status == TS_R_RECV)
 	{
 		if(t->status == TS_R_RECV) t->flags |= TF_PRE_RECV;
+		int old_status = t->status;
 		t->status = TS_STOPPED;
-		sq_remove_thread(t);
+		if(old_status != TS_READY || t->total_quantum > 0) {
+			sq_remove_thread(t);
+		}
 	}
 }
 
@@ -419,7 +422,7 @@ void thread_resume(struct thread *t)
 			/* it shouldn't be lost in R_RECV. */
 			t->wakeup_time = 0;
 		}
-		sq_insert_thread(t);
+		if(t->total_quantum > 0) sq_insert_thread(t);
 	}
 }
 
@@ -1229,8 +1232,11 @@ SYSCALL L4_Word_t sys_threadcontrol(
 		if(CHECK_FLAG(dest->flags, TF_INTR)) int_kick(dest);
 		post_exn_fail(dest);
 		if(dest->status != TS_STOPPED) {
+			int old_status = dest->status;
 			dest->status = TS_STOPPED;
-			sq_remove_thread(dest);
+			if(old_status != TS_READY || dest->total_quantum > 0) {
+				sq_remove_thread(dest);
+			}
 		}
 		L4_ThreadId_t dead_tid = { .raw = dest->id };
 		thread_destroy(dest);
@@ -1261,7 +1267,9 @@ SYSCALL L4_Word_t sys_threadcontrol(
 
 			if(CHECK_FLAG(dest->flags, TF_INTR)) int_kick(dest);
 
-			if(dest->status > 1) sq_remove_thread(dest);
+			if(dest->status != TS_READY || dest->total_quantum > 0) {
+				if(dest->status > 1) sq_remove_thread(dest);
+			}
 			dest->status = TS_STOPPED;
 			dest->flags = 0;
 
