@@ -181,9 +181,7 @@ static inline void L4_Start_SpIp(L4_ThreadId_t t, L4_Word_t sp, L4_Word_t ip)
 
 static inline void L4_Start_SpIpFlags(
 	L4_ThreadId_t t,
-	L4_Word_t sp,
-	L4_Word_t ip,
-	L4_Word_t flags)
+	L4_Word_t sp, L4_Word_t ip, L4_Word_t flags)
 {
 	L4_Word_t dummy;
 	L4_ThreadId_t dummy_id;
@@ -208,15 +206,97 @@ static inline L4_ThreadState_t L4_Stop(L4_ThreadId_t tid)
 
 static inline L4_ThreadState_t L4_Stop_SpIpFlags(
 	L4_ThreadId_t tid,
-	L4_Word_t *sp_p,
-	L4_Word_t *ip_p,
-	L4_Word_t *flags_p)
+	L4_Word_t *sp_p, L4_Word_t *ip_p, L4_Word_t *flags_p)
 {
 	L4_Word_t dummy;
 	L4_ThreadId_t dummy_id;
 	L4_ThreadState_t state;
 
 	L4_ExchangeRegisters(tid, 1 | 1 << 8 | 1 << 9, 0, 0, 0, 0,
+		L4_nilthread, &state.raw, sp_p, ip_p, flags_p, &dummy,
+		&dummy_id);
+	return state;
+}
+
+
+static inline L4_ThreadState_t L4_AbortReceive_and_stop(L4_ThreadId_t t)
+{
+	L4_Word_t dummy;
+	L4_ThreadId_t dummy_id;
+	L4_ThreadState_t state;
+
+	L4_ExchangeRegisters(t, 0x303, 0, 0, 0, 0,
+		L4_nilthread, &state.raw, &dummy, &dummy, &dummy, &dummy,
+		&dummy_id);
+	return state;
+}
+
+
+static inline L4_ThreadState_t L4_AbortReceive_and_stop_SpIpFlags(
+	L4_ThreadId_t t,
+	L4_Word_t *sp_p, L4_Word_t *ip_p, L4_Word_t *flags_p)
+{
+	L4_Word_t dummy;
+	L4_ThreadId_t dummy_id;
+	L4_ThreadState_t state;
+
+	L4_ExchangeRegisters(t, 0x303, 0, 0, 0, 0,
+		L4_nilthread, &state.raw, sp_p, ip_p, flags_p, &dummy,
+		&dummy_id);
+	return state;
+}
+
+
+static inline L4_ThreadState_t L4_AbortSend_and_stop(L4_ThreadId_t t)
+{
+	L4_Word_t dummy;
+	L4_ThreadId_t dummy_id;
+	L4_ThreadState_t state;
+
+	L4_ExchangeRegisters(t, 0x305, 0, 0, 0, 0,
+		L4_nilthread, &state.raw, &dummy, &dummy, &dummy, &dummy,
+		&dummy_id);
+	return state;
+}
+
+
+static inline L4_ThreadState_t L4_AbortSend_and_stop_SpIpFlags(
+	L4_ThreadId_t t,
+	L4_Word_t *sp_p, L4_Word_t *ip_p, L4_Word_t *flags_p)
+{
+	L4_Word_t dummy;
+	L4_ThreadId_t dummy_id;
+	L4_ThreadState_t state;
+
+	L4_ExchangeRegisters(t, 0x305, 0, 0, 0, 0,
+		L4_nilthread, &state.raw, sp_p, ip_p, flags_p, &dummy,
+		&dummy_id);
+	return state;
+}
+
+
+static inline L4_ThreadState_t L4_AbortIpc_and_stop(L4_ThreadId_t t)
+{
+	L4_Word_t dummy;
+	L4_ThreadId_t dummy_id;
+	L4_ThreadState_t state;
+
+	L4_ExchangeRegisters(t, 0x307, 0, 0, 0, 0,
+		L4_nilthread, &state.raw, &dummy, &dummy, &dummy, &dummy,
+		&dummy_id);
+	return state;
+}
+
+
+static inline L4_ThreadState_t L4_AbortIpc_and_stop_SpIpFlags(
+	L4_ThreadId_t t,
+	L4_Word_t *sp_p, L4_Word_t *ip_p, L4_Word_t *flags_p)
+{
+	L4_Word_t dummy;
+	L4_ThreadId_t dummy_id;
+	L4_ThreadState_t state;
+
+	L4_ExchangeRegisters(t, 0x307, 0, 0, 0, 0,
 		L4_nilthread, &state.raw, sp_p, ip_p, flags_p, &dummy,
 		&dummy_id);
 	return state;
