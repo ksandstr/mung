@@ -1037,11 +1037,11 @@ START_LOOP_TEST(tqe_mod_del_threadctl, iter, 0, 63)
 		if(L4_IpcFailed(tag)) {
 			if(L4_ErrorCode() == 3) break;
 			diag("tqe msg wait failed, ec=%#lx", L4_ErrorCode());
-			break;
 		} else if(L4_Label(tag) == 0xffd0) {
 			got_msg = true;
 		} else if(tag.raw == 0 && L4_SameThreads(sender, spinner)) {
 			got_done = true;
+			break;
 		}
 	}
 
@@ -1064,7 +1064,7 @@ START_LOOP_TEST(tqe_mod_del_threadctl, iter, 0, 63)
 		/* change its version bits just to cause a panic */
 		L4_ThreadId_t new_tid = L4_GlobalId(L4_ThreadNo(spinner),
 			L4_Version(spinner) ^ 0x120);
-		assert(new_tid.raw != spinner.raw);
+		fail_unless(new_tid.raw != spinner.raw);
 		L4_Word_t res = L4_ThreadControl(new_tid, spinner, L4_nilthread,
 			L4_nilthread, (void *)-1);
 		fail_if(res == 0, "threadctl ec=%#lx", L4_ErrorCode());
@@ -1075,7 +1075,7 @@ START_LOOP_TEST(tqe_mod_del_threadctl, iter, 0, 63)
 		res = L4_ThreadControl(spinner, new_tid, L4_nilthread,
 			L4_nilthread, (void *)-1);
 		fail_if(res == 0, "threadctl ec=%#lx", L4_ErrorCode());
-		assert(thr_exists(spinner) && !thr_exists(new_tid));
+		fail_unless(thr_exists(spinner) && !thr_exists(new_tid));
 	} skip_end;
 	imply_ok1(got_msg, thr_exists(spinner));
 
@@ -1093,6 +1093,99 @@ START_LOOP_TEST(tqe_mod_del_threadctl, iter, 0, 63)
 
 end:
 	;
+}
+END_TEST
+
+
+/* test about aborting a spinner's TQE IPC before it completes. the expected
+ * behaviour is that the passive send-phase is thrown away, the thread enters
+ * TQ=0 limbo, and comes out of it once reset.
+ *
+ * variables:
+ *   - interrupt the passive send, or not (for validation)
+ *   - give a new total quantum, or not (adds a no-op case)
+ *   - resume interrupted thread before quantum reset, or after
+ */
+START_LOOP_TEST(tqe_abort_ipc, iter, 0, 7)
+{
+	const int spin_ms = 20, my_pri = find_own_priority();
+	const L4_Time_t ts_len = L4_TimePeriod(spin_ms * 1000 / 2),
+		totq_len = L4_TimePeriod(spin_ms * 1000 * 2 / 3),
+		ipc_len = L4_TimePeriod(spin_ms * 3 * 1000);
+	const bool brk_send = CHECK_FLAG(iter, 1), add_tq = CHECK_FLAG(iter, 2),
+		resume_late = CHECK_FLAG(iter, 4);
+	diag("brk_send=%s, add_tq=%s, resume_late=%s",
+		btos(brk_send), btos(add_tq), btos(resume_late));
+	diag("spin_ms=%d, my_pri=%d", spin_ms, my_pri);
+	if(resume_late && (!add_tq || !brk_send)) {
+		plan_skip_all("redundant iteration");
+		goto end;
+	}
+	plan_tests(4);
+
+	L4_ThreadId_t spinner = start_spinner(my_pri - 2, spin_ms,
+		ts_len, totq_len, false, false, false);
+
+	/* wait 'til it pops. */
+	L4_Sleep(L4_TimePeriod(time_in_us(totq_len) + 5000));
+	L4_Word_t timectl = 0,
+		st = L4_Schedule(spinner, ~0ul, ~0ul, ~0ul, ~0ul, &timectl);
+	L4_Time_t rem_tq = { .raw = timectl & 0xffff };
+
+	/* confirm test state. */
+	if(!ok1(time_in_us(rem_tq) == 0)) {
+		diag("st=%#lx, timectl=%#lx [rem_ts=%uµs, rem_tq=%uµs]", st, timectl,
+			(unsigned)time_in_us((L4_Time_t){ .raw = timectl >> 16 }),
+			rem_tq.raw);
+	}
+
+	if(brk_send) {
+		/* break & re-enter */
+		L4_AbortIpc_and_stop(spinner);
+		if(!resume_late) L4_Start(spinner);
+		if(add_tq) {
+			diag("setting tq=∞ after abort, %s resume",
+				resume_late ? "before" : "after");
+			L4_Set_Timeslice(spinner, ts_len, L4_Never);
+		}
+		if(resume_late) L4_Start(spinner);
+	}
+
+	/* wait for tqe msg, if any. */
+	bool got_msg = false, got_done = false;
+	for(;;) {
+		L4_ThreadId_t sender;
+		L4_MsgTag_t tag = L4_Wait_Timeout(ipc_len, &sender);
+		if(L4_IpcFailed(tag)) {
+			if(L4_ErrorCode() == 3) break;
+			diag("tqe msg wait failed, ec=%#lx", L4_ErrorCode());
+			break;
+		} else if(L4_Label(tag) == 0xffd0) {
+			got_msg = true;
+			if(add_tq) {
+				diag("setting tq=∞ on RPC");
+				L4_Set_Timeslice(spinner, ts_len, L4_Never);
+			}
+		} else if(tag.raw == 0 && L4_SameThreads(sender, spinner)) {
+			got_done = true;
+			break;
+		}
+	}
+
+	iff_ok1(got_msg, !brk_send);
+	iff_ok1(got_done, add_tq);
+
+	L4_Word_t ec = 0;
+	void *retptr = join_thread_long(spinner, TEST_IPC_DELAY, &ec);
+	bool join_ok = retptr != NULL || ec == 0;
+	iff_ok1(add_tq, join_ok);
+	if(!join_ok) {
+		diag("retptr=%p, ec=%#lx", retptr, ec);
+		kill_thread(spinner);
+	}
+
+end:
+	;	/* label at end of compound statement, my eye */
 }
 END_TEST
 
@@ -1589,10 +1682,9 @@ Suite *thread_suite(void)
 	{
 		TCase *tc = tcase_create("tqe");
 		tcase_set_fork(tc, false);
-		/* TODO: check version field modification and space shifting in the
-		 * TQE state
-		 */
 		tcase_add_test(tc, tqe_mod_del_threadctl);
+		/* TODO: test ExchangeRegisters to halt/resume a thread */
+		tcase_add_test(tc, tqe_abort_ipc);
 		suite_add_tcase(s, tc);
 	}
 
