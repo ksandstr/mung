@@ -1042,7 +1042,9 @@ SYSCALL L4_Word_t sys_schedule(
 	L4_Word_t result, ec = 0, timectl = *timectl_p;
 
 	/* test for user TID range */
-	if(unlikely(L4_ThreadNo(dest_tid) < first_user_threadno())) {
+	if(L4_IsGlobalId(dest_tid)
+		&& unlikely(L4_ThreadNo(dest_tid) < first_user_threadno()))
+	{
 		result = L4_SCHEDRESULT_ERROR;
 		ec = L4_ERROR_INVALID_THREAD;
 		goto end_noupdate;
