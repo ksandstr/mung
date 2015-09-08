@@ -406,7 +406,7 @@ static void spinner_fn(void *param_ptr)
 
 	if(!L4_IsNilThread(param->parent)) {
 		L4_LoadMR(0, 0);
-		L4_Send_Timeout(param->parent, L4_TimePeriod(5 * 1000));
+		L4_Send_Timeout(param->parent, TEST_IPC_DELAY);
 	}
 
 	free(param);
@@ -897,38 +897,52 @@ static bool delay_preempt_case(
 
 /* start a thread that spins for longer than its total quantum. this should
  * cause a preemption message.
+ *
+ * TODO:
+ *   - add test points for when the tqe rpc happens, and the time value it
+ *     carries.
  */
-START_TEST(total_quantum_exhaust_rpc)
+START_LOOP_TEST(total_quantum_exhaust_rpc, iter, 0, 3)
 {
-	int my_pri = find_own_priority();
-	const L4_Time_t ts_len = L4_TimePeriod(6 * 1000),
-		tq_len = L4_TimePeriod(13 * 1000);
-
-	diag("my_pri=%d", my_pri);
+	const bool short_tq = CHECK_FLAG(iter, 1),
+		rcv_active = CHECK_FLAG(iter, 2);
+	const int spin_ms = 20, my_pri = find_own_priority();
+	const L4_Time_t ts_len = L4_TimePeriod(spin_ms * 1000 / 2),
+		totq_len = L4_TimePeriod((short_tq ? spin_ms * 2 / 3 : spin_ms * 2) * 1000),
+		ipc_len = L4_TimePeriod(spin_ms * 3 * 1000);
+	diag("short_tq=%s, rcv_active=%s", btos(short_tq), btos(rcv_active));
+	diag("spin_ms=%d, my_pri=%d, ts_len=%luµs, totq_len=%luµs",
+		spin_ms, my_pri, (unsigned long)time_in_us(ts_len),
+		(unsigned long)time_in_us(totq_len));
 	plan_tests(5);
 
-	L4_ThreadId_t spinner = start_spinner(my_pri - 2, 20,
-		ts_len, tq_len, false, false, false);
+	L4_ThreadId_t spinner = start_spinner(my_pri - 2, spin_ms,
+		ts_len, totq_len, false, false, false);
+	spinner = L4_GlobalIdOf(spinner);
+	diag("spinner=%lu:%lu", L4_ThreadNo(spinner), L4_Version(spinner));
 	/* wait for the message. or not. */
 	bool msg_got = false, sync_got = false;
 	L4_Clock_t msg_clock = { .raw = 0 }, ipc_at_clock = { .raw = 0 },
 		start_clock = L4_SystemClock();
 	L4_ThreadId_t msg_from = L4_nilthread;
 	for(;;) {
+		if(rcv_active) {
+			/* force passive send. */
+			L4_Sleep(L4_TimePeriod(time_in_us(totq_len) + 2000));
+		}
 		L4_ThreadId_t sender;
-		L4_MsgTag_t tag = L4_Wait_Timeout(TEST_IPC_DELAY, &sender);
+		L4_MsgTag_t tag = L4_Wait_Timeout(ipc_len, &sender);
 		if(L4_IpcFailed(tag)) {
+			if(L4_ErrorCode() == 3) break;
 			diag("ipc failed: ec=%#lx", L4_ErrorCode());
-			break;
 		} else if(L4_Label(tag) == 0xffd0) {
 			L4_Word_t mr[2]; L4_StoreMRs(1, 2, mr);
 			ipc_at_clock = L4_SystemClock();
 			msg_clock.raw = (L4_Word64_t)mr[0] | (L4_Word64_t)mr[1];
 			msg_got = true;
 			msg_from = sender;
-			diag("resetting total_quantum for %lu:%lu",
-				L4_ThreadNo(sender), L4_Version(sender));
-			L4_Word_t ret = L4_Set_Timeslice(sender, ts_len, tq_len);
+			diag("resetting total_quantum");
+			L4_Word_t ret = L4_Set_Timeslice(sender, ts_len, L4_Never);
 			if(ret == 0) {
 				diag("  Schedule failed, ec=%lu", L4_ErrorCode());
 			}
@@ -947,15 +961,14 @@ START_TEST(total_quantum_exhaust_rpc)
 		msg_t = msg_clock.raw - start_clock.raw,
 		ipc_t = ipc_at_clock.raw - start_clock.raw;
 
-	ok(msg_got, "got total_quantum message");
-	if(msg_got) {
-		diag("t=%lu, msg_t=%lu, ipc_t=%lu",
+	iff_ok1(short_tq, msg_got);
+	skip_start(!msg_got, 3, "tqe rpc didn't happen") {
+		diag("msg: t=%lu, msg_t=%lu, ipc_t=%lu",
 			(unsigned long)t, (unsigned long)msg_t, (unsigned long)ipc_t);
-	}
-	ok(L4_SameThreads(msg_from, spinner), "came from spinner");
-
-	ok1(msg_t >= L4_PeriodUs_NP(tq_len));
-	ok1(ipc_t >= L4_PeriodUs_NP(tq_len));
+		ok1(L4_SameThreads(msg_from, spinner));
+		ok1(msg_t >= L4_PeriodUs_NP(totq_len));
+		ok1(ipc_t >= L4_PeriodUs_NP(totq_len));
+	} skip_end;
 
 	ok(sync_got, "got clean exit message");
 

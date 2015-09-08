@@ -971,10 +971,11 @@ static void fault_to_given_pager_fn(void *param UNUSED)
 }
 
 
-/* tcase "tqeapi" */
+/* tcase "tqe" */
 
 /* test that deleting and modifying forms of ThreadControl work on threads
- * that've not been rescheduled with a new total_quantum.
+ * that've not been rescheduled with a new total_quantum. this test's
+ * self-verification overlaps somewhat with related tests in sched_suite.
  *
  * variables:
  *   - short_tq: whether the total_quantum is too short for the spin to
