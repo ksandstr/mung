@@ -413,7 +413,7 @@ static void spinner_fn(void *param_ptr)
 }
 
 
-static L4_ThreadId_t start_spinner(
+L4_ThreadId_t start_spinner(
 	int priority, int spin_ms,
 	L4_Time_t timeslice, L4_Time_t total_quantum,
 	bool signal_preempt, bool is_polite, bool delay_pe)

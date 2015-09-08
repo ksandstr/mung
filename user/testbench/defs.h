@@ -314,8 +314,13 @@ extern void next_tick(void);
 
 /* (actually in sched_suite.c) */
 extern int find_own_priority(void);
+/* launch a spinner thread. syncs with parent by a tag=0 message at end. */
+extern L4_ThreadId_t start_spinner(
+	int priority, int spin_ms,
+	L4_Time_t timeslice, L4_Time_t total_quantum,
+	bool signal_preempt, bool is_polite, bool delay_pe);
 
-/* (not in util.c anymore.) */
+
 static inline bool send_quit(L4_ThreadId_t serv) {
 	return __common_quit_timeout((serv), TEST_IPC_DELAY) == 0;
 }

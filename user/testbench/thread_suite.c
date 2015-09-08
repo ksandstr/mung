@@ -1,5 +1,6 @@
-/* unit tests concerning the ThreadControl and ExchangeRegister system calls,
- * and TCR access.
+
+/* tests concerning the ThreadControl and ExchangeRegister system calls, and
+ * TCR access.
  */
 
 #include <stdio.h>
@@ -644,7 +645,7 @@ static bool try_del(L4_ThreadId_t tid) {
 /* test that a deleting ThreadControl identifies "dest" by its ThreadNo field
  * alone. version bits should be ignored.
  */
-START_TEST(deletion)
+START_TEST(deletion_by_threadno)
 {
 	plan_tests(4);
 
@@ -968,6 +969,131 @@ static void fault_to_given_pager_fn(void *param UNUSED)
 	diag("fault test thread exiting");
 	free(memory);
 }
+
+
+/* tcase "tqeapi" */
+
+/* test that deleting and modifying forms of ThreadControl work on threads
+ * that've not been rescheduled with a new total_quantum.
+ *
+ * variables:
+ *   - short_tq: whether the total_quantum is too short for the spin to
+ *     complete in one segment
+ *   - op_rename: whether to modify the thread's version bits
+ *   - do_halt: halt thread before calling threadctl
+ *   - halt_before_ipc: halt thread in passive TQE send
+ *   - halt_and_abort: not just halt, but also abort IPC
+ *   - skip_ipc: don't receive IPC from thread at all
+ *
+ * TODO:
+ *   - [v1] test motion between spaces as well, though that's well fancy
+ */
+START_LOOP_TEST(tqe_mod_del_threadctl, iter, 0, 63)
+{
+	const bool short_tq = CHECK_FLAG(iter, 1),
+		op_rename = CHECK_FLAG(iter, 2), do_halt = CHECK_FLAG(iter, 4),
+		halt_before_ipc = CHECK_FLAG(iter, 8),
+		halt_and_abort = CHECK_FLAG(iter, 16),
+		skip_ipc = CHECK_FLAG(iter, 32);
+	const int spin_ms = 20, my_pri = find_own_priority();
+	const L4_Time_t ts_len = L4_TimePeriod(spin_ms * 1000 / 2),
+		totq_len = L4_TimePeriod((short_tq ? spin_ms * 2 / 3 : spin_ms * 2) * 1000),
+		ipc_len = L4_TimePeriod(spin_ms * 3 * 1000);
+	diag("short_tq=%s, op_rename=%s, do_halt=%s, halt_before_ipc=%s",
+		btos(short_tq), btos(op_rename), btos(do_halt),
+		btos(halt_before_ipc));
+	diag("  halt_and_abort=%s, skip_ipc=%s",
+		btos(halt_and_abort), btos(skip_ipc));
+	diag("spin_ms=%d, my_pri=%d, ts_len=%luµs, totq_len=%luµs",
+		spin_ms, my_pri, (unsigned long)time_in_us(ts_len),
+		(unsigned long)time_in_us(totq_len));
+	if(halt_and_abort && !halt_before_ipc) {
+		plan_skip_all("halt_and_abort has no effect");
+		goto end;
+	}
+	if(halt_before_ipc && (!do_halt || !short_tq)) {
+		plan_skip_all("halt_before_ipc has no effect");
+		goto end;
+	}
+	plan_tests(8);
+
+	L4_ThreadId_t spinner = start_spinner(my_pri - 2, spin_ms,
+		ts_len, totq_len, false, false, false);
+	spinner = L4_GlobalIdOf(spinner);
+
+	if(do_halt && halt_before_ipc) {
+		/* let it spin into its TQE state first. */
+		L4_Sleep(L4_TimePeriod(spin_ms * 1000 + 2000));
+		if(halt_and_abort) L4_AbortIpc_and_stop(spinner);
+		else L4_Stop(spinner);
+	}
+
+	/* wait for tqe msg, if any. */
+	bool got_msg = false, got_done = false;
+	while(!skip_ipc) {
+		L4_ThreadId_t sender;
+		L4_MsgTag_t tag = L4_Wait_Timeout(ipc_len, &sender);
+		if(L4_IpcFailed(tag)) {
+			if(L4_ErrorCode() == 3) break;
+			diag("tqe msg wait failed, ec=%#lx", L4_ErrorCode());
+			break;
+		} else if(L4_Label(tag) == 0xffd0) {
+			got_msg = true;
+		} else if(tag.raw == 0 && L4_SameThreads(sender, spinner)) {
+			got_done = true;
+		}
+	}
+
+	if(do_halt && !halt_before_ipc) {
+		if(halt_and_abort) L4_AbortIpc_and_stop(spinner);
+		else L4_Stop(spinner);
+	}
+	diag("got_msg=%s, got_done=%s", btos(got_msg), btos(got_done));
+
+	/* experiment validation */
+	skip_start(skip_ipc, 3, "skipped the IPC section") {
+		imply_ok1(!short_tq, !got_msg);
+		imply_ok1(got_msg, short_tq);
+		iff_ok1(got_done, !short_tq);
+	} skip_end;
+
+	skip_start(!op_rename || !got_msg, 2,
+		"not set to modify, or no TQE state")
+	{
+		/* change its version bits just to cause a panic */
+		L4_ThreadId_t new_tid = L4_GlobalId(L4_ThreadNo(spinner),
+			L4_Version(spinner) ^ 0x120);
+		assert(new_tid.raw != spinner.raw);
+		L4_Word_t res = L4_ThreadControl(new_tid, spinner, L4_nilthread,
+			L4_nilthread, (void *)-1);
+		fail_if(res == 0, "threadctl ec=%#lx", L4_ErrorCode());
+		ok1(thr_exists(new_tid));
+		ok1(!thr_exists(spinner));
+
+		/* change them back. */
+		res = L4_ThreadControl(spinner, new_tid, L4_nilthread,
+			L4_nilthread, (void *)-1);
+		fail_if(res == 0, "threadctl ec=%#lx", L4_ErrorCode());
+		assert(thr_exists(spinner) && !thr_exists(new_tid));
+	} skip_end;
+	imply_ok1(got_msg, thr_exists(spinner));
+
+	/* analysis */
+	L4_Word_t ec = 0;
+	void *rptr = join_thread_long(spinner, ipc_len, &ec);
+	bool join_ok = rptr != NULL || ec == 0;
+	imply_ok1(!skip_ipc && join_ok, got_done);
+	if(!join_ok) {
+		diag("killing spinner thread");
+		kill_thread(spinner);
+	}
+
+	ok1(!thr_exists(spinner));
+
+end:
+	;
+}
+END_TEST
 
 
 START_TEST(halt_on_missing_pager)
@@ -1448,11 +1574,24 @@ Suite *thread_suite(void)
 		tcase_add_test(tc, scheduler_id_validity);
 		tcase_add_test(tc, spacespec_validity);
 		tcase_add_test(tc, relocate_utcb);
-		tcase_add_test(tc, deletion);
+		tcase_add_test(tc, deletion_by_threadno);
 		tcase_add_test(tc, suicide);
 		tcase_add_test(tc, modify_self);
 		/* TODO: add modify_other */
 		tcase_add_test(tc, version_stomp);
+		suite_add_tcase(s, tc);
+	}
+
+	/* API cases when the thread's total_quantum has reached zero (i.e. been
+	 * exhausted), but it hasn't yet been assigned a new one.
+	 */
+	{
+		TCase *tc = tcase_create("tqe");
+		tcase_set_fork(tc, false);
+		/* TODO: check version field modification and space shifting in the
+		 * TQE state
+		 */
+		tcase_add_test(tc, tqe_mod_del_threadctl);
 		suite_add_tcase(s, tc);
 	}
 
