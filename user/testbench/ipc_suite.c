@@ -48,6 +48,14 @@ struct helper_ctx
 };
 
 
+static void *alloc_aligned(void **base_p, size_t size, size_t alignment) {
+	assert(POPCOUNT(alignment) == 1);
+	int n = posix_memalign(base_p, alignment, size);
+	if(n != 0) return NULL;
+	return *base_p;
+}
+
+
 static struct helper_ctx *helper_ctx(void)
 {
 	static int helper_ctx_key = -1;
