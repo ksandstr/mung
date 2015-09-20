@@ -3052,7 +3052,10 @@ START_LOOP_TEST(map_smaller_pages, iter, 0, 3)
 		void *base, *buffer = alloc_aligned(&base, area_size, area_size);
 		memset(buffer, 0, area_size);
 		diag("child's buffer=%p (area_size=%#x)", buffer, area_size);
-		L4_Accept(L4_MapGrantItems(L4_Fpage((L4_Word_t)buffer, area_size)));
+		L4_Fpage_t acc_range = L4_Fpage((L4_Word_t)buffer, area_size);
+		L4_Set_Rights(&acc_range, L4_FullyAccessible);
+		L4_FlushFpage(acc_range);
+		L4_Accept(L4_MapGrantItems(acc_range));
 		L4_MsgTag_t tag = L4_Receive_Timeout(parent_tid, TEST_IPC_DELAY);
 		if(L4_IpcFailed(tag) || L4_TypedWords(tag) < 2) {
 			diag("child ipc failed or too weird, ec=%#lx tag=%#lx",
