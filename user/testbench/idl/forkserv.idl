@@ -97,6 +97,13 @@ interface ForkServ: L4X2::FaultHandler
 	[Label(0x754d)]		/* "uM" */
 	void unmap(in pages unmap_pages, out pages out_pages);
 
+	/* make a region in the current space discontiguous with a given grain
+	 * (log2 size, min is the smallest page size on the KIP), or contiguous
+	 * with grain=0.
+	 */
+	[Label(0x6443)]		/* "dC" */
+	void discontiguate(in L4X2::Fpage page, in long grain);
+
 	[Label(0x6750)]		/* "gP" */
 	long getpid();
 

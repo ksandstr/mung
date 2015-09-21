@@ -3072,20 +3072,21 @@ START_LOOP_TEST(mapgrant_effect_clause, iter, 0, 15)
 END_TEST
 
 
-/* generate 2..16 aligned pages in the parent and map them into the forked
- * child as one large page.
+/* generate 2..16 pages in the parent and map them into the forked child as
+ * one aligned chunk.
  *
  * TODO: test with grantitems also, i.e. check that they become unmapped in
  * the parent. (this may be a tall order.)
  */
-START_LOOP_TEST(map_smaller_pages, iter, 0, 3)
+START_LOOP_TEST(map_smaller_pages, iter, 0, 7)
 {
 	const int num_pages = !CHECK_FLAG(iter, 1) ? 2 : 16;
 	const unsigned parent_sndbase =
 		CHECK_FLAG(iter, 2) ? PAGE_SIZE * num_pages * 2 : 0;
+	const bool large_grain = CHECK_FLAG(iter, 4);
 	uint32_t rand_seed = L4_SystemClock().raw ^ 0xb00ba6e1;
-	diag("num_pages=%d, parent_sndbase=%u, rand_seed=%#x",
-		num_pages, parent_sndbase, rand_seed);
+	diag("num_pages=%d, parent_sndbase=%u, large_grain=%s, rand_seed=%#x",
+		num_pages, parent_sndbase, btos(large_grain), rand_seed);
 
 	plan_tests(1);
 
@@ -3143,11 +3144,16 @@ START_LOOP_TEST(map_smaller_pages, iter, 0, 3)
 	diag("testmem=%p", testmem);
 	fail_unless(!CHECK_FLAG_ANY((uintptr_t)testmem,
 		PAGE_SIZE * num_pages - 1));
-	random_string(testmem, num_pages * PAGE_SIZE, &rand_seed);
-	L4_Word_t refcrc = crc32c(0, testmem, num_pages * PAGE_SIZE);
 
 	L4_Fpage_t sndpage = L4_Fpage((L4_Word_t)testmem, num_pages * PAGE_SIZE);
 	L4_Set_Rights(&sndpage, L4_Readable);
+	int n = forkserv_discontiguate(L4_Pager(), sndpage,
+		large_grain ? 0 : PAGE_BITS);
+	fail_if(n != 0, "discontig: n=%d", n);
+
+	random_string(testmem, num_pages * PAGE_SIZE, &rand_seed);
+	L4_Word_t refcrc = crc32c(0, testmem, num_pages * PAGE_SIZE);
+
 	L4_MapItem_t mi = L4_MapItem(sndpage, parent_sndbase);
 	diag("parent sends sndbase=%#lx", L4_MapItemSndBase(mi));
 	L4_LoadMR(0, (L4_MsgTag_t){ .X.t = 2 }.raw);

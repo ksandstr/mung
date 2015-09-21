@@ -186,6 +186,11 @@ static struct fs_phys_page *get_phys_at(void *address)
 }
 
 
+static struct fs_vpage *get_vpage_at(struct fs_space *sp, L4_Word_t addr) {
+	return htable_get(&sp->pages, int_hash(addr), &word_cmp, &addr);
+}
+
+
 #ifdef DEBUG_ME_HARDER
 #include <ukernel/invariant.h>
 
@@ -709,8 +714,7 @@ static void handle_pf(
 	const bool in_special = ADDR_IN_FPAGE(sp->utcb_area, addr)
 		|| ADDR_IN_FPAGE(sp->kip_area, addr);
 	L4_Word_t page_addr = addr & ~PAGE_MASK;
-	struct fs_vpage *page = htable_get(&sp->pages,
-		int_hash(page_addr), &word_cmp, &page_addr);
+	struct fs_vpage *page = get_vpage_at(sp, page_addr);
 	if(page == NULL && page_addr > 0xf000 && page_addr < sp->prog_brk
 		&& !in_special)
 	{
@@ -1316,6 +1320,12 @@ static void handle_unmap(
 }
 
 
+static void handle_discontig(L4_Fpage_t page, int32_t grain)
+{
+	/* the goggles, they do nothing */
+}
+
+
 /* POSIX reparents children to PID1. since there's no PID1 in the testbench
  * personality, any dead children waiting to get reaped by @sp will be
  * recursively destroyed.
@@ -1616,6 +1626,7 @@ static void forkserv_dispatch_loop(void)
 		.exit = &handle_exit,
 		.wait = &handle_wait,
 		.unmap = &handle_unmap,
+		.discontiguate = &handle_discontig,
 		.getpid = &handle_getpid,
 		.new_thread = &forward_new_thread,	/* this one is a bit special. */
 		.send_bol = &handle_send_bol,
