@@ -12,6 +12,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
+#include <errno.h>
 #include <ccan/list/list.h>
 #include <ccan/htable/htable.h>
 #include <ccan/likely/likely.h>
@@ -368,6 +369,7 @@ static void seed_heap(void)
 
 static void pump_sigma0_mem(void)
 {
+	L4_Word_t highest_end = 0;
 	int n_pages = 0, n_qal = 0;
 	for(int s = sizeof(L4_Word_t) * 8; s >= PAGE_BITS; --s) {
 		for(;;) {
@@ -375,6 +377,8 @@ static void pump_sigma0_mem(void)
 				L4_CompleteAddressSpace);
 			if(L4_IsNilFpage(got)) break;
 			n_pages += L4_Size(got) / PAGE_SIZE;
+			highest_end = MAX(L4_Word_t, highest_end,
+				L4_Address(got) + (L4_Size(got) - 1));
 
 			if(L4_Address(got) < brk_pos && L4_Address(got) > 0x100000) {
 				/* add free pages between 1M and brk_pos to the quick-alloc
@@ -400,6 +404,13 @@ static void pump_sigma0_mem(void)
 	printf("forkserv: got %d pages (%d KiB) of conventional memory\n",
 		n_pages, n_pages * PAGE_SIZE / 1024);
 	printf("  (%d pages, %d KiB on tap)\n", n_qal, n_qal * PAGE_SIZE / 1024);
+
+	/* not all memory indicated in the top-end memdescs is available. revise
+	 * phys_alloc_pos to match this fact.
+	 */
+	phys_alloc_pos = MIN(L4_Word_t, phys_alloc_pos - 1,
+		highest_end) & ~PAGE_MASK;
+	printf("  (phys_alloc_pos'=%#lx)\n", phys_alloc_pos);
 
 	pump_done = true;
 }
@@ -483,22 +494,69 @@ static struct fs_space *get_space_by_tid(L4_ThreadId_t tid)
 }
 
 
-static struct fs_phys_page *alloc_phys_page(void)
+/* ctor for fs_phys_page. returns NULL on ENOMEM, or if @addr is a gap.
+ * (caller distinguishes where relevant.)
+ */
+static struct fs_phys_page *make_phys_page(L4_Word_t addr)
 {
-	if(phys_alloc_pos <= brk_pos) return NULL;
-
 	struct fs_phys_page *phys = kmem_cache_alloc(phys_page_slab);
-	phys->local_addr = phys_alloc_pos;
+	phys->local_addr = addr;
 	bool ok = htable_add(&phys_page_hash, hash_word(phys, NULL), phys);
 	if(!ok) {
-		printf("forkserv: phys page at %#lx lost to OOM!\n", phys->local_addr);
+		kmem_cache_free(phys_page_slab, phys);
+		return NULL;
 	}
 	/* FIXME: confirm that the address is valid, i.e. that we didn't hit
 	 * a pothole in the great big contiguous memory range.
 	 */
 
-	phys_alloc_pos -= PAGE_SIZE;
 	return phys;
+}
+
+
+/* returns # of pages taken on success, -EFAULT when htable_add() fails or
+ * there's no more room in Hell. stuffs @output[] with however many pages 1 <<
+ * @size_log2 covers. phys pages will be aligned to that size.
+ */
+static int alloc_phys_pages(struct fs_phys_page **output, int size_log2)
+{
+	assert(size_log2 >= PAGE_BITS);
+
+	if(size_log2 == PAGE_BITS) {
+		output[0] = list_pop(&quick_alloc_list, struct fs_phys_page, link);
+		if(output[0] != NULL) {
+			output[0]->refcount = 0;
+			return 1;
+		}
+	}
+
+	/* align phys_alloc_pos, and release spare pages to the quick pool. */
+	const size_t size = 1u << size_log2;
+	while(((phys_alloc_pos + PAGE_SIZE) & (size - 1)) != 0) {
+		if(phys_alloc_pos <= brk_pos) return -EFAULT;
+		struct fs_phys_page *pp = make_phys_page(phys_alloc_pos);
+		if(pp == NULL) return -EFAULT;
+		list_add_tail(&quick_alloc_list, &pp->link);
+		phys_alloc_pos -= PAGE_SIZE;
+	}
+	if(phys_alloc_pos - size <= brk_pos) return -EFAULT;
+
+	/* make pages for the parts of the buffalo that we use. */
+	phys_alloc_pos -= size;
+	for(size_t i=0; i < size / PAGE_SIZE; i++) {
+		L4_Word_t addr = phys_alloc_pos + (i + 1) * PAGE_SIZE;
+		struct fs_phys_page *pp = make_phys_page(addr);
+		if(pp == NULL) {
+			/* don't lose the pages, but fail */
+			for(size_t j=0; j <= i; j++) {
+				list_add_tail(&quick_alloc_list, &output[j]->link);
+			}
+			return -EFAULT;
+		}
+		output[i] = pp;
+	}
+
+	return size / PAGE_SIZE;
 }
 
 
@@ -508,8 +566,8 @@ static struct fs_phys_page *alloc_user_page(void)
 	struct fs_phys_page *phys = list_pop(&quick_alloc_list,
 		struct fs_phys_page, link);
 	if(phys == NULL) {
-		phys = alloc_phys_page();
-		if(phys == NULL) return NULL;
+		int n = alloc_phys_pages(&phys, PAGE_BITS);
+		if(n < 0) return NULL;
 	}
 	phys->refcount = 1;
 	memset((void *)phys->local_addr, 0, PAGE_SIZE);
@@ -525,10 +583,14 @@ void *kmem_alloc_new_page(void)
 	if(list_empty(&free_page_list)) {
 		/* replenish. */
 		for(int i=0; i < 8; i++) {
-			struct fs_phys_page *tmp = alloc_phys_page();
-			if(tmp != NULL) {
+			struct fs_phys_page *tmp;
+			int n = alloc_phys_pages(&tmp, PAGE_BITS);
+			if(n >= 0) {
 				tmp->refcount = 0;
 				list_add(&free_page_list, &tmp->link);
+			} else {
+				printf("forkserv: failed to replenish; n=%d\n", n);
+				break;
 			}
 		}
 	}
@@ -1322,7 +1384,74 @@ static void handle_unmap(
 
 static void handle_discontig(L4_Fpage_t page, int32_t grain)
 {
-	/* the goggles, they do nothing */
+	assert(invariants("discontiguate[start]"));
+
+	struct fs_space *sp = get_space_by_tid(muidl_get_sender());
+	if(sp == NULL) return;
+	printf("forkserv: pid=%lu: discontiguate(%#lx:%#lx, %d)\n",
+		sp->id, L4_Address(page), L4_Size(page), grain);
+
+	if(grain < PAGE_BITS || grain > L4_SizeLog2(page)) {
+		grain = L4_SizeLog2(page);
+	}
+	const int num_phys = 1 << (grain - PAGE_BITS);
+
+	/* the correctness of this algorithm, when grain < page.sizelog2, depends
+	 * on alloc_phys_pages() returning pages in decreasing address order. this
+	 * is asserted against.
+	 */
+	struct fs_phys_page **phys = malloc(sizeof(*phys) * num_phys);
+	if(phys == NULL) {
+		printf("forkserv: %s: out of memory!\n", __func__);
+		return;
+	}
+	uint32_t not = 0;	/* invalid first page id, per segment */
+	for(L4_Word_t off = 0; off < L4_Size(page); off += 1ul << grain) {
+		L4_Word_t first_addr = L4_Address(page) + off;
+
+		int n = alloc_phys_pages(phys, grain);
+		if(n < 0) {
+			printf("forkserv: discontiguate failed at off=%#lx, addr=%#lx\n",
+				off, first_addr);
+			free(phys);
+			return;
+		}
+		assert(phys[0]->local_addr >> PAGE_BITS != not);
+
+		/* stick 'em in. */
+		for(int i=0; i < num_phys; i++) {
+			L4_Word_t addr = first_addr + i * PAGE_SIZE;
+			struct fs_vpage *vp = get_vpage_at(sp, addr);
+			if(vp != NULL) {
+				/* copy contents & replace physpage in existing vpage. */
+				memcpy((void *)phys[i]->local_addr,
+					(const void *)vp->page->local_addr, PAGE_SIZE);
+				L4_Fpage_t u = L4_FpageLog2(vp->page->local_addr, PAGE_BITS);
+				L4_Set_Rights(&u, L4_FullyAccessible);
+				L4_UnmapFpage(u);
+				if(--vp->page->refcount == 0) {
+					list_add(&quick_alloc_list, &vp->page->link);
+				}
+				vp->page = phys[i];
+			} else {
+				/* give it a new vpage & clear the fresh memory. */
+				memset((void *)phys[i]->local_addr, 0, PAGE_SIZE);
+				vp = kmem_cache_alloc(vpage_slab);
+				*vp = (struct fs_vpage){
+					.access = L4_ReadWriteOnly, .address = addr,
+					.page = phys[i],
+				};
+				bool ok = htable_add(&sp->pages, int_hash(vp->address), vp);
+				assert(ok);
+			}
+			phys[i]->refcount = 1;
+		}
+
+		not = phys[num_phys - 1]->local_addr >> PAGE_BITS;
+	}
+	free(phys);
+
+	assert(invariants("discontiguate[end]"));
 }
 
 

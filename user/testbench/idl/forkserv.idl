@@ -99,7 +99,8 @@ interface ForkServ: L4X2::FaultHandler
 
 	/* make a region in the current space discontiguous with a given grain
 	 * (log2 size, min is the smallest page size on the KIP), or contiguous
-	 * with grain=0.
+	 * with @grain == 0 || @grain > @page.sizelog2. calls Unmap on the
+	 * existing @page, of course.
 	 */
 	[Label(0x6443)]		/* "dC" */
 	void discontiguate(in L4X2::Fpage page, in long grain);

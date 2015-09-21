@@ -944,7 +944,6 @@ START_LOOP_TEST(discontiguate_basic, iter, 0, 15)
 
 	diag("region_size=%#lx, grain=%d", (L4_Word_t)region_size, grain);
 	plan_tests(3);
-	todo_start("no impl");
 
 	void *regptr = aligned_alloc(region_size, region_size);
 	fail_unless(regptr != NULL);
@@ -1018,7 +1017,6 @@ START_LOOP_TEST(discontiguate_fork, iter, 0, 7)
 	diag("region_size=%#lx, grain=%d, child_calls=%s",
 		(L4_Word_t)region_size, grain, btos(child_calls));
 	plan_tests(3);
-	todo_start("no impl");
 
 	void *regptr = aligned_alloc(region_size, region_size);
 	fail_unless(regptr != NULL);
