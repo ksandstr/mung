@@ -34,7 +34,7 @@ covercheck:
 
 
 testbench: testbench.ld crt0.o testbench.o dlmalloc.o heap.o thread.o tsd.o \
-		delay.o process.o exn-store.o log.o tap.o test.o util.o \
+		delay.o process.o exn-store.o log.o tap.o test.o util.o ll.o \
 		idlsupp.o pg_stats.o pg_drop.o \
 		sched_suite.o space_suite.o thread_suite.o string_suite.o \
 		ipc_suite.o self_suite.o type_suite.o redir_suite.o \
@@ -60,9 +60,7 @@ benchmark.o: benchmark.c benchmark-defs.h
 testbench.o: testbench.c common-defs.h
 
 
-# NOTE: use of the same heap.o as in testbench
-forkserv: forkserv.ld crt0.o forkserv.o heap.o dlmalloc.o \
-		idlsupp.o tsd.o \
+forkserv: forkserv.ld crt0.o forkserv.o dlmalloc.o idlsupp.o tsd.o ll.o \
 		forkserv-service.o forkserv-common.o forkserv-client.o \
 		threadmgr-common.o threadmgr-client.o \
 		ccan-list.o ccan-htable.o

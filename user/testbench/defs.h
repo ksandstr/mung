@@ -308,6 +308,8 @@ extern void xjoin_thread(L4_ThreadId_t other);
 
 extern void next_tick(void);
 
+extern void fault_own_pages(void);
+
 
 /* (actually in sched_suite.c) */
 extern int find_own_priority(void);

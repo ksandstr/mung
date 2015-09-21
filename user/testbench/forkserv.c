@@ -2,7 +2,10 @@
 /* service that takes over the root task's memory, letting it fork
  * subprocesses (and subprocesses of those). this is useful for test cases
  * involving map operations in IPC, or the Unmap system call.
+ *
+ * TODO: make this somehow less big and ugly.
  */
+
 #define FORKSERV_IMPL_SOURCE
 
 #include <stdio.h>
@@ -17,6 +20,8 @@
 #include <ukernel/slab.h>
 #include <ukernel/guard.h>
 #include <ukernel/util.h>
+#include <ukernel/kip.h>
+#include <ukernel/memdesc.h>
 
 #include <l4/types.h>
 #include <l4/ipc.h>
@@ -24,9 +29,7 @@
 #include <l4/space.h>
 #include <l4/schedule.h>
 #include <l4/kip.h>
-
-/* for int_hash() */
-#include <ukernel/util.h>
+#include <l4/sigma0.h>
 
 #include "defs.h"
 #include "forkserv.h"
@@ -74,10 +77,13 @@ struct fs_space
 };
 
 
+/* linked in free_page_list, quick_alloc_list, resv_page_list, or nothing when
+ * refcount > 0. kept in phys_page_hash by local_addr per hash_word().
+ */
 struct fs_phys_page
 {
-	struct list_node link;	/* in free_page_list */
 	L4_Word_t local_addr;	/* address in forkserv */
+	struct list_node link;
 	int refcount;			/* 1 for exclusive, 0 for dead */
 };
 
@@ -132,15 +138,21 @@ static void handle_exit(int32_t status);
 static struct htable
 	thread_hash = HTABLE_INITIALIZER(thread_hash, &hash_threadno, NULL),
 	space_hash = HTABLE_INITIALIZER(space_hash, &hash_word, NULL),
-	async_hash = HTABLE_INITIALIZER(async_hash, &hash_word, NULL);
-static LIST_HEAD(free_page_list);
-static struct kmem_cache *vpage_slab = NULL;		/* for fs_vpage */
+	async_hash = HTABLE_INITIALIZER(async_hash, &hash_word, NULL),
+	phys_page_hash = HTABLE_INITIALIZER(phys_page_hash, &hash_word, NULL);
+static LIST_HEAD(free_page_list);		/* forkserv's private stash */
+static LIST_HEAD(resv_page_list);		/* slab pages etc. */
+static LIST_HEAD(quick_alloc_list);		/* top-down freelist */
+static struct kmem_cache *vpage_slab = NULL,		/* for fs_vpage */
+	*phys_page_slab = NULL;		/* for fs_phys_page */
 
 static L4_ThreadId_t console_tid, fpager_tid, helper_tid, forkserv_tid;
 static L4_Word_t map_range_pos = 0, next_space_id = 100, next_async_id = 1;
 static struct helper_work *helper_queue = NULL;
-static L4_Word_t max_vaddr;
+static L4_Word_t max_vaddr, phys_mem_top, brk_pos = 0, phys_alloc_pos = 0;
+static bool pump_done = false;
 static int32_t root_space_id = -1;
+static L4_KernelInterfacePage_t *the_kip;
 
 
 static size_t hash_word(const void *elem, void *priv) {
@@ -163,6 +175,14 @@ static size_t hash_threadno(const void *elem, void *priv) {
 static struct fs_thread *get_thread(L4_ThreadId_t tid) {
 	return htable_get(&thread_hash, int_hash(L4_ThreadNo(tid)),
 		&word_cmp, &tid);
+}
+
+
+static struct fs_phys_page *get_phys_at(void *address)
+{
+	L4_Word_t key = (L4_Word_t)address & ~PAGE_MASK;
+	return htable_get(&phys_page_hash, hash_word(&key, NULL),
+		&word_cmp, &key);
 }
 
 
@@ -237,7 +257,7 @@ static bool invariants(const char *where) {
 
 
 /* find the highest virtual address usable to user space. */
-COLD L4_Word_t find_high_vaddr(void)
+static L4_Word_t find_high_vaddr(void)
 {
 	L4_KernelInterfacePage_t *kip = L4_GetKernelInterface();
 	int n_descs = kip->MemoryInfo.n;
@@ -268,11 +288,164 @@ COLD L4_Word_t find_high_vaddr(void)
 }
 
 
+/* points a memdescbuf at MemoryDescs on the KIP. */
+static inline struct memdescbuf kip_mdb(void)
+{
+	int n = L4_NumMemoryDescriptors(the_kip);
+	struct memdescbuf mds = {
+		.ptr = L4_MemoryDesc(the_kip, 0), .len = n, .size = n,
+	};
+	return mds;
+}
+
+
+/* by examining the KIP MemoryDesc array, figure out:
+ *   - highest virtual address
+ *   - top of physical RAM
+ *   - bottom address for sbrk() heap (1M alignment at or above 16M)
+ */
+static void configure_heap(void)
+{
+	max_vaddr = find_high_vaddr();
+	printf("forkserv: high vaddr=%#lx\n", max_vaddr);
+
+	phys_mem_top = 0;
+	struct memdescbuf mds = kip_mdb();
+	L4_Word_t q_start = 0, q_end = ~0ul;
+	for(;;) {
+		L4_Fpage_t part = mdb_query(&mds, q_start, q_end,
+			false, false, L4_ConventionalMemoryType);
+		if(L4_IsNilFpage(part)) break;
+		q_start = L4_Address(part) + L4_Size(part);
+		if(L4_SizeLog2(part) < PAGE_BITS) continue;
+
+		phys_mem_top = MAX(L4_Word_t, phys_mem_top, FPAGE_HIGH(part));
+	}
+
+	L4_Fpage_t part = mdb_query(&mds, 16 * 1024 * 1024, ~0ul,
+		false, false, L4_ConventionalMemoryType);
+	brk_pos = L4_Address(part);
+	phys_alloc_pos = phys_mem_top & ~PAGE_MASK;
+
+	printf("forkserv: phys_mem_top=%#lx, brk_pos=%#lx, phys_alloc_pos=%#lx\n",
+		phys_mem_top, brk_pos, phys_alloc_pos);
+}
+
+
+/* add some seed memory from sigma0, enough to create the slab caches used for
+ * roottask transfer and the eventual sigma0 pump.
+ */
+static void seed_heap(void)
+{
+	static struct fs_phys_page pp[48];
+	extern char _end;
+	L4_Word_t low_addr = ((L4_Word_t)&_end + PAGE_SIZE - 1) & ~PAGE_MASK;
+	for(int i=0; i < NUM_ELEMENTS(pp); i++) {
+		L4_Fpage_t got = L4_Sigma0_GetPage(L4_nilthread,
+			L4_FpageLog2(low_addr + PAGE_SIZE * i, PAGE_BITS));
+		if(L4_IsNilFpage(got)) {
+			printf("%s: i=%d: result is nilpage!\n", __func__, i);
+			abort();
+		}
+		pp[i] = (struct fs_phys_page){
+			.local_addr = L4_Address(got), .refcount = 0,
+		};
+		list_add_tail(&free_page_list, &pp[i].link);
+		bool ok = htable_add(&phys_page_hash,
+			hash_word(&pp[i], NULL), &pp[i]);
+		if(!ok) {
+			printf("forkserv: seed page at %#lx lost to OOM!\n",
+				pp[i].local_addr);
+		}
+	}
+}
+
+
+static void pump_sigma0_mem(void)
+{
+	int n_pages = 0, n_qal = 0;
+	for(int s = sizeof(L4_Word_t) * 8; s >= PAGE_BITS; --s) {
+		for(;;) {
+			L4_Fpage_t got = L4_Sigma0_GetAny(L4_nilthread, s,
+				L4_CompleteAddressSpace);
+			if(L4_IsNilFpage(got)) break;
+			n_pages += L4_Size(got) / PAGE_SIZE;
+
+			if(L4_Address(got) < brk_pos && L4_Address(got) > 0x100000) {
+				/* add free pages between 1M and brk_pos to the quick-alloc
+				 * list.
+				 */
+				for(L4_Word_t i=0; i < L4_Size(got); i += PAGE_SIZE) {
+					struct fs_phys_page *p = kmem_cache_alloc(phys_page_slab);
+					p->local_addr = L4_Address(got) + i;
+					p->refcount = 0;
+					list_add_tail(&quick_alloc_list, &p->link);
+					bool ok = htable_add(&phys_page_hash,
+						hash_word(p, NULL), p);
+					if(!ok) {
+						printf("forkserv: early page at %#lx lost to OOM!\n",
+							p->local_addr);
+					}
+					n_qal++;
+				}
+			}
+		}
+	}
+
+	printf("forkserv: got %d pages (%d KiB) of conventional memory\n",
+		n_pages, n_pages * PAGE_SIZE / 1024);
+	printf("  (%d pages, %d KiB on tap)\n", n_qal, n_qal * PAGE_SIZE / 1024);
+
+	pump_done = true;
+}
+
+
+void *sbrk(intptr_t increment)
+{
+	L4_Word_t prev_break = brk_pos;
+	if(increment < 0) {
+		/* trim. (not tested to work.) */
+		L4_Word_t decrement = (-increment + PAGE_SIZE - 1) & ~PAGE_MASK;
+		brk_pos -= decrement;
+	} else if(increment > 0) {
+		/* grow. */
+		increment = (increment + PAGE_SIZE - 1) & ~PAGE_MASK;
+		brk_pos += increment;
+		printf("%s: increment=%lu; allocating %#lx..%#lx\n", __func__,
+			(unsigned long)increment, prev_break, brk_pos - 1);
+
+		if(brk_pos > phys_alloc_pos) {
+			/* TODO: hunt the free-page list for enough pages to satisfy the
+			 * request. only abort() on failure. (not properly necessary until
+			 * scalability testing comes along.)
+			 */
+			abort();
+		}
+
+		if(!pump_done) {
+			/* grab the necessary pages in early (pre-pump) startup. */
+			L4_Word_t addr, size;
+			for_page_range(prev_break, brk_pos, addr, size) {
+				L4_Fpage_t got = L4_Sigma0_GetPage(L4_nilthread,
+					L4_FpageLog2(addr, size));
+				if(L4_IsNilFpage(got)) {
+					printf("%s: got nil page for %#lx:%#lx!\n", __func__,
+						addr, 1ul << size);
+					abort();
+				}
+			}
+		}
+	}
+
+	return (void *)prev_break;
+}
+
+
 static struct fs_space *make_initial_space(int id)
 {
 	struct fs_space *sp = malloc(sizeof(*sp));
 	*sp = (struct fs_space){
-		.id = id, .parent_id = 0, .prog_brk = find_phys_mem_top() + 1,
+		.id = id, .parent_id = 0, .prog_brk = phys_mem_top + 1,
 		.utcb_area = L4_Fpage(0x30000, UTCB_SIZE * THREADS_PER_SPACE),
 		.kip_area = L4_FpageLog2(0x2f000, 12),
 		.child_redir_tid = L4_anythread,
@@ -305,17 +478,71 @@ static struct fs_space *get_space_by_tid(L4_ThreadId_t tid)
 }
 
 
-static struct fs_phys_page *alloc_new_page(void)
+static struct fs_phys_page *alloc_phys_page(void)
 {
-	struct fs_phys_page *phys = list_pop(&free_page_list,
+	if(phys_alloc_pos <= brk_pos) return NULL;
+
+	struct fs_phys_page *phys = kmem_cache_alloc(phys_page_slab);
+	phys->local_addr = phys_alloc_pos;
+	bool ok = htable_add(&phys_page_hash, hash_word(phys, NULL), phys);
+	if(!ok) {
+		printf("forkserv: phys page at %#lx lost to OOM!\n", phys->local_addr);
+	}
+	/* FIXME: confirm that the address is valid, i.e. that we didn't hit
+	 * a pothole in the great big contiguous memory range.
+	 */
+
+	phys_alloc_pos -= PAGE_SIZE;
+	return phys;
+}
+
+
+/* allocates memory for forkserv clients. */
+static struct fs_phys_page *alloc_user_page(void)
+{
+	struct fs_phys_page *phys = list_pop(&quick_alloc_list,
 		struct fs_phys_page, link);
 	if(phys == NULL) {
-		phys = malloc(sizeof(*phys));
-		phys->local_addr = (uintptr_t)sbrk(PAGE_SIZE);
+		phys = alloc_phys_page();
+		if(phys == NULL) return NULL;
 	}
 	phys->refcount = 1;
 	memset((void *)phys->local_addr, 0, PAGE_SIZE);
 	return phys;
+}
+
+
+void *kmem_alloc_new_page(void)
+{
+	struct fs_phys_page *pp = list_pop(&free_page_list,
+		struct fs_phys_page, link);
+	assert(pp != NULL);
+	if(list_empty(&free_page_list)) {
+		/* replenish. */
+		for(int i=0; i < 8; i++) {
+			struct fs_phys_page *tmp = alloc_phys_page();
+			if(tmp != NULL) {
+				tmp->refcount = 0;
+				list_add(&free_page_list, &tmp->link);
+			}
+		}
+	}
+	list_add(&resv_page_list, &pp->link);
+	pp->refcount = 0;
+	return (void *)pp->local_addr;
+}
+
+
+void kmem_free_page(void *ptr)
+{
+	struct fs_phys_page *pp = get_phys_at(ptr);
+	if(pp != NULL) {
+		assert(pp->refcount == 0);
+		list_del_from(&resv_page_list, &pp->link);
+		list_add(&free_page_list, &pp->link);
+	} else {
+		printf("forkserv:%s: can't find ptr=%p\n", __func__, ptr);
+	}
 }
 
 
@@ -368,7 +595,7 @@ static void handle_send_page(L4_Word_t phys_addr, int32_t space_id)
 		window = L4_Fpage(phys_addr, PAGE_SIZE);
 	} else {
 		if(unlikely(map_range_pos == 0)) {
-			map_range_pos = find_phys_mem_top() + 1;
+			map_range_pos = phys_mem_top + 1;
 		}
 
 		window = L4_Fpage(map_range_pos, PAGE_SIZE);
@@ -419,15 +646,13 @@ static void handle_send_page(L4_Word_t phys_addr, int32_t space_id)
 #endif
 	if(space_id != 0) map_range_pos += L4_Size(window);
 
-	struct fs_phys_page *phys = malloc(sizeof(*phys));
+	struct fs_phys_page *phys = kmem_cache_alloc(phys_page_slab);
 	*phys = (struct fs_phys_page){
-		.local_addr = L4_Address(window),
-		.refcount = 1,
+		.local_addr = L4_Address(window), .refcount = 1,
 	};
 	struct fs_vpage *p = kmem_cache_alloc(vpage_slab);
 	*p = (struct fs_vpage){
-		.address = phys_addr,
-		.page = phys,
+		.address = phys_addr, .page = phys,
 		.access = L4_FullyAccessible,
 	};
 	assert(htable_get(&sp->pages, int_hash(p->address),
@@ -492,7 +717,7 @@ static void handle_pf(
 		/* moar ramz pls */
 		page = kmem_cache_alloc(vpage_slab);
 		page->address = page_addr;
-		page->page = alloc_new_page();
+		page->page = alloc_user_page();
 		page->access = L4_FullyAccessible;
 #if PF_TRACING
 		printf("%s: new page %#lx -> %#lx (brk=%#lx)\n", __func__,
@@ -562,7 +787,7 @@ static void handle_pf(
 			page_addr);
 #endif
 		assert(!CHECK_FLAG(page->access, L4_Writable));
-		struct fs_phys_page *copy = alloc_new_page();
+		struct fs_phys_page *copy = alloc_user_page();
 		memcpy((void *)copy->local_addr, (void *)page->page->local_addr,
 			PAGE_SIZE);
 		page->page->refcount--;
@@ -1009,14 +1234,18 @@ static void handle_set_mgr_tid(L4_Word_t arg_tid)
 static void handle_as_cfg(
 	int32_t space_id,
 	L4_Word_t roottask_mgr_tid,
-	L4_Fpage_t kip_area,
-	L4_Fpage_t utcb_area)
+	L4_Fpage_t kip_area, L4_Fpage_t utcb_area)
 {
 	assert(root_space_id == -1 || root_space_id == space_id);
 	root_space_id = space_id;
 
+	/* this is kind of a lousy way to trigger it, but w/e. */
+	if(!pump_done && space_id == 1) pump_sigma0_mem();
+
 	struct fs_space *sp = get_space(space_id);
-	if(sp == NULL) sp = make_initial_space(space_id);
+	if(sp == NULL) {
+		sp = make_initial_space(space_id);
+	}
 	if(!L4_IsNilFpage(kip_area)) sp->kip_area = kip_area;
 	if(!L4_IsNilFpage(utcb_area)) sp->utcb_area = utcb_area;
 	L4_ThreadId_t mgr_tid = { .raw = roottask_mgr_tid };
@@ -1209,7 +1438,7 @@ static void handle_exit(int32_t status)
 	{
 		if(vp->page != NULL) {
 			if(--vp->page->refcount == 0) {
-				list_add(&free_page_list, &vp->page->link);
+				list_add(&quick_alloc_list, &vp->page->link);
 				vp->page = NULL;
 			}
 		}
@@ -1605,15 +1834,17 @@ static void start_helper_thread(void)
 
 int main(void)
 {
+	fault_own_pages();
+	the_kip = L4_GetKernelInterface();
 	L4_Set_ExceptionHandler(L4_Pager());
 	console_tid = L4_Pager();
 	fpager_tid = L4_Pager();
 	forkserv_tid = L4_Myself();
 
-	max_vaddr = find_high_vaddr();
-	printf("forkserv: high vaddr=%#lx\n", max_vaddr);
-	heap_init(0x80000);		/* leave 512 KiB for testbench */
-	vpage_slab = KMEM_CACHE_NEW("fs_vpage slab", struct fs_vpage);
+	configure_heap();
+	seed_heap();
+	vpage_slab = KMEM_CACHE_NEW("fs_vpage", struct fs_vpage);
+	phys_page_slab = KMEM_CACHE_NEW("fs_phys_page", struct fs_phys_page);
 	start_helper_thread();
 	forkserv_dispatch_loop();
 
