@@ -2,7 +2,7 @@
 export CFGDIR:=$(abspath ../..)
 include $(CFGDIR)/config.mk
 
-LDFLAGS=-e_start -N -nostdlib
+LDFLAGS=-e_start -N -nostdlib -L $(CFGDIR)/user/lib/l4
 # under -O3, GCC may produce SSE instructions in a runtime that doesn't align
 # the stack properly. FIXME: repair that, then remove -mstackrealign.
 CFLAGS:=$(subst -D__KERNEL__,,$(CFLAGS)) -mstackrealign
@@ -40,7 +40,7 @@ testbench: testbench.ld crt0.o testbench.o dlmalloc.o heap.o thread.o tsd.o \
 		ipc_suite.o self_suite.o type_suite.o redir_suite.o \
 		x86_suite.o interrupt_suite.o \
 		meta_suite.o legacy.o benchmark.o thread_test.o \
-		syscalls.o ccan-list.o ccan-htable.o ccan-hash.o ccan-crc.o \
+		ccan-list.o ccan-htable.o ccan-hash.o ccan-crc.o \
 		ccan-talloc.o ccan-tally.o \
 		$(TEST_IDL_OBJS) \
 		threadmgr-common.o threadmgr-service.o threadmgr-client.o \
@@ -48,7 +48,7 @@ testbench: testbench.ld crt0.o testbench.o dlmalloc.o heap.o thread.o tsd.o \
 	@echo "  LD $@"
 	@$(LD) $(LDFLAGS) -static -o $@ -b elf32-i386 -T testbench.ld \
 		$(filter %.o,$^) $(LIBS) \
-		-L $(CFGDIR)/lib -lukernel_util \
+		-L $(CFGDIR)/lib -lukernel_util -ll4 \
 		-L /usr/lib32 -lm \
 		$(shell gcc $(CFLAGS) -print-libgcc-file-name)
 
@@ -63,14 +63,14 @@ testbench.o: testbench.c common-defs.h
 
 
 # NOTE: use of the same heap.o as in testbench
-forkserv: forkserv.ld crt0.o forkserv.o syscalls.o heap.o dlmalloc.o \
+forkserv: forkserv.ld crt0.o forkserv.o heap.o dlmalloc.o \
 		idlsupp.o tsd.o \
 		forkserv-service.o forkserv-common.o forkserv-client.o \
 		threadmgr-common.o threadmgr-client.o \
 		ccan-list.o ccan-htable.o
 	@echo "  LD $@"
 	@$(LD) $(LDFLAGS) -T forkserv.ld $(filter %.o,$^) $(LIBS) -o $@ \
-		-L $(CFGDIR)/lib -lukernel_util \
+		-L $(CFGDIR)/lib -lukernel_util -ll4 \
 		$(shell gcc $(CFLAGS) -print-libgcc-file-name)
 
 
