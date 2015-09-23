@@ -1608,7 +1608,7 @@ static int distribute_children(struct map_group *g, struct map_entry *from)
 
 		/* find the child's entry in the parent. */
 		L4_Word_t pref_addr = MG_START(g) + REF_ADDR(r.child_entry->parent);
-		TRACE("%s: i=%d, looking for parent of e=%#lx:%#lx within %#lx:%#lx\n",
+		TRACE("%s: i=%d, looking for parent of child=%#lx:%#lx within %#lx:%#lx\n",
 			__func__, i,
 			L4_Address(r.child_entry->range), L4_Size(r.child_entry->range),
 			pref_addr, L4_Size(r.child_entry->range));
@@ -1620,24 +1620,83 @@ static int distribute_children(struct map_group *g, struct map_entry *from)
 		}
 
 		if(L4_SizeLog2(p_ent->range) < L4_SizeLog2(r.child_entry->range)) {
-			/* the larger page was split, and it had a child entry that no
-			 * longer fits in its parent range. correct the invariant by
-			 * chopping the child up, and referencing it directly.
+			/* the larger entry was split and had a child entry that no longer
+			 * fits in a single parent range. uphold the invariant by breaking
+			 * the child entry up.
+			 *
+			 * the algorithm is a brute force perfect confetti generator. this
+			 * gets executed only very rarely, so it's not worth getting fancy
+			 * about.
+			 *
+			 * (that being said, it's possible to punch perfect confetti with
+			 * a single fetch_entry() if either from->range == child->range,
+			 * or p_ent->range.size == min && child->range.size == min + 1.
+			 * the cut must be the smallest size within range. [see? not worth
+			 * it.])
 			 */
-			L4_Word_t off = L4_Address(p_ent->range) - pref_addr;
-			L4_Fpage_t cut = L4_FpageLog2(L4_Address(r.child_entry->range)
-				+ off, L4_SizeLog2(p_ent->range));
-			struct map_entry *ent = fetch_entry(r.group, cut, true);
-			if(unlikely(ent == NULL)) {
-				assert(probe_group_range(r.group, cut) != NULL);
-				panic("split_entry() ran out of heap in distribute_children()");
+			TRACE("%s: correcting parent=%#lx:%#lx to child\n",
+				__func__, L4_Address(p_ent->range), L4_Size(p_ent->range));
+			/* wind down to pref_addr. */
+			while(p_ent > &g->entries[0]
+				&& L4_Address(p_ent[-1].range) >= pref_addr)
+			{
+				p_ent--;
 			}
-			r.child_entry = ent;
-
-			/* block output guarantee, and a required result from
-			 * fetch_entry(..., true): the child is known to exist.
+			TRACE("%s: p_leftmost=%#lx:%#lx\n", __func__,
+				L4_Address(p_ent->range), L4_Size(p_ent->range));
+			/* to avoid sorting an arbitrarily-large number of entry
+			 * pointers, we'll find the spot where size starts to increase
+			 * and then walk first backward and then forward.
+			 *
+			 * splitting destroys r.child_entry, so we'll copy the range &
+			 * restart the loop iteration afterward.
 			 */
-			assert(r.child_entry != NULL);
+			L4_Fpage_t c_range = r.child_entry->range;
+			const L4_Word_t pref_last = pref_addr + L4_Size(c_range);
+			TRACE("%s: parent range = %#lx..%#lx\n", __func__,
+				pref_addr, pref_last);
+			struct map_entry *p_leftmost = p_ent, *p_right = p_ent + 1;
+			int smallest = L4_SizeLog2(p_ent->range);
+			while(p_right < &g->entries[MG_N_ENTRIES(g)]
+				&& L4_Address(p_right->range) < pref_last
+				&& L4_SizeLog2(p_right->range) <= smallest)
+			{
+				smallest = L4_SizeLog2(p_right->range);
+				p_right++;
+			}
+			TRACE("%s: p_right=%#lx:%#lx, smallest=%d (%#lx)\n", __func__,
+				L4_Address(p_right->range), L4_Size(p_right->range),
+				smallest, 1lu << smallest);
+			p_ent = p_right - 1;
+			while(p_ent >= p_leftmost
+				|| (p_right < &g->entries[MG_N_ENTRIES(g)]
+					&& L4_Address(p_right->range) < pref_last))
+			{
+				struct map_entry *s;
+				if(p_ent >= p_leftmost) {
+					s = p_ent;
+					p_ent--;
+				} else {
+					s = p_right;
+					p_right++;
+				}
+				TRACE("%s: splitting with s=%#lx:%#lx\n", __func__,
+					L4_Address(s->range), L4_Size(s->range));
+				L4_Word_t off = L4_Address(s->range) - pref_addr;
+				L4_Fpage_t cut = L4_FpageLog2(L4_Address(c_range) + off,
+					L4_SizeLog2(s->range));
+				TRACE("%s:   cut=%#lx:%#lx\n", __func__,
+					L4_Address(cut), L4_Size(cut));
+				struct map_entry *ent = fetch_entry(r.group, cut, true);
+				if(unlikely(ent == NULL)) {
+					assert(probe_group_range(r.group, cut) != NULL);
+					panic("fetch_entry() ENOMEM in distribute_children() [complex]");
+				}
+			}
+			dump_map_group(r.group);
+
+			i--;
+			continue;
 		}
 
 		L4_Word_t child = addr_to_ref(r.group,
@@ -1735,6 +1794,7 @@ static int split_entry(
 			TRACE("%s: adding child ref %#lx to p=%p (%#lx:%#lx)\n",
 				__func__, child, parent_ent,
 				L4_Address(parent_ent->range), L4_Size(parent_ent->range));
+			assert(L4_SizeLog2(parent_ent->range) >= L4_SizeLog2(e[i].range));
 			int n = mapdb_add_child(parent_ent, child);
 			if(n < 0) {
 				panic("mapdb_add_child failed in split_entry()");
