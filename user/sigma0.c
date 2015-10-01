@@ -323,28 +323,24 @@ static L4_Fpage_t get_free_page_at(L4_Word_t address, int want_size_log2)
 static L4_Fpage_t get_free_page(int size_log2)
 {
 	struct track_page *pg = NULL;
-	for(int i=size_log2 - PAGE_BITS; i < PAGE_BUCKETS; i++) {
+	for(int i = size_log2 - PAGE_BITS; i < PAGE_BUCKETS; i++) {
 		pg = list_pop(&free_pages[i], struct track_page, link);
 		if(pg != NULL) break;
 	}
 	if(pg == NULL) return L4_Nilpage;
+	rb_erase(&pg->rb, &pages_by_range);
 
 	assert(!pg->dedicated);
 	assert(!pg->readonly);
-	L4_Fpage_t ret;
-	if(L4_SizeLog2(pg->page) == size_log2) {
-		ret = pg->page;
-		L4_Set_Rights(&ret, L4_FullyAccessible);
-	} else {
-		/* FIXME: implement splitting for propers */
-		printf("can't handle complex get_free_page() yet! %#lx:%#lx dropped.\n",
-			L4_Address(pg->page), L4_Size(pg->page));
-		return get_free_page(size_log2);
+	L4_Fpage_t ret = pg->page;
+	if(L4_SizeLog2(pg->page) > size_log2) {
+		/* release the part we don't need. */
+		free_page_range(L4_Address(pg->page) + (1 << size_log2),
+			L4_Size(pg->page) - (1 << size_log2), false, false);
 	}
-
-	rb_erase(&pg->rb, &pages_by_range);
 	free_track_page(pg);
 
+	L4_Set_Rights(&ret, L4_FullyAccessible);
 	return ret;
 }
 
