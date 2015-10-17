@@ -55,8 +55,6 @@ testbench: testbench.ld crt0.o testbench.o dlmalloc.o heap.o thread.o tsd.o \
 ipc_suite.o: ipc_suite.c ipc-suite-defs.h
 x86_suite.o: x86_suite.c x86-suite-defs.h
 thread.o: thread.c threadmgr-defs.h
-# (common dependency between forkserv and testbench, so it takes care of
-# forkserv-defs.h for both in the proper order.)
 heap.o: heap.c forkserv-defs.h common-defs.h
 benchmark.o: benchmark.c benchmark-defs.h
 testbench.o: testbench.c common-defs.h
