@@ -22,7 +22,7 @@
 #include "test.h"
 
 
-#define IN_TEST_MAGIC	0x51deb00b		/* with fuckings to mjg */
+#define IN_TEST_MAGIC 0x51deb00b	/* with fuckings to the poh-leece */
 
 #define E_FIXTURE_SETUP 1
 #define E_FIXTURE_TEARDOWN 2
@@ -144,21 +144,13 @@ TCase *tcase_create(const char *name)
 }
 
 
-static void add_fixture(
-	struct list_head *list,
-	SFun setup,
-	SFun teardown)
+static void add_fixture(struct list_head *list, SFun setup, SFun teardown)
 {
 	struct fixture *f = malloc(sizeof(*f));
 	*f = (struct fixture){ .setup = setup, .teardown = teardown };
 	list_add_tail(list, &f->link);
 }
 
-
-/* TODO: proper support for test fixtures requires controlled restarting of
- * the emulator & skipping past a point in the test suite runner's loop. so
- * for now test.c implements fixtures without anything like forking.
- */
 
 void tcase_add_unchecked_fixture(TCase *tc, SFun setup, SFun teardown) {
 	add_fixture(&tc->u_fixtures, setup, teardown);
@@ -213,14 +205,12 @@ void exit_on_fail(void)
 {
 	struct test_status *st = malloc(sizeof(*st));
 	if(st != NULL) {
-		*st = (struct test_status){
-			.rc = false,
-		};
+		*st = (struct test_status){ .rc = false };
 	}
 
-	/* TODO: cause any accessory threads to shut down as well. right now ones
+	/* TODO: track and forcequit accessory threads as well. right now ones
 	 * that aren't controlled by fixtures will be left hanging, which may
-	 * compromise the test process. (though restartability would help.)
+	 * compromise the test process under !do_fork.
 	 */
 	exit_thread(st);
 }
@@ -298,9 +288,8 @@ static bool run_test(TCase *tc, struct test *t, int test_value)
 	/* join it. there's no concurrency here; threads are merely used as a
 	 * nonlocal exit mechanism.
 	 *
-	 * FIXME: change the 3s timeout to a parameter of how long tests can take.
-	 * this should be available to all tests, and perhaps modifiable per
-	 * TCase.
+	 * FIXME: change the 3s timeout to a fancier model of how tests can be
+	 * run, concurrently or not, modifiable with parameters per TCase.
 	 */
 	L4_Word_t ec = 0;
 	struct test_status *status = join_thread_long(thread,
@@ -416,6 +405,7 @@ static int name_prefix_length_all(
 }
 
 
+/* this is objectively the worst thing i've ever written. -ks */
 static void add_test_ids(struct htable *table, SRunner *sr)
 {
 	int suite_pfx = name_prefix_length_all(&sr->suites,
@@ -526,8 +516,7 @@ void srunner_describe(SRunner *sr)
 }
 
 
-static void begin_suite(Suite *s)
-{
+static void begin_suite(Suite *s) {
 	printf("*** begin suite `%s'\n", s->name);
 }
 
@@ -541,9 +530,7 @@ static bool begin_tcase(TCase *tc)
 
 
 static void run_test_in_case(
-	TCase *tc,
-	struct test *t,
-	int iter,
+	TCase *tc, struct test *t, int iter,
 	int report_mode)
 {
 	if(!tc->do_fork && !list_empty(&tc->c_fixtures)) {
@@ -660,8 +647,7 @@ static bool end_tcase(TCase *tc)
 }
 
 
-static void end_suite(Suite *s)
-{
+static void end_suite(Suite *s) {
 	printf("*** end suite `%s'\n", s->name);
 }
 
