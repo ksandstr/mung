@@ -13,9 +13,13 @@ user_lipc:
 	movl %eax, %ebp
 	andl $0x3f, %ebp	# mask off version bits for LTID test
 	xorl %ebx, %ebx
+	testl %eax, %eax	# test for send phase
+	sete %bl
+	orl %ebx, %ebp		# %ebp = !localtid | !send
+	xorl %ebx, %ebx
 	testl %edx, %edx	# test for receive phase
 	sete %bl
-	orl %ebx, %ebp		# %ebp = !localtid | !recvphase
+	orl %ebx, %ebp		# %ebp = !localtid | !send | !recv
 	movl %esi, %ebx
 	andl $0xffc0, %ebx	# mask tag.t, tag.flags
 	orl %ebx, %ebp		# %ebp |= !no_typed | !no_flags
