@@ -66,6 +66,17 @@ void abort(void)
 }
 
 
+long sysconf(int name)
+{
+	switch(name) {
+		case _SC_PAGESIZE: return PAGE_SIZE;
+		default:
+			// errno = EINVAL;
+			return -1;
+	}
+}
+
+
 void malloc_panic(void) {
 	printf("testbench: %s called in %lu:%lu, returns %p, %p, %p!\n", __func__,
 		L4_ThreadNo(L4_Myself()), L4_Version(L4_Myself()),
