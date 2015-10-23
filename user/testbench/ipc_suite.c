@@ -34,13 +34,6 @@
 #define IS_LOCAL_TID(tid) (!L4_IsNilThread(L4_LocalIdOf((tid))))
 
 
-struct sender_param {
-	L4_ThreadId_t parent;
-	L4_Word_t payload;
-	L4_Time_t delay;	/* ZeroTime or TimePeriod */
-};
-
-
 struct helper_ctx
 {
 	int fault_delay_us;
@@ -178,6 +171,13 @@ IDL_FIXTURE(other_helper, ipc_helper, &helper_vtab,
 	!helper_ctx()->running);
 
 
+struct sender_param {
+	L4_ThreadId_t parent;
+	L4_Word_t payload;
+	L4_Time_t delay;	/* ZeroTime or TimePeriod */
+	bool use_lipc, call;
+};
+
 /* sender thread utilities. these attempt to do an IPC with the caller thread
  * either from another thread in this process, or a thread in a forked address
  * space.
@@ -193,7 +193,23 @@ static void sender_thread_fn(void *param_ptr)
 
 	L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 1, .X.label = 0xd00d }.raw);
 	L4_LoadMR(1, p->payload);
-	L4_MsgTag_t tag = L4_Send(p->parent);
+	L4_ThreadId_t dummy;
+	L4_MsgTag_t tag;
+	if(p->call) {
+		if(p->use_lipc) {
+			tag = L4_Lipc(p->parent, p->parent,
+				L4_Timeouts(L4_Never, L4_Never), &dummy);
+		} else {
+			tag = L4_Call(p->parent);
+		}
+	} else {
+		if(p->use_lipc) {
+			tag = L4_Lipc(p->parent, L4_nilthread,
+				L4_Timeouts(L4_Never, L4_ZeroTime), &dummy);
+		} else {
+			tag = L4_Send(p->parent);
+		}
+	}
 	if(L4_IpcFailed(tag)) {
 		diag("%s[%lu:%lu]: send failed, ec %#lx", __func__,
 			L4_ThreadNo(L4_Myself()), L4_Version(L4_Myself()),
@@ -204,19 +220,21 @@ static void sender_thread_fn(void *param_ptr)
 }
 
 
-static L4_ThreadId_t send_to_from_thread(
-	L4_ThreadId_t dest, L4_Word_t payload, L4_Time_t delay)
+static L4_ThreadId_t ipc_to_from_thread(
+	L4_ThreadId_t dest, L4_Word_t payload, L4_Time_t delay,
+	bool use_lipc, bool call)
 {
 	struct sender_param *param = malloc(sizeof(*param));
 	fail_if(param == NULL);
 	*param = (struct sender_param){
 		.parent = dest, .payload = payload, .delay = delay,
+		.use_lipc = use_lipc, .call = call,
 	};
 	return xstart_thread(&sender_thread_fn, param);
 }
 
 #define send_from_thread(payload, delay) \
-	send_to_from_thread(L4_MyGlobalId(), (payload), (delay))
+	ipc_to_from_thread(L4_MyGlobalId(), (payload), (delay), false, false)
 
 
 static L4_ThreadId_t send_from_fork(L4_Word_t payload, L4_Time_t delay)
@@ -415,18 +433,27 @@ static void wait_and_return(void *param_ptr UNUSED) {
  *   - active receive: no/yes
  *   - receiver's source parameter: sender's local tid, or local-id pattern
  *   - burn some thread IDs before creating the sender: no/yes
+ *   - use Ipc or Lipc syscall in receiver
+ *     - (this isn't super useful as Lipc always slow-paths out when there's
+ *       no send phase, but whatever.)
+ *   - use Ipc/Lipc syscall in true sender
+ *   - use Ipc/Lipc syscall in false sender
  *
  * TODO:
- *   - variables:
- *     - ipc / lipc
+ *   - shorten the amount of wallclock time the test takes, or execute its
+ *     iterations concurrently somehow.
  */
-START_LOOP_TEST(receive_from_false_local, iter, 0, 7)
+START_LOOP_TEST(receive_from_false_local, iter, 0, 63)
 {
 	const bool act_receive = CHECK_FLAG(iter, 1),
 		recv_pattern = CHECK_FLAG(iter, 2),
-		burn_threads = CHECK_FLAG(iter, 4);
-	diag("act_receive=%s, recv_pattern=%s, burn_threads=%s",
-		btos(act_receive), btos(recv_pattern), btos(burn_threads));
+		burn_threads = CHECK_FLAG(iter, 4),
+		recv_lipc = CHECK_FLAG(iter, 8),
+		send_true_lipc = CHECK_FLAG(iter, 16),
+		send_false_lipc = CHECK_FLAG(iter, 32);
+	diag("act_receive=%s, recv_pattern=%s, burn_threads=%s, lipc=%s/%s/%s",
+		btos(act_receive), btos(recv_pattern), btos(burn_threads),
+		btos(recv_lipc), btos(send_true_lipc), btos(send_false_lipc));
 	const L4_Word_t good_val = 0x12345678, bad_val = 0xabcdef64;
 	plan_tests(4);
 
@@ -441,9 +468,9 @@ START_LOOP_TEST(receive_from_false_local, iter, 0, 7)
 	/* start the real sender. it'll always wait a few ticks to let the false
 	 * sender get to the post first.
 	 */
-	L4_ThreadId_t sender = L4_LocalIdOf(send_from_thread(
-		good_val, A_SHORT_NAP));
-	diag("sender's ltid=%#lx", sender.raw);
+	L4_ThreadId_t sender = L4_LocalIdOf(ipc_to_from_thread(
+		L4_MyLocalId(), good_val, A_SHORT_NAP, send_true_lipc, true));
+	//diag("sender's ltid=%#lx", sender.raw);
 
 	/* fork and spawn enough threads to duplicate the sender's LTID. */
 	L4_ThreadId_t child_tid;
@@ -454,8 +481,8 @@ START_LOOP_TEST(receive_from_false_local, iter, 0, 7)
 		L4_ThreadId_t notsender[MAX_THREADS];
 		int num;
 		for(num = 0; num < MAX_THREADS; num++) {
-			notsender[num] = L4_LocalIdOf(send_to_from_thread(
-				parent, bad_val, L4_ZeroTime));
+			notsender[num] = L4_LocalIdOf(ipc_to_from_thread(
+				parent, bad_val, L4_ZeroTime, send_false_lipc, true));
 			if(notsender[num].raw == sender.raw) break;
 		}
 		/* communicate to the parent whether the right child was started. */
@@ -478,19 +505,38 @@ START_LOOP_TEST(receive_from_false_local, iter, 0, 7)
 	L4_MsgTag_t tag;
 	L4_ThreadId_t send_from;
 	if(recv_pattern) {
-		tag = L4_WaitLocal_Timeout(TEST_IPC_DELAY, &send_from);
+		if(recv_lipc) {
+			tag = L4_Lipc(L4_nilthread, L4_anylocalthread,
+				L4_Timeouts(L4_ZeroTime, TEST_IPC_DELAY), &send_from);
+		} else {
+			tag = L4_WaitLocal_Timeout(TEST_IPC_DELAY, &send_from);
+		}
 	} else {
 		send_from = sender;
-		tag = L4_Receive_Timeout(sender, TEST_IPC_DELAY);
+		if(recv_lipc) {
+			L4_ThreadId_t dummy;
+			tag = L4_Lipc(L4_nilthread, sender,
+				L4_Timeouts(L4_ZeroTime, TEST_IPC_DELAY), &dummy);
+		} else {
+			tag = L4_Receive_Timeout(sender, TEST_IPC_DELAY);
+		}
 	}
+	L4_Word_t ec = L4_ErrorCode();
 	L4_Word_t payload; L4_StoreMR(1, &payload);
 	if(!ok(L4_IpcSucceeded(tag) && L4_Label(tag) == 0xd00d, "got ipc")) {
-		diag("tag=%#lx", tag.raw);
+		diag("tag=%#lx, ec=%#lx", tag.raw, ec);
 	}
 	if(!ok(L4_SameThreads(send_from, sender), "ipc was from local sender")) {
-		diag("send_from=%#lx", send_from.raw);
+		diag("send_from=%#lx, ec=%#lx", send_from.raw, ec);
 	}
 	if(!ok1(payload == good_val)) diag("payload=%#lx", payload);
+	if(L4_IpcSucceeded(tag)) {
+		L4_LoadMR(0, 0);
+		tag = L4_Reply(sender);	/* always reply by regular Ipc. */
+		if(L4_IpcFailed(tag)) {
+			diag("reply failed, ec=%#lx", L4_ErrorCode());
+		}
+	}
 
 	/* get status from the fork-spawner thread to confirm that it was able to
 	 * start a thread with the same local TID as the proper sender.
@@ -510,6 +556,8 @@ START_LOOP_TEST(receive_from_false_local, iter, 0, 7)
 				diag("got payload=%#lx from tid=%lu:%lu", payload,
 					L4_ThreadNo(tid), L4_Version(tid));
 			}
+			L4_LoadMR(0, 0);
+			L4_Reply(tid);
 		}
 	} while(L4_IpcSucceeded(tag));
 
