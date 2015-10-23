@@ -730,11 +730,10 @@ static void handle_pf(
 		 */
 		if(page_addr > max_vaddr) {
 			printf("illegal access to addr=%#lx from ip=%#lx\n", addr, ip);
-		} else {
-			printf("segfault in thread %lu:%lu, space %lu (brk %#lx)\n",
-				L4_ThreadNo(from), L4_Version(from), sp->id, sp->prog_brk);
-			printf("  addr %#lx, ip %#lx\n", addr, ip);
 		}
+		printf("segfault in thread %lu:%lu, space %lu (brk %#lx)\n",
+			L4_ThreadNo(from), L4_Version(from), sp->id, sp->prog_brk);
+		printf("  addr %#lx, ip %#lx\n", addr, ip);
 		int n;
 		if(!L4_IsNilThread(sp->mgr_tid)
 			&& !L4_SameThreads(from, sp->mgr_tid))
