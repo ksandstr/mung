@@ -52,16 +52,14 @@ static void shuffle_mdb(struct memdescbuf *mdb, unsigned perm)
 
 
 /* simple dataset w/ just a virtual address space. it's like mung, but also
- * chops off the first 4k because fuck you.
+ * chops off the first 4k because fuck you. caller should free @mdb->ptr
+ * afterward.
  */
 static void dset_virtual_only(struct memdescbuf *mdb)
 {
 	static const L4_MemoryDesc_t test_descs[] = {
-		/* virtual address space. it's like mung, but also chops off the first
-		 * 4k because fuck you.
-		 */
 		{ .x.v = 1, .x.type = L4_ConventionalMemoryType,
-			.x.low = 0, .x.high = ~(L4_Word_t)0 >> 10 },
+			.x.low = 4095 >> 10, .x.high = ~(L4_Word_t)0 >> 10 },
 		{ .x.v = 1, .x.type = L4_ReservedMemoryType,
 			.x.low = (L4_Word_t)0xc0000000 >> 10,
 			.x.high = ~(L4_Word_t)0 >> 10 },
