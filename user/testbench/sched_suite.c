@@ -176,6 +176,20 @@ START_TEST(range_errors)
 END_TEST
 
 
+/* basic test of Ipc used as L4_Sleep(). */
+START_TEST(sleeping_ipc)
+{
+	plan_tests(1);
+
+	L4_Word64_t sleep_start = L4_SystemClock().raw;
+	L4_Sleep(L4_TimePeriod(500000));
+	L4_Word64_t wake = L4_SystemClock().raw;
+	diag("woke up at %llu; slept for %llu µs\n", wake, wake - sleep_start);
+	ok(wake - sleep_start >= 500000, "long enough");
+}
+END_TEST
+
+
 /* simple ReadPrecision (SystemClock latency) test. */
 START_TEST(kip_sysclock_latency)
 {
@@ -1173,6 +1187,7 @@ Suite *sched_suite(void)
 		tcase_add_test(tc, single_as_errors);
 		tcase_add_test(tc, syscall_access);
 		tcase_add_test(tc, range_errors);
+		tcase_add_test(tc, sleeping_ipc);
 		suite_add_tcase(s, tc);
 	}
 

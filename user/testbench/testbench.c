@@ -794,11 +794,6 @@ int main(void)
 		run_benchmarks();
 	}
 
-	if(!notest) {
-		printf("*** legacy tests follow\n");
-		legacy_tests();
-	}
-
 	printf("*** testbench completed.\n");
 
 	if(cmd_opt(&opts, "keyboard") != NULL) {

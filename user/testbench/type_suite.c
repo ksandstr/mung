@@ -6,7 +6,9 @@
 #endif
 
 #include <stdlib.h>
+
 #include <l4/types.h>
+#include <l4/thread.h>
 #include <l4/syscall.h>
 
 #include "defs.h"
@@ -123,14 +125,57 @@ START_LOOP_TEST(pt_valid, iter, 3, 15)
 END_TEST
 
 
+START_TEST(period_basic)
+{
+	plan_tests(1);
+
+	L4_Time_t t = L4_TimePeriod(500000);
+	diag("half a second is e %#x, m %#x (%lu µs)\n",
+		t.period.e, t.period.m, L4_PeriodUs_NP(t));
+	ok(abs(500000 - L4_PeriodUs_NP(t)) < 1000, "close enough");
+}
+END_TEST
+
+
+START_TEST(threadid_basic)
+{
+	plan_tests(2);
+
+	diag("L4_Myself() == %#lx", L4_Myself().raw);
+	diag("L4_MyLocalId() == %#lx", L4_MyLocalId().raw);
+	diag("L4_LocalIdOf(L4_MyGlobalId()) == %#lx",
+		L4_LocalIdOf(L4_MyGlobalId()).raw);
+	diag("L4_GlobalIdOf(L4_MyLocalId()) == %#lx",
+		L4_GlobalIdOf(L4_MyLocalId()).raw);
+
+	ok1(L4_GlobalIdOf(L4_MyLocalId()).raw == L4_MyGlobalId().raw);
+	ok1(L4_LocalIdOf(L4_MyGlobalId()).raw == L4_MyLocalId().raw);
+}
+END_TEST
+
+
 Suite *type_suite(void)
 {
 	Suite *s = suite_create("type");
 
-	TCase *timept_case = tcase_create("timept");
-	tcase_add_test(timept_case, pt_stable);
-	tcase_add_test(timept_case, pt_valid);
-	suite_add_tcase(s, timept_case);
+	{
+		TCase *tc = tcase_create("timept");
+		tcase_add_test(tc, pt_stable);
+		tcase_add_test(tc, pt_valid);
+		suite_add_tcase(s, tc);
+	}
+
+	{
+		TCase *tc = tcase_create("period");
+		tcase_add_test(tc, period_basic);
+		suite_add_tcase(s, tc);
+	}
+
+	{
+		TCase *tc = tcase_create("threadid");
+		tcase_add_test(tc, threadid_basic);
+		suite_add_tcase(s, tc);
+	}
 
 	return s;
 }

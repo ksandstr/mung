@@ -175,25 +175,15 @@ extern struct Suite *interrupt_suite(void);
 extern struct Suite *meta_suite(void);
 
 
-/* pre-formal tests */
-extern void threadctl_test(void);
-extern void thread_test(void);
-
-extern void legacy_tests(void);		/* from legacy.c */
-
-
 /* from benchmark.c */
-
 extern void run_benchmarks(void);
 
 
 /* from testbench.c */
-
 extern void add_fs_tid(L4_Word_t space_id, L4_ThreadId_t tid);
 
 
 /* from thread.c */
-
 extern int thread_self(void);
 
 /* gets the manager thread's thread ID, starting it if necessary. */

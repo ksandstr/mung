@@ -38,8 +38,7 @@ testbench: testbench.ld crt0.o testbench.o dlmalloc.o heap.o thread.o tsd.o \
 		idlsupp.o pg_stats.o pg_drop.o \
 		sched_suite.o space_suite.o thread_suite.o string_suite.o \
 		ipc_suite.o self_suite.o type_suite.o redir_suite.o \
-		x86_suite.o interrupt_suite.o \
-		meta_suite.o legacy.o benchmark.o thread_test.o \
+		x86_suite.o interrupt_suite.o meta_suite.o benchmark.o \
 		ccan-list.o ccan-htable.o ccan-hash.o ccan-crc.o \
 		ccan-talloc.o ccan-tally.o \
 		$(TEST_IDL_OBJS) \
