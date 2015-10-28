@@ -11,8 +11,14 @@ extern void free(void *ptr);
 extern void *calloc(size_t nmemb, size_t size) __attribute__((malloc));
 extern void *realloc(void *ptr, size_t size);
 extern void *valloc(size_t size);
-
 extern int posix_memalign(void **memptr, size_t alignment, size_t size);
+
+static inline void *aligned_alloc(size_t alignment, size_t size) {
+	void *ptr;
+	int n = posix_memalign(&ptr, alignment, size);
+	return n == 0 ? ptr : NULL;
+}
+
 
 extern NORETURN void abort(void);
 

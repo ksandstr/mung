@@ -2,7 +2,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <assert.h>
+
 #include <ccan/str/str.h>
+#include <ccan/crc/crc.h>
 
 #include <l4/types.h>
 #include <l4/ipc.h>
@@ -815,9 +817,7 @@ END_TEST
 
 static L4_MsgTag_t send_fault(
 	L4_ThreadId_t pager,
-	L4_Word_t addr,
-	L4_Word_t eip,
-	L4_Word8_t access)
+	L4_Word_t addr, L4_Word_t eip, int access)
 {
 	L4_LoadBR(0, L4_CompleteAddressSpace.raw);
 	L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 2,
@@ -926,6 +926,80 @@ static void add_thread_tests(TCase *tc)
 }
 
 
+/* tcase "env" */
+
+/* check that Forkserv::discontiguate() preserves existing data, and unmaps
+ * the memory region it's being applied to.
+ *
+ * variables:
+ *   - length of region (2 bits)
+ *   - size of grain (2 bits)
+ */
+START_LOOP_TEST(discontiguate_basic, iter, 0, 15)
+{
+	static const int region_shift[4] = { 14, 17, 21, 23 },
+		grain_vals[4] = { 0, 12, 16, 20 };
+	const size_t region_size = 1u << region_shift[iter & 3];
+	const int grain = grain_vals[(iter >> 2) & 3];
+
+	diag("region_size=%#lx, grain=%d", (L4_Word_t)region_size, grain);
+	plan_tests(3);
+	todo_start("no impl");
+
+	void *regptr = aligned_alloc(region_size, region_size);
+	fail_unless(regptr != NULL);
+
+	L4_Fpage_t region = L4_Fpage((L4_Word_t)regptr, region_size);
+	fail_unless(L4_Size(region) == region_size);
+	/* fill it with stuff. */
+	memset(regptr, '\0', region_size);
+	uint32_t rand_seed = 0xb00bface;
+	random_string(regptr, region_size, &rand_seed);
+
+	/* measurement #1: that there are no faults from accessing the memory
+	 * region once it's been written with memset() and random_string().
+	 * compute refcrc while we're here. (unmap property, precondition.)
+	 */
+	/* fault crc32() in so it doesn't interfere with readings. */
+	L4_Word_t dummy = crc32c(0, "what what", 10);
+	diag("dummy=%#lx", dummy);	/* must print this out */
+	L4_ThreadId_t old_pager = L4_Pager();
+	int old_faults = stats->n_faults;
+	L4_Set_Pager(stats_tid);
+	L4_Word_t refcrc = crc32c(0, regptr, region_size);
+	L4_Set_Pager(old_pager);
+	int n_faults = stats->n_faults - old_faults;
+	diag("refcrc=%#lx", refcrc);
+	if(!ok1(n_faults == 0)) {
+		diag("n_faults=%d", n_faults);
+	}
+
+	int n = forkserv_discontiguate(L4_Pager(), region, grain);
+	fail_if(n != 0, "n=%d", n);
+
+	/* measurement #2: that there are as many faults from accessing that
+	 * region after discontiguate as there are minimal pages. (unmap property,
+	 * proper.)
+	 */
+	old_faults = stats->n_faults;
+	L4_Set_Pager(stats_tid);
+	L4_Word_t aftercrc = crc32c(0, regptr, region_size);
+	L4_Set_Pager(old_pager);
+	n_faults = stats->n_faults - old_faults;
+	if(!ok1(n_faults == region_size / PAGE_SIZE)) {
+		diag("n_faults=%d", n_faults);
+	}
+
+	/* measurement #3: that the CRCs match. (preservation.) */
+	if(!ok1(refcrc == aftercrc)) {
+		diag("refcrc=%#lx, aftercrc=%#lx", refcrc, aftercrc);
+	}
+
+	free(regptr);
+}
+END_TEST
+
+
 /* start the stats-collecting pager thread. */
 static void stats_setup(void)
 {
@@ -980,6 +1054,18 @@ Suite *self_suite(void)
 		tcase_add_test(tc, multi_fork_tid);
 		tcase_add_test(tc, many_fork_sequence);
 		tcase_add_test(tc, retain_tsd_on_fork);
+		suite_add_tcase(s, tc);
+	}
+
+	/* tests concerning the testing environment, i.e. anything not having to
+	 * do with non-microkernel functions (bogomips delay loops), threading, or
+	 * POSIXy fork()ing; but also not implemented within testbench (such as
+	 * pg, below).
+	 */
+	{
+		TCase *tc = tcase_create("env");
+		tcase_add_checked_fixture(tc, &stats_setup, &stats_teardown);
+		tcase_add_test(tc, discontiguate_basic);
 		suite_add_tcase(s, tc);
 	}
 
