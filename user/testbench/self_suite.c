@@ -66,20 +66,21 @@ END_TEST
 
 START_TEST(basic_fork_and_wait)
 {
-	plan_tests(2);
+	plan_tests(3);
 
+	int parent_pid = getpid();
 	int spid = fork();
 	if(spid == 0) {
 		/* child side */
-		diag("child running, sees pid=%d", getpid());
-		exit(0);
+		diag("child running, sees pid=%d (parent=%d)", getpid(), parent_pid);
+		exit(abs(parent_pid - getpid()));
 		assert(false);
 	}
 	diag("spid=%d", spid);
 	ok(spid > 0, "fork succeeded");
 	int status = 0, dead = wait(&status);
 	ok(dead > 0 && dead == spid, "child exited");
-	/* TODO: test the status, too */
+	ok(status == abs(getpid() - spid), "exit status was delivered");
 }
 END_TEST
 
@@ -572,7 +573,7 @@ START_TEST(stats_delay_test)
 	ok1(elapsed_ms <= 1);
 
 	/* part 2: with delay, it should apply a measurable delay that's close
-	 * enough to delay_ms (FIXME: adjust this using the clock precision).
+	 * enough to delay_ms (TODO: adjust this using the clock precision).
 	 *
 	 * and part 3: it should stop applying the delay after repeat_ct calls.
 	 */
@@ -945,10 +946,12 @@ Suite *self_suite(void)
 {
 	Suite *s = suite_create("self");
 
-	TCase *util_case = tcase_create("util");
-	tcase_set_fork(util_case, false);
-	tcase_add_test(util_case, basic_delay_test);
-	suite_add_tcase(s, util_case);
+	{
+		TCase *tc = tcase_create("util");
+		tcase_set_fork(tc, false);
+		tcase_add_test(tc, basic_delay_test);
+		suite_add_tcase(s, tc);
+	}
 
 	{
 		TCase *tc = tcase_create("thread");
@@ -980,10 +983,12 @@ Suite *self_suite(void)
 		suite_add_tcase(s, tc);
 	}
 
-	TCase *pagers = tcase_create("pg");
-	tcase_add_checked_fixture(pagers, &stats_setup, &stats_teardown);
-	tcase_add_test(pagers, stats_delay_test);
-	suite_add_tcase(s, pagers);
+	{
+		TCase *tc = tcase_create("pg");
+		tcase_add_checked_fixture(tc, &stats_setup, &stats_teardown);
+		tcase_add_test(tc, stats_delay_test);
+		suite_add_tcase(s, tc);
+	}
 
 	return s;
 }
