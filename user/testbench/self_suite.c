@@ -928,8 +928,8 @@ static void add_thread_tests(TCase *tc)
 
 /* tcase "env" */
 
-/* check that Forkserv::discontiguate() preserves existing data, and unmaps
- * the memory region it's being applied to.
+/* check that Forkserv::discontiguate() preserves existing data in the same
+ * process, and unmaps the memory region it's being applied to.
  *
  * variables:
  *   - length of region (2 bits)
@@ -948,7 +948,6 @@ START_LOOP_TEST(discontiguate_basic, iter, 0, 15)
 
 	void *regptr = aligned_alloc(region_size, region_size);
 	fail_unless(regptr != NULL);
-
 	L4_Fpage_t region = L4_Fpage((L4_Word_t)regptr, region_size);
 	fail_unless(L4_Size(region) == region_size);
 	/* fill it with stuff. */
@@ -996,6 +995,75 @@ START_LOOP_TEST(discontiguate_basic, iter, 0, 15)
 	}
 
 	free(regptr);
+}
+END_TEST
+
+
+/* check that Forkserv::discontiguate() doesn't impact data in the other side
+ * of a fork().
+ *
+ * variables:
+ *   - length of region (32k, 2M)
+ *   - size of grain (0, 14)
+ *   - invoking role (parent / child)
+ *
+ * TODO: choose whether child computes its own crc first, or after the parent.
+ */
+START_LOOP_TEST(discontiguate_fork, iter, 0, 7)
+{
+	const size_t region_size = 1ul << (!CHECK_FLAG(iter, 1) ? 15 : 21);
+	const int grain = !CHECK_FLAG(iter, 2) ? 0 : 14;
+	const bool child_calls = CHECK_FLAG(iter, 4);
+
+	diag("region_size=%#lx, grain=%d, child_calls=%s",
+		(L4_Word_t)region_size, grain, btos(child_calls));
+	plan_tests(3);
+	todo_start("no impl");
+
+	void *regptr = aligned_alloc(region_size, region_size);
+	fail_unless(regptr != NULL);
+	L4_Fpage_t region = L4_Fpage((L4_Word_t)regptr, region_size);
+	fail_unless(L4_Size(region) == region_size);
+	/* fill it with whatever. */
+	uint32_t rand_seed = 0xdadab00b; /* solid diamond w/ a cardboard nipple */
+	random_string(regptr, region_size, &rand_seed);
+	L4_Word_t refcrc = crc32c(0, regptr, region_size);
+	diag("refcrc=%#lx", refcrc);
+
+	L4_ThreadId_t parent_tid = L4_Myself(), child_tid = L4_nilthread;
+	int child = fork_tid(&child_tid);
+	if(child == 0) {
+		if(child_calls) {
+			int n = forkserv_discontiguate(L4_Pager(), region, grain);
+			fail_if(n != 0, "n=%d (in child)", n);
+		} else {
+			L4_Sleep(A_SHORT_NAP);
+		}
+		L4_Word_t crc = crc32c(0, regptr, region_size);
+		L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 1 }.raw);
+		L4_LoadMR(1, crc);
+		L4_MsgTag_t tag = L4_Call_Timeouts(parent_tid,
+			TEST_IPC_DELAY, TEST_IPC_DELAY);
+		exit(L4_IpcSucceeded(tag) ? 0 : 1);
+	}
+
+	if(!child_calls) {
+		int n = forkserv_discontiguate(L4_Pager(), region, grain);
+		fail_if(n != 0, "n=%d", n);
+	} else {
+		L4_Sleep(A_SHORT_NAP);
+	}
+	L4_Word_t aftercrc = crc32c(0, regptr, region_size);
+	L4_MsgTag_t tag = L4_Receive_Timeout(child_tid, TEST_IPC_DELAY);
+	L4_Word_t ec = L4_ErrorCode(), child_crc = 0;
+	L4_StoreMR(1, &child_crc);
+	if(!ok(L4_IpcSucceeded(tag) && L4_UntypedWords(tag) == 1,
+		"got child msg"))
+	{
+		diag("ec=%#lx", ec);
+	}
+	if(!ok1(child_crc == refcrc)) diag("child_crc=%#lx", child_crc);
+	if(!ok1(aftercrc == refcrc)) diag("aftercrc=%#lx", aftercrc);
 }
 END_TEST
 
@@ -1066,6 +1134,7 @@ Suite *self_suite(void)
 		TCase *tc = tcase_create("env");
 		tcase_add_checked_fixture(tc, &stats_setup, &stats_teardown);
 		tcase_add_test(tc, discontiguate_basic);
+		tcase_add_test(tc, discontiguate_fork);
 		suite_add_tcase(s, tc);
 	}
 
