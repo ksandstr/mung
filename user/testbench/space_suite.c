@@ -1,6 +1,6 @@
 
-/* unit tests concerning the SpaceControl and Unmap system calls, and pager
- * operation.
+/* unit tests concerning the SpaceControl and Unmap system calls, pager
+ * operation, and the mapping database.
  */
 
 #include <stdio.h>
@@ -9,6 +9,7 @@
 #include <string.h>
 #include <assert.h>
 #include <ctype.h>
+
 #include <ccan/compiler/compiler.h>
 #include <ccan/crc/crc.h>
 
@@ -920,6 +921,103 @@ static void helpful_assistant(size_t map_size, L4_ThreadId_t p_tid)
 }
 
 
+/* tcase "panic" */
+
+/* case where a large entry is being mapped over a smaller entry, or a number
+ * thereof.
+ *
+ * variables:
+ *   - area size (32, 1024 pages)
+ *   - sender grain (no grain, 16 pages)
+ *
+ * TODO: further variables:
+ *   - receiver's pattern
+ *     - simple checkerboard: 0, 1, 0, 1, ...
+ *     - doubling checkerboard: 0, 1, 0, 0, 1, 1, ...
+ *     - hole with 1 page at start, or end
+ *       - & same, but at the second(-to-last) offset
+ *   - receiver's pattern size (1 page, 4 pages)
+ */
+START_LOOP_TEST(mapdb_shrimps, iter, 0, 3)
+{
+	uint32_t seed = 0xb00bf00d;		/* makes 'em nice and perky */
+	const size_t map_size = (CHECK_FLAG(iter, 1) ? 32 : 1024) * PAGE_SIZE,
+		snd_grain = CHECK_FLAG(iter, 2) ? PAGE_BITS + 4 : 0;
+
+	diag("map_size=%lu, snd_grain=%u",
+		(L4_Word_t)map_size, (unsigned)snd_grain);
+	plan_tests(2);
+
+	L4_ThreadId_t parent_tid = L4_Myself(), child_tid;
+	int child = fork_tid(&child_tid);
+	if(child == 0) {
+		/* set up us the reception area. */
+		void *recptr = aligned_alloc(map_size, map_size);
+		fail_if(recptr == NULL);
+		diag("recptr=%p", recptr);
+		L4_Fpage_t wnd = L4_Fpage((L4_Word_t)recptr, map_size);
+		diag("child wnd=%#lx:%#lx", L4_Address(wnd), L4_Size(wnd));
+
+		/* make it into checkerboard confetti of two consecutive pages, then
+		 * two pages' emptiness, repeating.
+		 */
+		int n = forkserv_discontiguate(L4_Pager(), wnd, 0);
+		fail_if(n != 0, "child discontig failed, n=%d", n);
+		memset(recptr, 0, map_size);
+		for(size_t o = 0; o < map_size; o += PAGE_SIZE * 4) {
+			L4_Fpage_t u = L4_FpageLog2(
+				L4_Address(wnd) + o + PAGE_SIZE * 2, PAGE_BITS + 1);
+			L4_Set_Rights(&u, L4_FullyAccessible);
+			L4_FlushFpage(u);
+		}
+
+		/* now get a thing & compute crc & reply. */
+		diag("child: doing ipc");
+		L4_Accept(L4_MapGrantItems(wnd));
+		L4_MsgTag_t tag = L4_Receive_Timeout(parent_tid, TEST_IPC_DELAY);
+		L4_Word_t ec = L4_ErrorCode(), crc = 0;
+		if(L4_IpcSucceeded(tag)) {
+			diag("child: ipc ok");
+			crc = crc32c(0, recptr, map_size);
+		} else {
+			diag("child recv failed, ec=%#lx", ec);
+		}
+		L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 1 }.raw);
+		L4_LoadMR(1, crc);
+		L4_Reply(parent_tid);
+
+		exit(L4_IpcSucceeded(tag) ? 0 : 1);
+	}
+
+	void *sndptr = aligned_alloc(map_size, map_size);
+	random_string(sndptr, map_size, &seed);
+	L4_Fpage_t sndpage = L4_Fpage((L4_Word_t)sndptr, map_size);
+	L4_Set_Rights(&sndpage, L4_FullyAccessible);
+	int n = forkserv_discontiguate(L4_Pager(), sndpage, snd_grain);
+	fail_if(n != 0, "n=%d");
+	L4_Word_t refcrc = crc32c(0, sndptr, map_size);
+
+	L4_MapItem_t mi = L4_MapItem(sndpage, 0);
+	L4_LoadMR(0, (L4_MsgTag_t){ .X.t = 2 }.raw);
+	L4_LoadMRs(1, 2, mi.raw);
+	L4_MsgTag_t tag = L4_Call_Timeouts(child_tid,
+		TEST_IPC_DELAY, TEST_IPC_DELAY);
+	L4_Word_t ec = L4_ErrorCode(), childcrc;
+	L4_StoreMR(1, &childcrc);
+	if(!ok(L4_IpcSucceeded(tag), "ipc ok")) {
+		diag("ec=%#lx", ec);
+	}
+	if(!ok1(refcrc == childcrc)) {
+		diag("refcrc=%#lx, childcrc=%#lx", refcrc, childcrc);
+	}
+
+	/* cleanup */
+	int st, dead = wait(&st);
+	fail_unless(dead == child, "child=%d, dead=%d, st=%d", child, dead, st);
+}
+END_TEST
+
+
 Suite *space_suite(void)
 {
 	Suite *s = suite_create("space");
@@ -953,6 +1051,13 @@ Suite *space_suite(void)
 		tcase_add_test(tc, parent_access);
 		tcase_add_test(tc, access_interference);
 		tcase_add_test(tc, deep_recursive_unmap);
+		suite_add_tcase(s, tc);
+	}
+
+	/* panic-provocation tests. */
+	{
+		TCase *tc = tcase_create("panic");
+		tcase_add_test(tc, mapdb_shrimps);
 		suite_add_tcase(s, tc);
 	}
 
