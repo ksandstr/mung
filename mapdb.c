@@ -110,6 +110,12 @@ static bool deref_child(
 	int child_ix,
 	L4_Fpage_t eff_range);		/* as given to unmap_entry_in_group() */
 
+static int unmap_entry_in_group(
+	struct map_group *g,
+	struct map_entry **e_p,
+	unsigned mode,
+	L4_Fpage_t eff_range);
+
 /* (how come this function is both static, and prefixed?) */
 static int mapdb_add_child(struct map_entry *ent, L4_Word_t child);
 
@@ -1203,8 +1209,10 @@ int mapdb_add_map(
 		if(fpage_group_p != NULL) *fpage_group_p = g;
 		if(likely(g != NULL)) rc = 0; else rc = -ENOMEM;
 	} else {
+		struct map_entry *old;
 		if(fpage_group_p != NULL) *fpage_group_p = g;
-		struct map_entry *old = probe_group_range(g, fpage);
+shrimp_retry:
+		old = probe_group_range(g, fpage);
 		if(old == NULL) {
 			/* not covered. */
 			rc = insert_map_entry(sp, g, parent, fpage, first_page_id);
@@ -1251,15 +1259,37 @@ int mapdb_add_map(
 			}
 		} else {
 			assert(L4_SizeLog2(old->range) < L4_SizeLog2(fpage));
+			assert(fpage_overlap(old->range, fpage));
 			/* "shrimp" case.
 			 *
-			 * TODO: wind "old" back to the leftmost entry covered by @fpage,
-			 * erase entries from here to @fpage's end, recycle one slot for
-			 * the added entry, and compress the rest of the group.
+			 * recursive solution: remove an existing entry w/
+			 * unmap_entry_in_group() and re-probe. this eventually erases all
+			 * overlapping shrimps under @fpage, then adds an entry for it. as
+			 * a downside, this has probe overhead in proportion to the amount
+			 * of confetti and the number of entries in @g, and some
+			 * erase/insert overhead on top of that.
 			 *
-			 * FIXME: implement this!
+			 * TODO: for a faster one-pass solution, wind "old" back to the
+			 * leftmost entry covered by @fpage, erase entries from here to
+			 * @fpage's end, recycle the leftmost slot for the added entry,
+			 * and compress the rest of the group. entry erasure requires
+			 * unmap_entry_in_group() however, so the speed gain might not be
+			 * there.
 			 */
-			panic("shrimp case not implemented");
+#if 0
+			printf("shrimp case: old=%#lx:%#lx, fpage=%#lx:%#lx\n",
+				L4_Address(old->range), L4_Size(old->range),
+				L4_Address(fpage), L4_Size(fpage));
+#endif
+			L4_Fpage_t o_range = old->range;
+			int n = unmap_entry_in_group(g, &old,
+				UM_IMMEDIATE | L4_Rights(old->range) << 4,
+				old->range);
+			if(n < 0) {
+				panic("TODO: propagate shrimp-case ENOMEM!");
+			}
+			assert(probe_group_range(g, o_range) == NULL);
+			goto shrimp_retry;
 		}
 	}
 
