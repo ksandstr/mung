@@ -90,9 +90,6 @@ struct thread
 	 */
 	struct space *space;
 
-	/* FIXME: alter ipc.c to go to TS_STOPPED after IPC completion when
-	 * TF_HALT is set
-	 */
 	uint8_t flags;
 	uint8_t status, pri, sens_pri;
 
