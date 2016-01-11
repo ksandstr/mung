@@ -12,6 +12,7 @@
 #include <ccan/hash/hash.h>
 #include <ccan/crc/crc.h>
 #include <ccan/endian/endian.h>
+#include <ccan/talloc/talloc.h>
 
 #include <l4/types.h>
 #include <l4/ipc.h>
@@ -108,23 +109,27 @@ static void helper_handle_fault_impl(
 	L4_MapItem_t *map)
 {
 	int sleep_us = helper_ctx()->fault_delay_us;
-	// diag("faddr=%#lx, fip=%#lx, sleep_us=%d", faddr, fip, sleep_us);
+	diag("helper[pf]: faddr=%#lx, fip=%#lx, sleep_us=%d", faddr, fip, sleep_us);
 	if(sleep_us > 0) {
 		L4_Sleep(L4_TimePeriod(sleep_us));
 	}
 
-	/* pass it up. */
-	L4_MsgTag_t tag = muidl_get_tag();
-	L4_LoadBR(0, L4_CompleteAddressSpace.raw);
+	/* pass it on and don't reply. this avoids a free() spinlock deadly
+	 * embrace on reply fail.
+	 */
+	L4_MsgTag_t i_tag = muidl_get_tag(),
+		tag = { .X.label = L4_Label(i_tag), .X.u = 2 };
+	L4_Set_Propagation(&tag);
+	L4_Set_VirtualSender(muidl_get_sender());
+	L4_LoadBR(0, 0);
 	L4_LoadMR(0, tag.raw);
 	L4_LoadMR(1, faddr);
 	L4_LoadMR(2, fip);
-	tag = L4_Call(L4_Pager());
+	tag = L4_Send(L4_Pager());
 	if(!L4_IpcSucceeded(tag)) {
 		diag("%s: ipc failed, ec %#lx", __func__, L4_ErrorCode());
 	}
-
-	L4_StoreMRs(1, 2, map->raw);
+	muidl_raise_no_reply();
 }
 
 
@@ -843,12 +848,13 @@ END_TEST
  * compare result with locally-computed equivalent via crc32c().
  */
 static int munge_case(
+	void *memctx,
 	L4_ThreadId_t partner_tid,
 	size_t munge_size,
 	uint32_t munge_seed)
 {
-	char *munge_in = malloc(munge_size + 1),
-		*munge_out = malloc(munge_size + 1);
+	char *munge_in = talloc_size(memctx, munge_size + 1),
+		*munge_out = talloc_size(memctx, munge_size + 1);
 	uint32_t rnd_seed = 0xcabb1e23;
 	random_string(munge_in, munge_size, &rnd_seed);
 	munge_string_local(munge_in, munge_out, munge_seed);
@@ -859,16 +865,14 @@ static int munge_case(
 
 	int n = __ipchelper_munge_string(partner_tid,
 		munge_in, munge_out, munge_seed);
-	if(n != 0) goto end;
-	uint32_t remote_crc = crc32c(0, munge_out, munge_size);
-	if(remote_crc != local_crc) {
-		diag("remote_crc=%#x, local_crc=%#x", __func__,
-			(unsigned)remote_crc, (unsigned)local_crc);
+	if(n == 0) {
+		uint32_t remote_crc = crc32c(0, munge_out, munge_size);
+		if(remote_crc != local_crc) {
+			diag("remote_crc=%#x, local_crc=%#x", __func__,
+				(unsigned)remote_crc, (unsigned)local_crc);
+		}
 	}
 
-end:
-	free(munge_in);
-	free(munge_out);
 	return n;
 }
 
@@ -878,9 +882,10 @@ end:
  */
 START_TEST(point_xfer_timeouts)
 {
-	const size_t munge_size = 6 * 1024 + 77;
+	const size_t munge_size = 11 * 1024 + 77;
 	const uint32_t munge_seed = 0x715517da;
 	const int to_us = 25 * 1000, pg_delay_us = 5 * 1000;
+	void *memctx = talloc_new(NULL);
 
 	plan_tests(4);
 
@@ -890,7 +895,7 @@ START_TEST(point_xfer_timeouts)
 
 	/* base case: no timeout when none is given. */
 	L4_Set_XferTimeouts(L4_Timeouts(L4_Never, L4_Never));
-	n = munge_case(other_helper_tid, munge_size, munge_seed);
+	n = munge_case(memctx, other_helper_tid, munge_size, munge_seed);
 	if(!ok1(n == 0)) diag("n=%d", n);
 
 	/* part #1: no timeout when timeout is given, but no delay. */
@@ -898,7 +903,7 @@ START_TEST(point_xfer_timeouts)
 	L4_Time_t to_pt = L4_TimePoint2_NP(base,
 		(L4_Clock_t){ .raw = base.raw + to_us });
 	L4_Set_XferTimeouts(L4_Timeouts(to_pt, to_pt));
-	n = munge_case(other_helper_tid, munge_size, munge_seed);
+	n = munge_case(memctx, other_helper_tid, munge_size, munge_seed);
 	if(!ok1(n == 0)) diag("n=%d", n);
 
 	/* part #2: timeout should occur when delay is set. */
@@ -917,13 +922,15 @@ START_TEST(point_xfer_timeouts)
 	fail_unless(pt_is_valid(L4_SystemClock(), to_pt));
 
 	L4_Set_XferTimeouts(L4_Timeouts(to_pt, to_pt));
-	n = munge_case(other_helper_tid, munge_size, munge_seed);
+	n = munge_case(memctx, other_helper_tid, munge_size, munge_seed);
 	L4_Clock_t after = L4_SystemClock();
 	diag("after=%#lx", (L4_Word_t)after.raw);
 	int code = (n >> 1) & 0x7;
 	if(!ok(code == 5 || code == 6, "hit xfer timeout")) diag("n=%d", n);
 	int64_t end_diff = (int64_t)after.raw - base.raw - to_us;
 	if(!ok1(end_diff > 0)) diag("end_diff=%d", (int)end_diff);
+
+	talloc_free(memctx);
 }
 END_TEST
 
