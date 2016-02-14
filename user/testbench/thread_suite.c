@@ -25,6 +25,12 @@
 #include "test.h"
 
 
+/* TODO: start collecting these utility thread functions somewhere. likely
+ * there's a bunch of duplication between test suites.
+ */
+static void receive_and_exit(void *param UNUSED);
+
+
 static bool as_exists(L4_ThreadId_t space_id)
 {
 	/* it's not properly specified in L4.X2, but a L4_Nilpage is the no-op for
@@ -42,6 +48,16 @@ static bool as_exists(L4_ThreadId_t space_id)
 static bool thr_exists(L4_ThreadId_t tid) {
 	/* funnily enough, as all threads exist within a space, ... */
 	return as_exists(L4_GlobalIdOf(tid));
+}
+
+
+static bool thr_is_halted(L4_ThreadId_t tid)
+{
+	L4_Word_t ctl, foo;
+	L4_ThreadId_t dummy, ret = L4_ExchangeRegisters(tid, 0,
+		0, 0, 0, 0, L4_nilthread, &ctl, &foo, &foo, &foo, &foo, &dummy);
+	fail_if(L4_IsNilThread(ret), "ec=%#lx", L4_ErrorCode());
+	return CHECK_FLAG(ctl, 1);		/* the H bit of output @control */
 }
 
 
@@ -879,6 +895,33 @@ START_TEST(version_stomp)
 	assert(thr_exists(orig_tid));
 
 	kill_thread(orig_tid);
+}
+END_TEST
+
+
+/* tcase "exregs" */
+
+
+/* test that ExchangeRegisters which sets the halt bit causes the read-out
+ * halt bit to change accordingly. very basic.
+ */
+START_TEST(halt_bit_smoke)
+{
+	plan_tests(3);
+	todo_start("nothing here");
+
+	L4_ThreadId_t target = xstart_thread(&receive_and_exit, NULL);
+	L4_Sleep(A_SHORT_NAP);
+	ok(!thr_is_halted(target), "thread starts out not halted");
+
+	L4_Stop(target);
+	ok(thr_is_halted(target), "thread H bit set after stop");
+	L4_Start(target);
+	ok(!thr_is_halted(target), "thread H bit clear after re-start");
+
+	diag("cleaning up...");
+	send_quit(target);
+	xjoin_thread(target);
 }
 END_TEST
 
@@ -1769,8 +1812,9 @@ Suite *thread_suite(void)
 		suite_add_tcase(s, tc);
 	}
 
+	/* tests on the ThreadControl system call. */
 	{
-		TCase *tc = tcase_create("api");
+		TCase *tc = tcase_create("ctl");
 		tcase_set_fork(tc, false);	/* must be run in privileged space */
 		tcase_add_test(tc, threadctl_basic);
 		tcase_add_test(tc, privilege);
@@ -1783,6 +1827,13 @@ Suite *thread_suite(void)
 		tcase_add_test(tc, modify_self);
 		/* TODO: add modify_other */
 		tcase_add_test(tc, version_stomp);
+		suite_add_tcase(s, tc);
+	}
+
+	/* tests on the ExchangeRegisters syscall. */
+	{
+		TCase *tc = tcase_create("exregs");
+		tcase_add_test(tc, halt_bit_smoke);
 		suite_add_tcase(s, tc);
 	}
 
