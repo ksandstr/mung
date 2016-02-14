@@ -739,10 +739,20 @@ SYSCALL L4_Word_t sys_exregs(
 	}
 
 	L4_Word_t ctl_out = 0;
-	if(CHECK_FLAG(dest_thread->flags, TF_HALT)) ctl_out |= 1;	/* "H"alt */
-	/* S, R never set because string transfers aren't implemented yet.
-	 * (FIXME: they are, though. this should get a test.)
-	 */
+	if(CHECK_FLAG(dest_thread->flags, TF_HALT)) ctl_out |= 1;	/* H bit */
+	switch(dest_thread->status) {
+		case TS_RECV_WAIT:
+		case TS_R_RECV:
+			ctl_out |= 2;	/* R bit */
+			break;
+		case TS_SEND_WAIT:
+			ctl_out |= 4;	/* S bit */
+			break;
+		case TS_XFER:
+			assert(dest_thread->ipc != NULL);
+			ctl_out |= dest_thread == dest_thread->ipc->from ? 4 : 2;
+			break;
+	}
 
 	/* fast exit for L4_{Local,Global}IdOf() */
 	if(*control_p == 0) goto end;
@@ -879,6 +889,7 @@ SYSCALL L4_Word_t sys_exregs(
 
 end:
 	*control_p = ctl_out;
+	TRACE("%s: returning control'=%#lx\n", __func__, *control_p);
 	/* NB: this line adds about 6k cycles to the exregs benchmark on core2. */
 	assert(dest_thread == NULL || check_thread(0, dest_thread));
 	return result.raw;

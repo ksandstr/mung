@@ -953,7 +953,6 @@ static void send_and_exit(void *param_ptr)
 START_TEST(read_s_bit)
 {
 	plan_tests(3);
-	todo_start("not expected to work yet");
 	L4_ThreadId_t target = xstart_thread(&send_and_exit,
 		(void *)L4_Myself().raw);
 	L4_Sleep(A_SHORT_NAP);
