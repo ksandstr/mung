@@ -908,7 +908,6 @@ END_TEST
 START_TEST(halt_bit_smoke)
 {
 	plan_tests(3);
-	todo_start("nothing here");
 
 	L4_ThreadId_t target = xstart_thread(&receive_and_exit, NULL);
 	L4_Sleep(A_SHORT_NAP);

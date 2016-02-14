@@ -737,6 +737,13 @@ SYSCALL L4_Word_t sys_exregs(
 		result.global.raw = dest_thread->id;
 		assert(result.local.X.zeros != 0);
 	}
+
+	L4_Word_t ctl_out = 0;
+	if(CHECK_FLAG(dest_thread->flags, TF_HALT)) ctl_out |= 1;	/* "H"alt */
+	/* S, R never set because string transfers aren't implemented yet.
+	 * (FIXME: they are, though. this should get a test.)
+	 */
+
 	/* fast exit for L4_{Local,Global}IdOf() */
 	if(*control_p == 0) goto end;
 
@@ -760,11 +767,6 @@ SYSCALL L4_Word_t sys_exregs(
 	if(CHECK_FLAG(ctl_in, CTL_d)) {
 		/* readout */
 		ctl_in &= ~CTL_d;
-
-		*control_p = dest_thread->status == TS_STOPPED ? 1 : 0;	/* "H"alt */
-		/* S, R never set because string transfers aren't implemented yet.
-		 * (FIXME: they are, though. this should get a test.)
-		 */
 
 		*sp_p = dest_thread->ctx.esp;
 		*ip_p = dest_thread->ctx.eip;
@@ -876,6 +878,7 @@ SYSCALL L4_Word_t sys_exregs(
 	}
 
 end:
+	*control_p = ctl_out;
 	/* NB: this line adds about 6k cycles to the exregs benchmark on core2. */
 	assert(dest_thread == NULL || check_thread(0, dest_thread));
 	return result.raw;
