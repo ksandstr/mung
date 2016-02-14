@@ -51,13 +51,22 @@ static bool thr_exists(L4_ThreadId_t tid) {
 }
 
 
-static bool thr_is_halted(L4_ThreadId_t tid)
-{
+static L4_Word_t exregs_ctl(L4_ThreadId_t tid) {
 	L4_Word_t ctl, foo;
 	L4_ThreadId_t dummy, ret = L4_ExchangeRegisters(tid, 0,
 		0, 0, 0, 0, L4_nilthread, &ctl, &foo, &foo, &foo, &foo, &dummy);
 	fail_if(L4_IsNilThread(ret), "ec=%#lx", L4_ErrorCode());
-	return CHECK_FLAG(ctl, 1);		/* the H bit of output @control */
+	return ctl;
+}
+
+
+static bool thr_is_halted(L4_ThreadId_t tid) {
+	return CHECK_FLAG(exregs_ctl(tid), 1);		/* the H bit */
+}
+
+
+static bool thr_in_send(L4_ThreadId_t tid) {
+	return CHECK_FLAG(exregs_ctl(tid), 4);		/* the S bit */
 }
 
 
@@ -901,7 +910,6 @@ END_TEST
 
 /* tcase "exregs" */
 
-
 /* test that ExchangeRegisters which sets the halt bit causes the read-out
  * halt bit to change accordingly. very basic.
  */
@@ -925,6 +933,50 @@ START_TEST(halt_bit_smoke)
 END_TEST
 
 
+static void send_and_exit(void *param_ptr)
+{
+	L4_ThreadId_t dest = { .raw = (L4_Word_t)param_ptr };
+	L4_LoadMR(0, 0);
+	L4_MsgTag_t tag = L4_Send_Timeout(dest, TEST_IPC_DELAY);
+	if(L4_IpcFailed(tag)) {
+		diag("%s: send failed, ec=%#lx", __func__, L4_ErrorCode());
+	}
+	exit_thread("done");
+}
+
+
+/* test read-out of the S bit.
+ *
+ * TODO: also test in-transfer states where the helper is in its send phase,
+ * passive and active.
+ */
+START_TEST(read_s_bit)
+{
+	plan_tests(3);
+	todo_start("not expected to work yet");
+	L4_ThreadId_t target = xstart_thread(&send_and_exit,
+		(void *)L4_Myself().raw);
+	L4_Sleep(A_SHORT_NAP);
+
+	L4_Word_t dummy, ss = L4_Schedule(target, ~0ul, ~0, ~0, ~0, &dummy);
+	L4_Word_t ec = L4_ErrorCode();
+	if(!ok(ss == L4_SCHEDRESULT_PENDING_SEND,
+		"thread schedstate is PENDING_SEND"))
+	{
+		diag("ss=%#lx, ec=%#lx", ss, ec);
+	}
+
+	ok(thr_in_send(target), "thread S bit is set (before receive)");
+	L4_MsgTag_t tag = L4_Receive_Timeout(target, TEST_IPC_DELAY);
+	IPC_FAIL(tag);
+	ok(!thr_in_send(target), "thread S bit is clear (after receive)");
+
+	diag("cleaning up...");
+	xjoin_thread(target);
+}
+END_TEST
+
+
 /* actually tests whether a thread is dead, or inactive. these states are
  * entered when e.g. a thread raises an exception but the exception handler
  * thread is either not set or cannot be found, or when a thread is halted
@@ -939,6 +991,9 @@ static bool is_halted(L4_ThreadId_t tid)
 }
 
 
+/* TODO: check ExchangeRegisters error with fail_if(), report ErrorCode if
+ * that happens, use this instead of L4_Stop(), L4_Start() in the exregs tcase
+ */
 static bool set_h_bit(L4_ThreadId_t tid, bool value)
 {
 	L4_Word_t dummy;
@@ -1832,7 +1887,9 @@ Suite *thread_suite(void)
 	/* tests on the ExchangeRegisters syscall. */
 	{
 		TCase *tc = tcase_create("exregs");
+		tcase_set_fork(tc, false);
 		tcase_add_test(tc, halt_bit_smoke);
+		tcase_add_test(tc, read_s_bit);
 		suite_add_tcase(s, tc);
 	}
 
