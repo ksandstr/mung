@@ -65,8 +65,24 @@ static bool thr_is_halted(L4_ThreadId_t tid) {
 }
 
 
+static bool thr_in_recv(L4_ThreadId_t tid) {
+	return CHECK_FLAG(exregs_ctl(tid), 2);		/* the R bit */
+}
+
+
 static bool thr_in_send(L4_ThreadId_t tid) {
 	return CHECK_FLAG(exregs_ctl(tid), 4);		/* the S bit */
+}
+
+
+/* TODO: add a forkserv (or some such) call that lets a forking test case call
+ * Schedule on threads it created. then re-enable forking in the exregs case.
+ */
+static L4_Word_t get_schedstate(L4_ThreadId_t tid) {
+	L4_Word_t dummy, res = L4_Schedule(tid, ~0ul, ~0, ~0, ~0, &dummy);
+	fail_if(res == L4_SCHEDRESULT_ERROR,
+		"Schedule failed: ec=%#lx", L4_ErrorCode());
+	return res;
 }
 
 
@@ -952,19 +968,19 @@ static void send_and_exit(void *param_ptr)
  */
 START_TEST(read_s_bit)
 {
-	plan_tests(3);
+	plan_tests(4);
 	L4_ThreadId_t target = xstart_thread(&send_and_exit,
 		(void *)L4_Myself().raw);
 	L4_Sleep(A_SHORT_NAP);
 
-	L4_Word_t dummy, ss = L4_Schedule(target, ~0ul, ~0, ~0, ~0, &dummy);
-	L4_Word_t ec = L4_ErrorCode();
+	L4_Word_t ss = get_schedstate(target), ec = L4_ErrorCode();
 	if(!ok(ss == L4_SCHEDRESULT_PENDING_SEND,
 		"thread schedstate is PENDING_SEND"))
 	{
 		diag("ss=%#lx, ec=%#lx", ss, ec);
 	}
 
+	ok1(!thr_in_recv(target));
 	ok(thr_in_send(target), "thread S bit is set (before receive)");
 	L4_MsgTag_t tag = L4_Receive_Timeout(target, TEST_IPC_DELAY);
 	IPC_FAIL(tag);
@@ -976,17 +992,44 @@ START_TEST(read_s_bit)
 END_TEST
 
 
+/* test read-out of the R bit.
+ * TODO: see todo of read_s_bit
+ */
+START_TEST(read_r_bit)
+{
+	plan_tests(4);
+	L4_ThreadId_t target = xstart_thread(&receive_and_exit, NULL);
+	L4_Sleep(A_SHORT_NAP);
+
+	L4_Word_t ss = get_schedstate(target), ec = L4_ErrorCode();
+	if(!ok(ss == L4_SCHEDRESULT_WAITING,
+		"thread schedstate is WAITING"))
+	{
+		diag("ss=%#lx, ec=%#lx", ss, ec);
+	}
+
+	ok1(!thr_in_send(target));
+	ok(thr_in_recv(target), "thread R bit is set (before send)");
+	L4_LoadMR(0, 0);
+	L4_MsgTag_t tag = L4_Send_Timeout(target, TEST_IPC_DELAY);
+	IPC_FAIL(tag);
+	ok(!thr_in_send(target), "thread R bit is clear (after send)");
+
+	diag("cleaning up...");
+	send_quit(target);
+	xjoin_thread(target);
+}
+END_TEST
+
+
 /* actually tests whether a thread is dead, or inactive. these states are
  * entered when e.g. a thread raises an exception but the exception handler
  * thread is either not set or cannot be found, or when a thread is halted
  * with ExchangeRegisters.
  */
-static bool is_halted(L4_ThreadId_t tid)
-{
-	L4_Word_t dummy, res = L4_Schedule(tid, ~0ul, ~0, ~0, ~0, &dummy);
-	fail_if(res == L4_SCHEDRESULT_ERROR,
-		"Schedule failed: ec=%#lx", L4_ErrorCode());
-	return res == L4_SCHEDRESULT_DEAD || res == L4_SCHEDRESULT_INACTIVE;
+static bool is_halted(L4_ThreadId_t tid) {
+	L4_Word_t s = get_schedstate(tid);
+	return s == L4_SCHEDRESULT_DEAD || s == L4_SCHEDRESULT_INACTIVE;
 }
 
 
@@ -1889,6 +1932,7 @@ Suite *thread_suite(void)
 		tcase_set_fork(tc, false);
 		tcase_add_test(tc, halt_bit_smoke);
 		tcase_add_test(tc, read_s_bit);
+		tcase_add_test(tc, read_r_bit);
 		suite_add_tcase(s, tc);
 	}
 
