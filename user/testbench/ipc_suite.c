@@ -216,9 +216,9 @@ static void sender_thread_fn(void *param_ptr)
 		}
 	}
 	if(L4_IpcFailed(tag)) {
-		diag("%s[%lu:%lu]: send failed, ec %#lx", __func__,
+		diag("%s[%lu:%lu]: %spc failed, ec=%#lx", __func__,
 			L4_ThreadNo(L4_Myself()), L4_Version(L4_Myself()),
-			L4_ErrorCode());
+			p->use_lipc ? "Li" : "I", L4_ErrorCode());
 	}
 
 	free(p);
@@ -3555,6 +3555,83 @@ static void big_reply_pager(void *param_ptr)
 }
 
 
+/* tcase "halt" */
+
+/* verify that passive senders and receivers do not rendezvous when the
+ * passive party's H bit is set. instead a potential peer will time out.
+ */
+START_LOOP_TEST(basic_halt_before_rendezvous, iter, 0, 1)
+{
+	const bool pasv_is_send = CHECK_FLAG(iter, 1);
+	diag("pasv_is_send=%s", btos(pasv_is_send));
+
+	plan_tests(8);
+
+	const L4_Word_t payload = 0xb0a7face;
+	L4_ThreadId_t other = ipc_to_from_thread(L4_Myself(), payload,
+		L4_ZeroTime, false, true);
+	diag("other=%lu:%lu", L4_ThreadNo(L4_GlobalIdOf(other)),
+		L4_Version(L4_GlobalIdOf(other)));
+
+	if(!pasv_is_send) {
+		/* receive and cause other to fall into passive receive. */
+		L4_Accept(L4_UntypedWordsAcceptor);
+		L4_MsgTag_t tag = L4_Receive_Timeout(other, TEST_IPC_DELAY);
+		IPC_FAIL(tag);
+		L4_Sleep(A_SHORT_NAP);
+		ok1(thr_in_recv(other));
+		skip(1, "!pasv_is_send");	/* skip thr_in_send() */
+	} else {
+		/* padding to keep test iters in sync */
+		L4_Sleep(A_SHORT_NAP);
+		skip(1, "!pasv_is_send");	/* skip thr_in_recv() */
+		ok1(thr_in_send(other));
+	}
+
+	ok(!set_h_bit(other, true), "halt set OK");
+	ok1(thr_is_halted(other));
+
+	todo_start("expected breakage");
+	/* check IPC non-rendezvous under halt. */
+	L4_MsgTag_t tag;
+	if(pasv_is_send) {
+		L4_Accept(L4_UntypedWordsAcceptor);
+		tag = L4_Receive_Timeout(other, A_SHORT_NAP);
+	} else {
+		L4_LoadMR(0, 0);
+		tag = L4_Send_Timeout(other, A_SHORT_NAP);
+	}
+	L4_Word_t ec = L4_IpcSucceeded(tag) ? 0 : L4_ErrorCode();
+	if(!ok(L4_IpcFailed(tag) && (ec >> 1) == 1, "Ipc should timeout")) {
+		diag("tag=%#lx, ec=%#lx", tag.raw, ec);
+	}
+
+	/* then check it once halt is cleared. */
+	ok(!set_h_bit(other, false), "halt cleared OK");
+	ok1(!thr_is_halted(other));
+	if(pasv_is_send) {
+		L4_Accept(L4_UntypedWordsAcceptor);
+		tag = L4_Receive_Timeout(other, A_SHORT_NAP);
+	} else {
+		L4_LoadMR(0, 0);
+		tag = L4_Send_Timeout(other, A_SHORT_NAP);
+	}
+	ec = L4_IpcSucceeded(tag) ? 0 : L4_ErrorCode();
+	if(!ok(L4_IpcSucceeded(tag), "Ipc should succeed")) {
+		diag("tag=%#lx, ec=%#lx", tag.raw, ec);
+	}
+
+	/* clean up */
+	if(pasv_is_send) {
+		/* execute economic slave */
+		L4_LoadMR(0, 0);
+		L4_Reply(other);
+	}
+	close_sender(other);
+}
+END_TEST
+
+
 /* Bug description: if a pagefault is replied to with more than 3 MRs (tag,
  * single MapItem), the reply's data overwrites that present in the
  * recipient's TCB. this can disrupt ongoing IPC by overwriting registers that
@@ -3698,6 +3775,16 @@ Suite *ipc_suite(void)
 		tcase_add_test(tc, forbid_map_from_special);
 		tcase_add_test(tc, forbid_map_over_special);
 		tcase_add_test(tc, forbid_map_into_utcb_range);
+		suite_add_tcase(s, tc);
+	}
+
+	/* tests about interactions between the IPC state machine and threads' H
+	 * (halt) bit
+	 */
+	{
+		TCase *tc = tcase_create("halt");
+		tcase_set_fork(tc, false);
+		tcase_add_test(tc, basic_halt_before_rendezvous);
 		suite_add_tcase(s, tc);
 	}
 
