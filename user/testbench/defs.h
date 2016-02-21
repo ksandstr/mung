@@ -331,6 +331,34 @@ extern void flush_byte_range(
 /* from self_suite.c (TODO: move elsewhere!) */
 extern void access_memory_fn(void *ptr);
 
+/* from thread_suite.c (TODO: move into a dedicated module!) */
+
+/* as_exists() and thr_exists() require access to SpaceControl.
+ *
+ * TODO: they should be rewritten to use a proxy SpaceControl via the root
+ * testbench instance, but for the time being their use is limited to
+ * non-forked tcases.
+ */
+extern bool as_exists(L4_ThreadId_t space_id);
+extern bool thr_exists(L4_ThreadId_t tid);
+
+/* examining the SRH bits, and altering the H bit, requires ExchangeRegisters
+ * on @tid, and therefore must happen from within the same address space as
+ * @tid.
+ */
+extern bool thr_is_halted(L4_ThreadId_t tid);
+extern bool thr_in_recv(L4_ThreadId_t tid);
+extern bool thr_in_send(L4_ThreadId_t tid);
+extern bool set_h_bit(L4_ThreadId_t tid, bool value);
+
+/* get_schedstate() requires Schedule, so the calling thread must be @tid's
+ * scheduler.
+ *
+ * TODO: this, too, should be modified to reach out to @tid's known scheduler
+ * over IPC instead.
+ */
+extern L4_Word_t get_schedstate(L4_ThreadId_t tid);
+
 
 /* from pg_stats.c */
 

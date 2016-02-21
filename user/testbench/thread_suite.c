@@ -31,7 +31,7 @@
 static void receive_and_exit(void *param UNUSED);
 
 
-static bool as_exists(L4_ThreadId_t space_id)
+bool as_exists(L4_ThreadId_t space_id)
 {
 	/* it's not properly specified in L4.X2, but a L4_Nilpage is the no-op for
 	 * SpaceControl's fields.
@@ -45,7 +45,7 @@ static bool as_exists(L4_ThreadId_t space_id)
 }
 
 
-static bool thr_exists(L4_ThreadId_t tid) {
+bool thr_exists(L4_ThreadId_t tid) {
 	/* funnily enough, as all threads exist within a space, ... */
 	return as_exists(L4_GlobalIdOf(tid));
 }
@@ -60,17 +60,17 @@ static L4_Word_t exregs_ctl(L4_ThreadId_t tid) {
 }
 
 
-static bool thr_is_halted(L4_ThreadId_t tid) {
+bool thr_is_halted(L4_ThreadId_t tid) {
 	return CHECK_FLAG(exregs_ctl(tid), 1);		/* the H bit */
 }
 
 
-static bool thr_in_recv(L4_ThreadId_t tid) {
+bool thr_in_recv(L4_ThreadId_t tid) {
 	return CHECK_FLAG(exregs_ctl(tid), 2);		/* the R bit */
 }
 
 
-static bool thr_in_send(L4_ThreadId_t tid) {
+bool thr_in_send(L4_ThreadId_t tid) {
 	return CHECK_FLAG(exregs_ctl(tid), 4);		/* the S bit */
 }
 
@@ -78,7 +78,7 @@ static bool thr_in_send(L4_ThreadId_t tid) {
 /* TODO: add a forkserv (or some such) call that lets a forking test case call
  * Schedule on threads it created. then re-enable forking in the exregs case.
  */
-static L4_Word_t get_schedstate(L4_ThreadId_t tid) {
+L4_Word_t get_schedstate(L4_ThreadId_t tid) {
 	L4_Word_t dummy, res = L4_Schedule(tid, ~0ul, ~0, ~0, ~0, &dummy);
 	fail_if(res == L4_SCHEDRESULT_ERROR,
 		"Schedule failed: ec=%#lx", L4_ErrorCode());
@@ -1036,7 +1036,7 @@ static bool is_halted(L4_ThreadId_t tid) {
 /* TODO: check ExchangeRegisters error with fail_if(), report ErrorCode if
  * that happens, use this instead of L4_Stop(), L4_Start() in the exregs tcase
  */
-static bool set_h_bit(L4_ThreadId_t tid, bool value)
+bool set_h_bit(L4_ThreadId_t tid, bool value)
 {
 	L4_Word_t dummy;
 	L4_ThreadId_t dummy_tid, ret = L4_ExchangeRegisters(tid,
