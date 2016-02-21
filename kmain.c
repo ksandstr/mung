@@ -543,8 +543,6 @@ void kmain(void *bigp, unsigned int magic)
 
 	/* per-module inits & init-time testing */
 	init_gdt_resv();
-	init_ipc();
-
 	cop_init();
 	init_threading();
 

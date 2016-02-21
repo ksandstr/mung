@@ -13,8 +13,6 @@
 struct thread;
 struct ipc_state;
 
-extern void init_ipc(void);
-
 /* IPC by kernelspace to userspace on @from's behalf. used to send exception &
  * pagefault messages to the exception handler or pager in *@to_p . requires
  * closed IPC with timeouts always ∞.

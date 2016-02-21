@@ -143,6 +143,17 @@ struct thread
 	L4_ThreadId_t scheduler;
 
 	union {
+		/* entry in `sendwait_hash' of ipc.c, keyed by int_hash(dest_tid.raw).
+		 * valid in TS_SEND_WAIT. present in sendwait_hash iff $status ==
+		 * TS_SEND_WAIT ∧ TF_HALT \notin ->flags$.
+		 */
+		struct {
+			L4_ThreadId_t dest_tid;		/* global ID */
+			L4_ThreadId_t send_tid;		/* ->id or vs, may be local */
+		} ipc_wait;
+	} u2;
+
+	union {
 		/* key into `redir_wait' in ipc.c. implies TF_REDIR_WAIT when not
 		 * nilthread, but may be nilthread even when a thread is in SEND_WAIT
 		 * with REDIR_WAIT set. when not nilthread, thread is present in
