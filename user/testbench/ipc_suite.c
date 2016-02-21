@@ -2236,7 +2236,7 @@ START_LOOP_TEST(propagation_in_active_receive, iter, 0, 7)
 		L4_StoreMR(1, &tag.raw);
 		L4_StoreMR(2, &ec);
 		if(!ok(L4_IpcSucceeded(tag) && ec == 0, "sender ok")) {
-			diag("tag=%#lx, ec=%#lx\n", tag.raw, ec);
+			diag("tag=%#lx, ec=%#lx", tag.raw, ec);
 		}
 
 		end_vs_pair(&p);
@@ -3643,6 +3643,10 @@ Suite *ipc_suite(void)
 		suite_add_tcase(s, tc);
 	}
 
+	/* TODO: merge this into redir_suite.c to lose ~350 lines, once the IPC
+	 * helper thread has been exported or an equivalent written somewhere
+	 * else.
+	 */
 	{
 		TCase *tc = tcase_create("redir");
 		tcase_set_fork(tc, false);	/* involves SpaceControl */
@@ -3651,6 +3655,12 @@ Suite *ipc_suite(void)
 		suite_add_tcase(s, tc);
 	}
 
+	/* preemption tests.
+	 *
+	 * TODO: move these into sched_suite.c; preemption isn't so much related to
+	 * the Ipc syscall that these should take up some of this suite's
+	 * thousands of lines.
+	 */
 	{
 		TCase *tc = tcase_create("preempt");
 		tcase_set_fork(tc, false);
@@ -3675,6 +3685,7 @@ Suite *ipc_suite(void)
 		suite_add_tcase(s, tc);
 	}
 
+	/* typed transfer tests. */
 	{
 		TCase *tc = tcase_create("typed");
 		tcase_add_test(tc, c_bit_in_typed_words);
@@ -3707,6 +3718,7 @@ Suite *ipc_suite(void)
 		suite_add_tcase(s, tc);
 	}
 
+	/* tests of the Lipc syscall. */
 	{
 		TCase *tc = tcase_create("lipc");
 		tcase_add_test(tc, basic_lipc);
