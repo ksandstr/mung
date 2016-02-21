@@ -1024,8 +1024,7 @@ END_TEST
 
 /* actually tests whether a thread is dead, or inactive. these states are
  * entered when e.g. a thread raises an exception but the exception handler
- * thread is either not set or cannot be found, or when a thread is halted
- * with ExchangeRegisters.
+ * thread is either not set or cannot be found.
  */
 static bool is_halted(L4_ThreadId_t tid) {
 	L4_Word_t s = get_schedstate(tid);
@@ -1708,106 +1707,6 @@ START_LOOP_TEST(err_on_lost_peer, iter, 0, 8)
 END_TEST
 
 
-static void hasi_thread_fn(void *param_ptr)
-{
-	L4_ThreadId_t parent_tid = { .raw = (L4_Word_t)param_ptr };
-
-	L4_Clock_t start = L4_SystemClock();
-	L4_LoadMR(0, 0);
-	L4_MsgTag_t tag = L4_Call_Timeouts(parent_tid,
-		TEST_IPC_DELAY, TEST_IPC_DELAY);
-	L4_Word_t ec = L4_ErrorCode();
-	L4_Clock_t end = L4_SystemClock();
-
-	/* report back. */
-	L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 4 }.raw);
-	L4_LoadMR(1, tag.raw);
-	L4_LoadMR(2, ec);
-	L4_LoadMR(3, (end.raw - start.raw) >> 32);
-	L4_LoadMR(4, (end.raw - start.raw) & 0xffffffff);
-	tag = L4_Send_Timeout(parent_tid, TEST_IPC_DELAY);
-	if(L4_IpcFailed(tag)) {
-		diag("reportback failed, ec=%#lx", L4_ErrorCode());
-	}
-
-	exit_thread(L4_IpcFailed(tag) ? NULL : "success");
-}
-
-
-/* a halted thread that's in an ongoing IPC should complete the IPC, and then
- * stop, regardless of the particulars.
- *
- * measurements:
- *   - other thread's is_halted() status
- *   - error code the other thread receives
- *   - TODO: time other thread spent in Ipc
- *
- * variables:
- *   - do_timeout: cause timeout of sender's Ipc syscall [yes/no]
- *   - early_timeout: cause timeout in sender's send phase [yes/no]
- *
- * TODO: some of the test points are redundant with others. this isn't all
- * that significant.
- */
-START_LOOP_TEST(halt_after_stopped_ipc, iter, 0, 3)
-{
-	const bool do_timeout = CHECK_FLAG(iter, 1),
-		early_timeout = CHECK_FLAG(iter, 2);
-	diag("do_timeout=%s, early_timeout=%s",
-		btos(do_timeout), btos(early_timeout));
-
-	if(early_timeout && !do_timeout) {
-		plan_skip_all("ineffective early_timeout");
-		return;
-	}
-	plan_tests(10);
-
-	L4_ThreadId_t parent_tid = L4_Myself(),
-		child_tid = xstart_thread(hasi_thread_fn, (void *)parent_tid.raw);
-
-	L4_Sleep(A_SHORT_NAP);
-	ok(!is_halted(child_tid), "child isn't halted (yet)");
-	set_h_bit(child_tid, true);
-	ok(!is_halted(child_tid), "child doesn't read as halted (yet)");
-
-	if(do_timeout && early_timeout) {
-		L4_Sleep(TEST_IPC_DELAY);
-		L4_Sleep(A_SHORT_NAP);
-	}
-	iff_ok1(early_timeout, is_halted(child_tid));
-
-	L4_MsgTag_t tag = L4_Receive_Timeout(child_tid, TEST_IPC_DELAY);
-	imply_ok1(!early_timeout, L4_IpcSucceeded(tag));
-
-	if(do_timeout && !early_timeout) {
-		L4_Sleep(TEST_IPC_DELAY);
-		L4_Sleep(A_SHORT_NAP);
-	}
-	iff_ok1(do_timeout, is_halted(child_tid));
-
-	L4_LoadMR(0, 0);
-	tag = L4_Reply(child_tid);
-	iff_ok1(!do_timeout, L4_IpcSucceeded(tag));
-
-	ok1(is_halted(child_tid));
-
-	/* get report. */
-	set_h_bit(child_tid, false);
-	tag = L4_Receive_Timeout(child_tid, TEST_IPC_DELAY);
-	IPC_FAIL(tag);
-	L4_MsgTag_t child_tag; L4_StoreMR(1, &child_tag.raw);
-	L4_Word_t child_ec; L4_StoreMR(2, &child_ec);
-	L4_Word_t diff_lo; L4_StoreMR(4, &diff_lo);
-	imply_ok1(do_timeout, L4_IpcFailed(child_tag));
-	imply_ok1(do_timeout && early_timeout, child_ec == 2);
-	imply_ok1(do_timeout && !early_timeout, child_ec == 3);
-
-	/* cleanup */
-	xjoin_thread(child_tid);
-}
-END_TEST
-
-
 /* create a non-activated thread and overwrite its version bits. */
 START_TEST(tid_stomp)
 {
@@ -1957,7 +1856,6 @@ Suite *thread_suite(void)
 		tcase_add_test(tc, halt_on_lost_pager);
 		tcase_add_test(tc, halt_on_lost_exh);
 		tcase_add_test(tc, err_on_lost_peer);
-		tcase_add_test(tc, halt_after_stopped_ipc);
 		suite_add_tcase(s, tc);
 	}
 
