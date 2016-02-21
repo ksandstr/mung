@@ -580,7 +580,9 @@ static bool ipc_send_half(
 	/* override TS_R_RECV? */
 	int status = dest->status;
 	bool status_cond;
-	if(match_cond && status == TS_R_RECV) {
+	if(match_cond && status == TS_R_RECV
+		&& !CHECK_FLAG(dest->flags, TF_HALT))
+	{
 		/* FIXME: this peer-timeouting thing shouldn't be here. such timeouts
 		 * should be handled by the scheduler; this code should just fail to
 		 * send to a thread under its receive timeout.
@@ -608,6 +610,7 @@ static bool ipc_send_half(
 
 	if(status_cond
 		&& match_cond
+		&& !CHECK_FLAG(dest->flags, TF_HALT)
 		&& (dest->wakeup_time == ~(uint64_t)0u
 			|| dest->wakeup_time > now_us))
 	{
