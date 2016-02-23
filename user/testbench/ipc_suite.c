@@ -177,7 +177,7 @@ IDL_FIXTURE(other_helper, ipc_helper, &helper_vtab,
 
 
 struct sender_param {
-	L4_ThreadId_t parent;
+	L4_ThreadId_t parent, vs;
 	L4_Word_t payload;
 	L4_Time_t delay;	/* ZeroTime or TimePeriod */
 	bool use_lipc, call;
@@ -196,10 +196,14 @@ static void sender_thread_fn(void *param_ptr)
 		L4_Sleep(p->delay);
 	}
 
-	L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 1, .X.label = 0xd00d }.raw);
+	L4_MsgTag_t tag = (L4_MsgTag_t){ .X.u = 1, .X.label = 0xd00d };
+	if(!L4_IsNilThread(p->vs)) {
+		L4_Set_VirtualSender(p->vs);
+		L4_Set_Propagation(&tag);
+	}
+	L4_LoadMR(0, tag.raw);
 	L4_LoadMR(1, p->payload);
 	L4_ThreadId_t dummy;
-	L4_MsgTag_t tag;
 	if(p->call) {
 		if(p->use_lipc) {
 			tag = L4_Lipc(p->parent, p->parent,
@@ -225,21 +229,23 @@ static void sender_thread_fn(void *param_ptr)
 }
 
 
+/* propagates from @vs when not nil. */
 static L4_ThreadId_t ipc_to_from_thread(
-	L4_ThreadId_t dest, L4_Word_t payload, L4_Time_t delay,
+	L4_ThreadId_t dest, L4_ThreadId_t vs, L4_Word_t payload, L4_Time_t delay,
 	bool use_lipc, bool call)
 {
 	struct sender_param *param = malloc(sizeof(*param));
 	fail_if(param == NULL);
 	*param = (struct sender_param){
-		.parent = dest, .payload = payload, .delay = delay,
+		.parent = dest, .vs = vs, .payload = payload, .delay = delay,
 		.use_lipc = use_lipc, .call = call,
 	};
 	return xstart_thread(&sender_thread_fn, param);
 }
 
 #define send_from_thread(payload, delay) \
-	ipc_to_from_thread(L4_MyGlobalId(), (payload), (delay), false, false)
+	ipc_to_from_thread(L4_MyGlobalId(), L4_nilthread, (payload), (delay), \
+		false, false)
 
 
 static L4_ThreadId_t send_from_fork(L4_Word_t payload, L4_Time_t delay)
@@ -474,7 +480,8 @@ START_LOOP_TEST(receive_from_false_local, iter, 0, 63)
 	 * sender get to the post first.
 	 */
 	L4_ThreadId_t sender = L4_LocalIdOf(ipc_to_from_thread(
-		L4_MyLocalId(), good_val, A_SHORT_NAP, send_true_lipc, true));
+		L4_MyLocalId(), L4_nilthread, good_val, A_SHORT_NAP,
+		send_true_lipc, true));
 	//diag("sender's ltid=%#lx", sender.raw);
 
 	/* fork and spawn enough threads to duplicate the sender's LTID. */
@@ -487,7 +494,8 @@ START_LOOP_TEST(receive_from_false_local, iter, 0, 63)
 		int num;
 		for(num = 0; num < MAX_THREADS; num++) {
 			notsender[num] = L4_LocalIdOf(ipc_to_from_thread(
-				parent, bad_val, L4_ZeroTime, send_false_lipc, true));
+				parent, L4_nilthread, bad_val, L4_ZeroTime,
+				send_false_lipc, true));
 			if(notsender[num].raw == sender.raw) break;
 		}
 		/* communicate to the parent whether the right child was started. */
@@ -3558,47 +3566,54 @@ static void big_reply_pager(void *param_ptr)
 /* tcase "halt" */
 
 /* verify that passive senders and receivers do not rendezvous when the
- * passive party's H bit is set. instead a potential peer will time out.
+ * passive party's H bit is set, regardless of propagation. instead a
+ * potential peer will time out.
  */
-START_LOOP_TEST(basic_halt_before_rendezvous, iter, 0, 1)
+START_LOOP_TEST(basic_halt_before_rendezvous, iter, 0, 3)
 {
-	const bool pasv_is_send = CHECK_FLAG(iter, 1);
-	diag("pasv_is_send=%s", btos(pasv_is_send));
+	const bool pasv_is_send = CHECK_FLAG(iter, 1),
+		propagate = CHECK_FLAG(iter, 2);
+	diag("pasv_is_send=%s, propagate=%s",
+		btos(pasv_is_send), btos(propagate));
 
-	plan_tests(8);
+	plan_tests(9);
 
 	const L4_Word_t payload = 0xb0a7face;
-	L4_ThreadId_t other = ipc_to_from_thread(L4_Myself(), payload,
-		L4_ZeroTime, false, true);
-	diag("other=%lu:%lu", L4_ThreadNo(L4_GlobalIdOf(other)),
-		L4_Version(L4_GlobalIdOf(other)));
+	L4_ThreadId_t prop_other = xstart_thread(&receive_and_exit, NULL),
+		sender = ipc_to_from_thread(L4_Myself(),
+			propagate ? prop_other : L4_nilthread,
+			payload, L4_ZeroTime, false, true);
+	diag("sender=%lu:%lu, prop_other=%lu:%lu",
+		L4_ThreadNo(sender), L4_Version(sender),
+		L4_ThreadNo(prop_other), L4_Version(prop_other));
 
+	L4_ThreadId_t peer = propagate ? prop_other : sender;
 	if(!pasv_is_send) {
 		/* receive and cause other to fall into passive receive. */
 		L4_Accept(L4_UntypedWordsAcceptor);
-		L4_MsgTag_t tag = L4_Receive_Timeout(other, TEST_IPC_DELAY);
+		L4_MsgTag_t tag = L4_Receive_Timeout(peer, TEST_IPC_DELAY);
 		IPC_FAIL(tag);
 		L4_Sleep(A_SHORT_NAP);
-		ok1(thr_in_recv(other));
+		ok1(thr_in_recv(sender));
 		skip(1, "!pasv_is_send");	/* skip thr_in_send() */
 	} else {
 		/* padding to keep test iters in sync */
 		L4_Sleep(A_SHORT_NAP);
-		skip(1, "!pasv_is_send");	/* skip thr_in_recv() */
-		ok1(thr_in_send(other));
+		skip(1, "pasv_is_send");	/* skip thr_in_recv() */
+		ok1(thr_in_send(sender));
 	}
 
-	ok(!set_h_bit(other, true), "halt set OK");
-	ok1(thr_is_halted(other));
+	ok(!set_h_bit(sender, true), "halt set OK");
+	ok1(thr_is_halted(sender));
 
 	/* check IPC non-rendezvous under halt. */
 	L4_MsgTag_t tag;
 	if(pasv_is_send) {
 		L4_Accept(L4_UntypedWordsAcceptor);
-		tag = L4_Receive_Timeout(other, A_SHORT_NAP);
+		tag = L4_Receive_Timeout(peer, A_SHORT_NAP);
 	} else {
 		L4_LoadMR(0, 0);
-		tag = L4_Send_Timeout(other, A_SHORT_NAP);
+		tag = L4_Send_Timeout(sender, A_SHORT_NAP);
 	}
 	L4_Word_t ec = L4_IpcSucceeded(tag) ? 0 : L4_ErrorCode();
 	if(!ok(L4_IpcFailed(tag) && (ec >> 1) == 1, "Ipc should timeout")) {
@@ -3606,27 +3621,30 @@ START_LOOP_TEST(basic_halt_before_rendezvous, iter, 0, 1)
 	}
 
 	/* then check it once halt is cleared. */
-	ok(!set_h_bit(other, false), "halt cleared OK");
-	ok1(!thr_is_halted(other));
+	ok(!set_h_bit(sender, false), "halt cleared OK");
+	ok1(!thr_is_halted(sender));
 	if(pasv_is_send) {
 		L4_Accept(L4_UntypedWordsAcceptor);
-		tag = L4_Receive_Timeout(other, A_SHORT_NAP);
+		tag = L4_Receive_Timeout(peer, A_SHORT_NAP);
 	} else {
 		L4_LoadMR(0, 0);
-		tag = L4_Send_Timeout(other, A_SHORT_NAP);
+		tag = L4_Send_Timeout(sender, A_SHORT_NAP);
 	}
 	ec = L4_IpcSucceeded(tag) ? 0 : L4_ErrorCode();
 	if(!ok(L4_IpcSucceeded(tag), "Ipc should succeed")) {
 		diag("tag=%#lx, ec=%#lx", tag.raw, ec);
 	}
+	imply_ok1(propagate && pasv_is_send, L4_IpcPropagated(tag));
 
 	/* clean up */
 	if(pasv_is_send) {
 		/* execute economic slave */
 		L4_LoadMR(0, 0);
-		L4_Reply(other);
+		L4_Reply(sender);
 	}
-	close_sender(other);
+	close_sender(sender);
+	send_quit(prop_other);
+	xjoin_thread(prop_other);
 }
 END_TEST
 

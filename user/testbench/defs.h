@@ -333,6 +333,9 @@ extern void access_memory_fn(void *ptr);
 
 /* from thread_suite.c (TODO: move into a dedicated module!) */
 
+/* receives one IPC from anywhere, then exits. */
+extern void receive_and_exit(void *param);
+
 /* as_exists() and thr_exists() require access to SpaceControl.
  *
  * TODO: they should be rewritten to use a proxy SpaceControl via the root

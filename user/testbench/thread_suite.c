@@ -25,12 +25,6 @@
 #include "test.h"
 
 
-/* TODO: start collecting these utility thread functions somewhere. likely
- * there's a bunch of duplication between test suites.
- */
-static void receive_and_exit(void *param UNUSED);
-
-
 bool as_exists(L4_ThreadId_t space_id)
 {
 	/* it's not properly specified in L4.X2, but a L4_Nilpage is the no-op for
@@ -1431,8 +1425,10 @@ START_TEST(halt_on_missing_exh)
 END_TEST
 
 
-/* receives one IPC from anywhere, then exits. */
-static void receive_and_exit(void *param UNUSED)
+/* TODO: start collecting these utility thread functions somewhere. likely
+ * there's a bunch of duplication between test suites.
+ */
+void receive_and_exit(void *param UNUSED)
 {
 	L4_ThreadId_t sender;
 	L4_MsgTag_t tag = L4_Wait(&sender);
