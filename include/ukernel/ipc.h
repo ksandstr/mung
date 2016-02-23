@@ -68,6 +68,10 @@ extern void cancel_ipc_from(struct thread *t);
 /* accessor of `redir_wait'. removes @t from it. */
 extern void remove_redir_wait(struct thread *t);
 
+/* accessors to `send_wait'. */
+extern void remove_send_wait(struct thread *t);	/* idempotent if wasn't */
+extern bool insert_send_wait(struct thread *t);	/* false on ENOMEM */
+
 
 /* the full L4.X2 IPC system call. registers and everything. */
 extern SYSCALL L4_Word_t sys_ipc(

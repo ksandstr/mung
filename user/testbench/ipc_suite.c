@@ -3591,7 +3591,6 @@ START_LOOP_TEST(basic_halt_before_rendezvous, iter, 0, 1)
 	ok(!set_h_bit(other, true), "halt set OK");
 	ok1(thr_is_halted(other));
 
-	todo_start("expected breakage");
 	/* check IPC non-rendezvous under halt. */
 	L4_MsgTag_t tag;
 	if(pasv_is_send) {

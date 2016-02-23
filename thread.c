@@ -374,6 +374,13 @@ void thread_halt(struct thread *t)
 		if(old_status != TS_READY || t->total_quantum > 0) {
 			sq_remove_thread(t);
 		}
+	} else if(t->status == TS_SEND_WAIT) {
+		/* render @t ineligible for active receive */
+		/* TODO: should redirect-blocked sendwait also put the redir_wait
+		 * entry on ice? or is it enough to have redirectors not pick up for
+		 * TF_HALTed redir_wait entries?
+		 */
+		remove_send_wait(t);
 	}
 }
 
@@ -391,6 +398,11 @@ void thread_resume(struct thread *t)
 			t->wakeup_time = 0;
 		}
 		if(t->total_quantum > 0) sq_insert_thread(t);
+	} else if(t->status == TS_SEND_WAIT) {
+		/* FIXME: check return value and pass it on. it'll be tough to change
+		 * all callsites of thread_resume(), but maybe it can be done.
+		 */
+		insert_send_wait(t);
 	}
 }
 

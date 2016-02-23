@@ -107,6 +107,16 @@ static L4_ThreadId_t tid_return(struct thread *self, struct thread *t)
 }
 
 
+void remove_send_wait(struct thread *t) {
+	htable_del(&sendwait_hash, hash_ipc_wait(t, NULL), t);
+}
+
+
+bool insert_send_wait(struct thread *t) {
+	return htable_add(&sendwait_hash, hash_ipc_wait(t, NULL), t);
+}
+
+
 void remove_redir_wait(struct thread *t)
 {
 	if(likely(!L4_IsNilThread(t->u1.waited_redir))) {
@@ -336,39 +346,8 @@ void cancel_ipc_to(L4_ThreadId_t with_tid, L4_Word_t errcode)
 }
 
 
-static void cancel_passive_send(struct thread *t)
-{
-	assert(t->status == TS_SEND_WAIT || t->status == TS_STOPPED);
-
-	L4_ThreadId_t partner_tid = t->ipc_to;
-	if(!L4_IsNilThread(partner_tid) && L4_IsLocalId(partner_tid)) {
-		struct thread *partner = space_find_local_thread(t->space,
-			partner_tid.local);
-		BUG_ON(partner == NULL, "invalid partner LTID!");
-		partner_tid.raw = partner->id;
-	} else if(L4_IsNilThread(partner_tid)) {
-		return;
-	}
-	assert(L4_IsGlobalId(partner_tid));
-
-	size_t dst_hash = int_hash(partner_tid.raw);
-	struct htable_iter it;
-	for(struct thread *from = htable_firstval(&sendwait_hash, &it, dst_hash);
-		from != NULL;
-		from = htable_nextval(&sendwait_hash, &it, dst_hash))
-	{
-		if(from == t) {
-			assert(from->u2.ipc_wait.dest_tid.raw == partner_tid.raw);
-			htable_delval(&sendwait_hash, &it);
-			break;
-		}
-	}
-}
-
-
-/* TODO: this function scales poorly. unlike cancel_passive_send() it does a
- * brute-force loop over all the passive sends in the system, not just those
- * for the IPC peer.
+/* TODO: this function scales poorly: it does a brute-force loop over all the
+ * passive sends in the system, not just those for the IPC peer.
  */
 static void rewrite_passive_vs_from(struct thread *t)
 {
@@ -403,8 +382,11 @@ static void rewrite_passive_vs_from(struct thread *t)
  */
 void cancel_ipc_from(struct thread *t)
 {
-	if(t->status == TS_SEND_WAIT || t->status == TS_STOPPED) {
-		cancel_passive_send(t);
+	if(t->status == TS_SEND_WAIT) {
+		remove_send_wait(t);
+		sq_remove_thread(t);
+		t->status = TS_READY;
+		sq_insert_thread(t);
 	}
 	rewrite_passive_vs_from(t);
 }
@@ -730,10 +712,10 @@ static bool ipc_send_half(
 		return true;
 	} else if(self->send_timeout.raw != L4_ZeroTime.raw) {
 		/* passive send */
-		/* FIXME: check return value from htable_add(). (really, instead of
-		 * sendwait_hash use a linked list in the destination thread, through
-		 * ipc_wait. there's already one mechanism that turns thread IDs into
-		 * hashtable entries.)
+		/* FIXME: check return value from insert_send_wait(). (really, instead
+		 * of sendwait_hash use a linked list in the destination thread,
+		 * through ipc_wait. there's already one mechanism that turns thread
+		 * IDs into hashtable entries.)
 		 */
 		TRACE("%s: passive send to %lu:%lu (from %lu:%lu, actual %lu:%lu)\n",
 			__func__,
@@ -743,7 +725,7 @@ static bool ipc_send_half(
 
 		self->u2.ipc_wait.dest_tid.raw = dest->id;
 		self->u2.ipc_wait.send_tid = tid_return(dest, propagated ? vs : self);
-		htable_add(&sendwait_hash, int_hash(dest->id), self);
+		insert_send_wait(self);
 		assert(!L4_IsGlobalId(self->ipc_to)
 			|| L4_ThreadNo(self->u2.ipc_wait.dest_tid) == L4_ThreadNo(self->ipc_to));
 
@@ -982,7 +964,7 @@ static void convert_to_redirwait(struct thread *t, L4_ThreadId_t holdup)
 		/* TODO: handle malloc fail */
 		htable_add(&redir_wait, hash_waited_redir(t, NULL), t);
 	}
-	htable_del(&sendwait_hash, int_hash(t->u2.ipc_wait.dest_tid.raw), t);
+	remove_send_wait(t);
 }
 
 
