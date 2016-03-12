@@ -749,7 +749,10 @@ START_LOOP_TEST(no_deadlock, iter, 0, 7)
 		L4_MsgTag_t tag = L4_Wait_Timeout(TEST_IPC_DELAY, &sender);
 		if(L4_IpcSucceeded(tag)) {
 			L4_LoadMR(0, 0);
-			L4_Reply(sender);
+			tag = L4_Send_Timeout(sender, TEST_IPC_DELAY);
+			if(L4_IpcFailed(tag)) {
+				diag("rcv_child: reply failed, ec=%#lx", L4_ErrorCode());
+			}
 		} else {
 			diag("rcv_child: ec=%#lx", L4_ErrorCode());
 		}

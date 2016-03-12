@@ -637,6 +637,9 @@ static bool ipc_send_half(
 				TRACE_REDIR("IPC: send-side held by %lu:%lu\n",
 					L4_ThreadNo(self->u1.waited_redir),
 					L4_Version(self->u1.waited_redir));
+				if(self->send_timeout.raw == L4_ZeroTime.raw) {
+					goto send_timeout;
+				}
 				self->flags |= TF_REDIR_WAIT;
 				self->status = TS_SEND_WAIT;
 				thread_sleep(self, self->send_timeout);
@@ -771,6 +774,7 @@ static bool ipc_send_half(
 
 		return false;
 	} else {
+send_timeout:
 		/* instant timeout. */
 		set_ipc_error(self_utcb, (1 << 1) | 0);
 		/* TODO: is this required? instant return would indicate "no". */
