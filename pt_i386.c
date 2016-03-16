@@ -124,6 +124,11 @@ static inline uint32_t pt_probe(
 		assert(CHECK_FLAG(pte, PT_DIRTY) || w == 0);
 
 		*access_p = rx | w;
+
+		/* invalidate TLB entry for x86 impls that don't set access or dirty
+		 * if the TLB's copy has those bits set.
+		 */
+		if(*access_p != 0) _pt_changed(it, addr);
 	}
 
 	return pte >> 12;

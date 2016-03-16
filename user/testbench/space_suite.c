@@ -669,25 +669,31 @@ END_TEST
  */
 START_TEST(local_access)
 {
-	plan_tests(2);
+	plan_tests(3);
 
 	char *testmem = valloc(PAGE_SIZE);
 	memset(testmem, 0, PAGE_SIZE);
 	diag("testmem=%p", testmem);
 	L4_Fpage_t pg = L4_FpageLog2((L4_Word_t)testmem, PAGE_BITS);
+
 	L4_GetStatus(pg);	/* clear off the access bits. */
+	unsigned before_write = L4_Rights(L4_GetStatus(pg));
+	if(!ok1(before_write == 0)) diag("before_write=%#x", before_write);
 
 	strlcpy(testmem, "whatever", PAGE_SIZE);
-	int after_write = L4_Rights(L4_GetStatus(pg));
+	testmem[666] = 0x42;
+	unsigned after_write = L4_Rights(L4_GetStatus(pg));
 	if(!ok1(CHECK_FLAG_ALL(after_write, L4_ReadWriteOnly))) {
-		diag("after_write=%#x", (unsigned)after_write);
+		diag("after_write=%#x", after_write);
 	}
 
 	diag("testmem contains `%s'", testmem);
-	int after_read = L4_Rights(L4_GetStatus(pg));
+	unsigned after_read = L4_Rights(L4_GetStatus(pg));
 	if(!ok1((after_read & L4_ReadWriteOnly) == L4_Readable)) {
-		diag("after_read=%#x", (unsigned)after_read);
+		diag("after_read=%#x", after_read);
 	}
+
+	free(testmem);
 }
 END_TEST
 
