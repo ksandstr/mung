@@ -2486,6 +2486,9 @@ START_LOOP_TEST(basic_redir, iter, 0, 9)
 		redir_alter_echo(xor_val);
 		exit(0);
 	}
+	diag("child tid=%lu:%lu, redir tid=%lu:%lu",
+		L4_ThreadNo(c_tid), L4_Version(c_tid),
+		L4_ThreadNo(r_tid), L4_Version(r_tid));
 
 	/* set redirector (or not) */
 	L4_Word_t dummy, res = L4_SpaceControl(c_tid, 0,

@@ -638,6 +638,7 @@ static bool ipc_send_half(
 					L4_ThreadNo(self->u1.waited_redir),
 					L4_Version(self->u1.waited_redir));
 				if(self->send_timeout.raw == L4_ZeroTime.raw) {
+					TRACE_REDIR("IPC: immediate send timeout on redir wait\n");
 					goto send_timeout;
 				}
 				self->flags |= TF_REDIR_WAIT;
@@ -677,6 +678,9 @@ static bool ipc_send_half(
 				 */
 				if(self->ipc_from.raw == saved_dest->id) {
 					self->ipc_from.raw = red->id;
+					TRACE_REDIR("IPC: closed wait on %lu:%lu changed to %lu:%lu\n",
+						TID_THREADNUM(saved_dest->id), TID_VERSION(saved_dest->id),
+						TID_THREADNUM(red->id), TID_VERSION(red->id));
 				}
 			}
 		}
@@ -1257,9 +1261,12 @@ bool ipc_recv_half(struct thread *self, void *self_utcb)
 		&& self->space != w->thread->space
 		&& self->space != w->thread->space->redirector->space)
 	{
-		/* active receive through redirector. */
+		/* this thread was the current redirection-wait target for w->thread,
+		 * but wasn't its immediate redirector. we'll push the redirection
+		 * forward one step.
+		 */
 		struct thread *from = w->thread;
-		TRACE_REDIR("IPC: redirecting active receive from %lu:%lu\n",
+		TRACE_REDIR("IPC: stepping redir chain forward for %lu:%lu\n",
 			TID_THREADNUM(from->id), TID_VERSION(from->id));
 		kmem_cache_free(ipc_wait_slab, w);
 
@@ -1361,6 +1368,13 @@ bool ipc_recv_half(struct thread *self, void *self_utcb)
 			tag->X.flags |= 0x2;	/* redirection */
 			L4_VREG(self_utcb, L4_TCR_INTENDEDRECEIVER) = r_sender->ipc_to.raw;
 			r_sender->flags &= ~TF_REDIR_WAIT;
+
+			/* (local destinations aren't subject to redirection.) */
+			assert(L4_IsNilThread(r_sender->ipc_to)
+				|| !L4_IsLocalId(r_sender->ipc_to));
+			if(r_sender->ipc_from.raw == r_sender->ipc_to.raw) {
+				r_sender->ipc_from.raw = self->id;
+			}
 		}
 		kmem_cache_free(ipc_wait_slab, w);
 
