@@ -26,6 +26,12 @@
 #define X86_CR0_TS (1 << 3)
 #define X86_CR0_NE (1 << 5)
 
+/* CR4 flags (incomplete) */
+#define X86_CR4_TSD 0x4
+#define X86_CR4_PGE 0x80
+#define X86_CR4_OSFXSR 0x200
+#define X86_CR4_OSXMMEXCPT 0x400
+
 /* CPUID page 01h EDX flag masks */
 #define X86_FEATURE_D_APIC (1 << 9)
 #define X86_FEATURE_D_SEP (1 << 11)

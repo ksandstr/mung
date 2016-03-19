@@ -164,7 +164,8 @@ void put_supervisor_page(uintptr_t addr, uint32_t page_id)
 	if(page_id == 0) {
 		pages[poffs] = 0;
 	} else {
-		pages[poffs] = (page_id << PAGE_BITS) | PT_PRESENT | PT_RW;
+		pages[poffs] = (page_id << PAGE_BITS)
+			| PT_PRESENT | PT_RW | PT_GLOBAL;
 	}
 
 	x86_invalidate_page(l_addr);
@@ -209,7 +210,7 @@ static COLD void setup_paging(uintptr_t id_start, uintptr_t id_end)
 	/* load the supervisor page table (kernel_pdirs into CR3), then enable
 	 * paging.
 	 */
-	__asm__ __volatile__ (
+	asm volatile (
 		"movl %%eax, %%cr3\n"
 		"movl %%cr0, %%eax\n"
 		"orl $0x80000000, %%eax\n"
@@ -217,6 +218,20 @@ static COLD void setup_paging(uintptr_t id_start, uintptr_t id_end)
 		:
 		: "a" (kernel_space->pdirs->vm_addr)
 		: "memory");
+}
+
+
+static void setup_cr4(void)
+{
+	/* clear TSD (enable RDTSC in ring 3), set PGE (apply global bit to share
+	 * TLBs for lowest-level pagetable entries)
+	 */
+	asm volatile (
+		"movl %%cr4, %%eax\n"
+		"andl $~0x4, %%eax\n"
+		"orl $0x80, %%eax\n"
+		"movl %%eax, %%cr4\n"
+		::: "eax", "memory");
 }
 
 
@@ -587,6 +602,7 @@ void kmain(void *bigp, unsigned int magic)
 	go_high();
 	setup_gdt();
 	setup_idt(SEG_KERNEL_CODE_HIGH, max_irq);
+	setup_cr4();
 
 	/* then unmap the low space by chucking its directories. */
 	pdir_t *kernel_pdirs = kernel_space->pdirs->vm_addr;
