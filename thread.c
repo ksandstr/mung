@@ -35,6 +35,9 @@
 #define TRACE(fmt, ...) TRACE_MSG(TRID_THREAD, fmt, __VA_ARGS__)
 
 
+#define NUM_SAVED_REGS 13	/* size of the exception message */
+
+
 /* interrupt routing state. */
 struct interrupt
 {
@@ -48,8 +51,7 @@ struct saved_regs
 {
 	L4_Word_t br0;
 	L4_ThreadId_t va_sender, ir;
-	uint8_t size, length;	/* size = space in mrs[], len = use */
-	L4_Word_t mrs[];
+	L4_Word_t mrs[NUM_SAVED_REGS];
 };
 
 
@@ -65,6 +67,7 @@ struct htable thread_hash = HTABLE_INITIALIZER(thread_hash,
 	hash_thread_by_id, NULL);
 
 struct kmem_cache *thread_slab = NULL;
+static struct kmem_cache *saved_regs_slab = NULL;
 
 
 #ifdef DEBUG_ME_HARDER
@@ -119,6 +122,7 @@ COLD void init_threading(void)
 
 	assert(thread_slab == NULL);
 	thread_slab = KMEM_CACHE_NEW("thread_slab", struct thread);
+	saved_regs_slab = KMEM_CACHE_NEW("saved_regs_slab", struct saved_regs);
 
 	assert(check_thread_module(0));
 }
@@ -132,15 +136,13 @@ static void restore_saved_regs(
 	assert(t->utcb_pos >= 0 && !IS_KERNEL_THREAD(t));
 	void *utcb = thread_get_utcb(t);
 
-	struct saved_regs *sr = t->regs;
-	assert(sr != NULL);
-	t->regs = NULL;
+	struct saved_regs *sr = priv;
 	L4_VREG(utcb, L4_TCR_BR(0)) = sr->br0;
 	L4_VREG(utcb, L4_TCR_VA_SENDER) = sr->va_sender.raw;
 	L4_VREG(utcb, L4_TCR_INTENDEDRECEIVER) = sr->ir.raw;
 	memcpy(&L4_VREG(utcb, L4_TCR_MR(0)), sr->mrs,
-		sizeof(L4_Word_t) * sr->length);
-	free(sr);
+		sizeof(L4_Word_t) * NUM_SAVED_REGS);
+	kmem_cache_free(saved_regs_slab, sr);
 
 	hook_detach(hook);
 }
@@ -148,38 +150,16 @@ static void restore_saved_regs(
 
 void save_ipc_regs(struct thread *t, void *utcb, int n_regs)
 {
-	assert(n_regs >= 0 && n_regs <= 64);
+	assert(n_regs >= 0 && n_regs <= NUM_SAVED_REGS);
 	assert(t->utcb_pos >= 0 && !IS_KERNEL_THREAD(t));
 
-	struct saved_regs *sr = t->regs;
-	if(sr == NULL) {
-		/* create */
-		hook_push_back(&t->post_exn_call, &restore_saved_regs, NULL);
-		sr = malloc(sizeof(struct saved_regs) + sizeof(L4_Word_t) * n_regs);
-		sr->br0 = L4_VREG(utcb, L4_TCR_BR(0));
-		sr->va_sender.raw = L4_VREG(utcb, L4_TCR_VA_SENDER);
-		sr->ir.raw = L4_VREG(utcb, L4_TCR_INTENDEDRECEIVER);
-		sr->size = n_regs;
-		sr->length = 0;
-		t->regs = sr;
-	} else if(sr->size < n_regs) {
-		/* enlarge */
-		int n_alloc = 1 << size_to_shift(n_regs);
-		sr = realloc(sr, sizeof(struct saved_regs)
-			+ sizeof(L4_Word_t) * n_alloc);
-		if(sr == NULL) {
-			panic("there's something wrong with the world today");
-			/* and i don't know what it is */
-		}
-		sr->size = n_alloc;
-		t->regs = sr;
-	}
-
-	if(sr->length < n_regs) {
-		memcpy(&sr->mrs[sr->length], &L4_VREG(utcb, L4_TCR_MR(sr->length)),
-			sizeof(L4_Word_t) * (n_regs - sr->length));
-		sr->length = n_regs;
-	}
+	struct saved_regs *sr = kmem_cache_alloc(saved_regs_slab);
+	sr->br0 = L4_VREG(utcb, L4_TCR_BR(0));
+	sr->va_sender.raw = L4_VREG(utcb, L4_TCR_VA_SENDER);
+	sr->ir.raw = L4_VREG(utcb, L4_TCR_INTENDEDRECEIVER);
+	memcpy(sr->mrs, &L4_VREG(utcb, L4_TCR_MR(0)),
+		sizeof(L4_Word_t) * NUM_SAVED_REGS);
+	hook_push_back(&t->post_exn_call, &restore_saved_regs, sr);
 }
 
 

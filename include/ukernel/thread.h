@@ -144,8 +144,6 @@ struct thread
 	 * can only be scheduled when this is true.
 	 */
 	struct hook post_exn_call;
-	/* TCRs and MRs saved under exception IPC. */
-	struct saved_regs *regs;
 
 	/* inactive threads have space != NULL && utcb_pos < 0, and haven't been
 	 * added with space_add_thread().
@@ -283,9 +281,11 @@ extern void thread_sleep(struct thread *t, L4_Time_t period);
 #define thread_wake(t) thread_sleep((t), L4_ZeroTime)
 
 /* used by exception handlers to save previous IPC registers & automagically
- * restore them on IPC completion. the restoring happens when @t next receives
- * a message as part of post_exn_{fail,ok}() processing at the back of the
- * hook; the handler detaches itself and resets t->u0.regs .
+ * restore them on IPC completion. restoring happens when @t next receives a
+ * message as part of post_exn_{fail,ok}() processing at the back of the hook.
+ *
+ * @n_mrs indicates how many registers the caller wants stored. the function
+ * may store more.
  */
 extern void save_ipc_regs(struct thread *t, void *utcb, int n_mrs);
 
