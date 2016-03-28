@@ -243,10 +243,8 @@ static inline L4_Fpage_t *get_pre_faults(struct ipc_state *st) {
 
 
 extern int do_typed_transfer(
-	struct thread *source,
-	void *s_base,
-	struct thread *dest,
-	void *d_base,
+	struct thread *source, void *s_base,
+	struct thread *dest, void *d_base,
 	L4_MsgTag_t tag);
 
 #endif

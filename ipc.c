@@ -276,22 +276,17 @@ struct thread *ipc_partner(struct thread *t)
 /* returns 0 on success, ErrorCode on error signal, or -EFAULT on ongoing
  * typed transfer.
  */
-static inline int do_ipc_transfer(
-	struct thread *source,
-	void *s_utcb,
-	struct thread *dest,
-	void *d_utcb)
+static int do_ipc_transfer(
+	struct thread *source, void *s_utcb,
+	struct thread *dest, void *d_utcb)
 {
 	L4_MsgTag_t tag = { .raw = L4_VREG(s_utcb, L4_TCR_MR(0)) };
-	if(unlikely(!hook_empty(&dest->post_exn_call))) {
-		/* (likelihood reflects exceptions' nature.) */
-		save_ipc_regs(dest, d_utcb,
-			L4_UntypedWords(tag) + L4_TypedWords(tag) + 1);
-	}
-	L4_VREG(d_utcb, L4_TCR_MR(0)) = tag.raw;
-	for(int i=0; i < tag.X.u; i++) {
-		int reg = L4_TCR_MR(i + 1);
-		L4_VREG(d_utcb, reg) = L4_VREG(s_utcb, reg);
+	if(hook_empty(&dest->post_exn_call)) {
+		L4_VREG(d_utcb, L4_TCR_MR(0)) = tag.raw;
+		for(int i=0; i < tag.X.u; i++) {
+			int reg = L4_TCR_MR(i + 1);
+			L4_VREG(d_utcb, reg) = L4_VREG(s_utcb, reg);
+		}
 	}
 
 	if(tag.X.t == 0) return 0;
@@ -718,7 +713,7 @@ static bool ipc_send_half(
 		 */
 		assert(dest->status == TS_RECV_WAIT || dest->status == TS_R_RECV);
 		dest->status = status;
-		if(!post_exn_ok(dest)) {
+		if(!post_exn_ok(dest, self)) {
 			/* receiver was in Ipc system call. set return values & wake it up
 			 * from Ipc.
 			 */
@@ -877,7 +872,7 @@ static bool ipc_user_oneway(struct thread *from, struct thread **to_p)
 	if(!ipc_send_half(from, from_utcb, to_p)) return false;
 	else {
 		/* clear the post-ipc hook immediately. */
-		post_exn_ok(from);
+		post_exn_ok(from, NULL);
 		return true;
 	}
 }
@@ -1386,7 +1381,7 @@ bool ipc_recv_half(struct thread *self, void *self_utcb)
 			if(L4_IsNilThread(from->ipc_from)) {
 				/* no receive phase. */
 				thread_wake(from);
-				if(!post_exn_ok(from)) {	/* clear total_quantum RPC */
+				if(!post_exn_ok(from, NULL)) {	/* clear total_quantum RPC */
 					/* only set regs in syscall-generated IPC */
 					set_ipc_return_thread(from, from_utcb);
 				}
@@ -1400,7 +1395,7 @@ bool ipc_recv_half(struct thread *self, void *self_utcb)
 				might_preempt(from);
 			}
 		}
-		if(!post_exn_ok(self)) {
+		if(!post_exn_ok(self, from)) {
 			/* post-IPC exception hooks may start another IPC operation right
 			 * away, so check this only in the ordinary path.
 			 */

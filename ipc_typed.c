@@ -191,10 +191,8 @@ static int apply_io_mapitem(
  * on failure, returns negative errno.
  */
 static int apply_mapitem(
-	struct thread *source,
-	const void *s_base,
-	struct thread *dest,
-	void *d_base,
+	struct thread *source, const void *s_base,
+	struct thread *dest, void *d_base,
 	L4_MapItem_t *m)
 {
 	L4_Fpage_t map_page = L4_MapItemSndFpage(*m),
@@ -1235,10 +1233,8 @@ static int do_string_transfer(
 static int do_mapgrant_transfer(
 	int first_mr,
 	bool is_last,
-	struct thread *source,
-	const void *s_base,
-	struct thread *dest,
-	void *d_base)
+	struct thread *source, const void *s_base,
+	struct thread *dest, void *d_base)
 {
 	L4_MapItem_t m = {
 		.raw = {
@@ -1247,12 +1243,12 @@ static int do_mapgrant_transfer(
 		},
 	};
 	int given = apply_mapitem(source, s_base, dest, d_base, &m);
-	if(given < 0) return given;
-
-	m.X.snd_fpage.X.rwx = given;
-	m.X.C = is_last ? 1 : 0;
-	L4_VREG(d_base, L4_TCR_MR(first_mr)) = m.raw[0];
-	L4_VREG(d_base, L4_TCR_MR(first_mr + 1)) = m.raw[1];
+	if(given >= 0 && hook_empty(&dest->post_exn_call)) {
+		m.X.snd_fpage.X.rwx = given;
+		m.X.C = is_last ? 1 : 0;
+		L4_VREG(d_base, L4_TCR_MR(first_mr)) = m.raw[0];
+		L4_VREG(d_base, L4_TCR_MR(first_mr + 1)) = m.raw[1];
+	}
 
 	return given;
 }
@@ -1273,10 +1269,8 @@ static int do_mapgrant_transfer(
  * other thread's ErrorCode TCR.
  */
 int do_typed_transfer(
-	struct thread *source,
-	void *s_base,
-	struct thread *dest,
-	void *d_base,
+	struct thread *source, void *s_base,
+	struct thread *dest, void *d_base,
 	L4_MsgTag_t tag)
 {
 	assert(tag.X.t > 1);
@@ -1290,6 +1284,12 @@ int do_typed_transfer(
 	struct str_meta str_buf[31];
 	size_t n_map_items, n_strs;
 	scan_typed_items(map_items, &n_map_items, str_buf, &n_strs, s_base, tag);
+
+	/* strxfer always writes @dest's MRs, so exclude replies to kernel
+	 * messages (which never receive string transfers).
+	 */
+	if(n_strs > 0 && !hook_empty(&dest->post_exn_call)) n_strs = 0;
+
 	struct ipc_state *st = source->ipc;
 	if(n_strs > 0 && st == NULL) {
 		/* start new transfer. */

@@ -634,7 +634,8 @@ static void receive_exn_reply(
 	void *param, uintptr_t code, void *priv)
 {
 	hook_detach(hook);
-	struct thread *t = container_of(hook, struct thread, post_exn_call);
+	struct thread *t = container_of(hook, struct thread, post_exn_call),
+		*sender = param;
 
 	if(code != 0) {
 		/* failed exception IPC happens under two conditions: either the
@@ -653,7 +654,8 @@ static void receive_exn_reply(
 		return;
 	}
 
-	void *utcb = thread_get_utcb(t);
+	assert(sender != NULL);
+	void *msg_utcb = thread_get_utcb(sender);
 	struct x86_exregs *regs = &t->ctx;
 	L4_Word_t eflags = 0;
 	L4_Word_t *exvarptrs[] = {
@@ -661,21 +663,15 @@ static void receive_exn_reply(
 		&eflags,
 		&regs->reason,		/* ExceptionNo */
 		&regs->error,
-		&regs->edi,
-		&regs->esi,
-		&regs->ebp,
-		&regs->esp,
-		&regs->ebx,
-		&regs->edx,
-		&regs->ecx,
-		&regs->eax,
+		&regs->edi, &regs->esi, &regs->ebp, &regs->esp,
+		&regs->ebx, &regs->edx, &regs->ecx, &regs->eax,
 	};
 	int num_vars = sizeof(exvarptrs) / sizeof(exvarptrs[0]);
 	assert(num_vars == 12);
-	L4_MsgTag_t tag = { .raw = L4_VREG(utcb, L4_TCR_MR(0)) };
+	L4_MsgTag_t tag = { .raw = L4_VREG(msg_utcb, L4_TCR_MR(0)) };
 	num_vars = MIN(int, num_vars, L4_UntypedWords(tag));
 	for(int i=0; i < num_vars; i++) {
-		*(exvarptrs[i]) = L4_VREG(utcb, L4_TCR_MR(i + 1));
+		*(exvarptrs[i]) = L4_VREG(msg_utcb, L4_TCR_MR(i + 1));
 	}
 	regs->eflags = x86_clean_eflags(regs->eflags, eflags);
 
@@ -684,9 +680,7 @@ static void receive_exn_reply(
 
 
 void build_exn_ipc(
-	struct thread *t,
-	void *utcb,
-	int label,
+	struct thread *t, void *utcb, int label,
 	const struct x86_exregs *regs)
 {
 	assert(label < 0);
@@ -701,14 +695,8 @@ void build_exn_ipc(
 		regs->eflags,
 		regs->reason,		/* ExceptionNo */
 		regs->error,
-		regs->edi,
-		regs->esi,
-		regs->ebp,
-		regs->esp,
-		regs->ebx,
-		regs->edx,
-		regs->ecx,
-		regs->eax,
+		regs->edi, regs->esi, regs->ebp, regs->esp,
+		regs->ebx, regs->edx, regs->ecx, regs->eax,
 	};
 	int num_vars = sizeof(exvars) / sizeof(exvars[0]);
 	assert(num_vars == 12);
@@ -716,8 +704,9 @@ void build_exn_ipc(
 		L4_VREG(utcb, L4_TCR_MR(i + 1)) = exvars[i];
 	}
 
-	/* this should be called before the save_ipc_regs() hook restores those
-	 * MRs we're interested in.
+	/* front. used to be because the reply was written into the thread's MRs,
+	 * but as it's now read from the sender's UTCB, there's no point except to
+	 * retain previous behaviour.
 	 */
 	hook_push_front(&t->post_exn_call, &receive_exn_reply, NULL);
 }

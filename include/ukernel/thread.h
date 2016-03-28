@@ -129,7 +129,9 @@ struct thread
 	 * desired.
 	 *
 	 * @code is 0 on success and nonzero on failure. @dataptr isn't defined.
-	 * the containing thread can be referenced with container_of().
+	 * the containing thread can be referenced with container_of(). @param
+	 * is the sender thread on success of the reply half, and NULL otherwise
+	 * (i.e. errors and one-way kernel IPC).
 	 *
 	 * this hook informs kernel-generated IPC chains (i.e. page faults,
 	 * exceptions, string transfer pagefaults, and breath-of-life) of timeout
@@ -300,7 +302,7 @@ extern void save_ipc_regs(struct thread *t, void *utcb, int n_mrs);
  * the caller.
  */
 extern bool post_exn_fail(struct thread *t);
-extern bool post_exn_ok(struct thread *t);
+extern bool post_exn_ok(struct thread *t, struct thread *sender);
 
 
 /* complicated accessors */

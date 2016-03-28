@@ -109,12 +109,11 @@ extern void cop_killa(struct thread *dead);
  * in "t"'s context.
  *
  * (TODO: this should be moved into an architecture-independent header, and
- * the x86_exregs structure should be made opaque to portable code.)
+ * the exregs pointer removed in favour of @t's context [saved at kernel
+ * enter].)
  */
 extern void build_exn_ipc(
-	struct thread *t,
-	void *utcb,
-	int label,
+	struct thread *t, void *utcb, int label,
 	const struct x86_exregs *regs);
 
 

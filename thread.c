@@ -183,9 +183,9 @@ void save_ipc_regs(struct thread *t, void *utcb, int n_regs)
 }
 
 
-bool post_exn_ok(struct thread *t)
+bool post_exn_ok(struct thread *t, struct thread *sender)
 {
-	int num = hook_call_front(&t->post_exn_call, NULL, 0);
+	int num = hook_call_front(&t->post_exn_call, sender, 0);
 	/* kernel IPC chains either keep shitting, or get off the pot. */
 	assert(num == 0 || t->ipc != NULL || IS_READY(t->status)
 		|| (CHECK_FLAG(t->flags, TF_HALT) && t->status == TS_STOPPED));
@@ -620,8 +620,9 @@ static void receive_breath_of_life(
 	hook_detach(hook);
 
 	if(code == 0) {
-		struct thread *t = container_of(hook, struct thread, post_exn_call);
-		void *utcb = thread_get_utcb(t);
+		struct thread *t = container_of(hook, struct thread, post_exn_call),
+			*sender = param;
+		void *utcb = thread_get_utcb(sender);
 		L4_MsgTag_t tag = { .raw = L4_VREG(utcb, L4_TCR_MR(0)) };
 		TRACE("%s: in thread %lu:%lu, tag %#lx\n", __func__,
 			TID_THREADNUM(t->id), TID_VERSION(t->id),
