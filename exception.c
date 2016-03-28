@@ -629,7 +629,9 @@ fail:
 }
 
 
-static void receive_exn_reply(struct hook *hook, uintptr_t code, void *priv)
+static void receive_exn_reply(
+	struct hook *hook,
+	void *param, uintptr_t code, void *priv)
 {
 	hook_detach(hook);
 	struct thread *t = container_of(hook, struct thread, post_exn_call);
@@ -721,7 +723,9 @@ void build_exn_ipc(
 }
 
 
-static void receive_pf_reply(struct hook *hook, uintptr_t code, void *priv)
+static void receive_pf_reply(
+	struct hook *hook,
+	void *param, uintptr_t code, void *priv)
 {
 	hook_detach(hook);
 	struct thread *t = container_of(hook, struct thread, post_exn_call);

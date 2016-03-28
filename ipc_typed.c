@@ -465,7 +465,9 @@ static int stritem_faults(
 /* NOTE: contrary to the name, this can also be called for in-transfer
  * faults.
  */
-static void prexfer_ipc_hook(struct hook *hook, uintptr_t code, void *dataptr)
+static void prexfer_ipc_hook(
+	struct hook *hook,
+	void *param, uintptr_t code, void *dataptr)
 {
 	struct thread *t = container_of(hook, struct thread, post_exn_call);
 	assert(&t->post_exn_call == hook);

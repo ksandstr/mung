@@ -46,67 +46,42 @@ void hook_init(struct hook *h, void *dataptr)
 }
 
 
-void hook_push_front(struct hook *h, hook_call_t fn, void *dataptr)
-{
-	struct hook_fn *ent = h_fn(fn, dataptr);
-	list_add(&h->fn_list, &ent->link);
+void hook_push_front(struct hook *h, hook_call_t fn, void *dataptr) {
+	list_add(&h->fn_list, &h_fn(fn, dataptr)->link);
 }
 
 
-void hook_push_back(struct hook *h, hook_call_t fn, void *dataptr)
-{
-	struct hook_fn *ent = h_fn(fn, dataptr);
-	list_add_tail(&h->fn_list, &ent->link);
+void hook_push_back(struct hook *h, hook_call_t fn, void *dataptr) {
+	list_add_tail(&h->fn_list, &h_fn(fn, dataptr)->link);
 }
 
 
-static void invoke_hook_fn(
-	struct hook *h,
-	struct hook_fn *member,
-	uintptr_t code,
-	bool remove)
-{
-	h->current = member;
-	(*member->fn)(h, code, member->dataptr);
-	if(remove && h->current == member) {
-		list_del_from(&h->fn_list, &member->link);
-		kmem_cache_free(hook_fn_slab, member);
-	}
-}
-
-
-int hook_call_front(
-	struct hook *h,
-	int num,
-	bool remove,
-	uintptr_t code)
+int hook_call_front(struct hook *h, void *param, uintptr_t code)
 {
 	int num_called = 0;
 	struct hook_fn *member, *next;
 	list_for_each_safe(&h->fn_list, member, next, link) {
-		invoke_hook_fn(h, member, code, remove);
-		if(++num_called == num && num > 0) break;
+		h->current = member;
+		(*member->fn)(h, param, code, member->dataptr);
+		num_called++;
 	}
 
 	return num_called;
 }
 
 
-int hook_call_back(
-	struct hook *h,
-	int num,
-	bool remove,
-	uintptr_t code)
+int hook_call_back(struct hook *h, void *param, uintptr_t code)
 {
-	/* my own list_for_each_safe_rev() */
+	/* a DIY list_for_each_safe_rev() */
 	int num_called = 0;
 	for(struct list_node *cur = h->fn_list.n.prev, *next = cur->prev;
 		cur->prev != &h->fn_list.n;
 		cur = next, next = cur->prev)
 	{
 		struct hook_fn *member = container_of(cur, struct hook_fn, link);
-		invoke_hook_fn(h, member, code, remove);
-		if(++num_called == num && num > 0) break;
+		h->current = member;
+		(*member->fn)(h, param, code, member->dataptr);
+		num_called++;
 	}
 
 	return num_called;

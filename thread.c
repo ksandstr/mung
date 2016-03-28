@@ -124,7 +124,9 @@ COLD void init_threading(void)
 }
 
 
-static void restore_saved_regs(struct hook *hook, uintptr_t code, void *priv)
+static void restore_saved_regs(
+	struct hook *hook,
+	void *param, uintptr_t code, void *priv)
 {
 	struct thread *t = container_of(hook, struct thread, post_exn_call);
 	assert(t->utcb_pos >= 0 && !IS_KERNEL_THREAD(t));
@@ -183,7 +185,7 @@ void save_ipc_regs(struct thread *t, void *utcb, int n_regs)
 
 bool post_exn_ok(struct thread *t)
 {
-	int num = hook_call_front(&t->post_exn_call, -1, false, 0);
+	int num = hook_call_front(&t->post_exn_call, NULL, 0);
 	/* kernel IPC chains either keep shitting, or get off the pot. */
 	assert(num == 0 || t->ipc != NULL || IS_READY(t->status)
 		|| (CHECK_FLAG(t->flags, TF_HALT) && t->status == TS_STOPPED));
@@ -193,7 +195,7 @@ bool post_exn_ok(struct thread *t)
 
 bool post_exn_fail(struct thread *t)
 {
-	int num = hook_call_front(&t->post_exn_call, -1, false, 1);
+	int num = hook_call_front(&t->post_exn_call, NULL, 1);
 	return num > 0;
 }
 
@@ -613,8 +615,7 @@ size_t hash_thread_by_id(const void *ptr, void *dataptr) {
 
 static void receive_breath_of_life(
 	struct hook *hook,
-	uintptr_t code,
-	void *priv)
+	void *param, uintptr_t code, void *priv)
 {
 	hook_detach(hook);
 

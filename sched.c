@@ -393,7 +393,9 @@ static uint64_t next_preempt_at(
 }
 
 
-static void desched_ready(struct hook *h, uintptr_t code, void *unused)
+static void desched_ready(
+	struct hook *h,
+	void *param, uintptr_t code, void *unused)
 {
 	struct thread *self = container_of(h, struct thread, post_exn_call);
 
