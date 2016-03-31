@@ -39,6 +39,11 @@ jmp_buf catch_pf_env;
 volatile bool catch_pf_ok = false;
 
 
+static void receive_pf_reply(
+	struct hook *hook,
+	void *param, uintptr_t code, void *priv);
+
+
 void isr_exn_de_bottom(struct x86_exregs *regs)
 {
 	printf("#DE(0x%lx) at eip 0x%lx, esp 0x%lx\n", regs->error,
@@ -51,9 +56,8 @@ static NORETURN void return_from_gp(struct thread *current, struct x86_exregs *r
 {
 	void *utcb = thread_get_utcb(current);
 	struct thread *exh = thread_get_exnh(current, utcb);
-	if(exh != NULL) {
-		build_exn_ipc(current, utcb, -5, regs);
-		return_to_ipc(exh);
+	if(likely(exh != NULL)) {
+		return_to_ipc(send_exn_ipc(current, utcb, -5, regs, &exh), exh);
 	} else {
 		printf("#GP(%#lx) unhandled at eip=%#lx, esp=%#lx, tid=%lu:%lu\n",
 			regs->error, regs->eip, regs->esp,
@@ -73,14 +77,13 @@ static NORETURN void return_from_ud(struct thread *current, struct x86_exregs *r
 {
 	void *utcb = thread_get_utcb(current);
 	struct thread *exh = thread_get_exnh(current, utcb);
-	if(exh != NULL) {
+	if(likely(exh != NULL)) {
 		/* indicate "invalid opcode" as though it was an INT# GP on line 6
 		 * (#UD). label will be an architecture-specific exception despite
 		 * invalid opcodes occurring on all architectures.
 		 */
 		regs->error = (6 << 3) + 2;
-		build_exn_ipc(current, utcb, -5, regs);
-		return_to_ipc(exh);
+		return_to_ipc(send_exn_ipc(current, utcb, -5, regs, &exh), exh);
 	} else {
 		printf("#UD unhandled in %lu:%lu; eip=%#lx, esp=%#lx\n",
 			TID_THREADNUM(current->id), TID_VERSION(current->id),
@@ -610,17 +613,20 @@ static void handle_io_fault(struct thread *current, struct x86_exregs *regs)
 			assert(false);
 	}
 
-	void *utcb = thread_get_utcb(current);
-	struct thread *pager = thread_get_pager(current, utcb);
-	if(pager == NULL) goto fail;
-	save_ipc_regs(current, utcb, 3);
-	L4_VREG(utcb, L4_TCR_BR(0)) = L4_IoFpageLog2(0, 16).raw;
-	L4_VREG(utcb, L4_TCR_MR(0)) = ((-8) & 0xfff) << 20 | 0x6 << 16 | 2;
+	void *cur_utcb = thread_get_utcb(current);
+	struct thread *pager = thread_get_pager(current, cur_utcb);
+	if(unlikely(pager == NULL)) goto fail;
+	L4_Word_t old_br0 = L4_VREG(cur_utcb, L4_TCR_BR(0));
+	L4_VREG(cur_utcb, L4_TCR_BR(0)) = L4_IoFpageLog2(0, 16).raw;
+	void *utcb = ipc_user(
+		(L4_MsgTag_t){ .raw = ((-8) & 0xfff) << 20 | 0x6 << 16 | 2 },
+		current, cur_utcb, &pager, 3);
+	hook_push_back(&current->post_exn_call,
+		&receive_pf_reply, (void *)old_br0);
 	L4_VREG(utcb, L4_TCR_MR(1)) = L4_IoFpage(port, size).raw;
 	L4_VREG(utcb, L4_TCR_MR(2)) = regs->eip;
-	return_to_ipc(pager);
-
-	return;
+	return_to_ipc(utcb, pager);
+	NOT_REACHED;
 
 fail:
 	thread_halt(current);
@@ -636,6 +642,7 @@ static void receive_exn_reply(
 	hook_detach(hook);
 	struct thread *t = container_of(hook, struct thread, post_exn_call),
 		*sender = param;
+	L4_VREG(thread_get_utcb(t), L4_TCR_BR(0)) = (L4_Word_t)priv;
 
 	if(code != 0) {
 		/* failed exception IPC happens under two conditions: either the
@@ -679,17 +686,18 @@ static void receive_exn_reply(
 }
 
 
-void build_exn_ipc(
-	struct thread *t, void *utcb, int label,
-	const struct x86_exregs *regs)
+void *send_exn_ipc(
+	struct thread *t, void *t_utcb, int label,
+	const struct x86_exregs *regs,
+	struct thread **handler_p)
 {
 	assert(label < 0);
-	assert(utcb != NULL);
 
-	save_ipc_regs(t, utcb, 13);
-	L4_VREG(utcb, L4_TCR_BR(0)) = 0;
-	L4_VREG(utcb, L4_TCR_MR(0)) = (L4_MsgTag_t){
-		.X.label = (label & 0xfff) << 4, .X.u = 12 }.raw;
+	L4_Word_t old_br0 = L4_VREG(t_utcb, L4_TCR_BR(0));
+	L4_VREG(t_utcb, L4_TCR_BR(0)) = L4_UntypedWordsAcceptor.raw;
+	void *utcb = ipc_user(
+		(L4_MsgTag_t){ .X.label = (label & 0xfff) << 4, .X.u = 12 },
+		t, t_utcb, handler_p, 13);
 	L4_Word_t exvars[] = {
 		regs->eip,
 		regs->eflags,
@@ -704,11 +712,12 @@ void build_exn_ipc(
 		L4_VREG(utcb, L4_TCR_MR(i + 1)) = exvars[i];
 	}
 
-	/* front. used to be because the reply was written into the thread's MRs,
-	 * but as it's now read from the sender's UTCB, there's no point except to
-	 * retain previous behaviour.
+	/* back, because BR0 must be restored after save_ipc_regs()' hook function
+	 * completes (if applicable).
 	 */
-	hook_push_front(&t->post_exn_call, &receive_exn_reply, NULL);
+	hook_push_back(&t->post_exn_call, &receive_exn_reply, (void *)old_br0);
+
+	return utcb;
 }
 
 
@@ -718,6 +727,8 @@ static void receive_pf_reply(
 {
 	hook_detach(hook);
 	struct thread *t = container_of(hook, struct thread, post_exn_call);
+	void *utcb = thread_get_utcb(t);
+	L4_VREG(utcb, L4_TCR_BR(0)) = (L4_Word_t)priv;
 	if(likely(code == 0)) {
 		thread_wake(t);
 	} else {
@@ -895,29 +906,32 @@ void isr_exn_pf_bottom(struct x86_exregs *regs)
 		assert(current->status == TS_STOPPED);
 		return_to_scheduler();
 	} else {
-		set_pf_msg(current, utcb, fault_addr, regs->eip, fault_access);
-		hook_push_back(&current->post_exn_call, &receive_pf_reply, NULL);
-		return_to_ipc(pager);
+		struct thread *dest = pager;
+		L4_Word_t old_br0 = L4_VREG(utcb, L4_TCR_BR(0));
+		void *msg_utcb = send_pf_ipc(current, utcb,
+			fault_addr, regs->eip, fault_access, &dest);
+		hook_push_back(&current->post_exn_call,
+			&receive_pf_reply, (void *)old_br0);
+		return_to_ipc(msg_utcb, dest);
 	}
 }
 
 
-/* functions exported in <ukernel/ipc.h> */
+/* exported in <ukernel/ipc.h> */
 
-void set_pf_msg(
-	struct thread *t,
-	void *utcb,
-	L4_Word_t fault_addr,
-	L4_Word_t ip,
-	int fault_access)
+void *send_pf_ipc(
+	struct thread *t, void *t_utcb,
+	L4_Word_t fault_addr, L4_Word_t fault_ip, int fault_access,
+	struct thread **handler_p)
 {
-	assert(utcb != NULL);
-
-	save_ipc_regs(t, utcb, 3);
-	L4_VREG(utcb, L4_TCR_BR(0)) = L4_CompleteAddressSpace.raw;
-	L4_VREG(utcb, L4_TCR_MR(0)) = ((-2) & 0xfff) << 20		/* label */
-		| fault_access << 16	/* access */
-		| 2;		/* "u" for msgtag */
+	L4_VREG(t_utcb, L4_TCR_BR(0)) = L4_CompleteAddressSpace.raw;
+	void *utcb = ipc_user(
+		(L4_MsgTag_t){ .raw = ((-2) & 0xfff) << 20		/* label */
+			| fault_access << 16	/* access */
+			| 2 },		/* # of untyped words */
+		t, t_utcb, handler_p, 3);
 	L4_VREG(utcb, L4_TCR_MR(1)) = fault_addr;
-	L4_VREG(utcb, L4_TCR_MR(2)) = ip;
+	L4_VREG(utcb, L4_TCR_MR(2)) = fault_ip;
+
+	return utcb;
 }

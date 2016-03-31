@@ -439,6 +439,16 @@ static inline bool is_interrupt(L4_ThreadId_t tid) {
 }
 
 
+static bool active_send_match(struct thread *sender, struct thread *dest)
+{
+	return dest->ipc_from.raw == L4_anythread.raw
+		|| dest->ipc_from.raw == sender->id
+		|| (dest->space == sender->space
+			&& (dest->ipc_from.raw == tid_return(dest, sender).raw
+				|| dest->ipc_from.raw == L4_anylocalthread.raw));
+}
+
+
 /* whether "tip" ends up redirecting for "base". */
 static bool has_redir_chain(struct thread *base, struct thread *tip)
 {
@@ -570,6 +580,9 @@ static bool ipc_send_half(
 	}
 	assert(!propagated || vs != NULL);
 
+	/* FIXME: replace this with a call to active_send_match(). do the same in
+	 * sys_lipc() as well.
+	 */
 	/* NOTE: parts of this condition are repeated in sys_lipc(). */
 	const bool match_cond = dest->ipc_from.raw == L4_anythread.raw
 		|| dest->ipc_from.raw == self_id.raw
@@ -833,7 +846,14 @@ bool redo_ipc_send_half(struct thread *t)
 }
 
 
-bool ipc_user(struct thread *from, struct thread **to_p)
+/* fast-path kernel-to-user IPC, first half. uses a slow path for passive
+ * send, propagation, and non-instant redirection.
+ */
+void *ipc_user(
+	L4_MsgTag_t tag,
+	struct thread *from, void *from_utcb,
+	struct thread **to_p,
+	int n_regs)
 {
 	/* this must be a global ID so that cancel_ipc_to()'s receiver search
 	 * will find it.
@@ -843,13 +863,98 @@ bool ipc_user(struct thread *from, struct thread **to_p)
 	from->send_timeout = L4_Never;
 	from->recv_timeout = L4_Never;
 
+	/* to exclude the fastpath in a debug situation, uncomment this. */
+	//goto slow;
+
+	struct thread *dest = *to_p;
+
+	/* basic fastpath filter. */
+	if((dest->status != TS_R_RECV && dest->status != TS_RECV_WAIT)
+		|| !active_send_match(from, dest)
+		|| (dest->wakeup_time != ~(uint64_t)0
+			&& ksystemclock() >= dest->wakeup_time)
+		|| unlikely(tag.X.flags != 0 || tag.X.t != 0)
+		|| unlikely(IS_KERNEL_THREAD(dest))
+		|| unlikely(!hook_empty(&dest->post_exn_call)))
+	{
+		/* any flags enabled (weird for an in-kernel message so not handled
+		 * here), typed transfers specified, recipient's ipc_from doesn't
+		 * match @from, recipient's state doesn't permit active send, or
+		 * recipient's receive phase has already timed out.
+		 *
+		 * or a more esoteric reason that still needs accounting for.
+		 */
+		TRACE("%s: first filter hit\n", __func__);
+		goto slow;
+	}
+
+	/* redirection. */
+	struct thread *saved_dest = NULL;
+	if(CHECK_FLAG(from->space->flags, SF_REDIRECT)
+		&& from->space != dest->space)
+	{
+		L4_ThreadId_t dummy;
+		if(!is_redir_ready(&dummy, from)) {
+			TRACE("%s: second filter hit\n", __func__);
+			goto slow;
+		}
+		struct thread *red = from->space->redirector;
+		assert(red != NULL);	/* ensured by is_redir_ready() */
+		if(dest->space != red->space) {
+			tag.X.flags |= 0x2;
+			saved_dest = dest;
+			*to_p = dest = red;
+			from->ipc_from.raw = red->id;
+		}
+	}
+
+	void *dst_utcb = thread_get_utcb(dest);
+	L4_VREG(dst_utcb, L4_TCR_MR(0)) = tag.raw;
+	if(L4_IpcRedirected(tag)) {
+		assert(saved_dest != NULL);
+		L4_VREG(dst_utcb, L4_TCR_INTENDEDRECEIVER) = tid_return(
+			dest, saved_dest).raw;
+	}
+	dest->ipc_from = tid_return(dest, from);
+	TRACE("%s: did fastpath setup, dest=%lu:%lu\n", __func__,
+		TID_THREADNUM(dest->id), TID_VERSION(dest->id));
+	return dst_utcb;
+
+slow:
+	save_ipc_regs(from, from_utcb, n_regs);
+	L4_VREG(from_utcb, L4_TCR_MR(0)) = tag.raw;
+	return from_utcb;
+}
+
+
+/* fast-path second half when not exiting kernel. */
+bool ipc_user_complete(
+	struct thread *from,
+	void *msg_utcb,
+	struct thread **to_p)
+{
 	void *from_utcb = thread_get_utcb(from);
+	if(msg_utcb != from_utcb) {
+		/* wheeee */
+		assert(msg_utcb == thread_get_utcb(*to_p));
+		set_ipc_return_thread(*to_p, msg_utcb);
+		assert(hook_empty(&(*to_p)->post_exn_call));
+		thread_wake(*to_p);
+		goto fast;
+	}
+
+	assert(from->ipc_to.raw == (*to_p)->id);
+	assert(from->ipc_from.raw == (*to_p)->id);
+	assert(from->send_timeout.raw == L4_Never.raw);
+	assert(from->recv_timeout.raw == L4_Never.raw);
+
 	if(!ipc_send_half(from, from_utcb, to_p)) return false;
 	else {
 		/* this needs R_RECV because of the possibility of a propagated
 		 * passive send, which should succeed at that point, despite being
 		 * quite weird a case indeed.
 		 */
+fast:
 		from->status = TS_R_RECV;
 		from->wakeup_time = ~0ull;
 		sq_update_thread(from);

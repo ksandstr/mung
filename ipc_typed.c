@@ -465,11 +465,13 @@ static int stritem_faults(
  */
 static void prexfer_ipc_hook(
 	struct hook *hook,
-	void *param, uintptr_t code, void *dataptr)
+	void *param, uintptr_t code, void *priv)
 {
 	struct thread *t = container_of(hook, struct thread, post_exn_call);
 	assert(&t->post_exn_call == hook);
 
+	void *utcb = thread_get_utcb(t);
+	L4_VREG(utcb, L4_TCR_BR(0)) = (L4_Word_t)priv;
 	hook_detach(hook);
 
 	if(code != 0) {
@@ -574,13 +576,15 @@ static void send_xfer_fault(
 	struct thread *pager = thread_get_pager(t, utcb);
 	t->orig_ipc_from = t->ipc_from;
 	t->orig_ipc_to = t->ipc_to;
-	set_pf_msg(t, utcb, L4_Address(fault), ip, L4_Rights(fault));
+	struct thread *dst = pager;
+	L4_Word_t old_br0 = L4_VREG(utcb, L4_TCR_BR(0));
+	void *msg_utcb = send_pf_ipc(t, utcb,
+		L4_Address(fault), ip, L4_Rights(fault), &dst);
 	/* (this can cause calls to ipc_send_half() to nest. due to the way IPC
 	 * works in L4.X2, that's completely safe.)
 	 */
-	hook_push_back(&t->post_exn_call, &prexfer_ipc_hook, NULL);
-	struct thread *dst = pager;
-	ipc_user(t, &dst);
+	hook_push_back(&t->post_exn_call, &prexfer_ipc_hook, (void *)old_br0);
+	ipc_user_complete(t, msg_utcb, &dst);
 
 	assert(IS_IPC(t->status));
 	assert(xferto_abs > 0);

@@ -38,10 +38,12 @@ extern void init_sched(struct thread *current);
  * and resumes execution in the x86 frame given. "current_thread" is updated.
  */
 extern NORETURN void return_to_scheduler(void);
-/* same, but invokes send-and-wait ipc first and if successful, schedules the
- * target. source is the current thread.
+
+/* same, but used to exit after sending a pf/exn/tqe message. caller should've
+ * done the ipc_user() dance beforehand. source is the current thread.
+ * @msg_utcb is ipc_user()'s return value.
  */
-extern NORETURN void return_to_ipc(struct thread *target);
+extern NORETURN void return_to_ipc(void *msg_utcb, struct thread *target);
 
 /* returns on failure. caller should fall back to return_to_scheduler(). */
 extern void return_to_other(struct thread *next);

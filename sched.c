@@ -811,9 +811,10 @@ NORETURN void scheduler_loop(struct thread *self)
 				/* send an immediate preemption exception. */
 				struct thread *exh = thread_get_exnh(prev, utcb);
 				if(likely(exh != NULL)) {
-					build_exn_ipc(prev, utcb, -4, &prev->ctx);
 					struct thread *dst = exh;
-					ipc_user(prev, &dst);
+					ipc_user_complete(prev,
+						send_exn_ipc(prev, utcb, -4, &prev->ctx, &dst),
+						&dst);
 					/* halt the thread if its exception handler is AWOL. */
 					if(!IS_IPC(prev->status)) {
 						assert(L4_VREG(utcb, L4_TCR_ERRORCODE) != 0);
@@ -1028,12 +1029,25 @@ NORETURN void return_to_partner(void)
 }
 
 
-void return_to_ipc(struct thread *target)
+NORETURN void return_to_ipc(void *msg_utcb, struct thread *target)
 {
 	struct thread *cur = get_current_thread();
 	assert(!hook_empty(&cur->post_exn_call));
-	if(!ipc_user(cur, &target)) return_to_scheduler();
-	else {
+	if(msg_utcb == thread_get_utcb(cur)) {
+		/* POKE slow, 1 */
+		TRACE("%s: slow path\n", __func__);
+		ipc_user_complete(cur, msg_utcb, &target);
+		return_to_scheduler();
+	} else {
+		/* faster, pussycat! */
+		TRACE("%s: fast path\n", __func__);
+		assert(IS_SCHED(cur));
+		cur->status = TS_R_RECV;
+		cur->wakeup_time = ~0ull;
+		sq_update_thread(cur);
+		assert(msg_utcb == thread_get_utcb(target));
+		set_ipc_return_regs(&target->ctx, target, msg_utcb);
+		thread_wake(target);
 		bool was_partner = target->u0.partner == cur;
 		sched_ipc_handoff_quick(cur, target);
 		if(!was_partner) target->u0.partner = cur;

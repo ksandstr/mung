@@ -16,16 +16,32 @@ struct ipc_state;
 extern void init_ipc(void);
 
 /* IPC by kernelspace to userspace on @from's behalf. used to send exception &
- * pagefault messages to the exception handler or pager in *@to_p. there's
- * always both a send and receive phase, and timeouts are always Never.
- * (ipc_typed.c also overwrites wakeup_time afterward.)
+ * pagefault messages to the exception handler or pager in *@to_p . requires
+ * closed IPC with timeouts always ∞.
  *
- * return value is true when the send-phase succeeded and false otherwise;
- * callers may exit into *@to_p in the former case (iff @from == current), and
- * schedule in either. *@to_p may be altered in the case that redirection
- * applies in @from's address space towards the old value of *@to_p .
+ * return value is the UTCB segment where the caller should compose its
+ * outgoing message. this may be the redirector of @from's address space, the
+ * actual recipient's UTCB, or the sender's own UTCB. in the lattermost case,
+ * MR0..MR@n_regs are saved to be restored before return to userspace. *@to_p
+ * may be altered in the case that redirection applies in @from's address
+ * space towards the old value of *@to_p . the returned UTCB's MR0 will be set
+ * to @tag .
+ *
+ * calling sequence:
+ *   - when @from == current: ipc_user(), hook_push_front(), return_to_ipc().
+ *   - otherwise: ipc_user(), hook_push_front(), ipc_user_complete(), ...
  */
-extern bool ipc_user(struct thread *from, struct thread **to_p);
+extern void *ipc_user(
+	L4_MsgTag_t tag,
+	struct thread *from, void *from_utcb,
+	struct thread **to_p,
+	int n_regs);
+
+/* returns true if sendphase completed immediately. */
+extern bool ipc_user_complete(
+	struct thread *from,
+	void *msg_utcb,			/* return value of ipc_user() */
+	struct thread **to_p);
 
 /* effect a string transfer timeout on the ongoing IPC transaction and its
  * peers. drops both out of IPC, sets error code, destroys @st, makes peers
@@ -135,13 +151,15 @@ extern bool send_tq_ipc(
 	struct thread *t, struct thread *sched,
 	L4_Clock_t body);
 
-/* actually from exception.c */
-extern void set_pf_msg(
-	struct thread *t,
-	void *utcb,
-	L4_Word_t fault_addr,
-	L4_Word_t ip,
-	int fault_access);
+/* actually from exception.c . same interface convention as send_exn_ipc(),
+ * but doesn't set a post_exn_call hook since in-transfer faults do it
+ * differently. also, the caller must arrange to restore BR0 in @utcb in its
+ * post hook.
+ */
+extern void *send_pf_ipc(
+	struct thread *t, void *utcb,
+	L4_Word_t fault_addr, L4_Word_t fault_ip, int fault_access,
+	struct thread **handler_p);
 
 
 /* from ipc_typed.c */

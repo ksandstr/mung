@@ -103,18 +103,18 @@ extern void cop_switch(struct thread *next);
 extern void cop_killa(struct thread *dead);
 
 
-/* constructs a per-architecture exception message using the given context
- * while saving prior message registers. doesn't perform IPC or set the
- * message tag's label field. sets up a reply handler that stores the message
- * in "t"'s context.
+/* calls ipc_user() and constructs a per-architecture exception message to
+ * *@handler_p using the given context. sets up a reply handler that stores
+ * the message in "t"'s context. returns ipc_user()'s return value.
  *
  * (TODO: this should be moved into an architecture-independent header, and
  * the exregs pointer removed in favour of @t's context [saved at kernel
  * enter].)
  */
-extern void build_exn_ipc(
+extern void *send_exn_ipc(
 	struct thread *t, void *utcb, int label,
-	const struct x86_exregs *regs);
+	const struct x86_exregs *regs,
+	struct thread **handler_p);
 
 
 static inline size_t x86_frame_len(const struct x86_exregs *frame)
