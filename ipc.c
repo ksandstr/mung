@@ -963,22 +963,23 @@ fast:
 }
 
 
-static bool ipc_user_oneway(struct thread *from, struct thread **to_p)
+static bool ipc_user_complete_oneway(
+	struct thread *from, void *msg_utcb,
+	struct thread **to_p)
 {
-	/* this must be a global ID so that cancel_ipc_to()'s receiver search
-	 * will find it.
-	 */
-	from->ipc_to.raw = (*to_p)->id;
 	from->ipc_from.raw = L4_nilthread.raw;
-	from->send_timeout = L4_Never;
 	from->recv_timeout = L4_ZeroTime;
 
 	void *from_utcb = thread_get_utcb(from);
-	if(!ipc_send_half(from, from_utcb, to_p)) return false;
-	else {
-		/* clear the post-ipc hook immediately. */
+	if(msg_utcb != from_utcb) {
+		set_ipc_return_thread(*to_p, msg_utcb);
+		thread_wake(*to_p);
 		post_exn_ok(from, NULL);
 		return true;
+	} else {
+		bool done = ipc_send_half(from, from_utcb, to_p);
+		if(done) post_exn_ok(from, NULL);
+		return done;
 	}
 }
 
@@ -987,15 +988,13 @@ bool send_tq_ipc(
 	struct thread *sender, struct thread *dest,
 	L4_Clock_t body)
 {
-	void *utcb = thread_get_utcb(sender);
-	save_ipc_regs(sender, utcb, 3);
-	L4_VREG(utcb, L4_TCR_BR(0)) = L4_UntypedWordsAcceptor.raw;
-	L4_VREG(utcb, L4_TCR_MR(0)) = (L4_MsgTag_t){
-			.X.label = 0xffd0, .X.u = 2,
-		}.raw;
-	L4_VREG(utcb, L4_TCR_MR(1)) = body.raw;
-	L4_VREG(utcb, L4_TCR_MR(2)) = body.raw >> sizeof(L4_Word_t) * 8;
-	return ipc_user_oneway(sender, &dest);
+	void *sender_utcb = thread_get_utcb(sender);
+	void *msg = ipc_user((L4_MsgTag_t){ .X.label = 0xffd0, .X.u = 2 },
+		sender, sender_utcb, &dest, 3);
+	L4_VREG(msg, L4_TCR_MR(1)) = body.raw;
+	L4_VREG(msg, L4_TCR_MR(2)) = body.raw >> sizeof(L4_Word_t) * 8;
+	sender->ipc_from = L4_nilthread;
+	return ipc_user_complete_oneway(sender, msg, &dest);
 }
 
 
