@@ -34,8 +34,16 @@
 /* for exregs, threadctl, threadswitch prints */
 #define TRACE(fmt, ...) TRACE_MSG(TRID_THREAD, fmt, __VA_ARGS__)
 
+/* the exception message, rounded up to cacheline size */
+#define NUM_SAVED_REGS 14
 
-#define NUM_SAVED_REGS 13	/* size of the exception message */
+
+/* stored TCRs for an exception originator */
+struct saved_regs
+{
+	L4_ThreadId_t va_sender, ir;
+	L4_Word_t mrs[NUM_SAVED_REGS];
+};
 
 
 /* interrupt routing state. */
@@ -43,15 +51,6 @@ struct interrupt
 {
 	struct thread *pager;	/* set in ThreadControl */
 	bool pending, delivered;
-};
-
-
-/* stored TCRs for an exception originator */
-struct saved_regs
-{
-	L4_Word_t br0;
-	L4_ThreadId_t va_sender, ir;
-	L4_Word_t mrs[NUM_SAVED_REGS];
 };
 
 
@@ -137,7 +136,6 @@ static void restore_saved_regs(
 	void *utcb = thread_get_utcb(t);
 
 	struct saved_regs *sr = priv;
-	L4_VREG(utcb, L4_TCR_BR(0)) = sr->br0;
 	L4_VREG(utcb, L4_TCR_VA_SENDER) = sr->va_sender.raw;
 	L4_VREG(utcb, L4_TCR_INTENDEDRECEIVER) = sr->ir.raw;
 	memcpy(&L4_VREG(utcb, L4_TCR_MR(0)), sr->mrs,
@@ -154,7 +152,6 @@ void save_ipc_regs(struct thread *t, void *utcb, int n_regs)
 	assert(t->utcb_pos >= 0 && !IS_KERNEL_THREAD(t));
 
 	struct saved_regs *sr = kmem_cache_alloc(saved_regs_slab);
-	sr->br0 = L4_VREG(utcb, L4_TCR_BR(0));
 	sr->va_sender.raw = L4_VREG(utcb, L4_TCR_VA_SENDER);
 	sr->ir.raw = L4_VREG(utcb, L4_TCR_INTENDEDRECEIVER);
 	memcpy(sr->mrs, &L4_VREG(utcb, L4_TCR_MR(0)),
