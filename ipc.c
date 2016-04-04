@@ -444,8 +444,8 @@ static bool active_send_match(struct thread *sender, struct thread *dest)
 	return dest->ipc_from.raw == L4_anythread.raw
 		|| dest->ipc_from.raw == sender->id
 		|| (dest->space == sender->space
-			&& (dest->ipc_from.raw == tid_return(dest, sender).raw
-				|| dest->ipc_from.raw == L4_anylocalthread.raw));
+			&& (dest->ipc_from.raw == L4_anylocalthread.raw
+				|| dest->ipc_from.raw == get_local_id(sender).raw));
 }
 
 
@@ -471,7 +471,7 @@ static bool is_redir_ready(L4_ThreadId_t *holdup_p, struct thread *t)
 {
 	assert(holdup_p != NULL);
 
-	bool rdy;
+	struct thread *prev;
 	do {
 		if(!CHECK_FLAG(t->space->flags, SF_REDIRECT)) return true;
 		if(unlikely(t->space->redirector == NULL)) {
@@ -482,15 +482,10 @@ static bool is_redir_ready(L4_ThreadId_t *holdup_p, struct thread *t)
 			*holdup_p = L4_nilthread;
 			return false;
 		}
-		struct thread *prev = t;
+		prev = t;
 		t = t->space->redirector;
-		rdy = (t->status == TS_R_RECV || t->status == TS_RECV_WAIT)
-			&& (t->ipc_from.raw == L4_anythread.raw
-				|| t->ipc_from.raw == prev->id
-				|| (prev->space == t->space
-					&& (t->ipc_from.raw == L4_anylocalthread.raw
-						|| t->ipc_from.raw == tid_return(t, prev).raw)));
-	} while(rdy);
+	} while((t->status == TS_R_RECV || t->status == TS_RECV_WAIT)
+		&& active_send_match(prev, t));
 
 	holdup_p->raw = t->id;
 	return false;
@@ -548,8 +543,7 @@ static bool ipc_send_half(
 	struct thread *dest = *dest_p;
 
 	/* get matching variables, incl. propagation */
-	L4_ThreadId_t self_id = { .raw = self->id },
-		self_lid = tid_return(dest, self);
+	L4_ThreadId_t self_id = { .raw = self->id }, self_lid = get_local_id(self);
 	bool propagated = false;
 	struct thread *vs = NULL, *sender = self;
 	if(CHECK_FLAG(tag->X.flags, 0x1)) {
@@ -572,7 +566,7 @@ static bool ipc_send_half(
 
 			sender = vs;
 			self_id.raw = vs->id;
-			self_lid = tid_return(dest, vs);
+			self_lid = get_local_id(vs);
 			propagated = true;
 		} else {
 			tag->X.flags &= ~0x1;		/* no propagation for you. */
@@ -580,15 +574,14 @@ static bool ipc_send_half(
 	}
 	assert(!propagated || vs != NULL);
 
-	/* FIXME: replace this with a call to active_send_match(). do the same in
-	 * sys_lipc() as well.
+	/* NOTE: due to the way propagation can alter self_lid, this condition
+	 * can't be replaced with active_send_match().
 	 */
-	/* NOTE: parts of this condition are repeated in sys_lipc(). */
 	const bool match_cond = dest->ipc_from.raw == L4_anythread.raw
 		|| dest->ipc_from.raw == self_id.raw
 		|| (dest->space == sender->space
-			&& (dest->ipc_from.raw == self_lid.raw
-				|| dest->ipc_from.raw == L4_anylocalthread.raw));
+			&& (dest->ipc_from.raw == L4_anylocalthread.raw
+				|| dest->ipc_from.raw == self_lid.raw));
 	uint64_t now_us = ksystemclock();
 
 	/* override TS_R_RECV? */
@@ -1810,11 +1803,10 @@ SYSCALL L4_Word_t sys_lipc(
 		&& (dest = space_find_local_thread(sender->space, to.local),
 			dest != NULL)
 		&& (dest->status == TS_RECV_WAIT || dest->status == TS_R_RECV)
-		&& dest->space == sender->space
-		&& (dest->ipc_from.raw == sender_ltid.raw
-			|| dest->ipc_from.raw == L4_anylocalthread.raw
-			|| dest->ipc_from.raw == sender->id
-			|| dest->ipc_from.raw == L4_anythread.raw);
+		&& (dest->ipc_from.raw == L4_anylocalthread.raw
+			|| dest->ipc_from.raw == L4_anythread.raw
+			|| dest->ipc_from.raw == sender_ltid.raw
+			|| dest->ipc_from.raw == sender->id);
 	if(unlikely(!pass)) {
 		/* fall back to regular ipc. */
 		TRACE("%s: fallback\n", __func__);
