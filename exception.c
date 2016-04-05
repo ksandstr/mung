@@ -5,6 +5,7 @@
 #include <ccan/likely/likely.h>
 #include <ccan/compiler/compiler.h>
 #include <ccan/str/str.h>
+#include <ccan/container_of/container_of.h>
 
 #include <l4/types.h>
 #include <l4/vregs.h>
@@ -109,11 +110,11 @@ void isr_exn_ud_bottom(struct x86_exregs *regs)
 		/* it is L4_KernelInterface(). */
 		const L4_KernelInterfacePage_t *kip = kip_mem;
 		regs->eip += 2;
-		regs->eax = L4_Address(current->space->kip_area);
-		regs->ecx = kip->ApiVersion.raw;
-		regs->edx = kip->ApiFlags.raw;
+		regs->r.eax = L4_Address(current->space->kip_area);
+		regs->r.ecx = kip->ApiVersion.raw;
+		regs->r.edx = kip->ApiFlags.raw;
 		const L4_KernelDesc_t *kdesc = kip_mem + kip->KernelVerPtr;
-		regs->esi = kdesc->KernelId.raw;
+		regs->r.esi = kdesc->KernelId.raw;
 		return_from_exn();
 	} else {
 		/* short read, or not a KernelInterface sequence. */
@@ -240,7 +241,7 @@ void isr_exn_xm_bottom(struct x86_exregs *regs)
 }
 
 
-static void glue_unmap(struct x86_exregs *regs)
+static void glue_unmap(struct x86_regs *regs)
 {
 	L4_Word_t control = regs->eax;
 
@@ -252,7 +253,7 @@ static void glue_unmap(struct x86_exregs *regs)
 }
 
 
-static void glue_threadcontrol(struct x86_exregs *regs)
+static void glue_threadcontrol(struct x86_regs *regs)
 {
 	L4_ThreadId_t dest_tid = { .raw = regs->eax },
 		pager = { .raw = regs->ecx },
@@ -265,7 +266,7 @@ static void glue_threadcontrol(struct x86_exregs *regs)
 }
 
 
-static void glue_spacecontrol(struct x86_exregs *regs)
+static void glue_spacecontrol(struct x86_regs *regs)
 {
 	regs->eax = sys_spacecontrol(
 		(L4_ThreadId_t){ .raw = regs->eax },	/* spacespec */
@@ -277,7 +278,7 @@ static void glue_spacecontrol(struct x86_exregs *regs)
 }
 
 
-static void glue_ipc(struct x86_exregs *regs)
+static void glue_ipc(struct x86_regs *regs)
 {
 	struct thread *current = get_current_thread();
 	/* TODO: instead of get_utcb, validate caller_utcb in the kernel */
@@ -285,8 +286,8 @@ static void glue_ipc(struct x86_exregs *regs)
 		*utcb = thread_get_utcb(current);
 
 	/* preserve registers. eip set by caller for return from scheduling. */
-	current->ctx.edi = regs->edi;
-	current->ctx.esp = regs->esp;
+	current->ctx.r.edi = regs->edi;
+	current->ctx.r.esp = regs->esp;
 
 	L4_ThreadId_t to = { .raw = regs->eax }, from = { .raw = regs->edx };
 	L4_Word_t timeouts = regs->ecx, mr0 = regs->esi;
@@ -299,10 +300,10 @@ static void glue_ipc(struct x86_exregs *regs)
 }
 
 
-static void glue_threadswitch(struct x86_exregs *regs)
+static void glue_threadswitch(struct x86_regs *regs)
 {
 	struct thread *current = get_current_thread();
-	thread_save_ctx(current, regs);
+	thread_save_ctx(current, container_of(regs, struct x86_exregs, r));
 
 	L4_ThreadId_t target = { .raw = regs->eax };
 	current->flags |= TF_SYSCALL;
@@ -311,14 +312,14 @@ static void glue_threadswitch(struct x86_exregs *regs)
 }
 
 
-static void glue_processorcontrol(struct x86_exregs *regs)
+static void glue_processorcontrol(struct x86_regs *regs)
 {
 	regs->eax = sys_processorcontrol(regs->eax, regs->ecx,
 		regs->edx, regs->esi);
 }
 
 
-static void glue_schedule(struct x86_exregs *regs)
+static void glue_schedule(struct x86_regs *regs)
 {
 	L4_ThreadId_t dest_tid = { .raw = regs->eax };
 	regs->eax = sys_schedule(dest_tid, regs->ecx,
@@ -327,7 +328,7 @@ static void glue_schedule(struct x86_exregs *regs)
 
 
 /* FIXME: implement sys_memctl() in a memory.c, or some such */
-static void glue_memctl(struct x86_exregs *regs)
+static void glue_memctl(struct x86_regs *regs)
 {
 	static bool first = true;
 	if(first) {
@@ -337,7 +338,7 @@ static void glue_memctl(struct x86_exregs *regs)
 }
 
 
-static void glue_exregs(struct x86_exregs *regs)
+static void glue_exregs(struct x86_regs *regs)
 {
 	assert(x86_irq_is_enabled());
 	regs->eax = sys_exregs((L4_ThreadId_t){ .raw = regs->eax },
@@ -346,7 +347,7 @@ static void glue_exregs(struct x86_exregs *regs)
 }
 
 
-static void (*const sys_fns[])(struct x86_exregs *regs) = {
+static void (*const sys_fns[])(struct x86_regs *regs) = {
 	[SC_IPC] = &glue_ipc,
 	[SC_LIPC] = &glue_ipc,
 	[SC_UNMAP] = &glue_unmap,
@@ -368,19 +369,20 @@ void isr_exn_basic_sc_bottom(struct x86_exregs *regs)
 	struct thread *current = get_current_thread();
 	current->ctx.eip = regs->eip;
 
-	switch(regs->ebx & 0xff) {
+	switch(regs->r.ebx & 0xff) {
 		case SC_IPC:
 		case SC_LIPC:
-			glue_ipc(regs);
+			glue_ipc(&regs->r);
 			break;
-		case SC_UNMAP: glue_unmap(regs); break;
-		case SC_THREADSWITCH: glue_threadswitch(regs); break;
-		case SC_SCHEDULE: glue_schedule(regs); break;
-		case SC_SPACECONTROL: glue_spacecontrol(regs); break;
-		case SC_THREADCONTROL: glue_threadcontrol(regs); break;
-		case SC_PROCESSORCONTROL: glue_processorcontrol(regs); break;
+		case SC_UNMAP: glue_unmap(&regs->r); break;
+		case SC_THREADSWITCH: glue_threadswitch(&regs->r); break;
+		case SC_SCHEDULE: glue_schedule(&regs->r); break;
+		case SC_SPACECONTROL: glue_spacecontrol(&regs->r); break;
+		case SC_THREADCONTROL: glue_threadcontrol(&regs->r); break;
+		case SC_PROCESSORCONTROL: glue_processorcontrol(&regs->r); break;
 		default: {
-			printf("unknown basic syscall %lu (caller stopped)\n", regs->eax);
+			printf("unknown basic syscall %lu (caller stopped)\n",
+				regs->r.eax);
 			thread_halt(current);
 			assert(current->status == TS_STOPPED);
 			return_to_scheduler();
@@ -396,7 +398,7 @@ void isr_exn_exregs_sc_bottom(struct x86_exregs *regs)
 	/* a thread-starting ExchangeRegisters may cause preemption. */
 	get_current_thread()->ctx.eip = regs->eip;
 
-	glue_exregs(regs);
+	glue_exregs(&regs->r);
 	return_from_exn();
 }
 
@@ -404,7 +406,7 @@ void isr_exn_exregs_sc_bottom(struct x86_exregs *regs)
 void isr_exn_memctl_sc_bottom(struct x86_exregs *regs)
 {
 	assert(x86_irq_is_enabled());
-	glue_memctl(regs);
+	glue_memctl(&regs->r);
 	return_from_exn();
 }
 
@@ -413,7 +415,7 @@ void isr_exn_lipc_sc_bottom(struct x86_exregs *regs)
 {
 	assert(x86_irq_is_enabled());
 	/* FIXME: use glue_lipc() instead */
-	glue_ipc(regs);
+	glue_ipc(&regs->r);
 	return_from_exn();
 }
 
@@ -440,13 +442,12 @@ void sysenter_bottom(struct x86_exregs *regs)
 	if(target == SC_THREADSWITCH) {
 		/* special handling of ThreadSwitch. */
 		void *utcb = thread_get_utcb(current);
-		regs->ebp = L4_VREG(utcb, TCR_SYSENTER_EBP);
-		regs->ebx = L4_VREG(utcb, TCR_SYSENTER_EBX);
+		regs->r.ebp = L4_VREG(utcb, TCR_SYSENTER_EBP);
+		regs->r.ebx = L4_VREG(utcb, TCR_SYSENTER_EBX);
 		regs->eip = kip_base + sysexit_epilogs.ecdx;
-		L4_VREG(utcb, TCR_SYSEXIT_ECX) = regs->ecx;
-		L4_VREG(utcb, TCR_SYSEXIT_EDX) = regs->edx;
-		thread_save_ctx(current, regs);
-		glue_threadswitch(regs);
+		L4_VREG(utcb, TCR_SYSEXIT_ECX) = regs->r.ecx;
+		L4_VREG(utcb, TCR_SYSEXIT_EDX) = regs->r.edx;
+		glue_threadswitch(&regs->r);
 		return_from_exn();
 	} else if(unlikely(target >= NUM_ELEMENTS(sys_fns)
 		|| sys_fns[target] == NULL))
@@ -463,32 +464,32 @@ void sysenter_bottom(struct x86_exregs *regs)
 		 */
 		switch(target) {
 			case SC_SCHEDULE:
-				glue_schedule(regs);
-				L4_VREG(utcb, TCR_SYSEXIT_EDX) = regs->edx;
+				glue_schedule(&regs->r);
+				L4_VREG(utcb, TCR_SYSEXIT_EDX) = regs->r.edx;
 				ret_offset = sysexit_epilogs.edx;
 				break;
 			case SC_SPACECONTROL:
-				glue_spacecontrol(regs);
-				L4_VREG(utcb, TCR_SYSEXIT_ECX) = regs->ecx;
+				glue_spacecontrol(&regs->r);
+				L4_VREG(utcb, TCR_SYSEXIT_ECX) = regs->r.ecx;
 				ret_offset = sysexit_epilogs.ecx;
 				break;
 			case SC_EXREGS:
 			case SC_MEMCTL:
-				regs->ebp = L4_VREG(utcb, TCR_SYSEXIT_ECX);
-				regs->ebx = L4_VREG(utcb, TCR_SYSEXIT_EDX);
+				regs->r.ebp = L4_VREG(utcb, TCR_SYSEXIT_ECX);
+				regs->r.ebx = L4_VREG(utcb, TCR_SYSEXIT_EDX);
 				if(unlikely(target == SC_MEMCTL)) {
-					glue_memctl(regs);
+					glue_memctl(&regs->r);
 					ret_offset = sysexit_epilogs.fast;
 				} else {
-					glue_exregs(regs);
-					L4_VREG(utcb, TCR_SYSEXIT_ECX) = regs->ecx;
-					L4_VREG(utcb, TCR_SYSEXIT_EDX) = regs->edx;
+					glue_exregs(&regs->r);
+					L4_VREG(utcb, TCR_SYSEXIT_ECX) = regs->r.ecx;
+					L4_VREG(utcb, TCR_SYSEXIT_EDX) = regs->r.edx;
 					ret_offset = sysexit_epilogs.ecdx;
 				}
 				break;
 			default:
 				ret_offset = sysexit_epilogs.fast;
-				(*sys_fns[target])(regs);
+				(*sys_fns[target])(&regs->r);
 		}
 		regs->eip = kip_base + ret_offset;
 		return_from_exn();
@@ -584,22 +585,22 @@ static void handle_io_fault(struct thread *current, struct x86_exregs *regs)
 			break;
 
 		case 0xec:	/* IN AL, DX */
-			port = regs->edx & 0xffff;
+			port = regs->r.edx & 0xffff;
 			size = 1;
 			break;
 
 		case 0xed:	/* IN [E]AX, DX */
-			port = regs->edx & 0xffff;
+			port = regs->r.edx & 0xffff;
 			break;
 
 		case 0xee:	/* OUT DX, AL */
-			port = regs->edx & 0xffff;
+			port = regs->r.edx & 0xffff;
 			size = 1;
 			in = false;
 			break;
 
 		case 0xef:	/* OUT DX, [E]AX */
-			port = regs->edx & 0xffff;
+			port = regs->r.edx & 0xffff;
 			in = false;
 			break;
 
@@ -661,26 +662,19 @@ static void receive_exn_reply(
 		return;
 	}
 
-	assert(sender != NULL);
 	void *msg_utcb = thread_get_utcb(sender);
-	struct x86_exregs *regs = &t->ctx;
-	L4_Word_t eflags = 0;
-	L4_Word_t *exvarptrs[] = {
-		&regs->eip,
-		&eflags,
-		&regs->reason,		/* ExceptionNo */
-		&regs->error,
-		&regs->edi, &regs->esi, &regs->ebp, &regs->esp,
-		&regs->ebx, &regs->edx, &regs->ecx, &regs->eax,
-	};
-	int num_vars = sizeof(exvarptrs) / sizeof(exvarptrs[0]);
-	assert(num_vars == 12);
+
+	/* only do a valid thing for a valid reply. seems reasonable, right? */
 	L4_MsgTag_t tag = { .raw = L4_VREG(msg_utcb, L4_TCR_MR(0)) };
-	num_vars = MIN(int, num_vars, L4_UntypedWords(tag));
-	for(int i=0; i < num_vars; i++) {
-		*(exvarptrs[i]) = L4_VREG(msg_utcb, L4_TCR_MR(i + 1));
-	}
-	regs->eflags = x86_clean_eflags(regs->eflags, eflags);
+	if(unlikely(L4_UntypedWords(tag) < 12 || sender == NULL)) return;
+
+	/* ignores "ExceptionNo", "ErrorCode" in MR3, MR4 resp. */
+	struct x86_ctx *c = &t->ctx;
+	c->eflags = x86_clean_eflags(c->eflags, L4_VREG(msg_utcb, L4_TCR_MR(2)));
+	c->eip = L4_VREG(msg_utcb, L4_TCR_MR(1));
+	L4_Word_t *rpos = &c->r.edi;
+	for(int i=5; i <= 12; i++) *(rpos++) = L4_VREG(msg_utcb, L4_TCR_MR(i));
+	assert(rpos == &c->r.eax + 1);
 
 	thread_wake(t);
 }
@@ -701,10 +695,11 @@ void *send_exn_ipc(
 	L4_Word_t exvars[] = {
 		regs->eip,
 		regs->eflags,
-		regs->reason,		/* ExceptionNo */
+		regs->reason,	/* ExceptionNo */
 		regs->error,
-		regs->edi, regs->esi, regs->ebp, regs->esp,
-		regs->ebx, regs->edx, regs->ecx, regs->eax,
+		regs->r.edi, regs->r.esi, regs->r.ebp,
+		regs->esp,		/* NOTE: this is correct. */
+		regs->r.ebx, regs->r.edx, regs->r.ecx, regs->r.eax,
 	};
 	int num_vars = sizeof(exvars) / sizeof(exvars[0]);
 	assert(num_vars == 12);

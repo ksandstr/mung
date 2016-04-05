@@ -193,19 +193,6 @@ COLD void go_high(void)
 		: "memory");
 
 	is_kernel_high = true;		/* the muthafuckin' d-a-e */
-
-	/* fix kthread segments, too. */
-	struct htable_iter it;
-	for(struct thread *t = htable_first(&thread_hash, &it);
-		t != NULL;
-		t = htable_next(&thread_hash, &it))
-	{
-		if(!IS_KERNEL_THREAD(t)) continue;
-		t->ctx.ds = data_sel;
-		t->ctx.es = data_sel;
-		t->ctx.ss = data_sel;
-		t->ctx.cs = code_sel;
-	}
 }
 
 

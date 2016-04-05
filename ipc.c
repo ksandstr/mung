@@ -85,7 +85,7 @@ static inline void set_ipc_error(void *utcb, L4_Word_t ec)
 
 
 inline void set_ipc_return_regs(
-	struct x86_exregs *regs,
+	struct x86_regs *regs,
 	struct thread *current,
 	void *utcb)
 {
@@ -99,7 +99,7 @@ inline void set_ipc_return_regs(
 static inline void set_ipc_return_thread(struct thread *t, void *utcb)
 {
 	assert(!IS_KERNEL_THREAD(t));
-	set_ipc_return_regs(&t->ctx, t, utcb);
+	set_ipc_return_regs(&t->ctx.r, t, utcb);
 }
 
 
@@ -1261,7 +1261,7 @@ bool ipc_recv_half(struct thread *self, void *self_utcb)
 			L4_VREG(utcb, L4_TCR_MR(0)) = (L4_MsgTag_t){
 				.X.label = 0xfff0 }.raw;
 			self->ipc_from = L4_GlobalId(found, 1);
-			set_ipc_return_regs(&self->ctx, self, utcb);
+			set_ipc_return_regs(&self->ctx.r, self, utcb);
 			if(self->status == TS_RUNNING) self->status = TS_READY;
 			assert(IS_READY(self->status));
 			return true;
@@ -1717,7 +1717,7 @@ SYSCALL L4_Word_t sys_ipc(
 			} else {
 				/* preemption before Ipc exit. */
 				current->status = TS_READY;
-				set_ipc_return_regs(&current->ctx, current, utcb);
+				set_ipc_return_regs(&current->ctx.r, current, utcb);
 			}
 			return_to_scheduler();
 		}
@@ -1728,7 +1728,7 @@ SYSCALL L4_Word_t sys_ipc(
 		TRACE("%s: IPC receive phase.\n", __func__);
 		if(ipc_recv_half(current, utcb)) {
 			if(check_preempt() && IS_READY(current->status)) {
-				set_ipc_return_regs(&current->ctx, current, utcb);
+				set_ipc_return_regs(&current->ctx.r, current, utcb);
 				return_to_scheduler();
 			}
 
@@ -1782,7 +1782,7 @@ SYSCALL L4_Word_t sys_lipc(
 		 */
 		sender->ctx.eip = kip_base + sysexit_epilogs.fast;
 		/* pop mr1, mr2 pushed in the syscall stub */
-		sender->ctx.esp += 8;
+		sender->ctx.r.esp += 8;
 	}
 
 	/* TODO: the l4.x2 spec seems to imply that Lipc might do propagation.
@@ -1836,12 +1836,12 @@ SYSCALL L4_Word_t sys_lipc(
 		dest->u0.partner = sender;
 	}
 	/* set the receiver's epilogue frame up. */
-	dest->ctx.edi = to.raw;
-	dest->ctx.eax = sender_ltid.raw;
+	dest->ctx.r.edi = to.raw;
+	dest->ctx.r.eax = sender_ltid.raw;
 	tag.X.flags = 0;
-	dest->ctx.esi = tag.raw;
-	dest->ctx.ebx = mr1;
-	dest->ctx.ebp = mr2;
+	dest->ctx.r.esi = tag.raw;
+	dest->ctx.r.ebx = mr1;
+	dest->ctx.r.ebp = mr2;
 	dest->ctx.eip = kip_base + lipc_epilog_offset;
 	return_from_exn();
 

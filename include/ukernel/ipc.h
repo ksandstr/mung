@@ -137,7 +137,7 @@ extern void set_ipc_error_thread(struct thread *t, L4_Word_t ec);
 
 /* used from interrupt delivery */
 extern void set_ipc_return_regs(
-	struct x86_exregs *regs,
+	struct x86_regs *regs,
 	struct thread *current,
 	void *utcb);
 

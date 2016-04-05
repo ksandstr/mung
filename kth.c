@@ -29,16 +29,13 @@ static struct list_head dead_thread_list = LIST_HEAD_INIT(dead_thread_list);
 
 static COLD void init_kthread_ctx(struct thread *t, L4_Word_t sp, L4_Word_t ip)
 {
-	int dsel = (is_kernel_high ? SEG_KERNEL_DATA_HIGH : SEG_KERNEL_DATA) << 3,
-		csel = (is_kernel_high ? SEG_KERNEL_CODE_HIGH : SEG_KERNEL_CODE) << 3;
-	t->ctx = (struct x86_exregs){
-		.esp = sp, .eip = ip,
+	t->ctx = (struct x86_ctx){
+		.r.esp = sp,
+		.eip = ip,
 		/* IOPL 0 (supervisor), interrupts enabled. also a reserved, constant
 		 * bit is set.
 		 */
 		.eflags = (0 << 12) | (1 << 9) | (1 << 1),
-		.es = dsel, .ds = dsel, .ss = dsel,
-		.cs = csel,
 	};
 }
 
@@ -112,17 +109,13 @@ struct thread *kth_start(void (*function)(void *), void *parameter)
 	void **stk_top = t->u1.stack_page->vm_addr + PAGE_SIZE - 32;
 	stk_top[0] = function;
 	stk_top[1] = parameter;
-	int dsel = (is_kernel_high ? SEG_KERNEL_DATA_HIGH : SEG_KERNEL_DATA) << 3,
-		csel = (is_kernel_high ? SEG_KERNEL_CODE_HIGH : SEG_KERNEL_CODE) << 3;
-	t->ctx = (struct x86_exregs){
-		.esp = (L4_Word_t)stk_top - 8,	/* fake return address bump, twice */
+	t->ctx = (struct x86_ctx){
+		.r.esp = (L4_Word_t)stk_top - 8,	/* fake return address bump, twice */
 		.eip = (L4_Word_t)&thread_wrapper,
 		/* IOPL 0 (supervisor), interrupts enabled. also a reserved, constant
 		 * bit is set.
 		 */
 		.eflags = (0 << 12) | (1 << 9) | (1 << 1),
-		.es = dsel, .ds = dsel, .ss = dsel,
-		.cs = csel,
 	};
 	t->pri = 250;
 	t->sens_pri = 250;

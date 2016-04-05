@@ -166,9 +166,9 @@ _sysenter_top:
 	movl 8(%esi), %esi	# ->kip_area
 	andl $0xfffffc00, %esi	# ... address
 	addl sysexit_epilogs, %esi	# + no-restore epilog offset
-	movl %edi, THREAD_CTX_OFF+12(%ebx)
-	movl %esi, THREAD_CTX_OFF+48(%ebx)
-	movl %ebp, THREAD_CTX_OFF+60(%ebx)
+	movl %edi, THREAD_CTX_OFF(%ebx)
+	movl %esi, THREAD_CTX_OFF+32(%ebx)
+	movl %ebp, THREAD_CTX_OFF+12(%ebx)
 
 	# utcb validation. compare %edi to utcb_top, and to utcb_area +
 	# UTCB_SIZE / 2.
@@ -224,8 +224,8 @@ _sysenter_top:
 	# return to caller when preemption didn't happen. to test it, somehow
 	# Ipc processing would have to take long enough for a
 	# preemption-causing interrupt to occur.
-	movl %ebp, THREAD_CTX_OFF+60(%ebx)	# caller %esp
-	movl %esi, THREAD_CTX_OFF+48(%ebx)	# caller %eip
+	movl %ebp, THREAD_CTX_OFF+12(%ebx)	# caller %esp
+	movl %esi, THREAD_CTX_OFF+32(%ebx)	# caller %eip
 	# no need for a proper call if kernel_preempt_pending is set; then the
 	# function is guaranteed to never return (except if current ==
 	# scheduler_thread, but... how would it end up in the sysenter tophalf
@@ -241,13 +241,15 @@ _sysenter_top:
 	pushl $USER_CODE_SEL	# .cs (future)
 	pushl $0		# .eip (false)
 	pushl 20(%esp)		# .error (syscall target)
-	pushal
+	pushal			# .r
 	pushl $USER_DATA_SEL	# .ds (surrogate)
 	pushl $USER_DATA_SEL	# .es (surrogate)
 	pushl $0		# .reason (not used)
 	pushl %esp		# frame address on sysenter stack
 	call sysenter_bottom
 
+	# offsets at +4 because of sysenter_bottom() parameter ptr.
+	# TODO: change it to regparms.
 	movl 16(%esp), %edi
 	movl 20(%esp), %esi
 	movl 24(%esp), %ebp
@@ -257,7 +259,7 @@ _sysenter_top:
 	movl 64(%esp), %ecx	# esp
 
 	pushl 60(%esp)		# eflags
-	pushl 48(%esp)		# eax (temporary, at +4 due to preceding push)
+	pushl 48(%esp)		# temporary eax (at +8)
 	movl $USER_DATA_SEL, %eax
 	movl %eax, %ds
 	movl %eax, %es
@@ -289,8 +291,8 @@ _sysenter_lipc_fast:
 	#
 	# stash pass-through %esp, %edi regs first.
 	movl current_thread, %ebx
-	movl %edi, THREAD_CTX_OFF+12(%ebx)
-	movl %ebp, THREAD_CTX_OFF+60(%ebx)
+	movl %edi, THREAD_CTX_OFF(%ebx)
+	movl %ebp, THREAD_CTX_OFF+12(%ebx)
 	# call sys_lipc().
 	#
 	# (the user-to-kernel transfer, here, is as valid as the sysenter stub
@@ -332,8 +334,8 @@ _sysenter_lipc_fast:
 11:	movzbl kernel_preempt_pending, %ecx
 	test %cl, %cl
 	jnz 12f		# return_from_exn() path
-	movl THREAD_CTX_OFF+60(%ebx), %ecx	# OUT caller %esp
-	movl THREAD_CTX_OFF+48(%ebx), %edx	# OUT epilog %eip
+	movl THREAD_CTX_OFF+12(%ebx), %ecx	# OUT caller %esp
+	movl THREAD_CTX_OFF+32(%ebx), %edx	# OUT epilog %eip
 	# load MR0, MR1, MR2 from visible UTCB
 	movl 8(%esi), %ebp	# OUT MR2
 	pushl 4(%esi)		# OUT MR1 (popped before sysexit)

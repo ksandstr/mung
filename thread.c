@@ -213,10 +213,6 @@ bool thread_ctor(struct thread *t, thread_id tid)
 			 * bit is set.
 			 */
 			.eflags = (3 << 12) | (1 << 9) | (1 << 1),
-			.es = SEG_USER_DATA << 3 | 0x3,
-			.ds = SEG_USER_DATA << 3 | 0x3,
-			.cs = SEG_USER_CODE << 3 | 0x3,
-			.ss = SEG_USER_DATA << 3 | 0x3,
 		},
 	};
 
@@ -256,7 +252,7 @@ void thread_set_spip(struct thread *t, L4_Word_t sp, L4_Word_t ip)
 	assert(!IS_KERNEL_THREAD(t));
 	assert(t->status != TS_RUNNING);
 
-	t->ctx.esp = sp;
+	t->ctx.r.esp = sp;
 	t->ctx.eip = ip;
 }
 
@@ -540,19 +536,21 @@ void *thread_get_utcb(struct thread *t)
 void thread_save_ctx(struct thread *t, const struct x86_exregs *regs)
 {
 	size_t flen = x86_frame_len(regs);
-	memcpy(&t->ctx, regs, flen);
+	t->ctx.r = regs->r;
+	t->ctx.r.esp = regs->esp;
+	t->ctx.eip = regs->eip;
+	t->ctx.eflags = regs->eflags;
 	if(flen < sizeof(*regs)) {
 		assert(IS_KERNEL_THREAD(t));
-		t->ctx.ss = regs->ds;
-		t->ctx.esp = (L4_Word_t)regs + flen;
+		t->ctx.r.esp = (L4_Word_t)regs + flen;
 		TRACE("%s: saved kernel thread %lu:%lu: eip %#lx, esp %#lx\n", __func__,
 			TID_THREADNUM(t->id), TID_VERSION(t->id),
-			t->ctx.eip, t->ctx.esp);
+			t->ctx.eip, t->ctx.r.esp);
 	} else {
 		assert(!IS_KERNEL_THREAD(t));
 		TRACE("%s: saved user thread %lu:%lu: eip %#lx, esp %#lx\n", __func__,
 			TID_THREADNUM(t->id), TID_VERSION(t->id),
-			t->ctx.eip, t->ctx.esp);
+			t->ctx.eip, t->ctx.r.esp);
 	}
 }
 
@@ -757,7 +755,7 @@ SYSCALL L4_Word_t sys_exregs(
 		/* readout */
 		ctl_in &= ~CTL_d;
 
-		*sp_p = dest_thread->ctx.esp;
+		*sp_p = dest_thread->ctx.r.esp;
 		*ip_p = dest_thread->ctx.eip;
 		*flags_p = dest_thread->ctx.eflags;
 		*udh_p = L4_VREG(dest_utcb, L4_TCR_USERDEFINEDHANDLE);
@@ -855,7 +853,7 @@ SYSCALL L4_Word_t sys_exregs(
 			dest_thread->flags &= ~TF_SYSCALL;
 			dest_thread->ctx.eip = ip_in;
 		}
-		if(CHECK_FLAG(ctl_in, CTL_s)) dest_thread->ctx.esp = sp_in;
+		if(CHECK_FLAG(ctl_in, CTL_s)) dest_thread->ctx.r.esp = sp_in;
 
 		ctl_in &= ~regset_mask;
 	}
@@ -955,7 +953,7 @@ static bool send_int_ipc(int ivec, struct thread *t, bool kernel_irq)
 		void *utcb = thread_get_utcb(t);
 		L4_VREG(utcb, L4_TCR_MR(0)) = (L4_MsgTag_t){ .X.label = 0xfff0 }.raw;
 		t->ipc_from = L4_GlobalId(ivec, 1);
-		set_ipc_return_regs(&t->ctx, t, utcb);
+		set_ipc_return_regs(&t->ctx.r, t, utcb);
 		thread_wake(t);
 		return true;
 	}

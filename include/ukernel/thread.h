@@ -93,7 +93,7 @@ struct thread
 	uint8_t flags;
 	uint8_t status, pri, sens_pri;
 
-	struct x86_exregs ctx;
+	struct x86_ctx ctx;
 	void *fpu_context;
 
 	GUARD_MEMBER(sched_rb_0);
@@ -340,24 +340,24 @@ extern size_t hash_thread_by_id(const void *threadptr, void *dataptr);
  * that're preserved over a SysV x86 function call.
  */
 extern void swap_context(
-	struct x86_exregs *store,
-	const struct x86_exregs *load);
+	struct x86_ctx *store,
+	const struct x86_ctx *load);
 
 extern void swap_to_ring3(
-	struct x86_exregs *store,
-	const struct x86_exregs *load,
+	struct x86_ctx *store,
+	const struct x86_ctx *load,
 	int gs_selector);
 
 /* NOTE: the sysexit_*() family don't fill in TCR_SYSEXIT_E[CD]X! */
 extern void sysexit_from_kth(
-	struct x86_exregs *store,
-	const struct x86_exregs *load,
+	struct x86_ctx *store,
+	const struct x86_ctx *load,
 	int gs_selector);
 
 extern NORETURN void sysexit_to_ring3(
-	const struct x86_exregs *userctx,
+	const struct x86_ctx *userctx,
 	int gs_selector);
 
-extern NORETURN void iret_to_scheduler(const struct x86_exregs *sched_ctx);
+extern NORETURN void iret_to_scheduler(const struct x86_ctx *sched_ctx);
 
 #endif

@@ -670,7 +670,7 @@ NORETURN void switch_thread_u2u(struct thread *next)
 		sysexit_to_ring3(&next->ctx, utcb_sel);
 	} else {
 		next->flags &= ~TF_SYSCALL;
-		struct x86_exregs dummy;
+		struct x86_ctx dummy;
 		swap_to_ring3(&dummy, &next->ctx, utcb_sel);
 		/* (nothing will recover the @dummy context, so it's effectively
 		 * NORETURN.)
@@ -812,8 +812,14 @@ NORETURN void scheduler_loop(struct thread *self)
 				struct thread *exh = thread_get_exnh(prev, utcb);
 				if(likely(exh != NULL)) {
 					struct thread *dst = exh;
+					struct x86_exregs fake_exregs = {
+						.r = prev->ctx.r,
+						.eip = prev->ctx.eip,
+						.esp = prev->ctx.r.esp,
+						.reason = -4,
+					};
 					ipc_user_complete(prev,
-						send_exn_ipc(prev, utcb, -4, &prev->ctx, &dst),
+						send_exn_ipc(prev, utcb, -4, &fake_exregs, &dst),
 						&dst);
 					/* halt the thread if its exception handler is AWOL. */
 					if(!IS_IPC(prev->status)) {
@@ -1046,7 +1052,7 @@ NORETURN void return_to_ipc(void *msg_utcb, struct thread *target)
 		cur->wakeup_time = ~0ull;
 		sq_update_thread(cur);
 		assert(msg_utcb == thread_get_utcb(target));
-		set_ipc_return_regs(&target->ctx, target, msg_utcb);
+		set_ipc_return_regs(&target->ctx.r, target, msg_utcb);
 		thread_wake(target);
 		bool was_partner = target->u0.partner == cur;
 		sched_ipc_handoff_quick(cur, target);

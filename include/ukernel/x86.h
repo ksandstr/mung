@@ -63,20 +63,37 @@ struct thread;
 struct space;
 struct page;
 
+
+/* basic thread context. part of x86_exregs so that it can be written very
+ * quickly with a PUSHAD instruction. doesn't carry %eip or %eflags.
+ */
+struct x86_regs {
+	L4_Word_t edi;
+	L4_Word_t esi;	/* 4 */
+	L4_Word_t ebp;	/* 8 */
+	L4_Word_t esp;	/* 12 */
+	L4_Word_t ebx;	/* 16 */
+	L4_Word_t edx;	/* 20 */
+	L4_Word_t ecx;	/* 24 */
+	L4_Word_t eax;	/* 28 */
+} __attribute__((packed));
+
+
+/* full thread context. */
+struct x86_ctx {
+	struct x86_regs r;
+	L4_Word_t eip;		/* 32 */
+	L4_Word_t eflags;	/* 36 */
+} __attribute__((packed));
+
+
 /* courtesy of L4Ka::pistachio */
 struct x86_exregs {
 	L4_Word_t reason;
-	/* actual process state */
+	/* TODO: remove es, ds from premises */
 	L4_Word_t es;		/* 4 */
 	L4_Word_t ds;		/* 8 */
-	L4_Word_t edi;		/* 12 */
-	L4_Word_t esi;		/* 16 */
-	L4_Word_t ebp;		/* 20 */
-	L4_Word_t __esp;	/* 24: trapgate ESP on exn entry */
-	L4_Word_t ebx;		/* 28 */
-	L4_Word_t edx;		/* 32 */
-	L4_Word_t ecx;		/* 36 */
-	L4_Word_t eax;		/* 40 */
+	struct x86_regs r;	/* 12 (NOTE: r.esp is trapgate ESP on exn entry) */
 	/* trapgate frame */
 	L4_Word_t error;	/* 44 */
 	L4_Word_t eip;		/* 48 */
