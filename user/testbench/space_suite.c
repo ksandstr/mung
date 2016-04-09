@@ -762,7 +762,7 @@ START_LOOP_TEST(access_interference, iter, 0, 1)
 	L4_GetStatus(pg);
 
 	strlcpy(testmem, "something or other", PAGE_SIZE);
-	unsigned parent, child;
+	unsigned parent = 0, child;
 	if(parent_first) parent = get_status_from_fs(pg);
 	child = L4_Rights(L4_GetStatus(pg));
 	if(!parent_first) parent = get_status_from_fs(pg);
