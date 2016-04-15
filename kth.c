@@ -27,23 +27,14 @@ static int next_kthread_num = -1;
 static struct list_head dead_thread_list = LIST_HEAD_INIT(dead_thread_list);
 
 
-static COLD void init_kthread_ctx(struct thread *t, L4_Word_t sp, L4_Word_t ip)
-{
-	t->ctx = (struct x86_ctx){
-		.r.esp = sp,
-		.eip = ip,
-		/* IOPL 0 (supervisor), interrupts enabled. also a reserved, constant
-		 * bit is set.
-		 */
-		.eflags = (0 << 12) | (1 << 9) | (1 << 1),
-	};
-}
-
-
-/* FIXME: this function is entirely untested. there should be a kernel
- * self-test mode to fix that even if end_kthread() is never used in anger.
+/* FIXME: this function is without proper testing because there's no
+ * kth_join(), so the tests down below aren't able to properly determine that
+ * a kthread has gone away.
+ *
+ * as kthreads started outside the tests will always run perpetually, this is
+ * not a significant downside in practice.
  */
-static NORETURN void end_kthread(void)
+static COLD NORETURN void end_kthread(void)
 {
 	struct thread *self = get_current_thread();
 	assert(IS_KERNEL_THREAD(self));
@@ -53,9 +44,7 @@ static NORETURN void end_kthread(void)
 	list_add(&dead_thread_list, &self->u0.dead_link);
 	self->status = TS_DEAD;
 	sq_remove_thread(self);
-	schedule();
-
-	panic("schedule() returned to dead thread???");
+	exit_to_scheduler(NULL);
 }
 
 
@@ -129,34 +118,14 @@ bool kth_yield(void)
 {
 	struct thread *current = get_current_thread();
 	current->status = TS_READY;
-	return schedule();
+	volatile int cval = save_kth_context();
+	if(cval == 0) exit_to_scheduler(current);
+	return cval > 1;
 }
 
 
-COLD struct thread *kth_init(L4_ThreadId_t boot_tid)
+COLD void kth_init(void)
 {
 	assert(next_kthread_num < 0);
-	next_kthread_num = L4_ThreadNo(boot_tid) + 1;
-
-	struct thread *boot = kmem_cache_zalloc(thread_slab);
-	init_kthread_ctx(boot, 0xdeadface, 0xabadc0de);
-	boot->space = kernel_space;
-	boot->utcb_pos = -1;
-	boot->utcb_page = NULL;
-	boot->utcb_ptr_seg = 0;
-	thread_set_utcb(boot, L4_Address(kernel_space->utcb_area));
-	boot->u1.stack_page = NULL;
-	boot->id = boot_tid.raw;
-	boot->status = TS_RUNNING;
-	boot->flags = 0;
-	boot->pri = 0xff;
-	boot->sens_pri = 0xff;
-	boot->max_delay = 0;
-	boot->ts_len = L4_TimePeriod(10000);
-	boot->quantum = ~0ul;
-	boot->total_quantum = ~(uint64_t)0;
-	htable_add(&thread_hash, int_hash(TID_THREADNUM(boot->id)), boot);
-	sq_insert_thread(boot);
-
-	return boot;
+	next_kthread_num = last_int_threadno() + 1;
 }

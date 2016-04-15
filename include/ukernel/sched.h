@@ -12,30 +12,34 @@
 #include <ukernel/interrupt.h>
 
 
+/* preempt_status flags */
+#define PS_PENDING 0x80	/* preemption occurred */
+#define PS_DELAYED 0x40	/* preemption was delayed until limit */
+
+
 /* global data from sched.c */
 
 /* accessed from the timer interrupt. r/w only with irqs off. */
 extern uint64_t preempt_timer_count;
 extern uint64_t task_switch_time;		/* ms */
 extern int preempt_task_pri;
-extern bool preempt_delayed;
-/* set per CPU rather early, used to signal preemption scheduling */
-extern L4_Word_t *scheduler_mr1;
+extern int preempt_status;		/* see PS_* */
 
 /* set from thread_sleep() */
 extern bool kernel_preempt_pending;
 extern struct thread *kernel_preempt_to;
 
 
-/* initializes the scheduler.
- *
- * TODO: should be generalized to accept a per-CPU structure, and initialize
- * the scheduling bits in that.
+/* saves the currently-executing kthread context in preparation of exit to
+ * scheduler. returns 0 on the first call (that which precedes an exit), and 1
+ * if the scheduler didn't pick a different thread, or 2 if it did.
  */
-extern void init_sched(struct thread *current);
+extern L4_Word_t save_kth_context(void);
 
-/* the "return_to_*" family exits the current interrupt or exception context
- * and resumes execution in the x86 frame given. "current_thread" is updated.
+
+/* the "return_to_*" family leaves the currently-running thread, exits the
+ * current interrupt or exception context, and resumes execution in the x86
+ * frame indicated. "current_thread" is updated.
  */
 extern NORETURN void return_to_scheduler(void);
 
@@ -47,12 +51,6 @@ extern NORETURN void return_to_ipc(void *msg_utcb, struct thread *target);
 
 /* returns on failure. caller should fall back to return_to_scheduler(). */
 extern void return_to_other(struct thread *next);
-
-/* very rare; invoked in thread self-deletion after the current thread has
- * been destroyed. basically a variant of return_to_scheduler() but doesn't
- * reference current at all.
- */
-extern NORETURN void return_from_dead(void);
 
 /* ISRs that don't call return_to_*() should instead call return_from_exn() as
  * their last line. it disables interrupts until the interrupt flag is
@@ -84,10 +82,19 @@ static inline struct thread *get_current_thread(void) {
 	return current_thread;
 }
 
-/* switches from current thread, which must be an userspace thread. caller
- * should save the exception context.
+/* calls scheduler, replacing the current kernel context. used after a
+ * save_kth_context() or save_user_context(), or when the current thread has
+ * committed suicide via ThreadControl.
  */
-extern NORETURN void switch_thread_u2u(struct thread *next);
+extern NORETURN void exit_to_scheduler(struct thread *prev);
+
+/* switches into target thread. caller should save exception context. */
+extern NORETURN void exit_to_thread(struct thread *next);
+
+/* for the self-deleting ThreadControl edge case: required before
+ * exit_to_scheduler(NULL).
+ */
+extern void leaving_thread(struct thread *current);
 
 /* interface for task switching in ipc.c . these establish an IPC partnership
  * between @src and @dst, updating the scheduling structures accordingly and
@@ -149,13 +156,5 @@ extern SYSCALL L4_Word_t sys_schedule(
 	L4_Word_t procctl,
 	L4_Word_t preemptctl);
 extern SYSCALL void sys_threadswitch(L4_ThreadId_t target);
-
-/* switches away from a kernel thread.
- * returns false when no thread was activated.
- */
-extern bool schedule(void);
-
-/* where CPU-starting threads go to cause proper scheduling */
-extern NORETURN void scheduler_loop(struct thread *self);
 
 #endif

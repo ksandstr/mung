@@ -403,6 +403,13 @@ extern int x86_alloc_ptab(struct map_group *g);
 /* free @g->ptab_page and disconnect it from @g->space->pdirs. */
 extern void x86_free_ptab(struct map_group *g);
 
+/* one for interrupts, another for syscalls. the difference is storing of
+ * %eip, which is synthesized on return from syscall and retained for
+ * interrupts.
+ */
+extern void save_user_ex(struct x86_exregs *regs);
+extern void save_user_regs(struct x86_regs *ctx);
+
 
 /* from cpu.c (should be in x86.c or some such, or in an ia32 directory
  * alongside gdt, idt, etc. bits?)
@@ -430,5 +437,21 @@ extern int ioapic_route_legacy_irq(int irqnum, int ioa_vector);
  */
 extern void isr_irq_bottom(struct x86_exregs *regs);
 
+
+/* low-level context switching from context-32.S . */
+
+/* load_context() switches to a kernel thread. it re-/stores only those
+ * registers that're preserved over a SysV x86 function call, and %eax so that
+ * save_kth_context() can return a different value.
+ */
+extern NORETURN void load_context(const struct x86_ctx *load);
+
+/* goes back to userspace while restoring all the registers, as when
+ * pre-empted by interrupt.
+ */
+extern NORETURN void iret_to_ring3(const struct x86_ctx *load, int gs_sel);
+
+/* NOTE: this doesn't fill in TCR_SYSEXIT_E[CD]X! */
+extern NORETURN void sysexit_to_ring3(const struct x86_ctx *userctx, int gs_sel);
 
 #endif

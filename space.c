@@ -803,7 +803,8 @@ bool space_add_ioperm(struct space *sp, L4_Word_t base_port, int size)
 			panic("ran out of segment table entries!");
 		}
 
-		if(get_current_thread()->space == sp) {
+		struct thread *current = get_current_thread();
+		if(likely(current != NULL) && current->space == sp) {
 			/* the fresh segment descriptor has a 0 "busy" flag. so this TSS
 			 * is good to go!
 			 */

@@ -1317,7 +1317,7 @@ bool ipc_recv_half(struct thread *self, void *self_utcb)
 			if(ksystemclock() >= self->ipc->xferto_at) {
 				/* this happens when @self is a xfer pagefault sender and that
 				 * IPC succeeded passively, putting @self in TS_R_RECV,
-				 * causing schedule() to call ipc_recv_half() on it after
+				 * causing the scheduler to call ipc_recv_half() on it after
 				 * xferto_at has passed.
 				 */
 				ipc_xfer_timeout(self->ipc);
@@ -1552,7 +1552,7 @@ L4_MsgTag_t kipc(
 				/* passive send. */
 				thread_sleep(current, current->send_timeout);
 				TRACE("%s: passive send, scheduling\n", __func__);
-				schedule();
+				if(!save_kth_context()) exit_to_scheduler(current);
 			}
 			tag.raw = L4_VREG(utcb, L4_TCR_MR(0));
 			if(L4_IpcFailed(tag)) {
@@ -1575,7 +1575,7 @@ L4_MsgTag_t kipc(
 				 */
 				thread_sleep(current, current->recv_timeout);
 				TRACE("%s: passive receive, scheduling\n", __func__);
-				schedule();
+				if(!save_kth_context()) exit_to_scheduler(current);
 			}
 		}
 		/* TODO: check kth preemption? */
@@ -1598,6 +1598,8 @@ SYSCALL L4_Word_t sys_ipc(
 	void *utcb,
 	L4_Word_t mr0)
 {
+	assert(x86_irq_is_enabled());
+
 	struct thread *current = get_current_thread();
 	TRACE("%s: current=%lu:%lu, to=%#lx, fromspec=%#lx, timeouts=%#lx, mr0=%#lx\n",
 		__func__, TID_THREADNUM(current->id), TID_VERSION(current->id),
@@ -1834,10 +1836,7 @@ SYSCALL L4_Word_t sys_lipc(
 	dest->ctx.r.ebx = mr1;
 	dest->ctx.r.ebp = mr2;
 	dest->ctx.eip = kip_base + lipc_epilog_offset;
-	return_from_exn();
 
-	/* TODO: this calls space_switch(), which is pointless. do a cop_switch()
-	 * instead and the sysexit-or-swap thing that _u2u() has.
-	 */
-	switch_thread_u2u(dest);
+	return_from_exn();
+	exit_to_thread(dest);
 }

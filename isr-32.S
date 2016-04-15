@@ -115,7 +115,7 @@ isr_exn_\name\()_top:
 # it'll also call sys_ipc() from a fast-path.
 #
 # TODO: add a fastpath for sys_threadswitch() as well; it should save the
-# caller's context in the current thread (like thread_save_ctx() would), set
+# caller's context in the current thread (like save_user_ex() would), set
 # TF_SYSCALL, and call sys_threadswitch().
 #
 # TODO: it'd be more efficient to use a per-syscall return path instead of one

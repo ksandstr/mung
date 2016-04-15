@@ -42,7 +42,7 @@ static struct list_head resv_page_list = LIST_HEAD_INIT(resv_page_list);
 static struct page *next_dir_page = NULL;
 
 /* system call & interrupt stack (x86 specific). */
-static void *syscall_stack = NULL;
+void *syscall_stack = NULL;
 
 uint8_t kcp_copy[PAGE_SIZE] PAGE_ALIGN;
 
@@ -548,9 +548,7 @@ void kmain(void *bigp, unsigned int magic)
 
 	cop_init();
 	init_threading();
-	struct thread *first_thread = kth_init(
-		L4_GlobalId(last_int_threadno() + 1, 1));
-	init_sched(first_thread);
+	kth_init();
 
 	int next_user_tno = first_user_threadno();
 	/* sigma0 (and later sigma1), being effectively the root pager, starts out
@@ -583,13 +581,6 @@ void kmain(void *bigp, unsigned int magic)
 	thread_start(s0_thread);
 	if(roottask != NULL) thread_start(roottask);
 
-	first_thread->pri = 0;
-	first_thread->sens_pri = 0;
-	first_thread->total_quantum = ~(uint64_t)0;
-	first_thread->quantum = 10000;
-	first_thread->ts_len = L4_TimePeriod(10000);
-	sq_update_thread(first_thread);
-
 	printf("enabling timer interrupt\n");
 	x86_irq_disable();
 	setup_timer_ch0();
@@ -597,8 +588,6 @@ void kmain(void *bigp, unsigned int magic)
 	else (*global_pic.unmask_irq)(0, false, false);	/* act-low, edge */
 	x86_irq_enable();
 
-	printf("entering kernel scheduler\n");
-	scheduler_loop(first_thread);
-
-	panic("kmain() returned from halt-schedule loop? what.");
+	printf("entering scheduler\n");
+	exit_to_scheduler(NULL);
 }

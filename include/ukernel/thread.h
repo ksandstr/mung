@@ -37,6 +37,7 @@ typedef L4_Word_t thread_id;
 #define TF_SYSCALL	0x10 /* may do fast exit (for Ipc, Lipc, ThreadSwitch) */
 #define TF_REDIR	0x20 /* has ever been made redirector of any space */
 #define TF_REDIR_WAIT 0x40 /* in SEND_WAIT but redirector blocked */
+#define TF_PREEMPT	0x80 /* sends a preempt exception at reschedule */
 
 /* thread states (<struct thread>.status); see also sched_status_str() */
 #define TS_STOPPED 0
@@ -305,9 +306,8 @@ extern bool post_exn_ok(struct thread *t, struct thread *sender);
 /* complicated accessors */
 extern PURE void *thread_get_utcb(struct thread *t);
 extern PURE L4_ThreadId_t get_local_id(struct thread *t);
-extern void thread_save_ctx(struct thread *t, const struct x86_exregs *regs);
 
-/* compares version bits for global IDs, resolves locak IDs in ref_space */
+/* compares version bits for global IDs, resolves local IDs in ref_space */
 extern struct thread *resolve_tid_spec(
 	struct space *ref_space,
 	L4_ThreadId_t tid);
@@ -330,31 +330,5 @@ static inline struct thread *get_tcr_thread(
 /* for htable */
 extern size_t hash_thread_by_id(const void *threadptr, void *dataptr);
 
-
-/* low-level context switching from context-32.S etc. */
-
-/* swap_context() is the soft yield. it re-/stores only those registers
- * that're preserved over a SysV x86 function call.
- */
-extern void swap_context(
-	struct x86_ctx *store,
-	const struct x86_ctx *load);
-
-extern void swap_to_ring3(
-	struct x86_ctx *store,
-	const struct x86_ctx *load,
-	int gs_selector);
-
-/* NOTE: the sysexit_*() family don't fill in TCR_SYSEXIT_E[CD]X! */
-extern void sysexit_from_kth(
-	struct x86_ctx *store,
-	const struct x86_ctx *load,
-	int gs_selector);
-
-extern NORETURN void sysexit_to_ring3(
-	const struct x86_ctx *userctx,
-	int gs_selector);
-
-extern NORETURN void iret_to_scheduler(const struct x86_ctx *sched_ctx);
 
 #endif

@@ -59,7 +59,7 @@ static short num_ints = 0, num_async_words = 0;
 static struct interrupt *int_table = NULL;
 static L4_Word_t *int_async_table = NULL;	/* bitfield, 0..num_ints-1 */
 
-/* control variables used by scheduler_loop() etc. */
+/* control variables used by schedule() etc. */
 volatile bool kernel_irq_ok = false, kernel_irq_deferred = false;
 
 struct htable thread_hash = HTABLE_INITIALIZER(thread_hash,
@@ -224,6 +224,8 @@ static void thread_destroy(struct thread *t)
 	assert(t->status == TS_DEAD || t->status == TS_STOPPED);
 	assert(hook_empty(&t->post_exn_call));
 	assert(!IS_KERNEL_THREAD(t));
+
+	if(unlikely(t == get_current_thread())) leaving_thread(t);
 
 	struct space *sp = t->space;
 	if(t->utcb_ptr_seg != 0) {
@@ -526,28 +528,6 @@ void *thread_get_utcb(struct thread *t)
 	 * UTCB_SIZE / 2, which it properly is.
 	 */
 	return p->vm_addr + offset * UTCB_SIZE + 256;
-}
-
-
-void thread_save_ctx(struct thread *t, const struct x86_exregs *regs)
-{
-	size_t flen = x86_frame_len(regs);
-	t->ctx.r = regs->r;
-	t->ctx.r.esp = regs->esp;
-	t->ctx.eip = regs->eip;
-	t->ctx.eflags = regs->eflags;
-	if(flen < sizeof(*regs)) {
-		assert(IS_KERNEL_THREAD(t));
-		t->ctx.r.esp = (L4_Word_t)regs + flen;
-		TRACE("%s: saved kernel thread %lu:%lu: eip %#lx, esp %#lx\n", __func__,
-			TID_THREADNUM(t->id), TID_VERSION(t->id),
-			t->ctx.eip, t->ctx.r.esp);
-	} else {
-		assert(!IS_KERNEL_THREAD(t));
-		TRACE("%s: saved user thread %lu:%lu: eip %#lx, esp %#lx\n", __func__,
-			TID_THREADNUM(t->id), TID_VERSION(t->id),
-			t->ctx.eip, t->ctx.r.esp);
-	}
 }
 
 
@@ -1357,7 +1337,7 @@ end:
 dead:
 	if(unlikely(dest == current)) {
 		assert(check_thread_module(0));
-		return_from_dead();
+		exit_to_scheduler(NULL);
 	}
 	result = 1;
 	goto end;

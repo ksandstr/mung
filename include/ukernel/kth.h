@@ -1,21 +1,22 @@
 
+/* FIXME: this is so tiny that it could just as well be merged into
+ * <ukernel/sched.h>.
+ */
+
 #ifndef SEEN_UKERNEL_KTH_H
 #define SEEN_UKERNEL_KTH_H
 
 #include <stdbool.h>
 
-#include <l4/types.h>
-
-#include <ukernel/sched.h>
 #include <ukernel/thread.h>
 
 
 struct thread;
 
-extern struct thread *kth_init(L4_ThreadId_t boot_tid);
+extern void kth_init(void);
 extern struct thread *kth_start(void (*function)(void *), void *parameter);
 
-/* returns as schedule() */
+/* returns true if switched, false if not. */
 extern bool kth_yield(void);
 
 

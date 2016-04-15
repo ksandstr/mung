@@ -32,6 +32,8 @@ struct thread;
 extern uint64_t global_timer_count;		/* timer ticks */
 extern uint64_t *systemclock_p;			/* microseconds */
 
+extern void *syscall_stack;
+
 extern void NORETURN panic(const char *message);
 extern void NORETURN __not_reached(
 	const char *file,

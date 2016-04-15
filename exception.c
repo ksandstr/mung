@@ -304,7 +304,8 @@ static void glue_ipc(struct x86_regs *regs)
 static void glue_threadswitch(struct x86_regs *regs)
 {
 	struct thread *current = get_current_thread();
-	thread_save_ctx(current, container_of(regs, struct x86_exregs, r));
+	/* NOTE: somewhat magical! */
+	save_user_ex(container_of(regs, struct x86_exregs, r));
 
 	L4_ThreadId_t target = { .raw = regs->eax };
 	current->flags |= TF_SYSCALL;
@@ -594,7 +595,7 @@ static bool kdb_op(struct x86_exregs *regs)
 		} else {
 			printf("#KDB (eip %#lx): [%#lx] %s\n", regs->eip, strptr, strbuf);
 			printf(" ... (not implemented, halting thread)\n");
-			thread_save_ctx(current, regs);
+			save_user_ex(regs);
 			thread_halt(current);
 			assert(current->status == TS_STOPPED);
 			return_to_scheduler();
@@ -640,7 +641,7 @@ fail:
 static void handle_io_fault(struct thread *current, struct x86_exregs *regs)
 {
 	assert(!IS_KERNEL_THREAD(current));
-	thread_save_ctx(current, regs);
+	save_user_ex(regs);
 
 	uint8_t insn_buf[16], *insn = insn_buf;
 	size_t n = space_memcpy_from(current->space, insn_buf, regs->eip, 16);
@@ -885,7 +886,7 @@ void isr_exn_gp_bottom(struct x86_exregs *regs)
 	} else if(regs->error == 3 * 8 + 2 && kdb_op(regs)) {
 		/* INT3 via #GP, was valid KDB operation; return to userspace */
 	} else {
-		thread_save_ctx(current, regs);
+		save_user_ex(regs);
 		return_from_gp(current, regs);
 	}
 }
@@ -896,10 +897,14 @@ void isr_exn_pf_bottom(struct x86_exregs *regs)
 	L4_Word_t fault_addr;
 	asm volatile ("movl %%cr2, %0": "=r" (fault_addr));
 
+	/* current will be NULL in ipc_resume(), which has catch_pf() in its
+	 * descending call graph.
+	 */
 	struct thread *current = get_current_thread();
 
 	if(unlikely(!CHECK_FLAG(regs->error, 4)) && catch_pf_ok) {
 		if(likely(fault_addr < KERNEL_SEG_START)
+			&& current != NULL
 			&& space_prefill_upper(current->space, fault_addr))
 		{
 			/* lazy-mode kernel pf repair */
@@ -947,7 +952,7 @@ void isr_exn_pf_bottom(struct x86_exregs *regs)
 	if(last_fault == fault_addr && ++repeat_count == 10) {
 		printf("WARNING: faulted many times on faddr=%#lx, fip=%#lx\n",
 			fault_addr, regs->eip);
-		thread_save_ctx(current, regs);
+		save_user_ex(regs);
 		thread_halt(current);
 		assert(current->status == TS_STOPPED);
 		return_to_scheduler();
@@ -988,7 +993,7 @@ void isr_exn_pf_bottom(struct x86_exregs *regs)
 
 	pt_iter_destroy(&it);
 
-	thread_save_ctx(current, regs);
+	save_user_ex(regs);
 	void *utcb = thread_get_utcb(current);
 	struct thread *pager = thread_get_pager(current, utcb);
 	if(unlikely(pager == NULL)) {

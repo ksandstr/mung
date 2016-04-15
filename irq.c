@@ -88,42 +88,28 @@ void isr_irq0_bottom(struct x86_exregs *regs)
 	if(now >= preempt_timer_count) {
 		preempt_timer_count = ~(uint64_t)0;
 		if(x86_frame_len(regs) < sizeof(*regs)) {
-			/* no preemption in kernel code. (quite yet. kernel threads could
-			 * be preempted as any other, but system calls with the exception
-			 * of string transfers are uninterruptable.)
+			/* no preemption in kernel code.
+			 *
+			 * TODO: set kernel_preempt_pending & cross fingers.
 			 */
 		} else {
-			/* (this segment seems long for a timer interrupt. but then, a
-			 * timer interrupt occurs at the start of each tick, which was
-			 * just observed.)
-			 */
+			/* TODO: move this into a function. the indent is too deep. */
 			struct thread *current = get_current_thread();
 			assert(current->status == TS_RUNNING);
 			bool preempt = true;
 			if(preempt_task_pri <= (int)current->sens_pri) {
 				L4_Word_t *ctl;
 				if(preempt_task_pri >= 0
-					&& !preempt_delayed
+					&& !CHECK_FLAG(preempt_status, PS_DELAYED)
 					&& current->max_delay > 0
 					&& (ctl = &L4_VREG(thread_get_utcb(current), L4_TCR_COP_PREEMPT),
 						CHECK_FLAG(*ctl, 0x40)))
 				{
 					/* delay preemption. */
-					*ctl |= 0x80;	/* set I-flag. */
+					*ctl |= 0x80;	/* set "I" */
 					preempt = false;
-					preempt_delayed = true;
+					preempt_status |= PS_DELAYED;
 
-					/* FIXME: this doesn't account for a silent preemption
-					 * during the delay time. to determine whether that'll
-					 * occur, the scheduling queue should be examined.
-					 * (the long scheduler path could be avoided by storing
-					 * whether the delay time is simple in a variable
-					 * alongside preempt_task_pri. if it is, do as follows. if
-					 * not, consult the scheduler.)
-					 *
-					 * to be fair, that case is not covered by unit tests
-					 * right now either.
-					 */
 					uint32_t q_spent = (now - task_switch_time) * 1000, q_rem;
 					if(current->quantum <= q_spent) q_rem = 0;
 					else q_rem = current->quantum - q_spent;
@@ -131,16 +117,22 @@ void isr_irq0_bottom(struct x86_exregs *regs)
 						+ MIN(uint32_t, q_rem, current->max_delay);
 					preempt_timer_count = (pe_at + 999) / 1000;
 				} else {
-					*scheduler_mr1 = current->id;
+					/* indicate preemption to scheduler. */
+					preempt_status |= PS_PENDING;
 				}
 			} else {
-				/* silent preemption. */
-				*scheduler_mr1 = L4_nilthread.raw;
+				/* silent preemption. the current thread's PreemptFlags TCR
+				 * may still indicate that a pre-emption was delayed, but
+				 * that won't influence kernel behaviour.
+				 *
+				 * TODO: test this.
+				 */
+				preempt_status = 0;
 			}
 
 			if(preempt) {
 				x86_irq_enable();
-				thread_save_ctx(current, regs);
+				save_user_ex(regs);
 				current->status = TS_READY;
 				current->wakeup_time = 0;
 				sq_update_thread(current);

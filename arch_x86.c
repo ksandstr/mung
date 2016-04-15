@@ -11,6 +11,7 @@
 
 #include <ukernel/space.h>
 #include <ukernel/mapdb.h>
+#include <ukernel/sched.h>
 #include <ukernel/x86.h>
 
 
@@ -112,4 +113,31 @@ bool is_stack_safe(size_t margin)
 	uintptr_t e = (uintptr_t)&e,
 		low = e & ~((uintptr_t)KERNEL_STACK_SIZE - 1);
 	return e >= low + margin;
+}
+
+
+void save_user_ex(struct x86_exregs *regs)
+{
+	struct thread *c = get_current_thread();
+	assert(!IS_KERNEL_THREAD(c));
+	c->ctx.r = regs->r;
+	c->ctx.r.esp = regs->esp;
+	c->ctx.eip = regs->eip;
+	c->ctx.eflags = regs->eflags;
+	assert(!CHECK_FLAG(regs->eflags, 1 << 14));	/* NT */
+	assert(CHECK_FLAG(regs->eflags, 1 << 9));	/* IF */
+}
+
+
+void save_user_regs(struct x86_regs *regs)
+{
+	struct thread *c = get_current_thread();
+	assert(!IS_KERNEL_THREAD(c));
+	c->ctx.r.ebx = regs->ebx;
+	c->ctx.r.esi = regs->esi;
+	c->ctx.r.edi = regs->edi;
+	c->ctx.r.ebp = regs->ebp;
+	c->ctx.r.esp = regs->esp;
+	assert(!CHECK_FLAG(c->ctx.eflags, 1 << 14));	/* NT */
+	assert(CHECK_FLAG(c->ctx.eflags, 1 << 9));		/* IF */
 }
