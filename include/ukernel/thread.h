@@ -41,7 +41,7 @@ typedef L4_Word_t thread_id;
 
 /* thread states (<struct thread>.status); see also sched_status_str() */
 #define TS_STOPPED 0
-#define TS_DEAD 1		/* (kthread only) thread waits for pruning */
+#define TS__UNUSED 1	/* unused, reserved for asm reasons */
 #define TS_RUNNING 2
 #define TS_READY 3		/* ready to execute */
 #define TS_R_RECV 4		/* (user only) ready to do IPC receive phase */
@@ -55,15 +55,6 @@ typedef L4_Word_t thread_id;
 #define IS_IPC_WAIT(st) (st == TS_SEND_WAIT || st == TS_RECV_WAIT)
 #define IS_IPC(st) (IS_IPC_WAIT(st) || st == TS_R_RECV || st == TS_XFER)
 #define IS_SCHED(thread) ((thread)->status >= TS_RUNNING)
-
-/* (requires inclusion of <ukernel/space.h>) */
-#define IS_KERNEL_THREAD(thread) ((thread)->space == kernel_space)
-
-/* there's need for a few kernel threads: the boot (scheduler) thread, the
- * sigma0 pager, and possibly the ones used by the kernel's self-tests. a
- * larger ID-space reservation won't hurt, however, so 256 it is.
- */
-#define NUM_KERNEL_THREADS 256
 
 /* allocation of implementation-defined UTCB fields.
  * one is used for %gs:0, and two more to return ECX and EDX via SYSEXIT and
@@ -152,23 +143,17 @@ struct thread
 	L4_ThreadId_t scheduler;
 
 	union {
-		struct page *stack_page;	/* kth stack page */
-
 		/* key into `redir_wait' in ipc.c. implies TF_REDIR_WAIT when not
 		 * nilthread, but may be nilthread even when a thread is in SEND_WAIT
 		 * with REDIR_WAIT set. when not nilthread, thread is present in
 		 * `redir_wait'.
-		 *
-		 * non-kth only. (enforced by forbidding SpaceControl on
-		 * kernel_space.)
 		 */
 		L4_ThreadId_t waited_redir;
 	} u1;
 
 	union {
 		L4_ThreadId_t pager;		/* before activation */
-		struct thread *partner;		/* non-kth after activation */
-		struct list_node dead_link;	/* kth after termination */
+		struct thread *partner;		/* after activation */
 	} u0;
 
 	/* context of the typed IPC state machine. emitted by do_typed_transfer()

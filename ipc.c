@@ -98,7 +98,6 @@ inline void set_ipc_return_regs(
 
 static inline void set_ipc_return_thread(struct thread *t, void *utcb)
 {
-	assert(!IS_KERNEL_THREAD(t));
 	set_ipc_return_regs(&t->ctx.r, t, utcb);
 }
 
@@ -199,12 +198,6 @@ bool ipc_resume(struct thread *t)
 	TRACE("%s: called on %lu:%lu -> %lu:%lu\n",
 		__func__, TID_THREADNUM(source->id), TID_VERSION(source->id),
 		TID_THREADNUM(dest->id), TID_VERSION(dest->id));
-
-	/* resumption applies only to string transfers. kernel threads are
-	 * forbidden from doing string transfers.
-	 */
-	assert(!IS_KERNEL_THREAD(dest));
-	assert(!IS_KERNEL_THREAD(source));
 
 	void *s_utcb = thread_get_utcb(st->from),
 		*d_utcb = thread_get_utcb(st->to);
@@ -734,9 +727,7 @@ static bool ipc_send_half(
 					dest, saved_dest).raw;
 			}
 			dest->ipc_from = tid_return(dest, sender);
-			if(likely(!IS_KERNEL_THREAD(dest))) {
-				set_ipc_return_thread(dest, dest_utcb);
-			}
+			set_ipc_return_thread(dest, dest_utcb);
 			thread_wake(dest);
 		} else {
 			assert(dest->ipc != NULL
@@ -867,7 +858,6 @@ void *ipc_user(
 		|| (dest->wakeup_time != ~(uint64_t)0
 			&& ksystemclock() >= dest->wakeup_time)
 		|| unlikely(tag.X.flags != 0 || tag.X.t != 0)
-		|| unlikely(IS_KERNEL_THREAD(dest))
 		|| unlikely(!hook_empty(&dest->post_exn_call)))
 	{
 		/* any flags enabled (weird for an in-kernel message so not handled
@@ -1470,27 +1460,20 @@ bool ipc_recv_half(struct thread *self, void *self_utcb)
 		}
 		kmem_cache_free(ipc_wait_slab, w);
 
-		if(unlikely(IS_KERNEL_THREAD(from))) {
-			/* kernel threads do the send/receive phases as control flow. */
+		/* userspace IPC state transition to the receive phase. */
+		if(L4_IsNilThread(from->ipc_from)) {
+			/* no receive phase. */
 			thread_wake(from);
-		} else {
-			/* userspace threads operate via a state machine. */
-			if(L4_IsNilThread(from->ipc_from)) {
-				/* no receive phase. */
-				thread_wake(from);
-				if(!post_exn_ok(from, NULL)) {	/* clear total_quantum RPC */
-					/* only set regs in syscall-generated IPC */
-					set_ipc_return_thread(from, from_utcb);
-				}
-			} else {
-				/* (the only special thread state transition in this
-				 * module.)
-				 */
-				from->status = TS_R_RECV;
-				from->wakeup_time = wakeup_at(from->recv_timeout);
-				sq_update_thread(from);
-				might_preempt(from);
+			if(!post_exn_ok(from, NULL)) {	/* clear total_quantum RPC */
+				/* only set regs in syscall-generated IPC */
+				set_ipc_return_thread(from, from_utcb);
 			}
+		} else {
+			/* go to a deferred receive half */
+			from->status = TS_R_RECV;
+			from->wakeup_time = wakeup_at(from->recv_timeout);
+			sq_update_thread(from);
+			might_preempt(from);
 		}
 		if(!post_exn_ok(self, from)) {
 			/* post-IPC exception hooks may start another IPC operation right
@@ -1511,83 +1494,6 @@ err_no_partner:
 	assert(self->status == TS_RUNNING);
 	self->status = TS_READY;	/* failed active receive -> READY. */
 	return false;
-}
-
-
-/* IPC in a kernel thread. string transfers are forbidden, enforced by
- * checking that BR0.s == 0 .
- *
- * TODO: move this into kth.c; it uses a kernel stack instead of the L4.X2 IPC
- * state machine.
- */
-L4_MsgTag_t kipc(
-	L4_ThreadId_t to,
-	L4_ThreadId_t *from_p,
-	L4_Word_t timeouts)
-{
-	struct thread *current = get_current_thread();
-	void *utcb = thread_get_utcb(current);
-	assert(!CHECK_FLAG(L4_VREG(utcb, L4_TCR_BR(0)), 0x2));
-
-	TRACE("%s: entered in %lu:%lu (to %lu:%lu)\n", __func__,
-		TID_THREADNUM(current->id), TID_VERSION(current->id),
-		TID_THREADNUM(to.raw), TID_VERSION(to.raw));
-
-	current->ipc_from = *from_p;
-	current->ipc_to = to;
-	current->send_timeout.raw = timeouts >> 16;
-	current->recv_timeout.raw = timeouts & 0xffff;
-
-	L4_MsgTag_t tag = { .raw = 0 };		/* "no error" */
-	if(likely(!L4_IsNilThread(to))) {
-		struct thread *dest = resolve_tid_spec(current->space, to);
-		if(dest == NULL) {
-			set_ipc_error(utcb, 4);		/* send: no partner */
-			tag.raw = L4_VREG(utcb, L4_TCR_MR(0));
-			return tag;
-		}
-
-		if(!ipc_send_half(current, utcb, &dest)) {
-			if(current->status == TS_SEND_WAIT) {
-				/* passive send. */
-				thread_sleep(current, current->send_timeout);
-				TRACE("%s: passive send, scheduling\n", __func__);
-				if(!save_kth_context()) exit_to_scheduler(current);
-			}
-			tag.raw = L4_VREG(utcb, L4_TCR_MR(0));
-			if(L4_IpcFailed(tag)) {
-				assert(current->status == TS_RUNNING);
-				TRACE("%s: error %#lx\n",
-					__func__, L4_VREG(utcb, L4_TCR_ERRORCODE));
-				return tag;
-			}
-		}
-	}
-	/* TODO: check kth preemption? */
-	assert(current->status != TS_XFER);
-
-	if(likely(!L4_IsNilThread(current->ipc_from))) {
-		if(!ipc_recv_half(current, utcb)) {
-			if(current->status == TS_RECV_WAIT) {
-				/* passive receive.
-				 *
-				 * TODO: implement switching right into the other thread.
-				 */
-				thread_sleep(current, current->recv_timeout);
-				TRACE("%s: passive receive, scheduling\n", __func__);
-				if(!save_kth_context()) exit_to_scheduler(current);
-			}
-		}
-		/* TODO: check kth preemption? */
-		tag.raw = L4_VREG(utcb, L4_TCR_MR(0));
-		if(likely(L4_IpcSucceeded(tag))) *from_p = current->ipc_from;
-	}
-	assert(current->status != TS_XFER);
-	assert(!IS_READY(current->status));
-
-	TRACE("%s: returning\n", __func__);
-
-	return tag;
 }
 
 
@@ -1740,7 +1646,6 @@ SYSCALL L4_Word_t sys_ipc(
 
 	/* successful exit. */
 	assert(current->status == TS_RUNNING);
-	assert(!IS_KERNEL_THREAD(current));
 	return current->ipc_from.raw;
 
 err_exit:

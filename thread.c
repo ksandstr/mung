@@ -130,7 +130,7 @@ static void restore_saved_regs(
 	void *param, uintptr_t code, void *priv)
 {
 	struct thread *t = container_of(hook, struct thread, post_exn_call);
-	assert(t->utcb_pos >= 0 && !IS_KERNEL_THREAD(t));
+	assert(t->utcb_pos >= 0);
 	void *utcb = thread_get_utcb(t);
 
 	struct saved_regs *sr = priv;
@@ -147,7 +147,7 @@ static void restore_saved_regs(
 void save_ipc_regs(struct thread *t, void *utcb, int n_regs)
 {
 	assert(n_regs >= 0 && n_regs <= NUM_SAVED_REGS);
-	assert(t->utcb_pos >= 0 && !IS_KERNEL_THREAD(t));
+	assert(t->utcb_pos >= 0);
 
 	struct saved_regs *sr = kmem_cache_alloc(saved_regs_slab);
 	sr->va_sender.raw = L4_VREG(utcb, L4_TCR_VA_SENDER);
@@ -221,9 +221,8 @@ bool thread_ctor(struct thread *t, thread_id tid)
 
 static void thread_destroy(struct thread *t)
 {
-	assert(t->status == TS_DEAD || t->status == TS_STOPPED);
+	assert(t->status == TS_STOPPED);
 	assert(hook_empty(&t->post_exn_call));
-	assert(!IS_KERNEL_THREAD(t));
 
 	if(unlikely(t == get_current_thread())) leaving_thread(t);
 
@@ -247,7 +246,6 @@ static void thread_destroy(struct thread *t)
 
 void thread_set_spip(struct thread *t, L4_Word_t sp, L4_Word_t ip)
 {
-	assert(!IS_KERNEL_THREAD(t));
 	assert(t->status != TS_RUNNING);
 
 	t->ctx.r.esp = sp;
@@ -360,13 +358,10 @@ void thread_start(struct thread *t)
 
 void thread_halt(struct thread *t)
 {
-	assert(!IS_KERNEL_THREAD(t));
-
 	TRACE("%s: called for %lu:%lu from %p\n", __func__,
 		TID_THREADNUM(t->id), TID_VERSION(t->id), __builtin_return_address(0));
 
 	assert(!CHECK_FLAG_ANY(t->flags, TF_HALT | TF_PRE_RECV));
-	assert(t->status != TS_DEAD);
 
 	t->flags |= TF_HALT;
 	if(t->status == TS_READY

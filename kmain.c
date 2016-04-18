@@ -23,7 +23,6 @@
 #include <ukernel/timer.h>
 #include <ukernel/ipc.h>
 #include <ukernel/thread.h>
-#include <ukernel/kth.h>
 #include <ukernel/sched.h>
 #include <ukernel/mapdb.h>
 #include <ukernel/memdesc.h>
@@ -548,7 +547,6 @@ void kmain(void *bigp, unsigned int magic)
 
 	cop_init();
 	init_threading();
-	kth_init();
 
 	int next_user_tno = first_user_threadno();
 	/* sigma0 (and later sigma1), being effectively the root pager, starts out

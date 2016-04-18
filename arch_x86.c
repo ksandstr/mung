@@ -119,7 +119,6 @@ bool is_stack_safe(size_t margin)
 void save_user_ex(struct x86_exregs *regs)
 {
 	struct thread *c = get_current_thread();
-	assert(!IS_KERNEL_THREAD(c));
 	c->ctx.r = regs->r;
 	c->ctx.r.esp = regs->esp;
 	c->ctx.eip = regs->eip;
@@ -132,7 +131,6 @@ void save_user_ex(struct x86_exregs *regs)
 void save_user_regs(struct x86_regs *regs)
 {
 	struct thread *c = get_current_thread();
-	assert(!IS_KERNEL_THREAD(c));
 	c->ctx.r.ebx = regs->ebx;
 	c->ctx.r.esi = regs->esi;
 	c->ctx.r.edi = regs->edi;

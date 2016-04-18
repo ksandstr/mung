@@ -67,14 +67,9 @@ extern void cancel_ipc_to(L4_ThreadId_t dest_tid, L4_Word_t errorcode);
 extern void cancel_ipc_from(struct thread *t);
 
 
-/* accessors to `redir_wait'. */
+/* accessor of `redir_wait'. removes @t from it. */
 extern void remove_redir_wait(struct thread *t);
 
-
-extern L4_MsgTag_t kipc(
-	L4_ThreadId_t to,
-	L4_ThreadId_t *from_p,
-	L4_Word_t timeouts);
 
 /* the full L4.X2 IPC system call. registers and everything. */
 extern SYSCALL L4_Word_t sys_ipc(

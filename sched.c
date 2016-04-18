@@ -118,7 +118,7 @@ const char *sched_status_str(struct thread *t)
 	int status = t->status;
 	static const char *table[] = {
 		[TS_STOPPED] = "stopped",
-		[TS_DEAD] = "dead",
+		[TS__UNUSED] = "***unused***",
 		[TS_RUNNING] = "running",
 		[TS_READY] = "ready",
 		[TS_R_RECV] = "r_recv",
@@ -133,7 +133,7 @@ const char *sched_status_str(struct thread *t)
 
 void sq_insert_thread(struct thread *t)
 {
-	assert(t->status != TS_STOPPED && t->status != TS_DEAD);
+	assert(t->status != TS_STOPPED);
 
 	struct thread *dupe = sq_insert_thread_helper(&sched_tree, t);
 	BUG_ON(dupe != NULL, "thread %lu:%lu already in tree",
@@ -569,7 +569,6 @@ static struct thread *schedule_next_thread(bool *saw_zero_p)
 			sched_status_str(cand));
 #endif
 
-		assert(cand->status != TS_DEAD);
 		assert(cand->status != TS_STOPPED);
 
 		if(cand->status == TS_SEND_WAIT || cand->status == TS_RECV_WAIT) {
@@ -628,9 +627,6 @@ NORETURN void exit_to_thread(struct thread *next)
 	space_switch(next->space);
 	cop_switch(next);
 
-	/* zomg optimized kthreads */
-	if(unlikely(IS_KERNEL_THREAD(next))) load_context(&next->ctx);
-
 	int gs_sel = next->utcb_ptr_seg << 3 | 3;
 	if(USE_SYSENTER && CHECK_FLAG(next->flags, TF_SYSCALL)) {
 		/* speedy gonzales */
@@ -665,11 +661,6 @@ static void maybe_exit_to_preempt(struct thread *current)
 		TID_THREADNUM(current->id), TID_VERSION(current->id),
 		TID_THREADNUM(next->id), TID_VERSION(next->id));
 
-	if(unlikely(IS_KERNEL_THREAD(next))) {
-		/* preemption of kernel threads is icky, so we'll punt. */
-		return;
-	}
-
 	if(current == next) {
 		/* the preemptor would've been switched to anyway (e.g. because of IPC
 		 * scheduling). skip preemption and allow return to userspace either
@@ -683,7 +674,6 @@ static void maybe_exit_to_preempt(struct thread *current)
 		 * unacceptable to run ipc_recv_half() from an interrupt-disabled
 		 * section, e.g. after return_from_exn().
 		 */
-		assert(!IS_KERNEL_THREAD(next));
 		if(current == get_current_thread()) leaving_thread(current);
 		exit_to_scheduler(current);
 	}
@@ -774,8 +764,7 @@ again:
 	if(kernel_preempt_pending) {
 		if(likely(prev != NULL) && prev->status == TS_RUNNING) {
 			maybe_exit_to_preempt(prev);
-		}
-		else {
+		} else {
 			/* pre-emption at boot, pre-emption of a dead thread, or one
 			 * that's sleeping.
 			 */
@@ -833,7 +822,6 @@ again:
 
 	if(next->status == TS_XFER) {
 		TRACE("%s: resume!\n", __func__);
-		assert(!IS_KERNEL_THREAD(next));
 		bool done = ipc_resume(next);
 		if(!done || !IS_READY(next->status)) goto again;
 	}
@@ -843,7 +831,6 @@ again:
 	if(next->status == TS_R_RECV) {
 		TRACE("%s: receive half in next=%lu:%lu!\n", __func__,
 			TID_THREADNUM(next->id), TID_VERSION(next->id));
-		assert(!IS_KERNEL_THREAD(next));
 		assert(!L4_IsNilThread(next->ipc_from));
 		ipc_recv_half(next, thread_get_utcb(next));
 		if(next->status != TS_READY) {
@@ -857,17 +844,10 @@ again:
 		}
 	}
 
-	TRACE("%s: %c-%c: %lu:%lu -> %lu:%lu\n", __func__,
-		prev == NULL ? '0' : (IS_KERNEL_THREAD(prev) ? 'K' : 'U'),
-		IS_KERNEL_THREAD(next) ? 'K' : 'U',
+	TRACE("%s: %lu:%lu -> %lu:%lu\n", __func__,
 		prev == NULL ? 0 : TID_THREADNUM(prev->id),
 		prev == NULL ? 0 : TID_VERSION(prev->id),
 		TID_THREADNUM(next->id), TID_VERSION(next->id));
-
-	if(prev != NULL && unlikely(IS_KERNEL_THREAD(prev))) {
-		/* return value from save_kth_context() */
-		prev->ctx.r.eax = prev != next ? 2 : 1;
-	}
 
 	if(kernel_irq_deferred) int_latent();
 	x86_irq_disable();
@@ -1086,7 +1066,6 @@ SYSCALL L4_Word_t sys_schedule(
 		result = L4_SCHEDRESULT_DEAD;
 		goto end_noupdate;
 	}
-	if(IS_KERNEL_THREAD(dest)) goto inv_param;
 
 	/* access check */
 	struct thread *sched_thread = resolve_tid_spec(
@@ -1132,7 +1111,7 @@ SYSCALL L4_Word_t sys_schedule(
 	} else {
 		static const uint8_t status_to_schedresult[] = {
 			[TS_STOPPED] = L4_SCHEDRESULT_INACTIVE,
-			[TS_DEAD] = L4_SCHEDRESULT_DEAD,	/* kth only */
+			[TS__UNUSED] = L4_SCHEDRESULT_DEAD,	/* undefined */
 			[TS_RUNNING] = L4_SCHEDRESULT_RUNNING,
 			[TS_READY] = L4_SCHEDRESULT_RUNNING,
 			[TS_SEND_WAIT] = L4_SCHEDRESULT_PENDING_SEND,
@@ -1147,7 +1126,6 @@ SYSCALL L4_Word_t sys_schedule(
 			result = status_to_schedresult[s];
 			assert(result > 0);
 		}
-		assert(IS_KERNEL_THREAD(dest) || result != L4_SCHEDRESULT_DEAD);
 	}
 
 	/* timectl */

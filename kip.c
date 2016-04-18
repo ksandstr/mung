@@ -369,13 +369,13 @@ void make_kip(
 	kip->ClockInfo.raw = 0;
 	kip->ClockInfo.X.ReadPrecision = L4_TimePeriod(1000).raw;
 	kip->ClockInfo.X.SchedulePrecision = sched_prec.raw;
-	/* ThreadInfo: SystemBase max_irq + 1, UserBase = SystemBase + kth_max,
-	 * full bits in threadno
+	/* ThreadInfo: SystemBase max_irq + 1, UserBase = SystemBase + 1, full
+	 * bits in threadno
 	 */
 	kip->ThreadInfo.raw = 0;
 	kip->ThreadInfo.X.t = 18;
 	kip->ThreadInfo.X.SystemBase = max_irq + 1;
-	kip->ThreadInfo.X.UserBase = max_irq + 1 + NUM_KERNEL_THREADS;
+	kip->ThreadInfo.X.UserBase = kip->ThreadInfo.X.SystemBase + 1;
 	/* PageInfo: page-size mask for only 4k pages (for now);
 	 *           rw independent (execute implied by read).
 	 */

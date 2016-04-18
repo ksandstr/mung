@@ -440,12 +440,6 @@ extern void isr_irq_bottom(struct x86_exregs *regs);
 
 /* low-level context switching from context-32.S . */
 
-/* load_context() switches to a kernel thread. it re-/stores only those
- * registers that're preserved over a SysV x86 function call, and %eax so that
- * save_kth_context() can return a different value.
- */
-extern NORETURN void load_context(const struct x86_ctx *load);
-
 /* goes back to userspace while restoring all the registers, as when
  * pre-empted by interrupt.
  */

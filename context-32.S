@@ -1,48 +1,6 @@
 #include <ukernel/gdt.h>
 
 
-/* L4_Word_t save_kth_context(void) */
-	.global save_kth_context
-	.type save_kth_context, @function
-	.align 16,0
-save_kth_context:
-	movl current_thread, %eax	# context at +8
-	movl (%esp), %edx	# return address
-	movl %edx, 40(%eax)	# eip
-	pushf
-	popl 44(%eax)		# eflags
-	movl %edi, 8(%eax)
-	movl %esi, 12(%eax)
-	movl %ebp, 16(%eax)
-	movl %esp, 20(%eax)
-	movl %ebx, 24(%eax)
-	movl $1, 36(%eax)
-	xorl %eax, %eax
-	ret
-
-
-/* void load_context(const struct x86_ctx *ctx) */
-	.global load_context
-	.type load_context, @function
-
-	.align 16,0
-load_context:
-	movl 4(%esp), %eax
-	movl 12(%eax), %esp
-	addl $4, %esp
-	movl (%eax), %edi
-	movl 4(%eax), %esi
-	movl 8(%eax), %ebp
-	movl 16(%eax), %ebx
-	/* restore flags just 'cause */
-	pushl 36(%eax)
-	popf
-	/* bombs away! */
-	movl 32(%eax), %ecx
-	movl 28(%eax), %eax
-	jmp *%ecx
-
-
 /* void iret_to_ring3(struct x86_ctx *ctx, int gs_sel) */
 	.global iret_to_ring3
 	.type iret_to_ring3, @function

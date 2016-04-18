@@ -30,13 +30,6 @@ extern bool kernel_preempt_pending;
 extern struct thread *kernel_preempt_to;
 
 
-/* saves the currently-executing kthread context in preparation of exit to
- * scheduler. returns 0 on the first call (that which precedes an exit), and 1
- * if the scheduler didn't pick a different thread, or 2 if it did.
- */
-extern L4_Word_t save_kth_context(void);
-
-
 /* the "return_to_*" family leaves the currently-running thread, exits the
  * current interrupt or exception context, and resumes execution in the x86
  * frame indicated. "current_thread" is updated.
@@ -83,7 +76,7 @@ static inline struct thread *get_current_thread(void) {
 }
 
 /* calls scheduler, replacing the current kernel context. used after a
- * save_kth_context() or save_user_context(), or when the current thread has
+ * save_user_ex() or save_user_regs(), or when the current thread has
  * committed suicide via ThreadControl.
  */
 extern NORETURN void exit_to_scheduler(struct thread *prev);

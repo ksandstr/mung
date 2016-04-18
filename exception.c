@@ -640,7 +640,6 @@ fail:
 
 static void handle_io_fault(struct thread *current, struct x86_exregs *regs)
 {
-	assert(!IS_KERNEL_THREAD(current));
 	save_user_ex(regs);
 
 	uint8_t insn_buf[16], *insn = insn_buf;

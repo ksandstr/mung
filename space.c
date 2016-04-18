@@ -29,13 +29,6 @@
 #include <ukernel/ptab.h>
 
 
-#define NUM_KERN_UTCB_PAGES ((UTCB_SIZE * NUM_KERNEL_THREADS \
-	+ PAGE_SIZE - 1) / PAGE_SIZE)
-
-
-/* allocated statically for bootstrapping */
-static struct utcb_page kernel_utcb_pages[NUM_KERN_UTCB_PAGES];
-
 struct space *current_space = NULL;
 
 struct space *kernel_space = NULL;
@@ -125,7 +118,7 @@ static bool check_space(int opt, struct space *sp)
 
 	/* check that correct pages, or holes, are mapped for utcb_pages[]. */
 	if(sp->utcb_pages.elems > 0) {
-		inv_ok1(sp->utcb_area.raw != L4_Nilpage.raw);
+		inv_imply1(sp != kernel_space, sp->utcb_area.raw != L4_Nilpage.raw);
 		for(int i=0; i < NUM_UTCB_PAGES(sp->utcb_area); i++) {
 			L4_Word_t page_addr = L4_Address(sp->utcb_area) + i * PAGE_SIZE;
 			inv_push("checking utcb page %d/%d at %#lx:", i,
@@ -390,7 +383,7 @@ void space_remove_thread(struct space *sp, struct thread *t)
 	up->slots[slot] = NULL;
 	up->occmap &= ~(1 << slot);
 
-	if(up->occmap == 0 && likely(!IS_KERNEL_THREAD(t))) {
+	if(up->occmap == 0) {
 		/* toss the UTCB page. */
 		L4_Fpage_t fp = L4_FpageLog2(
 			L4_Address(sp->utcb_area) + up->pos * PAGE_SIZE,
@@ -404,9 +397,6 @@ void space_remove_thread(struct space *sp, struct thread *t)
 		pt_iter_destroy(&it);
 #endif
 
-		/* can't toss statically allocated UTCB pages, though. */
-		assert(up < &kernel_utcb_pages[0]
-			|| up >= &kernel_utcb_pages[NUM_KERN_UTCB_PAGES]);
 		free_kern_page(up->pg);
 		htable_del(&sp->utcb_pages, int_hash(up->pos), up);
 		kmem_cache_free(utcb_page_slab, up);
@@ -1042,32 +1032,6 @@ COLD void init_spaces(struct list_head *resv_list)
 		memset(pg->vm_addr, 0, PAGE_SIZE);
 	}
 
-	/* UTCB pages */
-	int ua_shift = size_to_shift(UTCB_SIZE * NUM_KERNEL_THREADS);
-	if(ua_shift < PAGE_BITS) ua_shift = PAGE_BITS;
-	uintptr_t utcb_base = reserve_heap_range(1 << ua_shift);
-	kernel_space->utcb_area = L4_FpageLog2(utcb_base, ua_shift);
-	printf("kernel UTCB area at %#lx:%#lx\n",
-		L4_Address(kernel_space->utcb_area),
-		L4_Size(kernel_space->utcb_area));
-	const int n_ups = NUM_KERN_UTCB_PAGES;
-	/* keep pointer for finalize */
-	kernel_space->utcb_pages.priv = kernel_utcb_pages;
-	for(int i=0; i < n_ups; i++) {
-		struct utcb_page *up = &kernel_utcb_pages[i];
-		/* we can't let get_kern_page() call put_supervisor_page() this early
-		 * in the boot process, because it'll encounter next_dir_page == NULL
-		 * and explode. instead we'll put these wherever for the time being,
-		 * and move them over in the post-heap init.
-		 */
-		up->pg = get_kern_page(0);
-		list_add(resv_list, &up->pg->link);
-		memset(up->pg->vm_addr, 0, PAGE_SIZE);
-		up->occmap = 0;
-		up->pos = i;
-		for(int j=0; j < UTCB_PER_PAGE; j++) up->slots[j] = NULL;
-	}
-
 	/* module inits */
 	space_slab = KMEM_CACHE_NEW("space_slab", struct space);
 	utcb_page_slab = KMEM_CACHE_NEW("utcb_page_slab", struct utcb_page);
@@ -1124,22 +1088,4 @@ COLD void space_finalize_kernel(
 		if(!ok) panic("nacritude!");
 	}
 	htable_clear(&by_id);
-
-	assert(sp->utcb_pages.priv != NULL);
-	struct utcb_page *ups = sp->utcb_pages.priv;
-	sp->utcb_pages.priv = NULL;
-	for(int i=0; i < NUM_KERN_UTCB_PAGES; i++) {
-		htable_add(&sp->utcb_pages, int_hash(ups[i].pos), &ups[i]);
-		/* move the page into the kernel's UTCB segment. this'll make a
-		 * permanent hole in the idempotent kernel reservation to avoid VM
-		 * aliasing of UTCB pages.
-		 */
-		uintptr_t old_addr = (uintptr_t)ups[i].pg->vm_addr;
-		put_supervisor_page(old_addr, 0);
-		/* (i.e. the address space needn't be free_heap_page()'d) */
-		assert(CHECK_FLAG(ups[i].pg->flags, PAGEF_INITMEM));
-		uintptr_t new_addr = L4_Address(sp->utcb_area) + i * PAGE_SIZE;
-		ups[i].pg->vm_addr = (void *)new_addr;
-		put_supervisor_page(new_addr, ups[i].pg->id);
-	}
 }
