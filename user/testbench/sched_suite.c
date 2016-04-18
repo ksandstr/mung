@@ -629,15 +629,22 @@ START_TEST(simple_preempt_test)
 END_TEST
 
 
+/* test signaling of preemption exceptions.
+ *
+ * variables:
+ *   - timeslice length (big/small)
+ *   - preemption signaling switch (on/off)
+ *   - whether there'll be a higher-priority wakeup 10 ms in (yes/no)
+ *
+ * TODO: break this test the fuck up. it's ugly and came from the ugly olden
+ * times.
+ */
 START_LOOP_TEST(preempt_exn_test, t, 0, 7)
 {
-	/* there are three boolean variables here. the first is timeslice length,
-	 * the second is the preemption signaling switch, and the third is whether
-	 * there'll be a higher-priority wakeup 10 ms in.
-	 */
-	bool big_ts = (t & 0x01) != 0,
-		sig_pe = (t & 0x02) != 0,
-		has_pe = (t & 0x04) != 0;
+	bool big_ts = CHECK_FLAG(t, 1), sig_pe = CHECK_FLAG(t, 2),
+		has_pe = CHECK_FLAG(t, 4);
+	diag("big_ts=%s, sig_pe=%s, has_pe=%s",
+		btos(big_ts), btos(sig_pe), btos(has_pe));
 
 	plan_tests(!sig_pe ? 2 : 3);
 
