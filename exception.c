@@ -498,30 +498,67 @@ void sysenter_bottom(struct x86_exregs *regs)
 #endif
 
 
-static void handle_kdb_enter(struct thread *current, struct x86_exregs *regs)
+static void kdb_print_char(struct x86_exregs *regs) {
+	printf("KDB: %s not implemented\n", __func__);
+}
+
+
+static void kdb_print_string(struct x86_exregs *regs) {
+	printf("KDB: %s not implemented\n", __func__);
+}
+
+
+static void kdb_clear_page(struct x86_exregs *regs) {
+	printf("KDB: %s not implemented\n", __func__);
+}
+
+
+static void kdb_toggle_breakin(struct x86_exregs *regs) {
+	printf("KDB: %s not implemented\n", __func__);
+}
+
+
+static void kdb_read_char(struct x86_exregs *regs) {
+	printf("KDB: %s not implemented\n", __func__);
+	regs->r.eax = 0;
+}
+
+
+static void kdb_read_char_blocked(struct x86_exregs *regs) {
+	printf("KDB: %s not implemented\n", __func__);
+	regs->r.eax = 0;
+}
+
+
+/* returns true if a valid #KDB operation was performed, false otherwise. */
+static bool kdb_op(struct x86_exregs *regs)
 {
-	/* check the instruction sequence used. it should be cc eb 05 b8, i.e.
-	 * int3; jmp +5; mov imm32, %eax.
+	struct thread *current = get_current_thread();
+
+	/* check the instruction sequence used. L4_KDB_Enter() makes cc eb 05 b8,
+	 * i.e. int3; jmp +5; mov imm32, %eax. everything else is cc 3c, i.e.
+	 * int3; cmpb $xx, %al; where xx appears after and identifies the
+	 * operation.
 	 */
-	static const uint8_t expected[4] = { 0xcc, 0xeb, 0x05, 0xb8 };
+	static const uint8_t enter_seq[4] = { 0xcc, 0xeb, 0x05, 0xb8 },
+		cmd_seq[2] = { 0xcc, 0x3c };
 	union {
 		L4_Word_t w[2];
 		uint8_t b[8];
-	} entryseq;
-	size_t n = space_memcpy_from(current->space, entryseq.b, regs->eip, 8);
+	} mem;
+	size_t n = space_memcpy_from(current->space, mem.b, regs->eip, 8);
 	if(n < 8) {
 		printf("KDB: can't memcpy 8 bytes from %#lx (got %u)\n",
 			regs->eip, (unsigned)n);
+		/* advance by one byte just to cause something besides an infinite
+		 * loop through the kernel.
+		 */
+		regs->eip++;
+		return false;
 	}
-	if(n < 4 || memcmp(entryseq.b, expected, 4) != 0) {
-		/* KDB message not indicated with the right sequence, or not mapped */
-		if(n < 4) printf("KDB: entry sequence not mapped (n=%d)\n", (int)n);
-		regs->error = 3 * 8 + 2;
-		return_from_gp(current, regs);
-		assert(false);
-	} else {
+	if(n >= 4 && memcmp(mem.b, enter_seq, 4) == 0) {
 		/* copy out at most 256 bytes of KDB entry string */
-		L4_Word_t strptr = entryseq.w[1];
+		L4_Word_t strptr = mem.w[1];
 		char strbuf[257];
 		n = space_memcpy_from(current->space, strbuf, strptr, 256);
 		strbuf[MIN(size_t, n, 256)] = '\0';
@@ -537,9 +574,40 @@ static void handle_kdb_enter(struct thread *current, struct x86_exregs *regs)
 			return_to_scheduler();
 			assert(false);
 		}
+	} else if(n >= 3 && memcmp(mem.b, cmd_seq, 2) == 0) {
+		/* other KDB functions. */
+		regs->eip += 3;
+		static void (*const kdb_ops[])(struct x86_exregs *regs) = {
+			[0] = &kdb_print_char,
+			[1] = &kdb_print_string,
+			[2] = &kdb_clear_page,
+			[3] = &kdb_toggle_breakin,
+			[4] = &kdb_read_char,
+			[5] = &kdb_read_char_blocked,
+		};
+		int op_id = mem.b[2];
+		if(op_id < 0 || op_id >= NUM_ELEMENTS(kdb_ops)
+			|| kdb_ops[op_id] == NULL)
+		{
+			printf("KDB: unknown op_id=%d\n", op_id);
+			goto fail;
+		}
+		(*kdb_ops[op_id])(regs);
+		return true;
+	} else {
+		/* KDB message not indicated with the right sequence, not mapped, or
+		 * there was some other error.
+		 */
+		if(n < 4) {
+			printf("KDB: entry/cmd sequence not mapped (n=%d)\n", (int)n);
+		}
+fail:
+		regs->error = 3 * 8 + 2;
+		return_from_gp(current, regs);
+		assert(false);
 	}
 
-	return_from_exn();
+	return true;
 }
 
 
@@ -744,11 +812,13 @@ static void receive_pf_reply(
 
 
 /* NOTE: this doesn't activate from the INT3 instruction under qemu-kvm.
- * (wondering why that is.) anyway, the #GP handler also does
- * handle_kdb_enter() to cover for it.
+ * (wondering why that is.) anyway, the #GP handler also does kdb_op() to
+ * cover for it.
  */
-void isr_exn_int3_bottom(struct x86_exregs *regs) {
-	handle_kdb_enter(get_current_thread(), regs);
+void isr_exn_int3_bottom(struct x86_exregs *regs)
+{
+	kdb_op(regs);
+	return_from_exn();
 }
 
 
@@ -786,9 +856,8 @@ void isr_exn_gp_bottom(struct x86_exregs *regs)
 		printf("  eax=%#lx\n", regs->eax);
 #endif
 		handle_io_fault(current, regs);
-	} else if(regs->error == 3 * 8 + 2) {
-		/* INT3 via #GP */
-		handle_kdb_enter(current, regs);
+	} else if(regs->error == 3 * 8 + 2 && kdb_op(regs)) {
+		/* INT3 via #GP, was valid KDB operation; return to userspace */
 	} else {
 		thread_save_ctx(current, regs);
 		return_from_gp(current, regs);
