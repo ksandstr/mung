@@ -33,6 +33,10 @@
 #define __L4__X86__KDEBUG_H__
 
 
+/* L4_INLINE changed to "static inline" due to standards and preference.
+ * -ks
+ */
+
 #define L4_KDB_Enter(str...)			\
 do {						\
     __asm__ __volatile__ (			\
@@ -48,7 +52,7 @@ do {						\
 } while (0)
 
 #define __L4_KDB_Op(op, name)			\
-L4_INLINE void L4_KDB_##name (void)		\
+static inline void L4_KDB_##name (void)		\
 {						\
     __asm__ __volatile__ (			\
 	"/* L4_KDB_"#name"() */		\n"	\
@@ -59,7 +63,7 @@ L4_INLINE void L4_KDB_##name (void)		\
 }
 
 #define __L4_KDB_Op_Arg(op, name, argtype)	\
-L4_INLINE void L4_KDB_##name (argtype arg)	\
+static inline void L4_KDB_##name (argtype arg)	\
 {						\
     __asm__ __volatile__ (			\
 	"/* L4_KDB_"#name"() */		\n"	\
@@ -70,7 +74,7 @@ L4_INLINE void L4_KDB_##name (argtype arg)	\
 }
 
 #define __L4_KDB_Op_Ret(op, name, rettype)	\
-L4_INLINE rettype L4_KDB_##name (void)		\
+static inline rettype L4_KDB_##name (void)		\
 {						\
     rettype ret;				\
     __asm__ __volatile__ (			\

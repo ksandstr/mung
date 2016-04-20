@@ -35,7 +35,6 @@
 
 struct tss kernel_tss;
 struct space *sigma0_space = NULL;
-struct thread *s0_pager = NULL;
 
 struct pic_ops global_pic;
 
@@ -364,78 +363,8 @@ static void add_mem_to_sigma0(const L4_KernelInterfacePage_t *kip)
 }
 
 
-static bool try_selftest(L4_ThreadId_t from, L4_MsgTag_t tag)
-{
-#ifdef ENABLE_SELFTEST
-	if(tag.X.label == 0x5374) {		/* "St" */
-		struct thread *t = thread_find(from.raw);
-		assert(t != NULL);
-		if(CHECK_FLAG(t->space->flags, SF_PRIVILEGE)) {
-			if(L4_UntypedWords(tag) > 0) describe_all_tests();
-			run_all_tests();
-			return true;
-		}
-	}
-#endif
-	return false;
-}
-
-
-static void pager_thread(void *parameter)
-{
-	for(;;) {
-		L4_ThreadId_t from = L4_anythread;
-		L4_MsgTag_t tag = kipc(L4_nilthread, &from,
-			L4_Timeouts(L4_Never, L4_Never));
-
-		for(;;) {
-			if(L4_IpcFailed(tag)) {
-				printf("pager ipc failed (no ec yet)\n");
-				break;
-			}
-
-			L4_ThreadId_t sender = from;
-			void *utcb = thread_get_utcb(get_current_thread());
-			if((tag.X.label & 0xfff0) == 0xffe0) {
-				L4_Word_t fault_addr = L4_VREG(utcb, L4_TCR_MR(1)),
-					fault_ip = L4_VREG(utcb, L4_TCR_MR(2));
-				printf("%s: pagefault from %lu:%lu at %#lx (ip %#lx)\n",
-					__func__, TID_THREADNUM(from.raw), TID_VERSION(from.raw),
-					fault_addr, fault_ip);
-
-				/* ... sigma0 should never produce pagefaults, so we'll just
-				 * leave it hanging.
-				 */
-				break;
-			} else if(tag.X.label == 0x5370) {
-				/* sigma0's con_putstr() protocol. */
-				char buf[257];
-				for(int i=0; i < tag.X.u; i++) {
-					L4_Word_t val = L4_VREG(utcb, L4_TCR_MR(i + 1));
-					memcpy(&buf[i * 4], &val, sizeof(L4_Word_t));
-				}
-				buf[tag.X.u * 4] = '\0';
-				int len = strlen(buf);
-				while(len > 0 && buf[len - 1] == '\n') buf[--len] = '\0';
-				printf("[sigma0]: %s\n", buf);
-				L4_VREG(utcb, L4_TCR_MR(0)) = 0;
-			} else if(!try_selftest(from, tag)) {
-				printf("%s: unknown IPC label %#lx (u %lu, t %lu) from %lu:%lu\n",
-					__func__, (L4_Word_t)tag.X.label, (L4_Word_t)tag.X.u,
-					(L4_Word_t)tag.X.t, TID_THREADNUM(from.raw), TID_VERSION(from.raw));
-				break;
-			}
-
-			/* ReplyWait */
-			from = L4_anythread;
-			tag = kipc(sender, &from, L4_Timeouts(L4_ZeroTime, L4_Never));
-		}
-	}
-}
-
-
 /* NOTE: the resulting first thread is not started. */
-static struct thread *spawn_kernel_server(
+static COLD struct thread *spawn_kernel_server(
 	L4_Word_t thread_id,
 	const L4_KernelRootServer_t *s0,
 	struct thread *pager,
@@ -461,7 +390,7 @@ static struct thread *spawn_kernel_server(
 	BUG_ON(!ok, "thread_set_utcb() failed");
 	t->ts_len = L4_Never;
 	void *u_base = thread_get_utcb(t);
-	L4_VREG(u_base, L4_TCR_PAGER) = pager->id;
+	if(pager != NULL) L4_VREG(u_base, L4_TCR_PAGER) = pager->id;
 
 	if(premap) {
 		/* create idempotent mappings of kernel server memory. */
@@ -481,7 +410,7 @@ void malloc_panic(void) {
 }
 
 
-static void *find_kcp(size_t mem_after_1m)
+static COLD void *find_kcp(size_t mem_after_1m)
 {
 	void *ptr = (void *)0x100000;
 	for(size_t i=0; i < mem_after_1m; i++, ptr += PAGE_SIZE) {
@@ -623,14 +552,13 @@ void kmain(void *bigp, unsigned int magic)
 		L4_GlobalId(last_int_threadno() + 1, 1));
 	init_sched(first_thread);
 
-	/* this creates a pager for the s0, s1 processes. it isn't necessary, but
-	 * in development it functions as a printf() output path and for catching
-	 * segfaults, so that's OK.
-	 */
 	int next_user_tno = first_user_threadno();
-	s0_pager = kth_start(&pager_thread, NULL);
+	/* sigma0 (and later sigma1), being effectively the root pager, starts out
+	 * without one for itself. its putstr() style output will be handled by a
+	 * KDB entry bottom half.
+	 */
 	struct thread *s0_thread = spawn_kernel_server(
-		THREAD_ID(next_user_tno++, 1), &s0_mod, s0_pager,
+		THREAD_ID(next_user_tno++, 1), &s0_mod, NULL,
 		PAGE_BITS, true);
 	sigma0_space = s0_thread->space;
 	/* (burn one TID for sigma1, which is missing from the spec.) */

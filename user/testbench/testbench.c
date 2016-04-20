@@ -14,6 +14,7 @@
 #include <l4/kip.h>
 #include <l4/syscall.h>
 #include <l4/bootinfo.h>
+#include <l4/kdebug.h>
 
 #include <ukernel/util.h>
 #include <ukernel/ioport.h>
@@ -608,33 +609,25 @@ end:
 }
 
 
-static void invoke_ktest(L4_ThreadId_t s0_tid, bool describe)
+static void invoke_ktest(bool describe)
 {
-	/* kernel tests are executed by sigma0's pager in response to a special
-	 * IPC from a privileged space (this one).
+	/* kernel tests are executed in the int3 handler in response to a special
+	 * KDB cookie from a privileged space (this one). this works when
+	 * ENABLE_SELFTEST is active and prints the message otherwise.
 	 *
-	 * note that L4_PagerOf() doesn't usually work on out-of-space threads;
-	 * however, when ENABLE_SELFTEST is defined for mung, it works for
-	 * first_user_threadno from a privileged space.
+	 * TODO: check for a kernel extension on the KIP to this effect instead.
 	 */
-	L4_ThreadId_t s0_pager = L4_PagerOf(s0_tid);
-	if(L4_IsNilThread(s0_pager)) {
-		printf("*** can't find sigma0's pager from userspace.\n");
-		printf("*** was the microkernel compiled with ENABLE_SELFTEST?\n");
-		abort();
+	char *cookie = "(with describe option) "
+		"tried to run mung self-tests, but they weren't enabled";
+	while(!describe && *cookie != ')') {
+		cookie++;
+		assert(*cookie != '\0');
 	}
 
-	L4_LoadMR(0, (L4_MsgTag_t){
-		.X.label = 0x5374,
-		.X.u = describe ? 1 : 0 }.raw);
-	if(describe) L4_LoadMR(1, 0xbeefda7e);
-	L4_ThreadId_t from;
-	L4_MsgTag_t tag = L4_Ipc(s0_pager, L4_anythread,
-		L4_Timeouts(L4_Never, L4_Never), &from);
-	if(L4_IpcFailed(tag)) {
-		printf("%s: IPC failed, ec=%#lx\n", __func__, L4_ErrorCode());
-		abort();
-	}
+	/* copying the cookie ensures it's been mapped. this is important. */
+	char buf[256];
+	strlcpy(buf, cookie, sizeof(buf));
+	L4_KDB_PrintString(buf);
 }
 
 
@@ -707,7 +700,6 @@ int main(void)
 	printf("hello, world!\n");
 	print_boot_info();
 	calibrate_delay_loop();
-	L4_ThreadId_t s0_tid = L4_Pager();
 	fault_own_pages();
 
 	/* FIXME: add option to _not_ activate forkserv. */
@@ -742,7 +734,7 @@ int main(void)
 		suites = meta_plan;
 		n_suites = NUM_ELEMENTS(meta_plan);
 	} else if(cmd_opt(&opts, "ktest") != NULL) {
-		invoke_ktest(s0_tid, cmd_opt(&opts, "describe") != NULL);
+		invoke_ktest(cmd_opt(&opts, "describe") != NULL);
 		n_suites = 0;
 	} else {
 		/* actual microkernel test suite */

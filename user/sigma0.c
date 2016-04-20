@@ -16,6 +16,7 @@
 #include <l4/vregs.h>
 #include <l4/syscall.h>
 #include <l4/kip.h>
+#include <l4/kdebug.h>
 
 #include <ukernel/mm.h>
 #include <ukernel/slab.h>
@@ -81,17 +82,8 @@ static bool invariants(void)
 }
 
 
-void con_putstr(const char *str)
-{
-	size_t len = strlen(str);
-	L4_LoadMR(0, (L4_MsgTag_t){
-		.X.label = 0x5370, /* "pS" */
-		.X.u = (len + 3) / 4,
-	}.raw);
-	for(int i=0; i * 4 < len; i++) {
-		L4_LoadMR(i + 1, *(L4_Word_t *)&str[i * 4]);
-	}
-	L4_Call(L4_Pager());
+void con_putstr(const char *str) {
+	L4_KDB_PrintString((char *)str);
 }
 
 

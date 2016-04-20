@@ -25,6 +25,7 @@
 #include <ukernel/kip.h>
 #include <ukernel/util.h>
 #include <ukernel/misc.h>
+#include <ukernel/ktest.h>
 #include <ukernel/config.h>
 
 
@@ -503,8 +504,33 @@ static void kdb_print_char(struct x86_exregs *regs) {
 }
 
 
-static void kdb_print_string(struct x86_exregs *regs) {
-	printf("KDB: %s not implemented\n", __func__);
+static void kdb_print_string(struct x86_exregs *regs)
+{
+	struct thread *current = get_current_thread();
+
+	char sbuf[512];
+	size_t n = space_memcpy_from(current->space, sbuf, regs->r.eax,
+		sizeof(sbuf));
+	sbuf[MIN(size_t, n, sizeof(sbuf) - 1)] = '\0';
+	int len = strlen(sbuf);
+	assert(len <= n);
+	while(len > 0 && sbuf[len - 1] == '\n') sbuf[--len] = '\0';
+	if(current->space == sigma0_space) {
+		printf("[sigma0]: %s\n", sbuf);
+		return;
+	}
+
+#ifdef ENABLE_SELFTEST
+	if(CHECK_FLAG(current->space->flags, SF_PRIVILEGE)) {
+		if(strstr(sbuf, "mung self-tests") != NULL) {
+			if(strstr(sbuf, "describe option") != NULL) describe_all_tests();
+			run_all_tests();
+			return;
+		}
+	}
+#endif
+
+	printf("KDB[PrintString]: %s\n", sbuf);
 }
 
 
