@@ -105,11 +105,11 @@ void _run_ktest(
 		ktest_##name(); \
 	} while(0)
 
-void run_all_tests(void) {
+void run_all_tests(void)
+{
 	SUITE(test_util);
 	SUITE(slab);
 	SUITE(heap);
-	SUITE(kth);
 	SUITE(memdesc);
 }
 
