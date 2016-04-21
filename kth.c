@@ -140,8 +140,6 @@ COLD struct thread *kth_init(L4_ThreadId_t boot_tid)
 
 	struct thread *boot = kmem_cache_zalloc(thread_slab);
 	init_kthread_ctx(boot, 0xdeadface, 0xabadc0de);
-	GUARD_INIT(boot, sched_rb_0);
-	GUARD_INIT(boot, sched_rb_1);
 	boot->space = kernel_space;
 	boot->utcb_pos = -1;
 	boot->utcb_page = NULL;

@@ -18,7 +18,6 @@
 #include <ukernel/util.h>
 #include <ukernel/x86.h>
 #include <ukernel/slab.h>
-#include <ukernel/guard.h>
 #include <ukernel/misc.h>
 
 
@@ -96,12 +95,10 @@ struct thread
 	struct x86_ctx ctx;
 	void *fpu_context;
 
-	GUARD_MEMBER(sched_rb_0);
 	/* sched_rb is in a scheduling queue whenever the thread is not TS_STOPPED
 	 * or TS_DEAD. this can be tested with IS_SCHED().
 	 */
 	struct rb_node sched_rb;
-	GUARD_MEMBER(sched_rb_1);
 	uint64_t wakeup_time;		/* absolute microseconds since epoch */
 
 	thread_id id;

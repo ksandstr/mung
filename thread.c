@@ -77,8 +77,6 @@ static bool check_thread(int opt, struct thread *t)
 	INV_CTX;
 	inv_push("thread %lu:%lu (%p)", TID_THREADNUM(t->id),
 		TID_VERSION(t->id), t);
-	inv_ok1(GUARD_CHECK(t, sched_rb_0));
-	inv_ok1(GUARD_CHECK(t, sched_rb_1));
 	inv_pop();
 	return true;
 
@@ -216,8 +214,6 @@ bool thread_ctor(struct thread *t, thread_id tid)
 		},
 	};
 
-	GUARD_INIT(t, sched_rb_0);
-	GUARD_INIT(t, sched_rb_1);
 	hook_init(&t->post_exn_call, NULL);
 	return htable_add(&thread_hash, int_hash(TID_THREADNUM(t->id)), t);
 }

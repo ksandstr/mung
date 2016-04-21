@@ -19,7 +19,6 @@
 #include <ccan/container_of/container_of.h>
 
 #include <ukernel/slab.h>
-#include <ukernel/guard.h>
 #include <ukernel/util.h>
 #include <ukernel/kip.h>
 #include <ukernel/memdesc.h>
@@ -60,19 +59,15 @@ struct fs_thread;
 
 struct fs_space
 {
-	GUARD_MEMBER(g_0);
 	L4_Word_t id, parent_id, prog_brk;
 	L4_ThreadId_t mgr_tid;
 	struct htable pages;
-	GUARD_MEMBER(g_1);
 	struct fs_thread *threads[THREADS_PER_SPACE];
-	GUARD_MEMBER(g_2);
 	L4_Fpage_t utcb_area, kip_area;
 	struct list_head dead_children;
 	struct list_head waiting_threads;
 	struct list_node dead_link;		/* in parent's dead_children */
 	int exit_status;
-	GUARD_MEMBER(g_3);
 
 	L4_ThreadId_t child_redir_tid;
 };
@@ -207,11 +202,6 @@ static bool invariants(const char *context)
 	{
 		struct fs_space *sp = container_of(space_ptr, struct fs_space, id);
 		inv_push("check space %d (%p)", (int)sp->id, sp);
-
-		inv_ok1(GUARD_CHECK(sp, g_0));
-		inv_ok1(GUARD_CHECK(sp, g_1));
-		inv_ok1(GUARD_CHECK(sp, g_2));
-		inv_ok1(GUARD_CHECK(sp, g_3));
 
 		inv_ok(get_space(sp->parent_id) != NULL,
 			"parent space (id %d) must exist", (int)sp->parent_id);
@@ -466,10 +456,6 @@ static struct fs_space *make_initial_space(int id)
 		.kip_area = L4_FpageLog2(0x2f000, 12),
 		.child_redir_tid = L4_anythread,
 	};
-	GUARD_INIT(sp, g_0);
-	GUARD_INIT(sp, g_1);
-	GUARD_INIT(sp, g_2);
-	GUARD_INIT(sp, g_3);
 	list_head_init(&sp->dead_children);
 	list_head_init(&sp->waiting_threads);
 	htable_init(&sp->pages, &hash_word, NULL);
@@ -1207,10 +1193,6 @@ static int32_t handle_fork(void)
 	copy_space->kip_area = sp->kip_area;
 	copy_space->mgr_tid = L4_nilthread;
 	copy_space->child_redir_tid = sp->child_redir_tid;
-	GUARD_INIT(copy_space, g_0);
-	GUARD_INIT(copy_space, g_1);
-	GUARD_INIT(copy_space, g_2);
-	GUARD_INIT(copy_space, g_3);
 	list_head_init(&copy_space->dead_children);
 	list_head_init(&copy_space->waiting_threads);
 	htable_init(&copy_space->pages, &hash_word, NULL);
