@@ -236,16 +236,38 @@ char *strrchr(const char *s, int c)
 
 char *strstr(const char *haystack, const char *needle)
 {
-	if(*needle == '\0') return (char *)haystack;
+	if(*needle == '\0') goto end;	/* degenerate case */
 
-	size_t len = strlen(haystack), nlen = strlen(needle);
-	for(size_t i=0; i <= len - nlen; i++) {
-		if(memcmp(&haystack[i], needle, nlen) == 0) {
-			return (char *)&haystack[i];
-		}
+	size_t n_len = 0;
+	char diff = 0;
+	while(needle[n_len] != '\0') {
+		if(haystack[n_len] == '\0') return NULL;	/* #haystack < #needle */
+		diff |= needle[n_len] ^ haystack[n_len];
+		n_len++;
 	}
+	if(diff == 0) goto end;			/* prefix case */
 
-	return NULL;
+	if(haystack[0] != needle[0]) goto forward;
+	do {
+		/* compare up to n_len bytes. return NULL if haystack is shorter than
+		 * that. return haystack if needle is found. otherwise, advance until
+		 * next instance of first letter in needle.
+		 */
+		bool found = true;
+		for(size_t i=0; i < n_len; i++) {
+			if(haystack[i] != needle[i]) {
+				if(haystack[i] == '\0') return NULL;
+				found = false;
+				break;
+			}
+		}
+		if(found) break;
+forward:
+		haystack = strchr(haystack + 1, needle[0]);
+	} while(haystack != NULL);
+
+end:
+	return (char *)haystack;
 }
 
 
