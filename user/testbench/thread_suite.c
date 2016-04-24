@@ -1212,7 +1212,7 @@ START_LOOP_TEST(tqe_mod_del_threadctl, iter, 0, 63)
 	{
 		/* change its version bits just to cause a panic */
 		L4_ThreadId_t new_tid = L4_GlobalId(L4_ThreadNo(spinner),
-			L4_Version(spinner) ^ 0x120);
+			(L4_Version(spinner) ^ 0x1200) | 0x120);
 		fail_unless(new_tid.raw != spinner.raw);
 		L4_Word_t res = L4_ThreadControl(new_tid, spinner, L4_nilthread,
 			L4_nilthread, (void *)-1);
