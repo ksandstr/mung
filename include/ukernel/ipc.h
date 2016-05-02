@@ -47,20 +47,16 @@ extern bool ipc_user_complete(
  */
 extern void ipc_xfer_timeout(struct ipc_state *st);
 
-/* one thing that thread_ipc_fail() doesn't do. used by the deleting mode of
- * ThreadControl to abort waiting IPCs that depend on a freshly-deleted
- * thread's rendezvous.
- *
- * this function also does the other thing, i.e. aborting threads waiting for
- * IPC from @with_tid specifically.
- *
- * previously known as abort_waiting_ipc().
+/* used by the deleting mode of ThreadControl to abort waiting IPCs that
+ * depend on a freshly-deleted thread's rendezvous; be they senders or
+ * non-wildcard receivers. sets error codes and wakes up passive IPC halves
+ * that're affected.
  */
 extern void cancel_ipc_to(L4_ThreadId_t dest_tid, L4_Word_t errorcode);
 
-/* removes the ipc_wait structure associated with the passive send in @t.
- *
- * previously known as abort_thread_ipc().
+/* removes @t from sendwait_hash, recvwait_hash, and rewrites any passive
+ * virtual senders that were sending on behalf of @t. does not alter @t's
+ * scheduling status.
  */
 extern void cancel_ipc_from(struct thread *t);
 

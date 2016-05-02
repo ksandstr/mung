@@ -489,10 +489,10 @@ void thread_ipc_fail(struct thread *t)
 		|| t->status == TS_R_RECV
 		|| (t->status == TS_XFER && t->ipc != NULL));
 
-	if(t->status == TS_SEND_WAIT) {
-		/* (NOTE: also, $t->ipc != NULL \implies \
-		 * Myself \notin \dom sendwait\_hash$, so this isn't actually
-		 * required. cancel_ipc_from() accepts that, though.)
+	if(t->status == TS_SEND_WAIT || t->status == TS_RECV_WAIT) {
+		/* (NOTE: also, $t->ipc != NULL \implies \ Myself \notin \dom
+		 * sendwait\_hash$ (and the same for recvwait_hash), so this isn't
+		 * actually required. cancel_ipc_from() accepts that, though.)
 		 */
 		cancel_ipc_from(t);
 	}

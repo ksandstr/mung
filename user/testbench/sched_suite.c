@@ -1050,6 +1050,8 @@ static void chain_thread_fn(void *param_ptr)
 {
 	struct chain_param *p = param_ptr;
 
+	diag("%s running as %lu:%lu", __func__,
+		L4_ThreadNo(L4_MyGlobalId()), L4_Version(L4_MyGlobalId()));
 	bool running = true;
 	do {
 		L4_ThreadId_t sender;
@@ -1057,7 +1059,9 @@ static void chain_thread_fn(void *param_ptr)
 		L4_MsgTag_t tag = L4_Wait(&sender);
 		for(;;) {
 			if(L4_IpcFailed(tag)) {
-				diag("%s: ipc failed, ec=%#lx", __func__, L4_ErrorCode());
+				diag("%s: ipc failed in %lu:%lu, ec=%#lx", __func__,
+					L4_ThreadNo(L4_MyGlobalId()), L4_Version(L4_MyGlobalId()),
+					L4_ErrorCode());
 				break;
 			} else if(L4_Label(tag) == QUIT_LABEL) {
 				running = false;
@@ -1085,11 +1089,9 @@ static void chain_thread_fn(void *param_ptr)
 				}
 			}
 
-#if 0
 			diag("doing LreplyWait from %lu:%lu to %#lx",
 				L4_ThreadNo(L4_MyGlobalId()), L4_Version(L4_MyGlobalId()),
 				sender.raw);
-#endif
 			L4_LoadMR(0, 0);
 			tag = L4_LreplyWait(sender, &sender);
 		}
