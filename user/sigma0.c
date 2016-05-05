@@ -421,9 +421,6 @@ static void build_heap(void *kip_base)
 		.ptr = kip_base + (meminfo >> 16),
 		.len = num_mds, .size = num_mds,
 	};
-#ifdef DEBUG_ME_HARDER
-	printf("%d memory descriptors at %p\n", (int)num_mds, mds);
-#endif
 
 	/* discover system memory.
 	 *
