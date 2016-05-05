@@ -1443,7 +1443,7 @@ bool ipc_recv_half(struct thread *self, void *self_utcb)
 
 err_no_partner:
 	set_ipc_error(self_utcb, 5);
-	assert(self->status == TS_RUNNING);
+	assert(self->status == TS_RUNNING || self->status == TS_R_RECV);
 	self->status = TS_READY;	/* failed active receive -> READY. */
 	return false;
 }
