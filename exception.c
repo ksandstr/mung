@@ -927,14 +927,17 @@ void isr_exn_pf_bottom(struct x86_exregs *regs)
 	assert(x86_irq_is_enabled());
 
 	if(unlikely(!CHECK_FLAG(regs->error, 4))) {
+		unsigned long tno = current == NULL ? 0 : TID_THREADNUM(current->id),
+			tver = current == NULL ? 0 : TID_VERSION(current->id);
 		printf("KERNEL #PF (%s, %s, %s) @ %#lx (eip %#lx); current thread %lu:%lu\n",
 			CHECK_FLAG(regs->error, 4) ? "user" : "super",
 			CHECK_FLAG(regs->error, 2) ? "write" : "read",
 			CHECK_FLAG(regs->error, 1) ? "access" : "presence",
-			fault_addr, regs->eip,
-			TID_THREADNUM(current->id), TID_VERSION(current->id));
+			fault_addr, regs->eip, tno, tver);
 		panic("KERNEL #PF");
 	}
+
+	assert(current != NULL);
 
 	int fault_access = L4_Readable;		/* the cache always reads. */
 	if(CHECK_FLAG(regs->error, 2)) fault_access |= L4_Writable;
