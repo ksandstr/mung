@@ -387,6 +387,14 @@ void cancel_ipc_from(struct thread *t)
 		sq_remove_thread(t);
 		t->status = TS_READY;
 		sq_insert_thread(t);
+	} else if(t->status == TS_RECV_WAIT || t->status == TS_R_RECV) {
+		struct thread *s = thread_find(t->ipc_from.raw);
+		if(s != NULL && s->id == t->ipc_from.raw && s->u0.partner == t) {
+			/* TODO: coördinate partnership breaking using a function of some
+			 * kind, such as one that undoes scheduling effects.
+			 */
+			s->u0.partner = NULL;
+		}
 	}
 	rewrite_passive_vs_from(t);
 }
