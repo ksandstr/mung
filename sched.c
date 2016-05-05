@@ -222,24 +222,25 @@ static bool check_sched_module(void)
 		if(t == NULL) {
 			/* s ∉ \ran partner */
 		} else {
-			inv_push("t=%lu:%lu; ipc_from=%lu:%lu (%#lx)",
+			inv_ok(t->utcb_ptr_seg > 0, "partner thread must be active");
+			inv_push("t=%lu:%lu; ->ipc_from=%lu:%lu (%#lx), ->status=%s",
 				TID_THREADNUM(t->id), TID_VERSION(t->id),
 				L4_ThreadNo(t->ipc_from), L4_Version(t->ipc_from),
-				t->ipc_from.raw);
+				t->ipc_from.raw, sched_status_str(t));
 			/* (t → s) ∈ partner */
 			inv_ok1(t != s);
 			/* $∃s: THREAD @ s.FromSpec = t.id$ is implied by this test. */
 			inv_ok1(t->ipc_from.raw == s->id
 				|| (t->space == s->space
 					&& t->ipc_from.raw == get_local_id(s).raw));
-			inv_ok1(t->status == TS_RECV_WAIT);
+			inv_ok1(t->status == TS_RECV_WAIT || t->status == TS_R_RECV);
 			inv_pop();
 		}
 		inv_pop();
 	}
 
 	/* invariants of sched_chain_timeout wrt current_thread */
-	if(current_thread->u0.partner != NULL) {
+	if(current_thread != NULL && current_thread->u0.partner != NULL) {
 		inv_ok1(is_wakeup_valid(sched_chain_timeout));
 
 		int degree = 1;
