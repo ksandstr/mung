@@ -923,15 +923,12 @@ Enomem:
  * entry will be inserted.
  *
  * returns -ENOMEM on out-of-memory, or 0/1 on success; the latter indicating
- * whether a valid child reference exists for that entry after the call. if
- * not, the caller should insert one.
+ * whether a valid child reference exists for that entry after the call (as in
+ * mapdb_add_map()). if not, the caller should insert one.
  */
 static int insert_map_entry(
-	struct space *sp,
-	struct map_group *g,
-	L4_Word_t parent,
-	L4_Fpage_t fpage,
-	uint32_t first_page_id)
+	struct space *sp, struct map_group *g,
+	L4_Word_t parent, L4_Fpage_t fpage, uint32_t first_page_id)
 {
 	assert(!L4_IsNilFpage(fpage));
 	assert(g != NULL);
@@ -1062,30 +1059,34 @@ static struct map_entry *erase_map_entry(
 
 /* counterintuitively, if this function finds that "old" matches the page
  * range as well, fpage's rights are added to those in "old" rather than
- * replaced. this is consistent with the behaviour of L4's map operation in
+ * replaced. this is consistent with the behaviour the L4.X2 map operation in
  * all cases.
+ *
+ * returns mapdb_add_map()'s return value.
  */
-static void replace_map_entry(
-	struct map_group *g,
-	struct map_entry *old,
-	L4_Word_t parent,
-	L4_Fpage_t fpage,
-	uint32_t first_page_id)
+static int replace_map_entry(
+	struct map_group *g, struct map_entry *old,
+	L4_Word_t parent, L4_Fpage_t fpage, uint32_t first_page_id)
 {
 	assert(L4_Address(old->range) == L4_Address(fpage));
 	assert(L4_SizeLog2(old->range) == L4_SizeLog2(fpage));
 
 	if(old->first_page_id == first_page_id && old->parent == parent) {
 		/* matches content and parentage -> expand rights */
+		TRACE("%s: expand case (%#lx -> %#lx)\n", __func__,
+			L4_Rights(old->range), L4_Rights(fpage));
 		L4_Set_Rights(&old->range,
 			L4_Rights(old->range) | L4_Rights(fpage));
+		return 1;
 	} else {
 		/* TODO: this part is without test coverage. write some. */
+		TRACE("%s: overwrite case\n", __func__);
 		reparent_children(g, old);
 		*old = (struct map_entry){
 			.parent = parent, .range = fpage,
 			.first_page_id = first_page_id,
 		};
+		return 0;
 	}
 }
 
@@ -1146,8 +1147,9 @@ static bool add_map_postcond(
 }
 
 
-/* returns negative errno on failure, or positive indication of whether
- * there's a child reference for the fresh entry (0 for not).
+/* returns negative errno on failure, 0 when the caller should add a child for
+ * the new entry, and 1 when it shouldn't (e.g. merges into an existing low
+ * half result in the added entry being covered by an existing child pointer).
  */
 int mapdb_add_map(
 	struct space *sp,
@@ -1215,18 +1217,25 @@ shrimp_retry:
 		old = probe_group_range(g, fpage);
 		if(old == NULL) {
 			/* not covered. */
+			TRACE("%s: insert case\n", __func__);
 			rc = insert_map_entry(sp, g, parent, fpage, first_page_id);
 		} else if(L4_SizeLog2(old->range) == L4_SizeLog2(fpage)) {
 			/* exact match with old entry's form. */
+			TRACE("%s: replace case (old->range=%#lx:%#lx, old->parent=%#lx)\n",
+				__func__, L4_Address(old->range), L4_Size(old->range),
+				old->parent);
 			assert(L4_Address(old->range) == L4_Address(fpage));
 			if(likely(!REF_IS_SPECIAL(old->parent))) {
-				replace_map_entry(g, old, parent, fpage, first_page_id);
+				rc = replace_map_entry(g, old, parent, fpage, first_page_id);
 				/* TODO: verify that coalesce_entries() leaves g, old in a
 				 * valid state on ENOMEM since we're ignoring the error here.
 				 */
 				coalesce_entries(g, old);
+			} else {
+				/* special entries need no child ref. */
+				rc = 1;
 			}
-			rc = 0;
+			TRACE("%s: replace completed, rc=%d.\n", __func__, rc);
 		} else if(L4_SizeLog2(old->range) > L4_SizeLog2(fpage)) {
 			/* "contained" case. */
 			int page_offs = (L4_Address(fpage) - L4_Address(old->range)) >> PAGE_BITS;
@@ -1252,9 +1261,8 @@ shrimp_retry:
 					assert(probe_group_range(g, fpage) != NULL);
 					rc = -ENOMEM;
 				} else {
-					replace_map_entry(g, ne, parent, fpage, first_page_id);
+					rc = replace_map_entry(g, ne, parent, fpage, first_page_id);
 					/* (no need to coalesce after required break.) */
-					rc = 0;
 				}
 			}
 		} else {
@@ -1420,29 +1428,19 @@ static int mapdb_add_child(struct map_entry *ent, L4_Word_t child)
 
 
 static int add_map_and_link(
-	struct map_entry *from_ent,
-	struct space *to_space,
-	L4_Word_t parent,
-	L4_Fpage_t dst_page,
-	uint32_t first_page_id)
+	struct map_entry *from_ent, struct space *to_space,
+	L4_Word_t parent, L4_Fpage_t dst_page, uint32_t first_page_id)
 {
 	struct map_group *dstgrp = NULL;
 	int n = mapdb_add_map(to_space, &dstgrp, parent, dst_page, first_page_id);
-	if(n >= 0) {
+	if(n == 0) {
 		L4_Word_t child = addr_to_ref(dstgrp, L4_Address(dst_page))
 			| ((REF_INDEX(parent) >> 1) & 0xf);
-
-		if(n == 0) n = mapdb_add_child(from_ent, child);
-		else {
-			assert(n == 1);
-			if(CHECK_FLAG(L4_Address(dst_page), L4_Size(dst_page))) {
-				int n_gone = del_child(from_ent, child);
-				TRACE("%s: removed %d stale children (merge case)\n",
-					__func__, n_gone);
-			} else {
-				TRACE("%s: not adding link child (merge case)\n", __func__);
-			}
-		}
+		n = mapdb_add_child(from_ent, child);
+	} else if(n == 1) {
+		TRACE("%s: not adding link child (merge case)\n", __func__);
+	} else {
+		assert(n < 0);
 	}
 
 	return n;
