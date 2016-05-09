@@ -129,8 +129,10 @@ static unsigned short grp_mask_shift;
 static void dump_map_group(struct map_group *g)
 {
 #ifndef NDEBUG
-	TRACE("%s: group %#lx .. %#lx contains (%d ents, %lu alloc):\n",
+	L4_ThreadId_t space_id = space_name(g->space);
+	TRACE("%s: group %#lx..%#lx in %lu:%lu (%d ents, %lu alloc):\n",
 		__func__, MG_START(g), MG_START(g) + GROUP_SIZE - 1,
+		L4_ThreadNo(space_id), L4_Version(space_id),
 		MG_N_ENTRIES(g), 1ul << MG_N_ALLOC_LOG2(g));
 	for(int i=0; i < MG_N_ENTRIES(g); i++) {
 		struct map_entry *e = &g->entries[i];
@@ -205,9 +207,10 @@ static bool check_map_entry(
 	 *   - if it's special, check that space=0 appears only in sigma0 and
 	 *     that space=1 has no children.
 	 */
-	inv_push("check entry %#lx:%#lx in grp=%p; ->parent %#lx",
+	L4_ThreadId_t grp_space = space_name(grp->space);
+	inv_push("check entry %#lx:%#lx in grp=%p (%lu:%lu); ->parent %#lx",
 		L4_Address(e->range), L4_Size(e->range), grp,
-		e->parent);
+		L4_ThreadNo(grp_space), L4_Version(grp_space), e->parent);
 
 	inv_ok1(L4_Rights(e->range) != 0);
 	inv_ok1(L4_Size(e->range) <= GROUP_SIZE);
@@ -255,17 +258,19 @@ static bool check_map_entry(
 
 	if(!CHECK_FLAG(opts, MOD_NO_CHILD_REFS) && p_e != NULL) {
 		assert(p_grp != NULL);
-		bool found = false;
+		int found = -1;
 		const L4_Word_t *p_cs = p_e->num_children > 1
 			? p_e->children : &p_e->child;
 		for(int j=0; j < p_e->num_children; j++) {
 			inv_log("  child %d = %#lx", j, p_cs[j]);
 			if(REF_GROUP_BITS(p_cs[j]) != ((uintptr_t)grp & grp_mask_and)) continue;
 			if(ADDR_IN_FPAGE(e->range, MG_START(grp) + REF_ADDR(p_cs[j]))) {
-				inv_log("  found matching entry=%#lx:%#lx",
-					L4_Address(e->range), L4_Size(e->range));
-				inv_ok(!found, "should find child only once");
-				found = true;
+				inv_log("  child matches pos=%#lx of e=%#lx:%#lx in grp=%p",
+					(MG_START(grp) + REF_ADDR(p_cs[j]) - L4_Address(e->range)) >> PAGE_BITS,
+					L4_Address(e->range), L4_Size(e->range), grp);
+				if(found >= 0) inv_log("  previous is child %d", found);
+				inv_ok(found < 0, "should not find more than one child");
+				found = j;
 
 				/* test deref_child() since the loop provides us with
 				 * known results.
@@ -277,7 +282,7 @@ static bool check_map_entry(
 				inv_ok1(cr.child_entry == e);
 			}
 		}
-		inv_ok1(found);
+		inv_ok(found >= 0, "should find exactly one child");
 	}
 
 	inv_pop();
@@ -752,6 +757,9 @@ static int coalesce_entries(struct map_group *g, struct map_entry *e)
 {
 	bool far_side = CHECK_FLAG(L4_Address(e->range), L4_Size(e->range));
 	struct map_entry *oth = &e[far_side ? -1 : 1];
+	TRACE("%s: oth=%p; ->range=%#lx:%#lx, ->parent=%#lx, ->fpid=%u\n",
+		__func__, oth, L4_Address(oth->range), L4_Size(oth->range),
+		oth->parent, oth->first_page_id);
 	if(oth < &g->entries[0] || oth >= &g->entries[MG_N_ENTRIES(g)]
 		|| !can_merge(oth, e->parent, e->range, e->first_page_id))
 	{
@@ -762,6 +770,9 @@ static int coalesce_entries(struct map_group *g, struct map_entry *e)
 
 	/* always join to the left. */
 	if(far_side) SWAP(struct map_entry *, e, oth);
+	TRACE("%s: joining %#lx:%#lx with %#lx:%#lx\n", __func__,
+		L4_Address(e->range), L4_Size(e->range),
+		L4_Address(oth->range), L4_Size(oth->range));
 	int n = expand_entry(g, e);
 	if(unlikely(n < 0)) return n;
 
