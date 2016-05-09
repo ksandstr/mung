@@ -7,6 +7,7 @@
 
 
 #ifndef NDEBUG
+#include <stdio.h>
 #include <ukernel/misc.h>
 #define TRACE_MSG(id, fmt, ...) do { \
 		if(unlikely(trace_is_enabled((id)))) { \

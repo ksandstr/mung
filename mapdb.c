@@ -1,5 +1,4 @@
 
-#include <stdio.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -508,13 +507,12 @@ void mapdb_destroy(struct space *sp)
 }
 
 
-/* used in postcondition asserts. brute force. */
+/* used in asserts. brute force. */
 static bool no_addr_in_group(struct map_group *g, uintptr_t addr)
 {
 	for(int i=0; i < MG_N_ENTRIES(g); i++) {
 		assert(!ADDR_IN_FPAGE(g->entries[i].range, addr));
 	}
-
 	return true;
 }
 
@@ -1104,10 +1102,9 @@ static int replace_map_entry(
 
 static bool add_map_postcond(
 	struct space *sp,
-	L4_Word_t parent,
-	L4_Fpage_t map_area,
-	uint32_t first_page_id)
+	L4_Word_t parent, L4_Fpage_t map_area, uint32_t first_page_id)
 {
+#ifndef NDEBUG
 	/* @sp must contain the indicated range if it existed in the parent. */
 	struct map_group *p_grp = kmem_id2ptr_safe(map_group_policy,
 		REF_GROUP_ID(parent));
@@ -1153,6 +1150,7 @@ static bool add_map_postcond(
 		assert(!upper_present || pgid == exp_pgid);
 	}
 	pt_iter_destroy(&it);
+#endif
 
 	return true;
 }
@@ -1295,11 +1293,9 @@ shrimp_retry:
 			 * unmap_entry_in_group() however, so the speed gain might not be
 			 * there.
 			 */
-#if 0
-			printf("shrimp case: old=%#lx:%#lx, fpage=%#lx:%#lx\n",
+			TRACE("shrimp case: old=%#lx:%#lx, fpage=%#lx:%#lx\n",
 				L4_Address(old->range), L4_Size(old->range),
 				L4_Address(fpage), L4_Size(fpage));
-#endif
 			L4_Fpage_t o_range = old->range;
 			int n = unmap_entry_in_group(g, &old,
 				UM_IMMEDIATE | L4_Rights(old->range) << 4,
