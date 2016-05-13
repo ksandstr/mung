@@ -30,6 +30,15 @@
 #include <ukernel/ptab.h>
 
 
+static size_t space_memcpy_from_fast(
+	struct space *sp,
+	void *dest, L4_Word_t address, size_t size);
+
+static void space_memcpy_from_unsafe(
+	struct space *sp,
+	void *dest, L4_Word_t address, size_t size);
+
+
 struct space *current_space = NULL;
 
 struct space *kernel_space = NULL;
@@ -557,6 +566,24 @@ struct thread *space_find_local_thread(struct space *sp, L4_LthreadId_t ltid)
 {
 	assert(ltid.X.zeros == 0);
 
+	struct thread *t;
+	if(sp == current_space && catch_pf() == 0) {
+		/* this avoids access to cold cache lines and a htable_get() to find
+		 * the relevant UTCB page. this should be in the black even with the
+		 * catch_pf().
+		 */
+		L4_ThreadId_t gtid;
+		L4_Word_t gt_addr = ltid.raw + L4_TCR_MYGLOBALID * sizeof(L4_Word_t);
+		space_memcpy_from_unsafe(sp, &gtid, gt_addr, sizeof(gtid));
+		t = ra_id2ptr(thread_ra, L4_ThreadNo(gtid));
+		if(t->space == sp && get_local_id(t).raw == ltid.raw) {
+			uncatch_pf();
+			return t;
+		}
+		/* otherwise, proceed down to the full lookup. */
+		uncatch_pf();
+	}
+
 	/* (this micro-optimization saves 3 insns.) */
 	assert((sp->utcb_area.raw & ~PAGE_MASK) == L4_Address(sp->utcb_area));
 	intptr_t off = (intptr_t)ltid.raw - (sp->utcb_area.raw & ~PAGE_MASK) - 256;
@@ -569,7 +596,7 @@ struct thread *space_find_local_thread(struct space *sp, L4_LthreadId_t ltid)
 		int_hash(page_pos), &cmp_utcb_page, &page_pos);
 	if(likely(up != NULL)) {
 		int slot = (off / UTCB_SIZE) % UTCB_PER_PAGE;
-		struct thread *t = up->slots[slot];
+		t = up->slots[slot];
 		assert(t == NULL || t->utcb_pos == off / UTCB_SIZE);
 		assert(t == NULL || t->space == sp);
 		return t;
@@ -656,20 +683,29 @@ bool space_prefill_upper(struct space *space, L4_Word_t fault_addr)
 }
 
 
+static void space_memcpy_from_unsafe(
+	struct space *sp,
+	void *dest, L4_Word_t address, size_t size)
+{
+	assert(sp == current_space);
+
+	/* curious x86 segment games */
+	uint32_t wrap_addr = (uint32_t)address + KERNEL_SEG_SIZE;
+	memcpy(dest, (void *)wrap_addr, size);
+}
+
+
 static size_t space_memcpy_from_fast(
 	struct space *sp,
-	void *dest,
-	L4_Word_t address,
-	size_t size)
+	void *dest, L4_Word_t address, size_t size)
 {
+	assert(sp == current_space);
+
 	L4_Word_t fault_addr;
 	if((fault_addr = catch_pf()) != 0) {
 		return 0;
 	} else {
-		/* curious x86 segment games */
-		uint32_t wrap_addr = (uint32_t)address + KERNEL_SEG_SIZE;
-		memcpy(dest, (void *)wrap_addr, size);
-
+		space_memcpy_from_unsafe(sp, dest, address, size);
 		uncatch_pf();
 		return size;
 	}
@@ -678,9 +714,7 @@ static size_t space_memcpy_from_fast(
 
 size_t space_memcpy_from(
 	struct space *sp,
-	void *dest,
-	L4_Word_t address,
-	size_t size)
+	void *dest, L4_Word_t address, size_t size)
 {
 	assert(check_space(0, sp));
 
