@@ -1442,9 +1442,18 @@ void receive_and_exit(void *param UNUSED)
 }
 
 
+/* check that faulting threads halt when their pager is deleted after the pf
+ * message has been delivered.
+ *
+ * note the sleep: without it, the faulting thread won't hit "no partner" and
+ * be halted by its reception hook. while the behaviour could be tighter (so
+ * it'd fire immediately on thread deletion, avoiding both the need to sleep
+ * in this test and the possibility of a different, unrelated thread being
+ * created in between), for now it doesn't have to be.
+ */
 START_TEST(halt_on_lost_pager)
 {
-	plan_tests(1);
+	plan_tests(2);
 
 	L4_ThreadId_t oth = xstart_thread(&fault_to_given_pager_fn, NULL),
 		fake_pager = xstart_thread(&receive_and_exit, NULL);
@@ -1456,8 +1465,11 @@ START_TEST(halt_on_lost_pager)
 	void *res = join_thread_long(fake_pager, TEST_IPC_DELAY, &ec);
 	fail_if(res == NULL || !streq(res, "ok!"),
 		"join of fake pager failed, ec=%#lx", ec);
-	fail_if(thr_exists(fake_pager));
-	ok1(is_halted(oth));
+	ok1(!thr_exists(fake_pager));	/* validity precondition */
+	L4_Sleep(A_SHORT_NAP);
+	if(!ok1(is_halted(oth))) {
+		diag("schedstate=%lu", get_schedstate(oth));
+	}
 
 	kill_thread(oth);
 }
@@ -1469,7 +1481,7 @@ END_TEST
  */
 START_TEST(halt_on_lost_exh)
 {
-	plan_tests(1);
+	plan_tests(2);
 
 	L4_ThreadId_t oth = xstart_thread(&receive_and_die_fn, NULL),
 		fake_exh = xstart_thread(&receive_and_exit, NULL);
@@ -1481,9 +1493,11 @@ START_TEST(halt_on_lost_exh)
 	void *res = join_thread_long(fake_exh, TEST_IPC_DELAY, &ec);
 	fail_if(res == NULL || !streq(res, "ok!"),
 		"join of fake exceptionhandler failed, ec=%#lx", ec);
-	fail_if(thr_exists(fake_exh));
-
-	ok1(is_halted(oth));
+	ok1(!thr_exists(fake_exh));	/* validity precondition */
+	L4_Sleep(A_SHORT_NAP);
+	if(!ok1(is_halted(oth))) {
+		diag("schedstate=%lu", get_schedstate(oth));
+	}
 
 	kill_thread(oth);
 }
