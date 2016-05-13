@@ -2198,58 +2198,52 @@ END_TEST
 /* test that propagated passive sends can be received with all applicable
  * forms of FromSpec.
  */
-START_LOOP_TEST(propagation_in_active_receive, iter, 0, 7)
+START_LOOP_TEST(propagation_in_active_receive, iter, 0, 31)
 {
-	plan_tests(4);
+	const int fsix = iter & 3;	/* fromspec index */
+	iter >>= 2;
 	const bool is_fork = CHECK_FLAG(iter, 1),
 		is_local = CHECK_FLAG(iter, 2),
 		is_vs_local = CHECK_FLAG(iter, 4);
-	diag("is_fork=%s, is_local=%s, is_vs_local=%s",
-		btos(is_fork), btos(is_local), btos(is_vs_local));
-
-	/* iterate through different ways to receive, skipping local modes when
-	 * is_fork.
-	 */
-	for(int i=0; i < 4; i++) {
-		if(i < 2 && is_fork) {
-			skip(1, "mode `%s' not applicable when is_fork=%s",
-				fromspec_name[i], btos(is_fork));
-			continue;
-		}
-
-		subtest_start("FromSpec=%s", fromspec_name[i]);
-		plan_tests(7);
-
-		struct vs_pair p;
-		start_vs_pair(&p, is_local, is_vs_local, is_fork);
-		L4_ThreadId_t vs_tid = p.vs_tid, sender_tid = p.sender_tid;
-		L4_Sleep(A_SHORT_NAP);
-
-		L4_ThreadId_t from = fromspec_class(i, vs_tid);
-		L4_MsgTag_t tag = L4_Ipc(L4_nilthread, from,
-			L4_Timeouts(L4_Never, L4_ZeroTime), &from);
-		L4_Word_t ec = L4_ErrorCode();
-		if(!ok1(L4_IpcSucceeded(tag))) {
-			diag("ec=%#lx", ec);
-		}
-		L4_ThreadId_t actual = L4_ActualSender();
-		ok1(L4_IpcPropagated(tag));
-		ok1(L4_SameThreads(actual, sender_tid));
-		ok1(L4_SameThreads(from, vs_tid));
-		iff_ok1(!is_fork, L4_IsLocalId(from));
-		iff_ok1(!is_fork, L4_IsLocalId(actual));
-
-		tag = L4_Receive_Timeout(sender_tid, TEST_IPC_DELAY);
-		IPC_FAIL(tag);
-		L4_StoreMR(1, &tag.raw);
-		L4_StoreMR(2, &ec);
-		if(!ok(L4_IpcSucceeded(tag) && ec == 0, "sender ok")) {
-			diag("tag=%#lx, ec=%#lx", tag.raw, ec);
-		}
-
-		end_vs_pair(&p);
-		subtest_end();
+	diag("FromSpec=%s, is_fork=%s, is_local=%s, is_vs_local=%s",
+		fromspec_name[fsix], btos(is_fork), btos(is_local), btos(is_vs_local));
+	if(fsix < 2 && is_fork) {
+		plan_skip_all("skipping local FromSpec under is_fork");
+		diag("mode `%s' not applicable when is_fork=%s",
+			fromspec_name[fsix], btos(is_fork));
+		return;
 	}
+
+	plan_tests(7);
+
+	struct vs_pair p;
+	start_vs_pair(&p, is_local, is_vs_local, is_fork);
+	L4_ThreadId_t vs_tid = p.vs_tid, sender_tid = p.sender_tid;
+	L4_Sleep(A_SHORT_NAP);
+
+	L4_ThreadId_t from = fromspec_class(fsix, vs_tid);
+	L4_MsgTag_t tag = L4_Ipc(L4_nilthread, from,
+		L4_Timeouts(L4_Never, L4_ZeroTime), &from);
+	L4_Word_t ec = L4_ErrorCode();
+	if(!ok1(L4_IpcSucceeded(tag))) {
+		diag("ec=%#lx", ec);
+	}
+	L4_ThreadId_t actual = L4_ActualSender();
+	ok1(L4_IpcPropagated(tag));
+	ok1(L4_SameThreads(actual, sender_tid));
+	ok1(L4_SameThreads(from, vs_tid));
+	iff_ok1(!is_fork, L4_IsLocalId(from));
+	iff_ok1(!is_fork, L4_IsLocalId(actual));
+
+	tag = L4_Receive_Timeout(sender_tid, TEST_IPC_DELAY);
+	IPC_FAIL(tag);
+	L4_StoreMR(1, &tag.raw);
+	L4_StoreMR(2, &ec);
+	if(!ok(L4_IpcSucceeded(tag) && ec == 0, "sender ok")) {
+		diag("tag=%#lx, ec=%#lx", tag.raw, ec);
+	}
+
+	end_vs_pair(&p);
 }
 END_TEST
 
@@ -2710,21 +2704,14 @@ static void lipc_receiver_fn(void *param_ptr)
 	L4_LoadMR(0, (L4_MsgTag_t){ .X.label = tag.X.label,
 		.X.u = n_words }.raw);
 	L4_LoadMRs(1, n_words, words);
-	const char *kind;
 	if(p->reply_with_lipc && L4_IsLocalId(sender)) {
 		/* our little synthetic L4_Lreply() */
 		L4_ThreadId_t dummy;
 		tag = L4_Lipc(sender, L4_nilthread,
 			L4_Timeouts(L4_ZeroTime, L4_Never), &dummy);
-		kind = "Lipc";
 	} else {
 		tag = L4_Reply(sender);
-		kind = "Ipc";
 	}
-#if 0
-	diag("%s: did %s reply to %lu:%lu (%#lx)", __func__, kind,
-		L4_ThreadNo(sender), L4_Version(sender), sender.raw);
-#endif
 	IPC_FAIL(tag);
 
 	L4_Set_Rights(&a_page, L4_FullyAccessible);
