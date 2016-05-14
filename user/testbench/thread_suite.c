@@ -1445,18 +1445,24 @@ void receive_and_exit(void *param UNUSED)
 /* check that faulting threads halt when their pager is deleted after the pf
  * message has been delivered.
  *
- * note the sleep: without it, the faulting thread won't hit "no partner" and
- * be halted by its reception hook. while the behaviour could be tighter (so
- * it'd fire immediately on thread deletion, avoiding both the need to sleep
- * in this test and the possibility of a different, unrelated thread being
- * created in between), for now it doesn't have to be.
+ * variables:
+ *   - [delayed_measure] whether the measuring thread sleeps before testing
+ *     the subject's status. this is required to cover both passive receive and
+ *     pending passive receive. (this serves to exclude the case where a thread
+ *     ID is both deleted and created while the subject is in pending receive.)
  */
-START_TEST(halt_on_lost_pager)
+START_LOOP_TEST(halt_on_lost_pager, iter, 0, 1)
 {
+	const bool delayed_measure = CHECK_FLAG(iter, 1);
+	diag("delayed_measure=%s", btos(delayed_measure));
 	plan_tests(2);
 
 	L4_ThreadId_t oth = xstart_thread(&fault_to_given_pager_fn, NULL),
 		fake_pager = xstart_thread(&receive_and_exit, NULL);
+	fail_if(L4_Set_Priority(oth, 2) == 0,
+		"setpri(oth) failed, ec=%#lx", L4_ErrorCode());
+	fail_if(L4_Set_Priority(fake_pager, 3) == 0,
+		"setpri(fake_pager) failed, ec=%#lx", L4_ErrorCode());
 	L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 1 }.raw);
 	L4_LoadMR(1, fake_pager.raw);
 	L4_MsgTag_t tag = L4_Call(oth);
@@ -1466,7 +1472,8 @@ START_TEST(halt_on_lost_pager)
 	fail_if(res == NULL || !streq(res, "ok!"),
 		"join of fake pager failed, ec=%#lx", ec);
 	ok1(!thr_exists(fake_pager));	/* validity precondition */
-	L4_Sleep(A_SHORT_NAP);
+	if(delayed_measure) L4_Sleep(A_SHORT_NAP);
+	if(!delayed_measure) todo_start("currently broken");
 	if(!ok1(is_halted(oth))) {
 		diag("schedstate=%lu", get_schedstate(oth));
 	}
@@ -1476,15 +1483,19 @@ START_TEST(halt_on_lost_pager)
 END_TEST
 
 
-/* TODO: add case where the exception handler disappears before the exception
- * message is delivered. (and same for the lost_pager test, too.)
- */
-START_TEST(halt_on_lost_exh)
+/* same as halt_on_lost_pager, but for the ExceptionHandler. */
+START_LOOP_TEST(halt_on_lost_exh, iter, 0, 1)
 {
+	const bool delayed_measure = CHECK_FLAG(iter, 1);
+	diag("delayed_measure=%s", btos(delayed_measure));
 	plan_tests(2);
 
 	L4_ThreadId_t oth = xstart_thread(&receive_and_die_fn, NULL),
 		fake_exh = xstart_thread(&receive_and_exit, NULL);
+	fail_if(L4_Set_Priority(oth, 2) == 0,
+		"setpri(oth) failed, ec=%#lx", L4_ErrorCode());
+	fail_if(L4_Set_Priority(fake_exh, 3) == 0,
+		"setpri(fake_exh) failed, ec=%#lx", L4_ErrorCode());
 	L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 1 }.raw);
 	L4_LoadMR(1, fake_exh.raw);
 	L4_MsgTag_t tag = L4_Call(oth);
@@ -1494,7 +1505,8 @@ START_TEST(halt_on_lost_exh)
 	fail_if(res == NULL || !streq(res, "ok!"),
 		"join of fake exceptionhandler failed, ec=%#lx", ec);
 	ok1(!thr_exists(fake_exh));	/* validity precondition */
-	L4_Sleep(A_SHORT_NAP);
+	if(delayed_measure) L4_Sleep(A_SHORT_NAP);
+	if(!delayed_measure) todo_start("currently broken");
 	if(!ok1(is_halted(oth))) {
 		diag("schedstate=%lu", get_schedstate(oth));
 	}
