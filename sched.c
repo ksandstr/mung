@@ -545,6 +545,60 @@ void sched_ipc_handoff_timeout(
 }
 
 
+/* note that @with_ltid is allowed to be nilthread, but with_gtid isn't. */
+void cancel_pending_receive(
+	struct space *sp,
+	L4_GthreadId_t with_gtid, L4_LthreadId_t with_ltid,
+	L4_Word_t errcode)
+{
+	assert(with_gtid.raw != L4_anythread.raw);
+	assert(with_gtid.raw != L4_nilthread.raw);
+	assert(with_ltid.raw != L4_anylocalthread.raw);
+	assert(with_ltid.X.zeros == 0);
+	assert((errcode & 1) == 1);		/* code indicates receive phase */
+
+	for(struct rb_node *cur = rb_first(&sched_tree);
+		cur != NULL;
+		cur = rb_next(cur))
+	{
+		struct thread *t = rb_entry(cur, struct thread, sched_rb);
+		/* FIXME: apparently R_RECV threads end up in the scheduling queue
+		 * with wakeup_time > 0, which is contrary to the concept of being
+		 * ready to execute. this should be fixed in the R_RECV transitions,
+		 * and this early-exit clause restored.
+		 */
+		//if(t->wakeup_time > 0) break;
+
+		if(t->status == TS_R_RECV
+			&& (t->ipc_from.raw == with_gtid.raw
+				|| (with_ltid.raw != L4_nilthread.raw
+					&& t->ipc_from.raw == with_ltid.raw
+					&& t->space == sp)))
+		{
+			if(!post_exn_fail(t)) {
+				set_ipc_error_thread(t, errcode);
+				thread_wake(t);
+			}
+		}
+	}
+
+#ifndef NDEBUG
+	/* assert that there are no R_RECV threads remaining for the two TIDs. */
+	for(struct rb_node *cur = rb_first(&sched_tree);
+		cur != NULL;
+		cur = rb_next(cur))
+	{
+		struct thread *t = rb_entry(cur, struct thread, sched_rb);
+		assert(t->status != TS_R_RECV
+			|| (t->ipc_from.raw != with_gtid.raw
+				&& (with_ltid.raw == L4_nilthread.raw
+					|| t->ipc_from.raw != with_ltid.raw
+					|| t->space != sp)));
+	}
+#endif
+}
+
+
 /* when this function returns NULL and *saw_zero_p is set to true, the
  * scheduler should grant all ready threads another timeslice and redo from
  * start. (the flag indicates that a thread with a zero quantum was skipped

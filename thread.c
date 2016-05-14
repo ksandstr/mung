@@ -1204,6 +1204,10 @@ SYSCALL L4_Word_t sys_threadcontrol(
 
 		drop_redir_to(dest);
 		cancel_ipc_from(dest);
+		L4_ThreadId_t dead_tid = { .raw = dest->id };
+		cancel_pending_receive(dest->space, dead_tid.global,
+			dest->utcb_pos >= 0 ? get_local_id(dest).local
+				: L4_nilthread.local, 5);
 		if(!CHECK_FLAG(dest->flags, TF_HALT)) thread_halt(dest);
 		if(CHECK_FLAG(dest->flags, TF_INTR)) int_kick(dest);
 		post_exn_fail(dest);
@@ -1214,7 +1218,6 @@ SYSCALL L4_Word_t sys_threadcontrol(
 				sq_remove_thread(dest);
 			}
 		}
-		L4_ThreadId_t dead_tid = { .raw = dest->id };
 		thread_destroy(dest);
 		cancel_ipc_to(dead_tid, 2 << 1);	/* "lost partner" */
 		goto dead;

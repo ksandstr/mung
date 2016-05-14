@@ -113,6 +113,16 @@ extern void sched_ipc_handoff_timeout(
 /* returns clock value that fits thread->wakeup_time */
 extern uint64_t wakeup_at(L4_Time_t period);
 
+/* sets error code on threads in R_RECV where $Ipc.FromSpec ∈ { with_gtid,
+ * with_ltid[sp] }$. analoguous to cancel_ipc_to()'s RECV_WAIT side, but for
+ * threads that're waiting to enter active/passive receive. used for
+ * preventing the case where a TID is deleted and then created, causing peer
+ * identity skew on low-priority pending threads.
+ */
+extern void cancel_pending_receive(
+	struct space *sp,		/* of with_ltid */
+	L4_GthreadId_t with_gtid, L4_LthreadId_t with_ltid,
+	L4_Word_t errcode);
 
 /* scheduling queues */
 extern void sq_insert_thread(struct thread *t);

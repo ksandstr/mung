@@ -1473,7 +1473,6 @@ START_LOOP_TEST(halt_on_lost_pager, iter, 0, 1)
 		"join of fake pager failed, ec=%#lx", ec);
 	ok1(!thr_exists(fake_pager));	/* validity precondition */
 	if(delayed_measure) L4_Sleep(A_SHORT_NAP);
-	if(!delayed_measure) todo_start("currently broken");
 	if(!ok1(is_halted(oth))) {
 		diag("schedstate=%lu", get_schedstate(oth));
 	}
@@ -1506,7 +1505,6 @@ START_LOOP_TEST(halt_on_lost_exh, iter, 0, 1)
 		"join of fake exceptionhandler failed, ec=%#lx", ec);
 	ok1(!thr_exists(fake_exh));	/* validity precondition */
 	if(delayed_measure) L4_Sleep(A_SHORT_NAP);
-	if(!delayed_measure) todo_start("currently broken");
 	if(!ok1(is_halted(oth))) {
 		diag("schedstate=%lu", get_schedstate(oth));
 	}
