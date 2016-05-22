@@ -562,12 +562,7 @@ void cancel_pending_receive(
 		cur = rb_next(cur))
 	{
 		struct thread *t = rb_entry(cur, struct thread, sched_rb);
-		/* FIXME: apparently R_RECV threads end up in the scheduling queue
-		 * with wakeup_time > 0, which is contrary to the concept of being
-		 * ready to execute. this should be fixed in the R_RECV transitions,
-		 * and this early-exit clause restored.
-		 */
-		//if(t->wakeup_time > 0) break;
+		if(runnable_at(t) > 0) break;
 
 		if(t->status == TS_R_RECV
 			&& (t->ipc_from.raw == with_gtid.raw
