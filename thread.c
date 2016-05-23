@@ -1237,6 +1237,9 @@ SYSCALL L4_Word_t sys_threadcontrol(
 			 */
 			cancel_ipc_from(dest);
 			L4_ThreadId_t stale_tid = { .raw = dest->id };
+			cancel_pending_receive(dest->space, stale_tid.global,
+				dest->utcb_pos >= 0 ? get_local_id(dest).local
+					: L4_nilthread.local, 5);
 			dest->id = dest_tid.raw;
 			if(dest->utcb_pos >= 0) {
 				void *utcb = thread_get_utcb(dest);
