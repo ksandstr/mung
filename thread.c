@@ -18,6 +18,7 @@
 #include <ukernel/interrupt.h>
 #include <ukernel/mm.h>
 #include <ukernel/slab.h>
+#include <ukernel/rangealloc.h>
 #include <ukernel/ipc.h>
 #include <ukernel/misc.h>
 #include <ukernel/space.h>
@@ -62,11 +63,12 @@ static L4_Word_t *int_async_table = NULL;	/* bitfield, 0..num_ints-1 */
 /* control variables used by schedule() etc. */
 volatile bool kernel_irq_ok = false, kernel_irq_deferred = false;
 
-struct htable thread_hash = HTABLE_INITIALIZER(thread_hash,
-	hash_thread_by_id, NULL);
-
-struct kmem_cache *thread_slab = NULL;
 static struct kmem_cache *saved_regs_slab = NULL;
+struct rangealloc *thread_ra = NULL;
+
+/* burner threads for tno=0 .. num_ints */
+static int num_static;
+static struct thread **static_threads;
 
 
 #ifdef DEBUG_ME_HARDER
@@ -87,12 +89,13 @@ inv_fail:
 
 static bool check_thread_module(int opt)
 {
-	struct htable_iter it;
-	for(void *ptr = htable_first(&thread_hash, &it);
-		ptr != NULL;
-		ptr = htable_next(&thread_hash, &it))
+	struct ra_iter it;
+	for(struct thread *t = ra_first(thread_ra, &it);
+		t != NULL;
+		t = ra_next(thread_ra, &it))
 	{
-		if(!check_thread(opt, (struct thread *)ptr)) return false;
+		if(t->space == NULL) continue;	/* burners etc. */
+		if(!check_thread(opt, t)) return false;
 	}
 
 	return true;
@@ -105,6 +108,8 @@ static bool check_thread_module(int a) { return true; }
 
 COLD void init_threading(void)
 {
+	assert(thread_ra == NULL);
+
 	num_ints = last_int_threadno() + 1;
 	int_table = malloc(num_ints * sizeof(struct interrupt));
 	for(int i=0; i < num_ints; i++) {
@@ -117,9 +122,26 @@ COLD void init_threading(void)
 	int_async_table = malloc(num_async_words * sizeof(L4_Word_t));
 	for(int i=0; i < num_async_words; i++) int_async_table[0] = 0;
 
-	assert(thread_slab == NULL);
-	thread_slab = KMEM_CACHE_NEW("thread_slab", struct thread);
 	saved_regs_slab = KMEM_CACHE_NEW("saved_regs_slab", struct saved_regs);
+
+	/* room for the full 256k threads of 32-bit L4.X2. */
+	assert(thread_ra == NULL);
+	thread_ra = RA_NEW(struct thread, 1 << 18);
+
+	num_static = first_user_threadno() - 1;
+	if(num_static == 0) {
+		static_threads = NULL;
+	} else {
+		static_threads = malloc(num_static * sizeof(struct thread *));
+		for(int i=0; i < num_static; i++) {
+			struct thread *t = ra_zalloc(thread_ra, i);
+			BUG_ON(t == NULL, "static_threads[%d]", i);
+			static_threads[i] = t;
+		}
+#ifndef NDEBUG
+		printf("thread_ra: allocated %d burners.\n", num_static);
+#endif
+	}
 
 	assert(check_thread_module(0));
 }
@@ -177,24 +199,14 @@ bool post_exn_fail(struct thread *t)
 
 struct thread *thread_new(thread_id tid)
 {
-	/* keep thread_new() calls after init_threading() */
-	assert(thread_slab != NULL);
-
-	struct thread *t = kmem_cache_alloc(thread_slab);
-	if(thread_ctor(t, tid)) {
-		return t;
-	} else {
-		kmem_cache_free(thread_slab, t);
-		return NULL;
-	}
-}
-
-
-bool thread_ctor(struct thread *t, thread_id tid)
-{
+	assert(thread_ra != NULL);	/* must have been initialized */
 	assert(thread_find(tid) == NULL);
 	assert(TID_THREADNUM(tid) > last_int_threadno());
 
+	struct thread *t = ra_alloc(thread_ra, TID_THREADNUM(tid));
+	if(unlikely(t == NULL)) return NULL;
+
+	assert(ra_ptr2id(thread_ra, t) == TID_THREADNUM(tid));
 	*t = (struct thread){
 		.id = tid,
 		.status = TS_STOPPED,
@@ -213,9 +225,9 @@ bool thread_ctor(struct thread *t, thread_id tid)
 			.eflags = (3 << 12) | (1 << 9) | (1 << 1),
 		},
 	};
-
 	hook_init(&t->post_exn_call, NULL);
-	return htable_add(&thread_hash, int_hash(TID_THREADNUM(t->id)), t);
+
+	return t;
 }
 
 
@@ -239,8 +251,8 @@ static void thread_destroy(struct thread *t)
 	}
 
 	cop_killa(t);
-	htable_del(&thread_hash, int_hash(TID_THREADNUM(t->id)), t);
-	kmem_cache_free(thread_slab, t);
+	t->space = NULL;
+	ra_free(thread_ra, t);
 }
 
 
@@ -538,23 +550,21 @@ void *thread_get_utcb(struct thread *t)
 }
 
 
-static bool cmp_thread_to_id(const void *cand, void *ptr)
+struct thread *thread_find(thread_id tid)
 {
-	const struct thread *t = cand;
-	thread_id *tid = ptr;
-	return TID_THREADNUM(t->id) == TID_THREADNUM(*tid);
+	if(unlikely(catch_pf() != 0)) return NULL;
+
+	/* the speedy gonzales mode: avoids a ffsl(). */
+	struct thread *t = ra_id2ptr(thread_ra, TID_THREADNUM(tid));
+	if(unlikely(*(struct space *volatile *)&t->space == NULL)) t = NULL;
+	assert(t == NULL
+		|| TID_THREADNUM(t->id) == TID_THREADNUM(tid));
+	uncatch_pf();
+	return t;
 }
 
 
-struct thread *thread_find(thread_id tid) {
-	return htable_get(&thread_hash, int_hash(TID_THREADNUM(tid)),
-		&cmp_thread_to_id, &tid);
-}
-
-
-struct thread *resolve_tid_spec(
-	struct space *ref_space,
-	L4_ThreadId_t tid)
+struct thread *resolve_tid_spec(struct space *ref_space, L4_ThreadId_t tid)
 {
 	if(L4_IsLocalId(tid)) {
 		return space_find_local_thread(ref_space, tid.local);
@@ -562,12 +572,6 @@ struct thread *resolve_tid_spec(
 		struct thread *t = thread_find(tid.raw);
 		return t != NULL && t->id == tid.raw ? t : NULL;
 	}
-}
-
-
-size_t hash_thread_by_id(const void *ptr, void *dataptr) {
-	const struct thread *t = ptr;
-	return int_hash(TID_THREADNUM(t->id));
 }
 
 

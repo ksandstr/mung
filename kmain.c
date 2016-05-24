@@ -372,7 +372,6 @@ static COLD struct thread *spawn_kernel_server(
 {
 	assert(utcb_size_log2 >= PAGE_BITS);
 
-	struct thread *t = thread_new(thread_id);
 	struct space *sp = space_new();
 	/* position the UTCB area to fall within the kernel's reservation. */
 	extern char _start;
@@ -383,6 +382,7 @@ static COLD struct thread *spawn_kernel_server(
 	 * mappings.
 	 */
 	space_set_kip_area(sp, L4_FpageLog2((L4_Word_t)kip_mem, PAGE_BITS));
+	struct thread *t = thread_new(thread_id);
 	t->space = sp;
 	assert(t->utcb_pos < 0 && t->utcb_page == NULL);
 	bool ok = thread_set_utcb(t, L4_Address(sp->utcb_area));

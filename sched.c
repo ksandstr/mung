@@ -212,11 +212,12 @@ static bool check_sched_module(void)
 	/* TODO: check states in the scheduling queue as well */
 
 	/* invariants of <struct thread> (via IpcPartnerThread). */
-	struct htable_iter it;
-	for(struct thread *s = htable_first(&thread_hash, &it);
+	struct ra_iter it;
+	for(struct thread *s = ra_first(thread_ra, &it);
 		s != NULL;
-		s = htable_next(&thread_hash, &it))
+		s = ra_next(thread_ra, &it))
 	{
+		if(s->space == NULL) continue;	/* burners etc. */
 		inv_push("s=%lu:%lu", TID_THREADNUM(s->id), TID_VERSION(s->id));
 		struct thread *t = s->u0.partner;
 		if(t == NULL) {

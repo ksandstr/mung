@@ -17,7 +17,7 @@
 #include <ukernel/hook.h>
 #include <ukernel/util.h>
 #include <ukernel/x86.h>
-#include <ukernel/slab.h>
+#include <ukernel/rangealloc.h>
 #include <ukernel/misc.h>
 
 
@@ -74,6 +74,7 @@ struct utcb_page;
 struct ipc_state;		/* defined in <ukernel/ipc.h> */
 struct saved_regs;		/* private to thread.c */
 
+/* validity criteria in thread_find(): space != NULL. */
 struct thread
 {
 	/* the fields up to and including "ctx" are accessed from the fast
@@ -179,13 +180,7 @@ struct thread
 };
 
 
-/* keyed by int_hash(thread->id), members are <struct thread *> */
-extern struct htable thread_hash;
-
-/* allocates <struct thread> after init_threading() */
-extern struct kmem_cache *thread_slab;
-
-
+extern struct rangealloc *thread_ra;	/* for invariant checks */
 extern void init_threading(void);
 
 /* finds by thread ID, ignores version. */
@@ -211,11 +206,6 @@ extern SYSCALL L4_Word_t sys_threadcontrol(
  * ThreadControl semantics.
  */
 extern struct thread *thread_new(thread_id tid);
-
-/* (re)constructs a thread. initializes all fields and adds it to thread_hash.
- * return value is true when the latter succeeds.
- */
-extern bool thread_ctor(struct thread *t, thread_id tid);
 
 extern void thread_set_spip(struct thread *t, L4_Word_t sp, L4_Word_t ip);
 /* returns false on some error (generally when out of GDT slots). */
