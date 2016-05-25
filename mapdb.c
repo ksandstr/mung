@@ -155,8 +155,29 @@ static void dump_map_group(struct map_group *g)
  * end up pointing to no valid entry at all, or an entry in an unrelated
  * space's group (because of object recycling). caveat lector.
  */
-static bool is_group_valid(struct map_group *grp) {
+static inline bool is_group_valid(struct map_group *grp) {
 	return grp->space != NULL;
+}
+
+
+static struct map_group *deref_group(long id)
+{
+	if(id == 0) return NULL;
+
+#ifndef NDEBUG
+	if(unlikely(catch_pf() != 0)) {
+		BUG_ON(true, "lookup of map_group id=%ld faulted!", id);
+	}
+#endif
+
+	struct map_group *g = ra_id2ptr(map_group_ra, id);
+	if(!is_group_valid(g)) g = NULL;
+
+#ifndef NDEBUG
+	uncatch_pf();
+#endif
+
+	return g;
 }
 
 
@@ -215,8 +236,7 @@ static bool check_map_entry(
 	inv_ok1(L4_Size(e->range) <= GROUP_SIZE);
 	inv_ok1(fpage_overlap(L4_Fpage(MG_START(grp), GROUP_SIZE), e->range));
 
-	struct map_group *p_grp = ra_id2ptr_safe(map_group_ra,
-		REF_GROUP_ID(e->parent));
+	struct map_group *p_grp = deref_group(REF_GROUP_ID(e->parent));
 	if(p_grp != NULL && p_grp->space == NULL) {
 		inv_log("p_grp=%p had NULL space -- cleared", p_grp);
 		p_grp = NULL;
@@ -411,9 +431,8 @@ static bool deref_child(
 		}
 	}
 
-	struct map_group *g = ra_id2ptr_safe(map_group_ra,
-		REF_GROUP_ID(ref));
-	if(g == NULL || !is_group_valid(g)) goto tombstone;
+	struct map_group *g = deref_group(REF_GROUP_ID(ref));
+	if(g == NULL) goto tombstone;
 	cr->child_entry = probe_group_addr(g, MG_START(g) + REF_ADDR(ref));
 	if(cr->child_entry == NULL) {
 		TRACE("%s: no entry at %#lx+%#lx=%#lx\n", __func__,
@@ -458,11 +477,11 @@ tombstone:
 
 static struct map_entry *deref_parent(struct map_group **g_p, L4_Word_t ref)
 {
-	*g_p = ra_id2ptr_safe(map_group_ra, REF_GROUP_ID(ref));
+	*g_p = deref_group(REF_GROUP_ID(ref));
 	/* (parent refs are guaranteed valid, except where they're not. leave the
 	 * other case to the caller.)
 	 */
-	if(likely(*g_p != NULL && is_group_valid(*g_p))) {
+	if(likely(*g_p != NULL)) {
 		return probe_group_addr(*g_p, MG_START(*g_p) + REF_ADDR(ref));
 	} else {
 		return NULL;
@@ -1106,10 +1125,9 @@ static bool add_map_postcond(
 {
 #ifndef NDEBUG
 	/* @sp must contain the indicated range if it existed in the parent. */
-	struct map_group *p_grp = ra_id2ptr_safe(map_group_ra,
-		REF_GROUP_ID(parent));
+	struct map_group *p_grp = deref_group(REF_GROUP_ID(parent));
 	/* @parent may be undefined, or special. */
-	assert(p_grp == NULL || !REF_DEFINED(parent) || is_group_valid(p_grp));
+	assert(p_grp == NULL || is_group_valid(p_grp));
 	assert(p_grp != NULL || !REF_DEFINED(parent) || REF_IS_SPECIAL(parent));
 
 	if(REF_DEFINED(parent) && !REF_IS_SPECIAL(parent)) {
@@ -1912,9 +1930,8 @@ static int reparent_children(struct map_group *g, struct map_entry *e)
 	int p_offs = 0;
 	if(likely(REF_DEFINED(e->parent))) {
 		/* FIXME: use a deref_parent() here */
-		parent_g = (void *)((e->parent & map_group_ra->and_mask) | map_group_ra->or_mask);
-		assert(parent_g == ra_id2ptr_safe(map_group_ra,
-			REF_GROUP_ID(e->parent)));
+		parent_g = deref_group(REF_GROUP_ID(e->parent));
+		assert(parent_g != NULL);
 		parent_entry = probe_group_addr(parent_g,
 			MG_START(parent_g) + REF_ADDR(e->parent));
 		assert(parent_entry != NULL);
