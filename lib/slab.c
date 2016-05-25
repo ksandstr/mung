@@ -31,7 +31,6 @@ struct kmem_cache
 	uint16_t size, align;		/* object size, alignment */
 	unsigned int flags;			/* KMEM_* */
 	kmem_cache_ctor ctor, dtor;
-	struct slab_policy_fns *pol;
 
 	struct list_head free_list, partial_list, full_list;
 	uint32_t magic;				/* for kmem_cache_find() */
@@ -107,7 +106,6 @@ struct kmem_cache *kmem_cache_create(
 	c->ctor = ctor;
 	c->dtor = dtor;
 	c->n_cached = 0;
-	c->pol = NULL;
 	list_head_init(&c->free_list);
 	list_head_init(&c->partial_list);
 	list_head_init(&c->full_list);
@@ -124,30 +122,21 @@ void kmem_cache_destroy(struct kmem_cache *cache)
 	 */
 
 	kmem_cache_shrink(cache);
-
-	if(cache->pol != NULL) {
-		(*cache->pol->destroy)(cache->pol);
-		cache->pol = NULL;
-	}
 }
 
 
 static void *get_new_slab(struct kmem_cache *cache) {
-	return cache->pol == NULL ? kmem_alloc_new_page()
-		: (*cache->pol->alloc_page)(cache->pol);
+	return kmem_alloc_new_page();
 }
 
 
 static void free_slab(struct kmem_cache *cache, void *slab) {
-	if(cache->pol == NULL) kmem_free_page(slab);
-	else (*cache->pol->free_page)(cache->pol, slab);
+	kmem_free_page(slab);
 }
 
 
 void *kmem_cache_alloc(struct kmem_cache *cache)
 {
-	assert(!CHECK_FLAG(cache->flags, KMEM_POLICY));
-
 	if(cache->n_cached > 0) {
 		void *ret = cache->cache[--cache->n_cached];
 		if(cache->ctor != NULL
@@ -329,13 +318,4 @@ struct kmem_cache *kmem_cache_find(void *allocation)
 	}
 
 	return NULL;
-}
-
-
-void kmem_cache_set_policy(struct kmem_cache *cache, void *polptr)
-{
-	assert(CHECK_FLAG(cache->flags, KMEM_POLICY));
-	assert(polptr != NULL);
-	cache->pol = polptr;
-	cache->flags &= ~KMEM_POLICY;
 }
