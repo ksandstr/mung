@@ -718,45 +718,11 @@ size_t space_memcpy_from(
 
 /* the goal is that regardless of @size, the TSS structure should be allocated
  * in such a way that the TSS before the I/O bitmap falls within a single
- * memory page. most reasonably this happens with a number of regular
- * allocations first and if those don't pay up, a slightly less efficient
- * valloc().
- *
- * also the static analyzer from clang screams potential memory leak about
- * this code, twice, in both cases spuriously -- it mistakenly regards the two
- * "p0 < p1" expressions as orthogonal.
+ * memory page. this is guaranteed by alignment to the next biggest power of
+ * two greater than @size. dlmalloc will pony up with such a block.
  */
-static void *alloc_tss(size_t size)
-{
-	assert(size >= sizeof(struct tss));
-	const int max_trash = 8;
-
-	struct list_head trash_list;
-	int n_trash = 0;
-	void *ptr;
-	L4_Word_t p0, p1;
-	do {
-		ptr = malloc(size);
-		p0 = (L4_Word_t)ptr >> PAGE_BITS;
-		p1 = ((L4_Word_t)ptr + sizeof(struct tss) - 1) >> PAGE_BITS;
-		if(p0 < p1) {
-			if(unlikely(ptr == NULL)) break;
-			if(n_trash == 0) list_head_init(&trash_list);
-			list_add(&trash_list, ptr);
-		}
-	} while(p0 < p1 && ++n_trash < max_trash);
-	if(n_trash > 0) {
-		struct trash_entry { struct list_node n; } *ent, *next;
-		list_for_each_safe(&trash_list, ent, next, n) {
-			free(ent);
-		}
-	}
-	if(ptr != NULL && p0 < p1) {
-		/* punt case. */
-		assert(n_trash == max_trash);
-		ptr = valloc(size);
-	}
-	return ptr;
+static void *alloc_tss(size_t size) {
+	return aligned_alloc(1 << size_to_shift(size), size);
 }
 
 
