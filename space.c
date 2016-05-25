@@ -19,6 +19,7 @@
 #include <ukernel/mm.h>
 #include <ukernel/x86.h>
 #include <ukernel/slab.h>
+#include <ukernel/rangealloc.h>
 #include <ukernel/misc.h>
 #include <ukernel/util.h>
 #include <ukernel/thread.h>
@@ -1051,7 +1052,7 @@ static COLD bool cmp_page_to_id(const void *cand_ptr, void *key) {
 
 
 /* the init_spaces() parts that require the malloc heap and mapdb
- * initialization, i.e. htable operations and map_group_slab.
+ * initialization, i.e. htable operations and map_group_ra.
  */
 COLD void space_finalize_kernel(
 	struct space *sp,
@@ -1065,7 +1066,7 @@ COLD void space_finalize_kernel(
 	 * this'll let kernel_space pass consistency checks for very little cost
 	 * so it's fine.
 	 */
-	assert(map_group_slab != NULL);
+	assert(map_group_ra != NULL);
 	struct htable by_id;
 	htable_init(&by_id, &hash_page_by_id, NULL);
 	struct page *p;
@@ -1078,7 +1079,7 @@ COLD void space_finalize_kernel(
 		uint32_t pgid = dirs[(KERNEL_SEG_START + i) >> PT_UPPER_BITS] >> 12;
 		p = htable_get(&by_id, int_hash(pgid), &cmp_page_to_id, &pgid);
 		if(p == NULL) panic("spuriously!");		/* but also gravely. */
-		struct map_group *g = kmem_cache_alloc(map_group_slab);
+		struct map_group *g = ra_alloc(map_group_ra, -1);
 		if(g == NULL) panic("decongestuous!");
 		*g = (struct map_group){
 			.addr = (KERNEL_SEG_START + i) | MGF_ROOT,

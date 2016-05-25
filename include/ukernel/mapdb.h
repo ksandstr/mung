@@ -6,6 +6,7 @@
 
 #include <l4/types.h>
 #include <ukernel/mm.h>
+#include <ukernel/rangealloc.h>
 
 
 /* TODO: change this per pagetable format, i.e. derive it from constants in
@@ -121,7 +122,7 @@ struct map_group
 };
 
 
-extern struct kmem_cache *map_group_slab;	/* for space_finalize_kernel() */
+extern struct rangealloc *map_group_ra;		/* for space_finalize_kernel() */
 
 extern void init_mapdb(void);
 

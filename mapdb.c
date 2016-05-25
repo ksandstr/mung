@@ -13,7 +13,6 @@
 #include <ukernel/bug.h>
 #include <ukernel/misc.h>
 #include <ukernel/util.h>
-#include <ukernel/slab.h>
 #include <ukernel/trace.h>
 #include <ukernel/space.h>
 #include <ukernel/mapdb.h>
@@ -27,7 +26,7 @@
  *
  * - high 10 bits (v1: 9 with x86 PTE) index into the target group in
  *   increments of PAGE_SIZE.
- * - in between there are group ID bits per grp_mask_and.
+ * - in between there are group ID bits per map_group_ra->and_mask.
  * - the low 4 ("MISC") bits vary:
  *   - in map_entry.parent, bit 1 (value 2) is the IS_SPECIAL indicator.
  *     others are undefined, so left at 0;
@@ -42,18 +41,19 @@
  * wrapping at the array's end.
  */
 /* constructors */
-#define REF_CTOR(ix, grp, misc) ((ix) << 22 | (grp) << grp_mask_shift | (misc))
+#define REF_CTOR(ix, grp, misc) \
+	((ix) << 22 | (grp) << map_group_ra->id_shift | (misc))
 #define REF_SPECIAL(ix, grp, misc) REF_CTOR((ix), (grp), (misc) | 2)
 /* basic accessors */
 #define REF_INDEX(ref) (((ref) >> 22) & 0x3ff)
-#define REF_GROUP_BITS(ref) ((ref) & grp_mask_and)
+#define REF_GROUP_BITS(ref) ((ref) & map_group_ra->and_mask)
 #define REF_MISC(ref) ((ref) & (sizeof(struct map_group) - 1))
 /* derived accessors */
 #define REF_IS_NULL(ref) ((ref) == 0)
 #define REF_IS_SPECIAL(ref) CHECK_FLAG(REF_MISC((ref)), 2)
 #define REF_DEFINED(ref) (REF_GROUP_BITS(ref) != 0)
 #define REF_ADDR(ref) (REF_INDEX(ref) * PAGE_SIZE)
-#define REF_GROUP_ID(ref) (REF_GROUP_BITS((ref)) >> grp_mask_shift)
+#define REF_GROUP_ID(ref) (REF_GROUP_BITS((ref)) >> map_group_ra->id_shift)
 #define REF_HASH(ref) int_hash((ref) & ~0xful)
 /* constants */
 #define REF_NULL 0
@@ -119,10 +119,10 @@ static int unmap_entry_in_group(
 static int mapdb_add_child(struct map_entry *ent, L4_Word_t child);
 
 
-struct kmem_cache *map_group_slab = NULL;
-static struct slab_policy *map_group_policy;
-static uintptr_t grp_mask_and, grp_mask_or;
-static unsigned short grp_mask_shift;
+struct rangealloc *map_group_ra = NULL;
+
+/* burner to keep group_id=0 from appearing in alloc. */
+static struct map_group *group_0;
 
 
 static void dump_map_group(struct map_group *g)
@@ -170,13 +170,13 @@ static struct map_group *group_for_addr(struct space *sp, uintptr_t addr) {
 static inline L4_Word_t addr_to_ref(struct map_group *g, uintptr_t addr)
 {
 	assert(addr >= MG_START(g) && addr < MG_START(g) + GROUP_SIZE);
-	uintptr_t grp_bits = (uintptr_t)g & grp_mask_and,
+	uintptr_t grp_bits = (uintptr_t)g & map_group_ra->and_mask,
 		ix = (addr - MG_START(g)) >> PAGE_BITS;
 
 	assert(ix >= 0 && ix < GROUP_SIZE / PAGE_SIZE);
 	L4_Word_t ref = grp_bits | (ix << 22);
 	assert(REF_ADDR(ref) + MG_START(g) == (addr & ~PAGE_MASK));
-	assert((REF_GROUP_BITS(ref) | grp_mask_or) == (uintptr_t)g);
+	assert((REF_GROUP_BITS(ref) | map_group_ra->or_mask) == (uintptr_t)g);
 	return ref;
 }
 
@@ -215,7 +215,7 @@ static bool check_map_entry(
 	inv_ok1(L4_Size(e->range) <= GROUP_SIZE);
 	inv_ok1(fpage_overlap(L4_Fpage(MG_START(grp), GROUP_SIZE), e->range));
 
-	struct map_group *p_grp = kmem_id2ptr_safe(map_group_policy,
+	struct map_group *p_grp = ra_id2ptr_safe(map_group_ra,
 		REF_GROUP_ID(e->parent));
 	if(p_grp != NULL && p_grp->space == NULL) {
 		inv_log("p_grp=%p had NULL space -- cleared", p_grp);
@@ -262,7 +262,7 @@ static bool check_map_entry(
 			? p_e->children : &p_e->child;
 		for(int j=0; j < p_e->num_children; j++) {
 			inv_log("  child %d = %#lx", j, p_cs[j]);
-			if(REF_GROUP_BITS(p_cs[j]) != ((uintptr_t)grp & grp_mask_and)) continue;
+			if(REF_GROUP_BITS(p_cs[j]) != ((uintptr_t)grp & map_group_ra->and_mask)) continue;
 			if(ADDR_IN_FPAGE(e->range, MG_START(grp) + REF_ADDR(p_cs[j]))) {
 				inv_log("  child matches pos=%#lx of e=%#lx:%#lx in grp=%p",
 					(MG_START(grp) + REF_ADDR(p_cs[j]) - L4_Address(e->range)) >> PAGE_BITS,
@@ -411,7 +411,7 @@ static bool deref_child(
 		}
 	}
 
-	struct map_group *g = kmem_id2ptr_safe(map_group_policy,
+	struct map_group *g = ra_id2ptr_safe(map_group_ra,
 		REF_GROUP_ID(ref));
 	if(g == NULL || !is_group_valid(g)) goto tombstone;
 	cr->child_entry = probe_group_addr(g, MG_START(g) + REF_ADDR(ref));
@@ -427,11 +427,11 @@ static bool deref_child(
 	 */
 	L4_Word_t c_pt = cr->child_entry->parent,
 		c_in_pt = MG_START(home_group) + REF_ADDR(c_pt);
-	if(((uintptr_t)home_group & grp_mask_and) != REF_GROUP_BITS(c_pt)
+	if(((uintptr_t)home_group & map_group_ra->and_mask) != REF_GROUP_BITS(c_pt)
 		|| !ADDR_IN_FPAGE(e->range, c_in_pt))
 	{
 		TRACE("%s: backref %#lx (addr %#lx) mismatches group %#lx or range %#lx..%#lx\n",
-			__func__, c_pt, c_in_pt, (L4_Word_t)home_group & grp_mask_and,
+			__func__, c_pt, c_in_pt, (L4_Word_t)home_group & map_group_ra->and_mask,
 			FPAGE_LOW(e->range), FPAGE_HIGH(e->range));
 		goto tombstone;
 	}
@@ -458,7 +458,7 @@ tombstone:
 
 static struct map_entry *deref_parent(struct map_group **g_p, L4_Word_t ref)
 {
-	*g_p = kmem_id2ptr_safe(map_group_policy, REF_GROUP_ID(ref));
+	*g_p = ra_id2ptr_safe(map_group_ra, REF_GROUP_ID(ref));
 	/* (parent refs are guaranteed valid, except where they're not. leave the
 	 * other case to the caller.)
 	 */
@@ -501,7 +501,7 @@ void mapdb_destroy(struct space *sp)
 
 		g->space = NULL;
 		assert(!is_group_valid(g));
-		kmem_cache_free(map_group_slab, g);
+		ra_free(map_group_ra, g);
 	}
 	htable_clear(&sp->ptab_groups);
 }
@@ -892,7 +892,7 @@ static struct map_group *add_map_group(
 	L4_Fpage_t fpage,
 	uint32_t first_page_id)
 {
-	struct map_group *g = kmem_cache_alloc(map_group_slab);
+	struct map_group *g = ra_alloc(map_group_ra, -1);
 	if(unlikely(g == NULL)) return NULL;
 	assert(!is_group_valid(g));
 
@@ -922,7 +922,7 @@ static struct map_group *add_map_group(
 Enomem:
 	g->space = NULL;
 	assert(!is_group_valid(g));
-	kmem_cache_free(map_group_slab, g);
+	ra_free(map_group_ra, g);
 	return NULL;
 }
 
@@ -1106,10 +1106,10 @@ static bool add_map_postcond(
 {
 #ifndef NDEBUG
 	/* @sp must contain the indicated range if it existed in the parent. */
-	struct map_group *p_grp = kmem_id2ptr_safe(map_group_policy,
+	struct map_group *p_grp = ra_id2ptr_safe(map_group_ra,
 		REF_GROUP_ID(parent));
 	/* @parent may be undefined, or special. */
-	assert(p_grp == NULL || is_group_valid(p_grp));
+	assert(p_grp == NULL || !REF_DEFINED(parent) || is_group_valid(p_grp));
 	assert(p_grp != NULL || !REF_DEFINED(parent) || REF_IS_SPECIAL(parent));
 
 	if(REF_DEFINED(parent) && !REF_IS_SPECIAL(parent)) {
@@ -1912,8 +1912,8 @@ static int reparent_children(struct map_group *g, struct map_entry *e)
 	int p_offs = 0;
 	if(likely(REF_DEFINED(e->parent))) {
 		/* FIXME: use a deref_parent() here */
-		parent_g = (void *)((e->parent & grp_mask_and) | grp_mask_or);
-		assert(parent_g == kmem_id2ptr_safe(map_group_policy,
+		parent_g = (void *)((e->parent & map_group_ra->and_mask) | map_group_ra->or_mask);
+		assert(parent_g == ra_id2ptr_safe(map_group_ra,
 			REF_GROUP_ID(e->parent)));
 		parent_entry = probe_group_addr(parent_g,
 			MG_START(parent_g) + REF_ADDR(e->parent));
@@ -1959,7 +1959,7 @@ static int reparent_children(struct map_group *g, struct map_entry *e)
 			TRACE("%s: detached second-level mapping %#lx:%#lx in grp %#lx\n",
 				__func__, L4_Address(cr.child_entry->range),
 				L4_Size(cr.child_entry->range),
-				(L4_Word_t)cr.group & grp_mask_and);
+				(L4_Word_t)cr.group & map_group_ra->and_mask);
 			cr.child_entry->parent = 0;
 			coalesce_entries(cr.group, cr.child_entry);
 		}
@@ -2336,6 +2336,8 @@ int mapdb_fill_page_table(struct space *sp, uintptr_t addr)
 
 COLD void init_mapdb(void)
 {
+	assert(map_group_ra == NULL);
+
 	/* TODO: add a proper interface for enabling/disabling trace IDs.
 	 * kernel commandline perhaps?
 	 */
@@ -2357,14 +2359,11 @@ COLD void init_mapdb(void)
 	 * 3G mark, or to give 16k concurrent address spaces 128M of active range
 	 * at once.
 	 */
-	struct slab_policy *pol = kmem_policy_align(1 << 22,
-		sizeof(struct map_group));
-	map_group_slab = kmem_cache_create("map_group_slab",
-		sizeof(struct map_group), 1 << size_to_shift(sizeof(struct map_group)),
-		KMEM_POLICY, NULL, NULL);
-	kmem_cache_set_policy(map_group_slab, pol);
-	kmem_get_align_masks(pol, &grp_mask_and, &grp_mask_or);
-	assert(POPCOUNT(grp_mask_and) == 18);
-	grp_mask_shift = ffsl(grp_mask_and) - 1;
-	map_group_policy = pol;
+	map_group_ra = RA_NEW(struct map_group, 1 << 18);
+
+	/* burn id 0. */
+	group_0 = ra_zalloc(map_group_ra, 0);
+	assert(group_0 != NULL);
+	assert(!is_group_valid(group_0));
+	assert(ra_ptr2id(map_group_ra, group_0) == 0);
 }
