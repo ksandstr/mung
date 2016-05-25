@@ -482,7 +482,7 @@ static void rewrite_passive_vs_from(struct thread *t)
 			continue;
 		}
 
-		struct thread *dest = thread_find(from->u2.ipc_wait.dest_tid.raw);
+		struct thread *dest = thread_get(from->u2.ipc_wait.dest_tid);
 		assert(dest != NULL);
 		from->u2.ipc_wait.send_tid = tid_return(dest, from);
 		L4_MsgTag_t *tag = (void *)&L4_VREG(
@@ -506,7 +506,7 @@ void cancel_ipc_from(struct thread *t)
 		t->status = TS_READY;
 		sq_insert_thread(t);
 	} else if(t->status == TS_RECV_WAIT || t->status == TS_R_RECV) {
-		struct thread *s = thread_find(t->ipc_from.raw);
+		struct thread *s = resolve_tid_spec(t->space, t->ipc_from);
 		if(s != NULL && s->id == t->ipc_from.raw && s->u0.partner == t) {
 			/* TODO: coördinate partnership breaking using a function of some
 			 * kind, such as one that undoes scheduling effects.
@@ -1130,7 +1130,7 @@ static struct thread *find_global_sender(bool *valid_p, struct thread *self)
 	*valid_p = true;
 	if(self->ipc_from.raw != L4_anythread.raw) {
 		/* LTID conversion & validity test. */
-		struct thread *ft = thread_find(self->ipc_from.raw);
+		struct thread *ft = thread_get(self->ipc_from);
 		if(ft == NULL || ft->id != self->ipc_from.raw) {
 			*valid_p = false;
 			return NULL;
@@ -1245,7 +1245,7 @@ static struct thread *find_redir_sender(struct thread *redir)
 			 * else uses it.
 			 */
 			assert(L4_IsGlobalId(cand->ipc_to));
-			struct thread *dest = thread_find(cand->ipc_to.raw);
+			struct thread *dest = thread_get(cand->ipc_to);
 			if((dest->status == TS_R_RECV || dest->status == TS_RECV_WAIT)
 				&& (dest->ipc_from.raw == L4_anythread.raw
 					|| dest->ipc_from.raw == cand->id))

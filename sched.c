@@ -431,7 +431,7 @@ void leaving_thread(struct thread *self)
 			self->total_quantum = 0;
 			struct thread *sched;
 			sched = L4_IsNilThread(self->scheduler)
-				? NULL : thread_find(self->scheduler.raw);
+				? NULL : thread_get(self->scheduler);
 			if(sched == NULL) {
 				printf("WARNING: no scheduler for %lu:%lu! thread stopped.\n",
 					TID_THREADNUM(self->id), TID_VERSION(self->id));

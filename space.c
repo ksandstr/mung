@@ -477,12 +477,12 @@ struct space *space_switch(struct space *next)
 }
 
 
-struct space *space_find(thread_id tid)
+struct space *space_find(thread_id raw)
 {
-	assert(L4_IsGlobalId((L4_ThreadId_t){ .raw = tid }));
-
-	struct thread *t = thread_find(tid);
-	return t == NULL || t->id != tid ? NULL : t->space;
+	L4_ThreadId_t tid = { .raw = raw };
+	assert(L4_IsGlobalId(tid));
+	struct thread *t = thread_get(tid);
+	return t == NULL ? NULL : t->space;
 }
 
 

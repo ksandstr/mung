@@ -183,9 +183,6 @@ struct thread
 extern struct rangealloc *thread_ra;	/* for invariant checks */
 extern void init_threading(void);
 
-/* finds by thread ID, ignores version. */
-extern struct thread *thread_find(thread_id tid);
-
 
 extern SYSCALL L4_Word_t sys_exregs(
 	L4_ThreadId_t dest,
@@ -293,15 +290,18 @@ extern bool post_exn_ok(struct thread *t, struct thread *sender);
 extern PURE void *thread_get_utcb(struct thread *t);
 extern PURE L4_ThreadId_t get_local_id(struct thread *t);
 
-/* compares version bits for global IDs, resolves local IDs in ref_space */
+/* find thread by global ID. if thread is found but version doesn't match, or
+ * if thread isn't found, returns NULL.
+ */
+extern struct thread *thread_get(L4_ThreadId_t tid);
+
+/* eqv to thread_get() for global IDs, resolves local IDs in ref_space */
 extern struct thread *resolve_tid_spec(
 	struct space *ref_space,
 	L4_ThreadId_t tid);
 
 static inline struct thread *get_tcr_thread(
-	struct thread *t,
-	void *utcb,
-	int tcr)
+	struct thread *t, void *utcb, int tcr)
 {
 	assert(utcb != NULL);
 	L4_ThreadId_t tid = { .raw = L4_VREG(utcb, tcr) };

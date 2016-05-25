@@ -55,6 +55,9 @@ struct interrupt
 };
 
 
+static struct thread *thread_find(thread_id tid);
+
+
 /* only accessible with interrupts disabled. */
 static short num_ints = 0, num_async_words = 0;
 static struct interrupt *int_table = NULL;
@@ -550,11 +553,16 @@ void *thread_get_utcb(struct thread *t)
 }
 
 
-struct thread *thread_find(thread_id tid)
+/* possibly not as fast as it could be, however, quicker than the "safe"
+ * hashtable search of ra_id2ptr_safe() and accesses fewer cachelines over
+ * time. if at some point pt_get_pgid() loses its htable lookup (i.e. the
+ * kernel gets some way of quickly accessing its own pagetables), that method
+ * should be used instead of catch_pf().
+ */
+static struct thread *thread_find(thread_id tid)
 {
 	if(unlikely(catch_pf() != 0)) return NULL;
 
-	/* the speedy gonzales mode: avoids a ffsl(). */
 	struct thread *t = ra_id2ptr(thread_ra, TID_THREADNUM(tid));
 	if(unlikely(*(struct space *volatile *)&t->space == NULL)) t = NULL;
 	assert(t == NULL
@@ -564,13 +572,22 @@ struct thread *thread_find(thread_id tid)
 }
 
 
+struct thread *thread_get(L4_ThreadId_t tid)
+{
+	assert(L4_IsGlobalId(tid));
+	struct thread *t = thread_find(tid.raw);
+	if(t != NULL && TID_VERSION(t->id) != L4_Version(tid)) t = NULL;
+	return t;
+}
+
+
 struct thread *resolve_tid_spec(struct space *ref_space, L4_ThreadId_t tid)
 {
-	if(L4_IsLocalId(tid)) {
+	if(L4_IsNilThread(tid)) return NULL;
+	else if(L4_IsLocalId(tid)) {
 		return space_find_local_thread(ref_space, tid.local);
 	} else {
-		struct thread *t = thread_find(tid.raw);
-		return t != NULL && t->id == tid.raw ? t : NULL;
+		return thread_get(tid);
 	}
 }
 
