@@ -7,6 +7,7 @@
 #include <assert.h>
 
 #include <ccan/list/list.h>
+#include <ccan/likely/likely.h>
 #include <ccan/compiler/compiler.h>
 
 #include <l4/types.h>
@@ -180,7 +181,7 @@ struct thread
 };
 
 
-extern struct rangealloc *thread_ra;	/* for invariant checks */
+extern struct rangealloc *thread_ra;
 extern void init_threading(void);
 
 
@@ -299,6 +300,22 @@ extern struct thread *thread_get(L4_ThreadId_t tid);
 extern struct thread *resolve_tid_spec(
 	struct space *ref_space,
 	L4_ThreadId_t tid);
+
+/* very unsafe, but about as fast as it gets. useful where thread_get() would
+ * be used without a null-check.
+ */
+#ifdef NDEBUG
+#define thread_get_fast(tid) \
+	((struct thread *)ra_id2ptr(thread_ra, L4_ThreadNo((tid))))
+#else
+static inline struct thread *thread_get_fast(L4_ThreadId_t tid) {
+	assert(L4_IsGlobalId(tid));
+	struct thread *t = ra_id2ptr(thread_ra, L4_ThreadNo(tid));
+	assert(t->id == tid.raw);
+	return t;
+}
+#endif
+
 
 static inline struct thread *get_tcr_thread(
 	struct thread *t, void *utcb, int tcr)

@@ -482,8 +482,7 @@ static void rewrite_passive_vs_from(struct thread *t)
 			continue;
 		}
 
-		struct thread *dest = thread_get(from->u2.ipc_wait.dest_tid);
-		assert(dest != NULL);
+		struct thread *dest = thread_get_fast(from->u2.ipc_wait.dest_tid);
 		from->u2.ipc_wait.send_tid = tid_return(dest, from);
 		L4_MsgTag_t *tag = (void *)&L4_VREG(
 			thread_get_utcb(from), L4_TCR_MR(0));
@@ -1131,7 +1130,7 @@ static struct thread *find_global_sender(bool *valid_p, struct thread *self)
 	if(self->ipc_from.raw != L4_anythread.raw) {
 		/* LTID conversion & validity test. */
 		struct thread *ft = thread_get(self->ipc_from);
-		if(ft == NULL || ft->id != self->ipc_from.raw) {
+		if(ft == NULL) {
 			*valid_p = false;
 			return NULL;
 		}
@@ -1245,7 +1244,7 @@ static struct thread *find_redir_sender(struct thread *redir)
 			 * else uses it.
 			 */
 			assert(L4_IsGlobalId(cand->ipc_to));
-			struct thread *dest = thread_get(cand->ipc_to);
+			struct thread *dest = thread_get_fast(cand->ipc_to);
 			if((dest->status == TS_R_RECV || dest->status == TS_RECV_WAIT)
 				&& (dest->ipc_from.raw == L4_anythread.raw
 					|| dest->ipc_from.raw == cand->id))
