@@ -1169,21 +1169,6 @@ bool ipc_user_complete_oneway(
 }
 
 
-bool send_tq_ipc(
-	struct thread *sender, struct thread *dest,
-	L4_Clock_t body)
-{
-	assert(check_ipc_module());
-	void *sender_utcb = thread_get_utcb(sender);
-	void *msg = ipc_user((L4_MsgTag_t){ .X.label = 0xffd0, .X.u = 2 },
-		sender, sender_utcb, &dest, 3);
-	L4_VREG(msg, L4_TCR_MR(1)) = body.raw;
-	L4_VREG(msg, L4_TCR_MR(2)) = body.raw >> sizeof(L4_Word_t) * 8;
-	sender->ipc_from = L4_nilthread;
-	return ipc_user_complete_oneway(sender, msg, &dest);
-}
-
-
 /* add `t' to redir_hash under `holdup', then remove `t' from sendwait_hash.
  * this makes sure that a held passive send can be restarted through the
  * `holdup' redirector's active receive when the ultimate recipient goes into
@@ -1596,7 +1581,7 @@ bool ipc_recv_half(struct thread *self, void *self_utcb)
 			TRACE_REDIR("IPC: active receive was redirected, status=%s\n",
 				sched_status_str(self));
 			/* (instead leave it to the scheduler.) */
-		} else if(!kernel_preempt_pending) {
+		} else if(!check_preempt()) {
 			/* IPC didn't complete, and no pre-emption occurs. try again. */
 			sq_remove_thread(self);
 			self->status = TS_RUNNING;
@@ -1875,6 +1860,8 @@ SYSCALL L4_Word_t sys_ipc(
 	/* successful exit. */
 	assert(current->status == TS_RUNNING);
 	assert(check_ipc_module());
+	TRACE("%s: successful exit, from=%#lx\n", __func__,
+		current->ipc_from.raw);
 	return current->ipc_from.raw;
 
 err_exit:

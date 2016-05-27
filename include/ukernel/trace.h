@@ -45,6 +45,7 @@ enum trace_id {
 	TRID_MAPDB,
 	TRID_IPC,
 	TRID_IPC_REDIR,
+	TRID_IRQ,
 };
 
 #endif

@@ -189,20 +189,17 @@ _sysenter_top:
 	# check for and process interrupts that occurred while IRQ processing
 	# was soft disabled.
 	cli
-10:	movzbl kernel_irq_deferred, %ecx
+	movzbl irq_defer_active, %ecx
 	test %cl, %cl
 	jz 11f
-	sti
-	call int_latent
-	cli
-	jmp 10b
+	# make caller's frame valid for return_from_irq() nonlocal exit
+	movl %ebp, THREAD_CTX_OFF+12(%ebx)	# caller %esp
+	movl %esi, THREAD_CTX_OFF+32(%ebx)	# caller %eip
+	pushl %ebx
+	call return_from_irq
+	addl $4, %esp
 
-	# now test for a pending preemption & handle it like the C part would.
-11:	movzbl kernel_preempt_pending, %ecx
-	test %cl, %cl
-	jnz 12f
-
-	movl %ebp, %ecx		# OUT caller %esp
+11:	movl %ebp, %ecx		# OUT caller %esp
 	movl %esi, %edx		# OUT epilog %eip
 	# loads from visible UTCB: %esi=MR0, %ebx=MR1, %ebp=MR2.
 	leal 0x10000000(%edi), %esi
@@ -216,22 +213,6 @@ _sysenter_top:
 	popl %ebx		# OUT MR1
 	sti
 	sysexit
-
-12:	# store caller's return info for rescheduling
-	#
-	# TODO: the current unit tests never hit this path, and it can't be
-	# properly hand-tested because of how return_from_exn will actually
-	# return to caller when preemption didn't happen. to test it, somehow
-	# Ipc processing would have to take long enough for a
-	# preemption-causing interrupt to occur.
-	movl %ebp, THREAD_CTX_OFF+12(%ebx)	# caller %esp
-	movl %esi, THREAD_CTX_OFF+32(%ebx)	# caller %eip
-	# no need for a proper call if kernel_preempt_pending is set; then the
-	# function is guaranteed to never return (except if current ==
-	# scheduler_thread, but... how would it end up in the sysenter tophalf
-	# anyway).
-	sti
-	jmp return_from_exn
 
 	.align 16,0
 2:	# construct generic x86_exregs frame
@@ -310,8 +291,7 @@ _sysenter_lipc_fast:
 	call sys_lipc		# OUT %eax=from (retval)
 
 	# we get here because Lipc's fallback to Ipc failed or returned
-	# immediately. on success, sys_lipc() switches to a different thread or
-	# enters the scheduler.
+	# immediately. on success, sys_lipc() exits the current frame.
 	#
 	# registers:
 	#   %eax = sys_ipc() return value, %ebx = current_thread,
@@ -322,27 +302,19 @@ _sysenter_lipc_fast:
 	# check for and process interrupts that occurred while IRQ processing
 	# was soft disabled.
 	cli
-10:	movzbl kernel_irq_deferred, %ecx
+	movzbl irq_defer_active, %ecx
 	test %cl, %cl
 	jz 11f
-	sti
-	call int_latent
-	cli
-	jmp 10b
+	pushl %ebx
+	call return_from_irq
+	addl $4, %esp
 
-	# now test for a pending preemption & handle it like the C part would.
-11:	movzbl kernel_preempt_pending, %ecx
-	test %cl, %cl
-	jnz 12f		# return_from_exn() path
-	movl THREAD_CTX_OFF+12(%ebx), %ecx	# OUT caller %esp
+11:	movl THREAD_CTX_OFF+12(%ebx), %ecx	# OUT caller %esp
 	movl THREAD_CTX_OFF+32(%ebx), %edx	# OUT epilog %eip
 	# load MR0, MR1, MR2 from visible UTCB
 	movl 8(%esi), %ebp	# OUT MR2
 	pushl 4(%esi)		# OUT MR1 (popped before sysexit)
 	movl (%esi), %esi	# OUT MR0
 	jmp 13b			# sysexit from the Ipc fastpath
-
-12:	sti
-	jmp return_from_exn
 
 #endif

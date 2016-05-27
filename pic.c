@@ -151,6 +151,7 @@ COLD int xtpic_init(struct pic_ops *ops)
 		.mask_irq = &pic_mask_irq,
 		.unmask_irq = &pic_unmask_irq,
 	};
+	set_irq_handler(0x2f, NULL);	/* enable int_trigger(), deferring */
 
 	return 15;		/* highest interrupt number */
 }

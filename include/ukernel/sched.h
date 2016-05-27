@@ -12,22 +12,22 @@
 #include <ukernel/interrupt.h>
 
 
-/* preempt_status flags */
-#define PS_PENDING 0x80	/* preemption occurred */
-#define PS_DELAYED 0x40	/* preemption was delayed until limit */
+/* preempt_status flags. coincides with TCR CopPreempt fields by design. */
+#define PS_DELAYED 0x80		/* preemption is being delayed */
 
 
 /* global data from sched.c */
 
 /* accessed from the timer interrupt. r/w only with irqs off. */
-extern uint64_t preempt_timer_count;
 extern uint64_t task_switch_time;		/* ms */
-extern int preempt_task_pri;
+extern uint64_t preempt_timer_count;
+extern struct thread *preempt_thread;
 extern int preempt_status;		/* see PS_* */
 
-/* set from thread_sleep() */
-extern bool kernel_preempt_pending;
+/* set from might_preempt() */
 extern struct thread *kernel_preempt_to;
+
+#define check_preempt() (kernel_preempt_to != NULL)
 
 
 /* the "return_to_*" family leaves the currently-running thread, exits the
@@ -45,26 +45,21 @@ extern NORETURN void return_to_ipc(void *msg_utcb, struct thread *target);
 /* returns on failure. caller should fall back to return_to_scheduler(). */
 extern void return_to_other(struct thread *next);
 
-/* ISRs that don't call return_to_*() should instead call return_from_exn() as
- * their last line. it disables interrupts until the interrupt flag is
- * reloaded by IRET.
+/* syscalls that don't end with return_to_*() should instead call
+ * return_from_exn() as their last line. it disables interrupts until the
+ * interrupt flag is reloaded by IRET or restored by STI;SYSEXIT, and
+ * potentially exits to an asynchronous preëmptor.
  */
 extern void return_from_exn(void);
 
-/* see comment for check_preempt() */
-extern void return_to_preempt(void);
+/* the "interrupts always disabled" sibling of return_from_exn(). */
+extern void return_from_irq(struct thread *next);
 
 /* called from ipc.c to un-do a part of the IPC partner chain due to a
  * successful reply send-phase. parameters implied from current_thread and its
  * ->u0.partner .
  */
 extern NORETURN void return_to_partner(void);
-
-/* returns true when it's useful for the caller to prepare the current thread
- * for scheduling out of, and then call return_to_preempt(). unless preemption
- * was delayed, the latter will do a non-local exit.
- */
-extern bool check_preempt(void);
 
 
 /* distinct function for easier transition to SMP. (it'll be under
@@ -84,8 +79,13 @@ extern NORETURN void exit_to_scheduler(struct thread *prev);
 /* switches into target thread. caller should save exception context. */
 extern NORETURN void exit_to_thread(struct thread *next);
 
+/* called by irq0 handler when preempt_timer_count is hit. convention per
+ * set_irq_handler(), but allows !x86_irq_is_enabled().
+ */
+extern struct thread *on_preempt(int vec_num);
+
 /* for the self-deleting ThreadControl edge case: required before
- * exit_to_scheduler(NULL).
+ * exit_to_scheduler(NULL). also irq_latent().
  */
 extern void leaving_thread(struct thread *current);
 
@@ -140,17 +140,19 @@ extern void might_preempt(struct thread *t);
 
 extern const char *sched_status_str(struct thread *t);
 
-/* returns true if "other" will preempt "self"'s current quantum, counted from
- * switch_time_us.
+
+/* choose whether @next should remain, or if @event should take its place.
+ * @current and @cur_utcb are used to decide preemption delay, and should be
+ * NULL when the CPU was idle.
+ *
+ * sets the pending bit "I" (0x80) in @cur_utcb.CopPreempt immediately (where
+ * applicable); the caller should clear it off if not returning to @current.
  */
-static inline bool preempted_by(
-	struct thread *self,
-	uint64_t switch_at_us,
-	struct thread *other)
-{
-	return other->pri > self->pri
-		&& other->wakeup_time <= switch_at_us + self->quantum;
-}
+extern struct thread *sched_resolve_next(
+	struct thread *current, void *cur_utcb,
+	struct thread *next,
+	struct thread *event);
+
 
 extern SYSCALL L4_Word_t sys_schedule(
 	L4_ThreadId_t dest_tid,

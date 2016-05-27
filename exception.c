@@ -516,6 +516,7 @@ static void check_trace_control(const char *str)
 		[TRID_MAPDB] = "mapdb",
 		[TRID_IPC] = "ipc",
 		[TRID_IPC_REDIR] = "redir",
+		[TRID_IRQ] = "irq",
 	};
 
 /* NDEBUG disables tracing, so trace enable/disable becomes irrelevant. */
@@ -968,8 +969,6 @@ void isr_exn_pf_bottom(struct x86_exregs *regs)
 		TID_THREADNUM(current->id), TID_VERSION(current->id));
 #endif
 
-	assert(x86_irq_is_enabled());
-
 	if(unlikely(!CHECK_FLAG(regs->error, 4))) {
 		unsigned long tno = current == NULL ? 0 : TID_THREADNUM(current->id),
 			tver = current == NULL ? 0 : TID_VERSION(current->id);
@@ -981,6 +980,7 @@ void isr_exn_pf_bottom(struct x86_exregs *regs)
 		panic("KERNEL #PF");
 	}
 
+	assert(x86_irq_is_enabled());
 	assert(current != NULL);
 
 	int fault_access = L4_Readable;		/* the cache always reads. */

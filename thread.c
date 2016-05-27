@@ -58,12 +58,8 @@ static struct thread *thread_find(thread_id tid);
 
 
 /* only accessible with interrupts disabled. */
-static short num_ints = 0, num_async_words = 0;
+static short num_ints = 0;
 static struct interrupt *int_table = NULL;
-static L4_Word_t *int_async_table = NULL;	/* bitfield, 0..num_ints-1 */
-
-/* control variables used by schedule() etc. */
-volatile bool kernel_irq_ok = false, kernel_irq_deferred = false;
 
 static struct kmem_cache *saved_regs_slab = NULL;
 struct rangealloc *thread_ra = NULL;
@@ -119,10 +115,6 @@ COLD void init_threading(void)
 			.pager = NULL, .pending = false,
 		};
 	}
-	const int wordsize = sizeof(L4_Word_t) * 8;
-	num_async_words = (num_ints + wordsize - 1) / wordsize;
-	int_async_table = malloc(num_async_words * sizeof(L4_Word_t));
-	for(int i=0; i < num_async_words; i++) int_async_table[0] = 0;
 
 	saved_regs_slab = KMEM_CACHE_NEW("saved_regs_slab", struct saved_regs);
 
@@ -939,20 +931,13 @@ static L4_Word_t interrupt_ctl(
 /* returns true if t->status was changed. caller should set
  * int_table[ivec].delivered in that case to avoid double delivery.
  */
-static bool send_int_ipc(int ivec, struct thread *t, bool kernel_irq)
+static bool send_int_ipc(int ivec, struct thread *t)
 {
 	assert(t != NULL);
 
 	if(!CHECK_FLAG(t->flags, TF_INTR)) return false;	/* nope.jpg */
 
-	if(kernel_irq && !kernel_irq_ok) {
-		/* deferred signaling for modification safety wrt kernel code. */
-		int limb = ivec / (sizeof(L4_Word_t) * 8),
-			bit = ivec & (sizeof(L4_Word_t) * 8 - 1);
-		int_async_table[limb] |= 1ul << bit;
-		kernel_irq_deferred = true;
-		return false;
-	} else if(t->status != TS_RECV_WAIT
+	if((t->status != TS_RECV_WAIT && t->status != TS_R_RECV)
 		|| (t->ipc_from.raw != L4_anythread.raw
 			&& t->ipc_from.raw != L4_GlobalId(ivec, 1).raw))
 	{
@@ -967,58 +952,6 @@ static bool send_int_ipc(int ivec, struct thread *t, bool kernel_irq)
 		set_ipc_return_regs(&t->ctx.r, t, utcb);
 		thread_wake(t);
 		return true;
-	}
-}
-
-
-void int_latent(void)
-{
-	assert(x86_irq_is_enabled());
-	assert(kernel_irq_deferred);
-	assert(!kernel_irq_ok);
-
-	struct thread *ts[num_ints];
-	uint8_t vecs[num_ints];
-	int num_vecs = 0;
-
-	x86_irq_disable();
-	for(int i=0; i < num_async_words; i++) {
-		while(int_async_table[i] != 0) {
-			int b = ffsl(int_async_table[i]) - 1,
-				v = i * sizeof(L4_Word_t) * 8 + b;
-			assert(CHECK_FLAG(int_async_table[i], 1 << b));
-			assert(v < num_ints);
-			assert(num_vecs < num_ints);
-			assert(!int_table[v].delivered);
-
-			int_async_table[i] &= ~(1ul << v);
-			int_table[v].delivered = true;
-			vecs[num_vecs] = v;
-			ts[num_vecs] = int_table[v].pager;
-			num_vecs++;
-		}
-	}
-	kernel_irq_deferred = false;
-	x86_irq_enable();
-
-	if(num_vecs > 0) {
-		int no_deliver = 0;
-		for(int i=0; i < num_vecs; i++) {
-			if(ts[i] == NULL) continue;
-			if(!send_int_ipc(vecs[i], ts[i], false)) {
-				no_deliver++;
-				ts[i] = NULL;
-			}
-		}
-
-		if(no_deliver > 0) {
-			/* go clear the delivery bits for the ones that failed. */
-			x86_irq_disable();
-			for(int i=0; i < num_vecs; i++) {
-				if(ts[i] == NULL) int_table[vecs[i]].delivered = false;
-			}
-			x86_irq_enable();
-		}
 	}
 }
 
@@ -1046,21 +979,23 @@ static void int_kick(struct thread *t)
 }
 
 
-/* called from irq.c with interrupts disabled */
-bool int_trigger(int intnum, bool in_kernel)
+/* called from irq.c with interrupts deferred */
+struct thread *int_trigger(int vecnum)
 {
-	assert(!x86_irq_is_enabled());
-	assert(intnum < num_ints);
-	struct interrupt *it = &int_table[intnum];
-	if(unlikely(it->pager == NULL)) return false;
+	assert(vecnum < 0);		/* it's already been masked. */
+	int intnum = -vecnum - 0x20;
+	assert(intnum >= 0 && intnum < num_ints);
 
-	if(likely(!it->pending)) {
+	struct interrupt *it = &int_table[intnum];
+	if(likely(it->pager != NULL) && likely(!it->pending)) {
 		it->pending = true;
-		if(send_int_ipc(intnum, it->pager, in_kernel)) it->delivered = true;
-		int_disable(intnum);
+		if(send_int_ipc(intnum, it->pager)) {
+			it->delivered = true;
+			return it->pager;
+		}
 	}
 
-	return true;
+	return get_current_thread();
 }
 
 
@@ -1246,6 +1181,12 @@ SYSCALL L4_Word_t sys_threadcontrol(
 				sq_remove_thread(dest);
 			}
 		}
+		x86_irq_disable();
+		if(preempt_thread == dest) {
+			preempt_thread = NULL;
+			preempt_timer_count = ~0ull;
+		}
+		x86_irq_enable();
 		thread_destroy(dest);
 		cancel_ipc_to(dead_tid, 2 << 1);	/* "lost partner" */
 		goto dead;

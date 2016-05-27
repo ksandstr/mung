@@ -765,17 +765,11 @@ START_LOOP_TEST(delay_basics, iter, 0, 7)
 	int n = pump_wakeups(preempts, &start_time, spinner, TEST_IPC_DELAY);
 	if(!ok1(n >= 0)) diag("error n=%d from pump_wakeups()", n);
 
-	if(!high_sens_pri) todo_start("expected breakage");
-
 	struct preempt_wakeup *wu = list_pop(preempts,
 		struct preempt_wakeup, link);
 	ok(wu != NULL, "got at least one wakeup");
 	skip_start(wu == NULL, 2, "no wakeups were recorded!") {
 		int at = (wu->clock.raw - start_time.raw + 500) / 1000;
-
-		if(iter == 0 || iter == 1 || iter == 4 || iter == 5) {
-			todo_start("expected breakage");
-		}
 
 		imply_ok1(delay_pe && high_sens_pri && !max_delay_zero,
 			at >= 14 && at <= 16);

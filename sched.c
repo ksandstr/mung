@@ -27,8 +27,10 @@
 #include <ukernel/sched.h>
 
 
-/* for "[KU]-[KU]: %d:%d -> %d:%d" prints */
 #define TRACE(fmt, ...) TRACE_MSG(TRID_SCHED, fmt, ##__VA_ARGS__)
+
+static struct thread *send_preempt_fault(struct thread *t, L4_Clock_t at);
+static struct thread *send_preempt_exception(struct thread *t);
 
 
 static struct rb_root sched_tree = { };
@@ -43,13 +45,12 @@ static uint64_t sched_chain_timeout = 0;
 struct thread *current_thread = NULL;
 
 /* these control the timer interrupt. write with irqs disabled only. */
+struct thread *preempt_thread = NULL;
 uint64_t preempt_timer_count = ~(uint64_t)0;
 uint64_t task_switch_time = 0;
-int preempt_task_pri = 0;
 int preempt_status = 0;
 
 /* pre-emption of threads while inside the kernel. */
-bool kernel_preempt_pending = false;
 struct thread *kernel_preempt_to = NULL;
 
 
@@ -132,6 +133,23 @@ const char *sched_status_str(struct thread *t)
 }
 
 
+static bool in_sq(struct thread *t)
+{
+#ifdef NDEBUG
+	return true;
+#else
+	bool found = false;
+	RB_FOREACH(node, &sched_tree) {
+		if(node == &t->sched_rb) {
+			found = true;
+			break;
+		}
+	}
+	return found;
+#endif
+}
+
+
 void sq_insert_thread(struct thread *t)
 {
 	assert(t->status != TS_STOPPED);
@@ -146,26 +164,12 @@ void sq_insert_thread(struct thread *t)
 void sq_remove_thread(struct thread *t)
 {
 #ifndef NDEBUG
-	bool found = false;
-	RB_FOREACH(node, &sched_tree) {
-		if(node == &t->sched_rb) {
-			found = true;
-			break;
-		}
-	}
-	if(!found) {
+	if(!in_sq(t)) {
 		printf("%s: called from %p\n", __func__,
 			__builtin_return_address(0));
-/* this one requires -fno-omit-frame-pointer to not completely fall over and
- * explode.
- */
-#if 0
-		printf("... in turn called from %p\n",
-			__builtin_return_address(1));
-#endif
 	}
-	assert(found);
 #endif
+	assert(in_sq(t));
 
 	rb_erase(&t->sched_rb, &sched_tree);
 }
@@ -269,13 +273,38 @@ inv_fail:
 #endif
 
 
+struct thread *sched_resolve_next(
+	struct thread *current, void *cur_utcb,
+	struct thread *next,
+	struct thread *event)
+{
+	if(next == NULL) return event;
+	if(event == NULL || event->pri <= next->pri) return next;
+
+	assert(event != next);	/* implied by null and priority tests above */
+
+	if(next == current
+		&& event->pri <= current->sens_pri
+		&& current->max_delay > 0
+		&& CHECK_FLAG(L4_VREG(cur_utcb, L4_TCR_COP_PREEMPT), 0x40))
+	{
+		/* delay preemption. */
+		L4_VREG(cur_utcb, L4_TCR_COP_PREEMPT) |= 0x80;	/* set "I" */
+		return current;
+	}
+
+	/* switch. */
+	return event;
+}
+
+
 void might_preempt(struct thread *t)
 {
 	struct thread *current = get_current_thread();
 	TRACE("%s: t=%p, current=%p\n", __func__, t, current);
 	if(current == NULL) return;
 	if(t->pri > current->pri
-		&& (!kernel_preempt_pending
+		&& (kernel_preempt_to == NULL
 			|| t->pri > kernel_preempt_to->pri)
 		/* don't let a closed waiter pre-empt its waitee */
 		&& (t->status != TS_R_RECV || !closed_wait(t, current)))
@@ -300,24 +329,22 @@ void might_preempt(struct thread *t)
 			 */
 			if(pe_after > 0
 				&& (preempt_timer_count <= task_switch_time
-					|| t->pri > preempt_task_pri
+					|| (preempt_thread != NULL && t->pri > preempt_thread->pri)
 					|| preempt_timer_count * 1000 - now > pe_after))
 			{
 				*ctl |= 0x80;
 				uint64_t ct = (now + pe_after) / 1000;
 				x86_irq_disable_push();
-				preempt_task_pri = t->pri;
+				preempt_thread = t;
 				preempt_timer_count = ct;
 				preempt_status |= PS_DELAYED;
 				x86_irq_restore();
 			} else {
-				assert(pe_after == 0 || preempt_task_pri >= 0);
 				assert(pe_after == 0 || preempt_timer_count * 1000 > now);
 			}
-			kernel_preempt_pending = false;
+			kernel_preempt_to = NULL;
 		} else {
 			/* make it snappy. */
-			kernel_preempt_pending = true;
 			kernel_preempt_to = t;
 		}
 	}
@@ -350,45 +377,6 @@ static void timeout_ipc(struct thread *t)
 }
 
 
-static uint64_t next_preempt_at(
-	int *preempt_pri,
-	struct thread *self,
-	uint64_t switch_at_us)
-{
-	*preempt_pri = -1;		/* can always be loud (see isr_irq0_bottom()) */
-	uint64_t at = ~(uint64_t)0;
-
-	struct rb_node *pos = &self->sched_rb;
-	pos = rb_next(pos);		/* skip self. */
-	/* skip over threads with equal priority. */
-	while(pos != NULL) {
-		struct thread *other = container_of(pos, struct thread, sched_rb);
-		if(other->pri > self->pri) break;
-		pos = rb_next(pos);
-	}
-	/* out of the ones that preempt this thread, choose the closest. */
-	bool got = false;
-	uint64_t q_end = switch_at_us + self->quantum;
-	while(pos != NULL) {
-		struct thread *other = container_of(pos, struct thread, sched_rb);
-		assert(other->wakeup_time > switch_at_us);
-		if(preempted_by(self, switch_at_us, other)) {
-			if(other->wakeup_time < at) {
-				*preempt_pri = other->pri;
-				at = other->wakeup_time;
-			}
-			got = true;
-		} else if(other->wakeup_time > q_end) {
-			/* early exit */
-			break;
-		}
-		pos = rb_next(pos);
-	}
-
-	return got ? at : 0;
-}
-
-
 static void desched_ready(
 	struct hook *h,
 	void *param, uintptr_t code, void *unused)
@@ -396,7 +384,7 @@ static void desched_ready(
 	struct thread *self = container_of(h, struct thread, post_exn_call);
 
 	if(unlikely(code != 0)) {
-		printf("%s: ipc failed (code=%lu, status=%s)\n", __func__,
+		TRACE("%s: ipc failed (code=%lu, status=%s)\n", __func__,
 			(unsigned long)code, sched_status_str(self));
 		/* should come out of SEND_WAIT. */
 		self->status = TS_READY;
@@ -410,6 +398,46 @@ static void desched_ready(
 		sq_remove_thread(self);
 	}
 	hook_detach(h);
+}
+
+
+static bool send_tq_ipc(
+	struct thread *sender, struct thread *dest,
+	L4_Clock_t body)
+{
+	void *sender_utcb = thread_get_utcb(sender);
+	void *msg = ipc_user((L4_MsgTag_t){ .X.label = 0xffd0, .X.u = 2 },
+		sender, sender_utcb, &dest, 3);
+	L4_VREG(msg, L4_TCR_MR(1)) = body.raw;
+	L4_VREG(msg, L4_TCR_MR(2)) = body.raw >> sizeof(L4_Word_t) * 8;
+	sender->ipc_from = L4_nilthread;
+	return ipc_user_complete_oneway(sender, msg, &dest);
+}
+
+
+/* returns next thread that's up for scheduling, or NULL for none. */
+static struct thread *enter_tq0_state(struct thread *self)
+{
+	struct thread *sched = L4_IsNilThread(self->scheduler)
+		? NULL : thread_get(self->scheduler);
+	if(sched == NULL) {
+		printf("WARNING: no scheduler for %lu:%lu! thread stopped.\n",
+			TID_THREADNUM(self->id), TID_VERSION(self->id));
+		thread_halt(self);
+	} else {
+		L4_Clock_t sw_at = { .raw = ksystemclock() };
+		hook_push_front(&self->post_exn_call, &desched_ready, NULL);
+		if(!send_tq_ipc(self, sched, sw_at)) {
+			assert(self->status == TS_SEND_WAIT);
+			assert(in_sq(self));
+			sched = NULL;
+		} else {
+			assert(self->status == TS_READY);
+			assert(!in_sq(self));
+		}
+	}
+
+	return sched;
 }
 
 
@@ -433,24 +461,19 @@ void leaving_thread(struct thread *self)
 		if(self->total_quantum == 0 && IS_IPC(self->status)) {
 			/* thread entered an IPC state before the kernel could notice that
 			 * its total_quantum had run out. defer the message until next
-			 * leave.
+			 * enter.
+			 *
+			 * FIXME: this is quite unlikely to happen in practice, and very
+			 * very difficult to test as well!
 			 */
+			TRACE("%s: tq=0 ipc from %lu:%lu delayed because of %s via %p, %p\n",
+				__func__, TID_THREADNUM(self->id), TID_VERSION(self->id),
+				sched_status_str(self), __builtin_return_address(0),
+				__builtin_return_address(1));
 			self->total_quantum = 1;
 		} else if(self->total_quantum == 0) {
-			struct thread *sched;
-			sched = L4_IsNilThread(self->scheduler)
-				? NULL : thread_get(self->scheduler);
-			if(sched == NULL) {
-				printf("WARNING: no scheduler for %lu:%lu! thread stopped.\n",
-					TID_THREADNUM(self->id), TID_VERSION(self->id));
-				thread_halt(self);
-			} else {
-				L4_Clock_t sw_at = { .raw = ksystemclock() };
-				hook_push_front(&self->post_exn_call, &desched_ready, NULL);
-				if(!send_tq_ipc(self, sched, sw_at)) {
-					assert(self->status == TS_SEND_WAIT);
-				}
-			}
+			TRACE("%s: total_quantum ran out\n", __func__);
+			enter_tq0_state(self);
 		}
 	}
 
@@ -458,45 +481,231 @@ void leaving_thread(struct thread *self)
 }
 
 
+/* translate scheduling events into preëmption events according to existing
+ * state.
+ */
+struct thread *on_preempt(int vec_num)
+{
+	x86_irq_disable_push();
+
+	struct thread *next, *cand = preempt_thread,
+		*current = get_current_thread();
+	preempt_thread = NULL;
+	if(current == NULL) {
+		next = cand;
+		TRACE("%s: straight thread switch\n", __func__);
+		goto end;
+	}
+	void *cur_utcb = thread_get_utcb(current);
+
+	int old_preempt_status = preempt_status,
+		old_preemptflags = L4_VREG(cur_utcb, L4_TCR_COP_PREEMPT);
+	if(CHECK_FLAG(preempt_status, PS_DELAYED)) {
+		/* max preëmption delay hit. */
+		assert(cand != NULL);		/* FIXME: this is wrong. */
+		TRACE("%s: current=%lu:%lu hit max preempt delay; next=%lu:%lu\n",
+			__func__, TID_THREADNUM(current->id), TID_VERSION(current->id),
+			TID_THREADNUM(cand->id), TID_VERSION(cand->id));
+		assert(cand->pri > current->pri);
+		assert(cand->pri <= current->sens_pri);
+
+		preempt_status = 0;
+		L4_VREG(cur_utcb, L4_TCR_COP_PREEMPT) &= ~0xc0;	/* clear I, d */
+		/* send exception IPC immediately & resolve preemption of the existing
+		 * candidate.
+		 */
+		struct thread *exh = send_preempt_exception(current);
+		next = sched_resolve_next(current, cur_utcb, cand, exh);
+		if(next == exh) {
+			TRACE("%s: exh trumping! status'=%s\n", __func__,
+				sched_status_str(current));
+			TRACE("%s: ... activating exh=%lu:%lu instead of cand=%lu:%lu\n",
+				__func__, TID_THREADNUM(exh->id), TID_VERSION(exh->id),
+				TID_THREADNUM(cand->id), TID_VERSION(cand->id));
+		}
+		assert(next != current);
+		assert(IS_IPC(current->status));
+	} else {
+		assert(current->status == TS_RUNNING);
+		next = sched_resolve_next(current, cur_utcb, current, cand);
+	}
+
+	if(CHECK_FLAG(L4_VREG(cur_utcb, L4_TCR_COP_PREEMPT), 0x80)) {
+		/* async preemption of @current was delayed. */
+		assert(next == current);
+		assert(!CHECK_FLAG(old_preemptflags, 0x80));
+
+		uint64_t now = ksystemclock();
+		int q_rem = MAX(int, 0,
+				current->quantum - (now - task_switch_time * 1000)),
+			pe_after = MIN(int, current->max_delay, q_rem);
+		preempt_timer_count = (now + pe_after) / 1000;
+		preempt_thread = cand;
+		preempt_status |= PS_DELAYED;
+
+		TRACE("%s: current=%lu:%lu preemption delayed for %dµs\n", __func__,
+			TID_THREADNUM(current->id), TID_VERSION(current->id), pe_after);
+	} else {
+		/* async preemption of @current. */
+		L4_Word_t *ctl_p = &L4_VREG(cur_utcb, L4_TCR_COP_PREEMPT);
+		if(CHECK_FLAG(*ctl_p, 0x20)
+			&& !CHECK_FLAG(old_preempt_status, PS_DELAYED)
+			&& (next != current || current->quantum == 0))
+		{
+			TRACE("%s: set TF_PREEMPT on current=%lu:%lu\n", __func__,
+				TID_THREADNUM(current->id), TID_VERSION(current->id));
+			current->flags |= TF_PREEMPT;
+		} else {
+			TRACE("%s: silent async preempt (q=0 | tq=0) on current=%lu:%lu\n",
+				__func__, TID_THREADNUM(current->id), TID_VERSION(current->id));
+		}
+		if(next == current) next = NULL;
+		*ctl_p &= ~0x80;	/* clear "I" */
+		preempt_status = 0;
+	}
+
+end:
+	x86_irq_restore();
+	return next;
+}
+
+
+static struct thread *preemptor_of(struct thread *self, uint64_t run_until)
+{
+	struct rb_node *pos = &self->sched_rb;
+	pos = rb_next(pos);		/* skip self. */
+	/* skip over threads with equal priority. */
+	while(pos != NULL) {
+		struct thread *other = container_of(pos, struct thread, sched_rb);
+		if(other->pri > self->pri) break;
+		pos = rb_next(pos);
+	}
+	/* out of the ones that preempt this thread, choose the one with earliest
+	 * wakeup.
+	 */
+	struct thread *preemptor = NULL;
+	while(pos != NULL) {
+		struct thread *other = container_of(pos, struct thread, sched_rb);
+		if(other->wakeup_time > run_until) break;
+		if(other->pri > self->pri
+			&& (preemptor == NULL
+				|| other->wakeup_time < preemptor->wakeup_time)
+			&& other->total_quantum > 0)
+		{
+			preemptor = other;
+		}
+		pos = rb_next(pos);
+	}
+
+	return preemptor;
+}
+
+
 /* set preemption parameters, current_thread */
-static void entering_thread(struct thread *next)
+static void sched_next_thread(struct thread *next)
 {
 	assert(get_current_thread() == NULL);
 	assert(hook_empty(&next->post_exn_call));
+	assert(next->total_quantum > 0);
+	assert(!CHECK_FLAG(next->flags, TF_PREEMPT));
 
 	/* FIXME: a terrible hack that keeps everything working before timeslice
 	 * borrowing comes about.
 	 */
 	if(next->quantum <= 0) next->quantum = 10000;	/* ewwwwwww */
 
-	/* TODO: find the clock tick when this thread'll be pre-empted due to
-	 * exhausted quantum; or when the total quantum exhausted message will be
-	 * triggered (XXX: what is that?); or when a higher-priority thread's IPC
-	 * wakeup time occurs before the quantum expires.
-	 *
-	 * it's a simple enough walk through the sched tree _before_
-	 * sq_update_thread() is called on "next".
+	/* find the known descheduling point for @next. this can happen in one of
+	 * three ways:
+	 *   - its current quantum runs out, pending eventual refill via
+	 *     schedule();
+	 *   - its total_quantum runs out;
+	 *   - a higher-priority thread encounters an IPC timeout within the
+	 *     slice from the prior two.
 	 */
 	assert(next->quantum > 0);
-	next->status = TS_RUNNING;
-	task_switch_time = read_global_timer();
-	int preempt_pri;
-	uint64_t preempt_at = next_preempt_at(&preempt_pri, next,
-		task_switch_time * 1000);
-	if(next->ts_len.raw != L4_Never.raw) {
-		uint64_t q_end = task_switch_time * 1000
-			+ MIN(uint64_t, next->quantum, next->total_quantum);
-		if(preempt_at == 0 || preempt_at > q_end) preempt_at = q_end;
+	uint32_t runtime = next->quantum;	/* good for ~71.58 minutes */
+	if(runtime > next->total_quantum) {
+		runtime = next->total_quantum;
 	}
 
-	/* write parameters used by the irq0 handler */
-	preempt_at = (preempt_at + 999) / 1000;
+	next->status = TS_RUNNING;
+	uint64_t switch_at = ksystemclock();
+	/* FIXME: modify the incoming @next and return the new value. for now
+	 * we'll just noisily ignore preemptions that happened before switching.
+	 */
+	struct thread *preemptor = preemptor_of(next, switch_at + runtime);
+	if(preemptor != NULL && switch_at >= preemptor->wakeup_time) {
+		printf("%s: disregarding preemptor=%lu:%lu (switch_at=%u >= wakeup_time=%u)\n",
+			__func__, TID_THREADNUM(preemptor->id), TID_VERSION(preemptor->id),
+			(unsigned)switch_at, (unsigned)preemptor->wakeup_time);
+		preemptor = NULL;
+	}
+	if(preemptor != NULL) {
+		assert(switch_at < preemptor->wakeup_time);
+		runtime = preemptor->wakeup_time - switch_at;
+
+#if 0
+		printf("%s: next=%lu:%lu will be preempted by %lu:%lu in %uµs\n",
+			__func__, TID_THREADNUM(next->id), TID_VERSION(next->id),
+			TID_THREADNUM(preemptor->id), TID_VERSION(preemptor->id),
+			(unsigned)runtime);
+		printf("%s: ... next->pri=%d, preemptor->pri=%d\n",
+			__func__, (int)next->pri, (int)preemptor->pri);
+#endif
+	}
+
+	/* set up us the interrupt. */
+	uint64_t preempt_at = (switch_at + runtime + 999) / 1000;
+	TRACE("%s: running next=%lu:%lu for %uµs (preempt_at=%u, tq=%u)...\n",
+		__func__, TID_THREADNUM(next->id), TID_VERSION(next->id), runtime,
+		(unsigned)preempt_at, (unsigned)next->total_quantum);
 	x86_irq_disable_push();
-	current_thread = next;
+	current_thread = next;	/* move "zig" */
 	preempt_timer_count = preempt_at;
-	preempt_task_pri = preempt_pri;
+	preempt_thread = preemptor;
 	preempt_status = 0;
+	task_switch_time = switch_at / 1000;
 	x86_irq_restore();
+}
+
+
+/* if *@next_p has TF_PREEMPT set, and resolving it causes its
+ * exceptionhandler to pre-empt *@next_p, then *@next_p will be set to the
+ * exceptionhandler, the thread-entering effect will take on that thread
+ * instead of the earlier value, and the caller should exit to it.
+ */
+static void entering_thread(struct thread **next_p)
+{
+	struct thread *next = *next_p, *orig = next;
+	if(CHECK_FLAG(next->flags, TF_PREEMPT)) {
+		/* FIXME: get preemption time from somewhere! */
+		TRACE("%s: sending preempt fault for %lu:%lu\n",
+			__func__, TID_THREADNUM(next->id), TID_VERSION(next->id));
+		struct thread *exh = send_preempt_fault(next,
+				(L4_Clock_t){ .raw = ksystemclock() }),
+			*oldnext = next;
+		next = sched_resolve_next(NULL, NULL, next, exh);
+		if(next == exh) {
+			*next_p = next;
+			TRACE("%s: exh trumping! status'=%s\n", __func__,
+				sched_status_str(oldnext));
+			TRACE("%s: ... replacing next with exh=%lu:%lu\n", __func__,
+				TID_THREADNUM(exh->id), TID_VERSION(exh->id));
+		}
+		assert(next->status == TS_READY
+			|| next->status == TS_RUNNING);
+	}
+
+	if(next->total_quantum == 1) {
+		TRACE("%s: detected a delayed tq=0 condition\n", __func__);
+		next = sched_resolve_next(NULL, NULL, next, enter_tq0_state(next));
+		assert(next != orig);
+		assert(next->status == TS_READY
+			|| next->status == TS_RUNNING);
+	}
+
+	sched_next_thread(next);
+	*next_p = next;
 }
 
 
@@ -505,7 +714,8 @@ static void entering_thread(struct thread *next)
  */
 static void handoff_epilog(struct thread *src, struct thread *dst)
 {
-	entering_thread(dst);
+	/* FIXME: resolve TF_PREEMPT for @dst! */
+	sched_next_thread(dst);
 	assert(dst->status == TS_RUNNING);
 	if(src->u0.partner == dst) {
 		/* break it up */
@@ -707,13 +917,9 @@ NORETURN void exit_to_thread(struct thread *next)
 static void maybe_exit_to_preempt(struct thread *current)
 {
 	assert(current != NULL);
-	assert(kernel_preempt_pending);
 	assert(kernel_preempt_to != NULL);
 
 	struct thread *next = kernel_preempt_to;
-
-	/* we're handling it, so clear these. */
-	kernel_preempt_pending = false;
 	kernel_preempt_to = NULL;
 
 	TRACE("%s: current=%lu:%lu, next=%lu:%lu\n", __func__,
@@ -762,8 +968,8 @@ static void maybe_exit_to_preempt(struct thread *current)
 			} while(next->quantum <= 0);
 		}
 	}
-	TRACE("%s: ... entering pre-emptor\n", __func__);
-	entering_thread(next);
+	TRACE("%s: ... switching to pre-emptor\n", __func__);
+	entering_thread(&next);
 	exit_to_thread(next);
 }
 
@@ -824,55 +1030,41 @@ static NORETURN void schedule(void *param_ptr)
 	assert(get_current_thread() == NULL);
 	struct thread *prev = param_ptr;
 
-	if(likely(prev != NULL)) {
-		x86_irq_disable();
-		int p_status = preempt_status;
-		preempt_status = 0;
-		if(CHECK_FLAG(p_status, PS_PENDING)) {
-			assert(get_current_thread() == NULL);
-			void *utcb = thread_get_utcb(prev);
-			L4_Word_t *preempt_p = &L4_VREG(utcb, L4_TCR_COP_PREEMPT);
-			if(CHECK_FLAG(*preempt_p, 0x20)) {	/* "s"ignal? */
-				if(CHECK_FLAG(*preempt_p & p_status, PS_DELAYED)) {
-					/* max delay ran out. pop the exception. */
-					prev->flags &= ~TF_PREEMPT;
-					send_preempt_exception(prev);
-				} else {
-					prev->flags |= TF_PREEMPT;
-				}
-			}
-			if(CHECK_FLAG(*preempt_p & p_status, PS_DELAYED)) {
-				/* clear the "d" flag; delay was exceeded. this happens
-				 * regardless of whether "s" is set.
-				 */
-				*preempt_p &= ~0x40;
-			}
-			*preempt_p &= ~0x80;	/* clear "I" */
-		}
-		x86_irq_enable();
-	}
-
 again:
 	assert(x86_irq_is_enabled());
-	if(kernel_irq_deferred) int_latent();
-	if(kernel_preempt_pending) {
+	x86_irq_disable();
+	if(irq_defer_active) {
+		/* the singing scheduler */
+		irq_call_deferred(NULL);
+	}
+	x86_irq_enable();
+	if(kernel_preempt_to != NULL) {
+		TRACE("%s: kernel_preempt_to=%lu:%lu\n", __func__,
+			TID_THREADNUM(kernel_preempt_to->id),
+			TID_VERSION(kernel_preempt_to->id));
 		if(likely(prev != NULL) && prev->status == TS_RUNNING) {
 			maybe_exit_to_preempt(prev);
 		} else {
 			/* pre-emption at boot, pre-emption of a dead thread, or one
 			 * that's sleeping.
 			 */
-			kernel_preempt_pending = false;
 			kernel_preempt_to = NULL;
 		}
 	}
 
-	assert(!kernel_preempt_pending);
+	assert(kernel_preempt_to == NULL);
 	assert(prev == NULL || prev->status != TS_RUNNING);
 
 	/* find next ready thread. */
 	bool new_slices;
 	struct thread *next = schedule_next_thread(&new_slices);
+#ifdef DEBUG_ME_HARDER
+	if(next != NULL) {
+		TRACE("%s: next=%p (%lu:%lu), status=%s\n", __func__, next,
+			TID_THREADNUM(next->id), TID_VERSION(next->id),
+			sched_status_str(next));
+	}
+#endif
 	if(next == NULL && !new_slices) {
 		/* system is idle. */
 		assert(check_sched_module());
@@ -908,12 +1100,17 @@ again:
 
 	if(CHECK_FLAG(next->flags, TF_PREEMPT)) {
 		/* signal preemption. */
+		TRACE("%s: sending preempt fault for next=%lu:%lu\n", __func__,
+			TID_THREADNUM(next->id), TID_VERSION(next->id));
 		next->flags &= ~TF_PREEMPT;
 		/* FIXME: get preempt time from somewhere */
-		send_preempt_fault(next, (L4_Clock_t){ .raw = ksystemclock() });
+		struct thread *exh = send_preempt_fault(next,
+			(L4_Clock_t){ .raw = ksystemclock() });
+		TRACE("%s: ... next->status'=%s\n", __func__, sched_status_str(next));
 		/* (XFER and R_RECV threads don't preempt.) */
 		assert(next->status == TS_READY || next->status == TS_RUNNING);
-		goto again;
+		next = sched_resolve_next(NULL, NULL, next, exh);
+		if(next == exh) TRACE("%s: exh > next\n", __func__);
 	}
 
 	if(next->status == TS_XFER) {
@@ -945,10 +1142,10 @@ again:
 		prev == NULL ? 0 : TID_VERSION(prev->id),
 		TID_THREADNUM(next->id), TID_VERSION(next->id));
 
-	if(kernel_irq_deferred) int_latent();
 	x86_irq_disable();
-	entering_thread(next);
-	if(kernel_preempt_pending) maybe_exit_to_preempt(next);
+	assert(get_current_thread() == NULL);
+	if(irq_defer_active) next = irq_call_deferred(next);
+	sched_next_thread(next);
 	exit_to_thread(next);
 }
 
@@ -975,50 +1172,69 @@ NORETURN void return_to_scheduler(void)
 }
 
 
+void return_from_irq(struct thread *next)
+{
+	assert(!x86_irq_is_enabled());
+	if(irq_defer_active) next = irq_call_deferred(next);
+
+	struct thread *current = get_current_thread();
+	if(current != NULL && next != current) {
+		/* preëmpted or descheduled. */
+		void *cur_utcb = thread_get_utcb(current);
+		L4_Word_t *ctl_p = &L4_VREG(cur_utcb, L4_TCR_COP_PREEMPT);
+		if(CHECK_FLAG(*ctl_p, 0x20)) current->flags |= TF_PREEMPT;
+		*ctl_p &= ~0x80;	/* clear "I" */
+
+		if(current->status == TS_RUNNING) {
+			current->status = TS_READY;
+			current->wakeup_time = 0;
+			sq_update_thread(current);
+		}
+		assert(current->status == TS_READY
+			|| current->status == TS_R_RECV
+			|| current->status == TS_SEND_WAIT);
+		leaving_thread(current);
+
+		TRACE("%s: preempt or deschedule of current=%lu:%lu\n", __func__,
+			TID_THREADNUM(current->id), TID_VERSION(current->id));
+	}
+
+	if(next == NULL) {
+		/* TODO: make scheduler depend on !intena */
+		TRACE("%s: going to scheduler\n", __func__);
+		assert(!kernel_irq_ok);
+		x86_irq_enable();
+		exit_to_scheduler(current);
+	} else if(next != current) {
+		/* switch into other thread. */
+		assert(next != NULL);
+		if(IS_IPC(next->status)) {
+			assert(next != current);
+			timeout_ipc(next);
+			assert(next->status == TS_READY);
+		}
+		entering_thread(&next);
+		assert(next != NULL);
+		TRACE("%s: going to next=%lu:%lu\n", __func__,
+			TID_THREADNUM(next->id), TID_VERSION(next->id));
+		exit_to_thread(next);
+	} else {
+		/* exit via caller. */
+	}
+}
+
+
 /* this must be the last line of an exception handler that doesn't call one of
  * the return_to_*() family of kernel exits. it tests for and handles latent
- * interrupts. (the reason why return_to_*() callers don't need it is that all
- * of those already handle pre-emption either by calling this, or by entering
- * the scheduler [which calls int_latent() for a first thing, and this before
- * kernel exit]).
+ * interrupts, and resolves in-kernel preëmption.
  */
 void return_from_exn(void)
 {
 	x86_irq_disable();
-	if(unlikely(kernel_irq_deferred)) {
-		do {
-			x86_irq_enable();
-			int_latent();
-			x86_irq_disable();
-		} while(kernel_irq_deferred);
-	}
-
-	if(kernel_preempt_pending) {
-		maybe_exit_to_preempt(get_current_thread());
-	}
-}
-
-
-/* like return_from_exn(), but allows for continuation of in-kernel processing
- * with interrupts enabled when pre-emption delay kicks in instead.
- */
-void return_to_preempt(void)
-{
-	return_from_exn();
-	x86_irq_enable();
-}
-
-
-bool check_preempt(void)
-{
-	if(kernel_preempt_pending) {
-		return true;
-	} else if(kernel_irq_deferred) {
-		int_latent();
-		return kernel_preempt_pending;
-	} else {
-		return false;
-	}
+	struct thread *current = get_current_thread();
+	/* FIXME: check in-kernel preëmptions with sched_resolve_next()! */
+	// if(kernel_preempt_to != NULL) maybe_exit_to_preempt(current);
+	return_from_irq(current);
 }
 
 
@@ -1054,7 +1270,7 @@ void return_to_other(struct thread *other)
 		other->quantum = new_ts;
 	}
 
-	entering_thread(other);
+	entering_thread(&other);
 	return_from_exn();
 	exit_to_thread(other);
 }
@@ -1196,8 +1412,9 @@ SYSCALL L4_Word_t sys_schedule(
 		goto inv_param;
 	}
 
+	L4_Word_t tq = dest->total_quantum == 1 ? 0 : dest->total_quantum;
 	*timectl_p = (L4_Word_t)L4_TimePeriod(dest->quantum).raw << 16
-		| L4_TimePeriod(dest->total_quantum).raw;
+		| L4_TimePeriod(tq).raw;
 
 	if(IS_IPC(dest->status)
 		/* TODO: check flag to see if current IPC is by kernel, instead */

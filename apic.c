@@ -140,6 +140,7 @@ static void ioapic_send_eoi(int irq)
 
 static void ioapic_mask_irq(int irq)
 {
+	assert(!x86_irq_is_enabled());
 	struct ioapic_info *ioa = &global_ioapics[irq / 24];
 	int vec = irq % 24;
 
@@ -493,5 +494,7 @@ COLD int ioapic_init(struct pic_ops *ops)
 		.unmask_irq = &ioapic_unmask_irq,
 	};
 
-	return num_global_ioapics * 24 - 1;
+	int num_ints = num_global_ioapics * 24 - 1;
+	set_irq_handler(0x20 + num_ints, NULL);
+	return num_ints;
 }

@@ -476,7 +476,6 @@ void kmain(void *bigp, unsigned int magic)
 
 	setup_gdt();
 	setup_idt(SEG_KERNEL_CODE, 15);		/* XT-PIC, for now */
-	init_irq();
 
 	/* set MP. clear EMulation, NoExceptions, TaskSwitch. */
 	x86_alter_cr0(~(X86_CR0_EM | X86_CR0_NE | X86_CR0_TS), X86_CR0_MP);
