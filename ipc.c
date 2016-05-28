@@ -124,7 +124,70 @@ static bool check_ipc_module(void)
 {
 	INV_CTX;
 
-	/* recvwait_hash. simple enough. */
+	/* for all threads, check correct membership in recvwait_hash and
+	 * sendwait_hash.
+	 */
+	struct ra_iter rai;
+	for(struct thread *t = ra_first(thread_ra, &rai);
+		t != NULL;
+		t = ra_next(thread_ra, &rai))
+	{
+		inv_push("t=%lu:%lu (%p), ->ipc_from=%lu:%lu, ->ipc_to=%lu:%lu",
+			TID_THREADNUM(t->id), TID_VERSION(t->id), t,
+			L4_ThreadNo(t->ipc_from), L4_Version(t->ipc_from),
+			L4_ThreadNo(t->ipc_to), L4_Version(t->ipc_to));
+
+		/* string transfers that're waiting for either the other thread's
+		 * pagefaults, or for the transfer to proceed via scheduling.
+		 */
+		inv_push("[TS_XFER checks] t->status=%s, ->ipc=%p",
+			sched_status_str(t), t->ipc);
+		inv_imply1(t->status == TS_XFER, t->ipc != NULL);
+		if(t->status == TS_XFER) {
+			inv_log("ipc->from->id=%lu:%lu, ->to->id=%lu:%lu",
+				TID_THREADNUM(t->ipc->from->id), TID_VERSION(t->ipc->from->id),
+				TID_THREADNUM(t->ipc->to->id), TID_VERSION(t->ipc->to->id));
+		}
+		inv_imply1(t->status == TS_XFER,
+			t->ipc->from == t || t->ipc->to == t);
+		inv_imply1(t->status == TS_XFER && t->ipc->from == t,
+			t->ipc->to != t);
+		inv_imply1(t->status == TS_XFER && t->ipc->to == t,
+			t->ipc->from != t);
+		inv_pop();
+
+		/* check how many times @t occurs in sendwait_hash and
+		 * recvwait_hash.
+		 */
+		struct htable_iter it;
+		int sendwait_count = 0;
+		for(struct thread *cand = htable_first(&sendwait_hash, &it);
+			cand != NULL;
+			cand = htable_next(&sendwait_hash, &it))
+		{
+			if(cand == t) sendwait_count++;
+		}
+		inv_log("t->status=%s, sendwait_count=%d",
+			sched_status_str(t), sendwait_count);
+		inv_imply1(t->status == TS_SEND_WAIT, sendwait_count == 1);
+		inv_imply1(t->status != TS_SEND_WAIT, sendwait_count == 0);
+
+		int recvwait_count = 0;
+		for(struct thread *cand = htable_first(&recvwait_hash, &it);
+			cand != NULL;
+			cand = htable_next(&recvwait_hash, &it))
+		{
+			if(cand == t) recvwait_count++;
+		}
+		inv_log("in_recv_wait(t)=%s, recvwait_count=%d",
+			btos(in_recv_wait(t)), recvwait_count);
+		inv_imply1(in_recv_wait(t), recvwait_count == 1);
+		inv_imply1(!in_recv_wait(t), recvwait_count == 0);
+
+		inv_pop();
+	}
+
+	/* recvwait_hash per member. simple enough. */
 	struct htable_iter it;
 	for(struct thread *t = htable_first(&recvwait_hash, &it);
 		t != NULL;
@@ -144,9 +207,6 @@ static bool check_ipc_module(void)
 
 		inv_pop();
 	}
-	/* TODO: foreach all threads, check that those that're in a non-nil
-	 * RECV_WAIT are in recvwait_hash and all others are not.
-	 */
 
 	/* TODO: sendwait_hash, redir_hash */
 
@@ -1014,8 +1074,10 @@ void *ipc_user(
 			dest, saved_dest).raw;
 	}
 	dest->ipc_from = tid_return(dest, from);
-	TRACE("%s: did fastpath setup, dest=%lu:%lu\n", __func__,
+	TRACE("%s: did fastpath setup; from=%lu:%lu, dest=%lu:%lu\n", __func__,
+		TID_THREADNUM(from->id), TID_VERSION(from->id),
 		TID_THREADNUM(dest->id), TID_VERSION(dest->id));
+	TRACE("%s: ... dest->status=%s\n", __func__, sched_status_str(dest));
 	assert(check_ipc_module());
 	return dst_utcb;
 
