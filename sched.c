@@ -125,6 +125,7 @@ const char *sched_status_str(struct thread *t)
 		[TS_SEND_WAIT] = "send_wait",
 		[TS_RECV_WAIT] = "recv_wait",
 		[TS_XFER] = "xfer",
+		[0x42] = "***dummy***",
 	};
 	assert(status >= 0 && status < (sizeof(table) / sizeof(table[0])));
 	return table[status];

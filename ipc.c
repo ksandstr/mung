@@ -512,7 +512,11 @@ void cancel_ipc_from(struct thread *t)
 			 */
 			s->u0.partner = NULL;
 		}
-		if(in_recv_wait(t)) remove_recv_wait(t);
+		if(in_recv_wait(t)) {
+			remove_recv_wait(t);
+			t->status = 0x42;	/* a dummy */
+			assert(!in_recv_wait(t));
+		}
 	}
 	rewrite_passive_vs_from(t);
 	assert(check_ipc_module());
@@ -779,7 +783,11 @@ static bool ipc_send_half(
 		}
 		assert(!redirected || saved_dest != NULL);
 
-		if(in_recv_wait(dest)) remove_recv_wait(dest);
+		if(in_recv_wait(dest)) {
+			remove_recv_wait(dest);
+			dest->status = TS_R_RECV;	/* a more curiouser dummy */
+			assert(!in_recv_wait(dest));
+		}
 
 		void *dest_utcb = thread_get_utcb(dest);
 		int n = do_ipc_transfer(self, self_utcb, dest, dest_utcb);
@@ -995,6 +1003,9 @@ void *ipc_user(
 	}
 
 	if(in_recv_wait(dest)) remove_recv_wait(dest);
+	dest->status = 0x42;	/* a dummy */
+	assert(!in_recv_wait(dest));
+
 	void *dst_utcb = thread_get_utcb(dest);
 	L4_VREG(dst_utcb, L4_TCR_MR(0)) = tag.raw;
 	if(L4_IpcRedirected(tag)) {
@@ -1030,6 +1041,8 @@ bool ipc_user_complete(
 		assert(msg_utcb == thread_get_utcb(*to_p));
 		set_ipc_return_thread(*to_p, msg_utcb);
 		assert(hook_empty(&(*to_p)->post_exn_call));
+		assert((*to_p)->status == 0x42);	/* check the dummy. */
+		(*to_p)->status = TS_RECV_WAIT;
 		thread_wake(*to_p);
 		goto fast;
 	}
@@ -1872,6 +1885,8 @@ SYSCALL L4_Word_t sys_lipc(
 	} else {
 		sched_ipc_handoff_timeout(sender, dest, sender->recv_timeout);
 	}
+	assert(dest->status == TS_RUNNING);
+	assert(!in_recv_wait(dest));
 	assert(sender->u0.partner != dest);
 	if(to.raw == fromspec.raw && likely(!dest_was_partner)) {
 		assert(get_local_id(dest).raw == to.raw);
