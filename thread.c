@@ -553,7 +553,10 @@ void *thread_get_utcb(struct thread *t)
 }
 
 
-/* possibly not as fast as it could be, however, quicker than the "safe"
+/* look for a thread number, ignoring the version number. used from
+ * sys_threadcontrol(), thread_new(), and thread_get().
+ *
+ * this is possibly not as fast as it could be, however, it's quicker than the
  * hashtable search of ra_id2ptr_safe() and accesses fewer cachelines over
  * time. if at some point pt_get_pgid() loses its htable lookup (i.e. the
  * kernel gets some way of quickly accessing its own pagetables), that method
@@ -563,7 +566,11 @@ static struct thread *thread_find(thread_id tid)
 {
 	if(unlikely(catch_pf() != 0)) return NULL;
 
-	struct thread *t = ra_id2ptr(thread_ra, TID_THREADNUM(tid));
+	uintptr_t ptr = tid >> (14 - thread_ra->id_shift);
+	ptr &= thread_ra->and_mask;
+	ptr |= thread_ra->or_mask;
+	struct thread *t = (struct thread *)ptr;
+	assert(t == ra_id2ptr(thread_ra, TID_THREADNUM(tid)));
 	if(unlikely(*(struct space *volatile *)&t->space == NULL)) t = NULL;
 	assert(t == NULL
 		|| TID_THREADNUM(t->id) == TID_THREADNUM(tid));
@@ -576,7 +583,7 @@ struct thread *thread_get(L4_ThreadId_t tid)
 {
 	assert(L4_IsGlobalId(tid));
 	struct thread *t = thread_find(tid.raw);
-	if(t != NULL && TID_VERSION(t->id) != L4_Version(tid)) t = NULL;
+	if(t != NULL && t->id != tid.raw) t = NULL;
 	return t;
 }
 
@@ -901,7 +908,7 @@ static L4_Word_t interrupt_ctl(
 	assert(L4_Version(dest_tid) == 1);
 	assert(intnum < num_ints);
 
-	struct thread *pgt = thread_find(pager.raw);
+	struct thread *pgt = thread_get(pager);
 	if(pager.raw != dest_tid.raw && pgt == NULL) {
 		*ec_p = 2;		/* "unavailable thread", when pager isn't valid */
 		return 0;
