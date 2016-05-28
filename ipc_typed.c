@@ -485,6 +485,7 @@ static void prexfer_ipc_hook(
 		 *
 		 * if t->ipc isn't NULL, we'll clean it up for both peers.
 		 */
+		TRACE("%s: aborted, code=%u\n", __func__, (unsigned)code);
 		if(t->ipc != NULL) {
 			struct ipc_state *st = t->ipc;
 			st->from->ipc = NULL;
@@ -517,6 +518,7 @@ static void prexfer_ipc_hook(
 		panic("should xfertimeout in post-fault");
 	}
 
+	t->status = TS_XFER;
 	if(t->ipc->str_off >= 0) {
 		/* in-transfer fault.
 		 * TODO: remove the goto, for obvious reasons
@@ -536,28 +538,29 @@ static void prexfer_ipc_hook(
 
 	if(++p_self->pos < p_self->num) {
 		/* next fault. */
-		TRACE("%s: sending next fault (index %u out of %u) (in %lu:%lu)\n",
+		TRACE("%s: sending next fault (pos=%u, num=%u) from t=%lu:%lu\n",
 			__func__, p_self->pos, p_self->num, TID_THREADNUM(t->id),
 			TID_VERSION(t->id));
 		send_xfer_fault(t, p_self->faults[p_self->pos], t->ctx.eip,
 			t->ipc->xferto_at);
-		TRACE("%s: next fault sent, state now %s\n", __func__,
+		TRACE("%s: next fault sent, state'=%s\n", __func__,
 			sched_status_str(t));
 	} else if(p_other->pos < p_other->num) {
 		/* wait for partner. */
 		TRACE("%s: waiting for partner in %s thread %lu:%lu\n", __func__,
 			CHECK_FLAG(t->flags, TF_SENDER) ? "sender" : "receiver",
 			TID_THREADNUM(t->id), TID_VERSION(t->id));
-		t->status = is_sender ? TS_SEND_WAIT : TS_RECV_WAIT;
 		thread_sleep(t, L4_Never);
+		assert(t->ipc != NULL);
 	} else {
 proceed:
 		TRACE("%s: partner %lu:%lu ready, scheduling\n", __func__,
 			TID_THREADNUM(t->id), TID_VERSION(t->id));
-		t->status = TS_XFER;
 		thread_wake(t);
 		ipc_partner(t)->status = TS_XFER;
 		thread_wake(ipc_partner(t));
+		TRACE("%s: self->status'=%s, partner->status'=%s\n", __func__,
+			sched_status_str(t), sched_status_str(ipc_partner(t)));
 	}
 }
 
@@ -568,9 +571,9 @@ static void send_xfer_fault(
 	L4_Word_t ip,
 	uint64_t xferto_abs)
 {
-	TRACE("ipc: xfer fault %#lx (ip %#lx) in %lu:%lu (xfto %lu)\n",
+	TRACE("ipc: xfer fault %#lx (ip %#lx) in %lu:%lu (xfto=%lu, status=%s)\n",
 		L4_Address(fault), ip, TID_THREADNUM(t->id), TID_VERSION(t->id),
-		(unsigned long)xferto_abs);
+		(unsigned long)xferto_abs, sched_status_str(t));
 
 	void *utcb = thread_get_utcb(t);
 	struct thread *pager = thread_get_pager(t, utcb);
@@ -609,12 +612,12 @@ static void set_xfer_fault_state(struct ipc_state *st, L4_Fpage_t fault)
 	 * to the post-fault hook
 	 */
 	assert(oth->status == TS_XFER);
-	oth->status = oth == st->to ? TS_RECV_WAIT : TS_SEND_WAIT;
 	thread_sleep(oth, L4_Never);
 
 	/* the faulter does an IPC in the scheduled transfer peer's (or IPC
 	 * caller's, outside of the ipc_resume() path) context.
 	 */
+	ft->status = TS_XFER;
 	send_xfer_fault(ft, fault, ft->ctx.eip, st->xferto_at);
 }
 
@@ -1118,21 +1121,6 @@ static int check_prexfer_faults(
 	memcpy(st->xfer.fault[0].faults, s_faults, nf_src * sizeof(L4_Fpage_t));
 	memcpy(st->xfer.fault[1].faults, d_faults, nf_dst * sizeof(L4_Fpage_t));
 
-	/* send faults & adjust sched status */
-	if(nf_src > 0) {
-		send_xfer_fault(source, s_faults[0], source->ctx.eip, st->xferto_at);
-	} else {
-		source->status = TS_SEND_WAIT;
-		thread_sleep(source, L4_Never);
-	}
-
-	if(nf_dst > 0) {
-		send_xfer_fault(dest, d_faults[0], dest->ctx.eip, st->xferto_at);
-	} else {
-		dest->status = TS_RECV_WAIT;
-		thread_sleep(dest, L4_Never);
-	}
-
 	if(source->ipc == NULL) {
 		assert(!CHECK_FLAG(source->flags, TF_SENDER));
 		assert(!CHECK_FLAG(dest->flags, TF_SENDER));
@@ -1145,6 +1133,23 @@ static int check_prexfer_faults(
 
 	assert(source->ipc == dest->ipc);
 	assert(source->ipc->str_off < 0);
+
+	/* change sched status to ongoing typed transfer & send faults where
+	 * applicable.
+	 */
+	source->status = TS_XFER;
+	if(nf_src > 0) {
+		send_xfer_fault(source, s_faults[0], source->ctx.eip, st->xferto_at);
+	} else {
+		thread_sleep(source, L4_Never);
+	}
+
+	dest->status = TS_XFER;
+	if(nf_dst > 0) {
+		send_xfer_fault(dest, d_faults[0], dest->ctx.eip, st->xferto_at);
+	} else {
+		thread_sleep(dest, L4_Never);
+	}
 
 	return -EFAULT;
 

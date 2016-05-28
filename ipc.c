@@ -250,6 +250,9 @@ void ipc_xfer_timeout(struct ipc_state *st)
 		TID_THREADNUM(st->from->id), TID_VERSION(st->from->id),
 		TID_THREADNUM(st->to->id), TID_VERSION(st->to->id));
 
+	/* must determine which peer's fault caused the timeout. if they were both
+	 * waiting, we'll blame the sender.
+	 */
 	bool f_in_src;
 	if(st->str_off < 0) {
 		/* pre-xfer mode. decided by whether the sender has unserviced faults,
@@ -261,13 +264,10 @@ void ipc_xfer_timeout(struct ipc_state *st)
 		assert(f_src->num > 0 || st->xfer.fault[1].num > 0);
 		f_in_src = f_src->num > 0;
 	} else {
-		/* in-transfer mode. decided by whether the sender is waiting for
-		 * pager service.
+		/* in-transfer mode. decided by whether the sender is waiting for the
+		 * receiver's fault handling.
 		 */
-		f_in_src = IS_IPC_WAIT(st->from->status)
-			|| st->from->status == TS_R_RECV;
-		assert(!f_in_src
-			|| (IS_IPC_WAIT(st->to->status) || st->to->status == TS_R_RECV));
+		f_in_src = (st->from->status != TS_XFER);
 	}
 
 	const L4_Word_t ec_offs = st->tot_offset << 4;

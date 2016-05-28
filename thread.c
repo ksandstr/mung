@@ -477,15 +477,6 @@ void thread_sleep(struct thread *t, L4_Time_t period)
 			}
 		}
 	} else {
-#if 0
-#ifndef NDEBUG
-		if(!IS_IPC_WAIT(t->status) && t->status != TS_XFER) {
-			printf("%s: thread %lu:%lu status is %s\n", __func__,
-				TID_THREADNUM(t->id), TID_VERSION(t->id),
-				sched_status_str(t));
-		}
-#endif
-#endif
 		assert(IS_IPC_WAIT(t->status) || t->status == TS_XFER);
 
 		t->wakeup_time = wakeup_at(period);
@@ -502,7 +493,8 @@ void thread_ipc_fail(struct thread *t)
 	assert(t->status == TS_RECV_WAIT
 		|| t->status == TS_SEND_WAIT
 		|| t->status == TS_R_RECV
-		|| (t->status == TS_XFER && t->ipc != NULL));
+		|| t->status == TS_XFER);
+	assert(t->ipc == NULL);
 
 	if(t->status == TS_SEND_WAIT || t->status == TS_RECV_WAIT) {
 		/* (NOTE: also, $t->ipc != NULL \implies \ Myself \notin \dom
