@@ -509,13 +509,23 @@ static void prexfer_ipc_hook(
 
 	if(t->ipc->xferto_at > 0 && ksystemclock() >= t->ipc->xferto_at) {
 		/* transfer timed out under the pager transaction, and wasn't killed
-		 * by the scheduler before that.
-		 *
-		 * FIXME: hit this in a test, first
+		 * by the scheduler before that. this happens when the pager takes its
+		 * sweet time and higher-priority tasks prevent execution of the
+		 * transfer timeout.
 		 */
-		printf("%s: post-fault xfer timeout in %lu:%lu\n", __func__,
+		TRACE("%s: post-fault xferto_at crossing in %lu:%lu\n", __func__,
 			TID_THREADNUM(t->id), TID_VERSION(t->id));
-		panic("should xfertimeout in post-fault");
+		/* calling ipc_xfer_timeout() from a hook this way causes recursion
+		 * over @t->post_exn_call. fortunately this is permitted when all
+		 * hooks detach, which they will under timeout.
+		 */
+		TRACE("%s: t->ipc->from->status=%s, ->to->status=%s\n", __func__,
+			sched_status_str(t->ipc->from), sched_status_str(t->ipc->to));
+		t->status = TS_XFER;	/* assume !in_recv_wait() */
+		ipc_xfer_timeout(t->ipc);
+		assert(t->ipc == NULL);
+		assert(t->status == TS_READY || t->status == TS_STOPPED);
+		return;
 	}
 
 	t->status = TS_XFER;
