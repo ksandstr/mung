@@ -140,10 +140,8 @@ static bool stritem_next(struct stritem_iter *it)
  * FIXME: the resulting Map/Grant item's contents aren't being tested for.
  */
 static int apply_io_mapitem(
-	struct thread *source,
-	const void *s_base,
-	struct thread *dest,
-	void *d_base,
+	struct thread *source, const void *s_base,
+	struct thread *dest, void *d_base,
 	L4_MapItem_t m,
 	L4_Fpage_t recvwnd)
 {
@@ -270,10 +268,7 @@ static int apply_mapitem(
 	if(unlikely(fpage_overlap(wnd, dest->space->utcb_area)
 		|| fpage_overlap(wnd, dest->space->kip_area)))
 	{
-		struct space *dsp = dest->space;
-		TRACE("  skipped due to overlap w/ utcb=%#lx:%#lx or kip=%#lx:%#lx\n",
-			L4_Address(dsp->utcb_area), L4_Size(dsp->utcb_area),
-			L4_Address(dsp->kip_area), L4_Size(dsp->kip_area));
+		/* skip for overlap with UTCB or KIP area */
 		goto noop;
 	}
 
@@ -306,10 +301,8 @@ noop:
  * stops on weird string items, or unknown item types.
  */
 static void scan_typed_items(
-	uint8_t *mapgrant_buf,
-	size_t *mapgrant_len_p,
-	struct str_meta *str_buf,
-	size_t *str_buf_len_p,
+	uint8_t *mapgrant_buf, size_t *mapgrant_len_p,
+	struct str_meta *str_buf, size_t *str_buf_len_p,
 	const void *utcb,
 	L4_MsgTag_t tag)
 {
@@ -878,8 +871,7 @@ static int copy_stritem(L4_Fpage_t *fault_p, struct ipc_state *st)
  */
 static bool next_src_string(
 	struct ipc_state *st,
-	void *s_base,
-	void *d_base,
+	void *s_base, void *d_base,
 	size_t *len_p)
 {
 	assert(st->str_pos <= st->num_strings);
@@ -1054,8 +1046,7 @@ static bool eval_xfer_timeout(
 static int check_prexfer_faults(
 	struct ipc_state *st,
 	size_t src_len,
-	void *s_base,
-	void *d_base)
+	void *s_base, void *d_base)
 {
 	struct thread *source = st->from, *dest = st->to;
 
@@ -1180,8 +1171,7 @@ xfer_timeout:
  */
 static int do_string_transfer(
 	struct ipc_state *st,
-	void *s_base,
-	void *d_base,
+	void *s_base, void *d_base,
 	bool resume)
 {
 	size_t src_len = 0;
@@ -1199,9 +1189,7 @@ static int do_string_transfer(
 			bool d_ok = next_dst_strbuf(st, d_base, &dst_len),
 				s_ok = next_src_string(st, s_base, d_base, &src_len);
 			/* (implied by pre-xfer fault processing.) */
-			BUG_ON(!s_ok || !d_ok || src_len > dst_len,
-				"hey, don't shoot me! src_len=%u, dst_len=%u",
-				(unsigned)src_len, (unsigned)dst_len);
+			assert(s_ok && d_ok && src_len <= dst_len);
 		} else {
 			/* after in-transfer fault. */
 			int str_pos = st->str_pos - 1;	/* debump */
