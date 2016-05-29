@@ -427,9 +427,16 @@ void leaving_thread(struct thread *self)
 	else self->quantum -= passed;
 
 	if(self->total_quantum != ~(uint64_t)0) {
-		if(passed < self->total_quantum) self->total_quantum -= passed;
-		else {
-			self->total_quantum = 0;
+		if(passed > self->total_quantum) self->total_quantum = 0;
+		else self->total_quantum -= passed;
+
+		if(self->total_quantum == 0 && IS_IPC(self->status)) {
+			/* thread entered an IPC state before the kernel could notice that
+			 * its total_quantum had run out. defer the message until next
+			 * leave.
+			 */
+			self->total_quantum = 1;
+		} else if(self->total_quantum == 0) {
 			struct thread *sched;
 			sched = L4_IsNilThread(self->scheduler)
 				? NULL : thread_get(self->scheduler);
