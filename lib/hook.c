@@ -11,6 +11,10 @@
 #include <ukernel/hook.h>
 
 
+/* special value for hook->current, post-detach */
+#define DETACHED ((struct hook_fn *)0xdababb1e)
+
+
 struct hook_fn
 {
 	struct list_node link;		/* in struct hook @fn_list */
@@ -61,10 +65,22 @@ int hook_call_front(struct hook *h, void *param, uintptr_t code)
 	int num_called = 0;
 	struct hook_fn *member, *next;
 	list_for_each_safe(&h->fn_list, member, next, link) {
+		assert(member != NULL);
 		h->current = member;
 		(*member->fn)(h, param, code, member->dataptr);
 		num_called++;
+
+		if(h->current == NULL) {
+			/* recursion most foul!
+			 *
+			 * while there's likely a fancier way to solve this, we'll just
+			 * assert that the recursion emptied the hook and exit early.
+			 */
+			assert(hook_empty(h));
+			return num_called;
+		}
 	}
+	h->current = NULL;
 
 	return num_called;
 }
@@ -79,10 +95,18 @@ int hook_call_back(struct hook *h, void *param, uintptr_t code)
 		cur = next, next = cur->prev)
 	{
 		struct hook_fn *member = container_of(cur, struct hook_fn, link);
+		assert(member != NULL);
 		h->current = member;
 		(*member->fn)(h, param, code, member->dataptr);
 		num_called++;
+
+		if(h->current == NULL) {
+			/* recursion case. see comment in hook_call_front(). */
+			assert(hook_empty(h));
+			return num_called;
+		}
 	}
+	h->current = NULL;
 
 	return num_called;
 }
@@ -91,8 +115,9 @@ int hook_call_back(struct hook *h, void *param, uintptr_t code)
 void hook_detach(struct hook *h)
 {
 	assert(h->current != NULL);
+	assert(h->current != DETACHED);
 
 	list_del_from(&h->fn_list, &h->current->link);
 	kmem_cache_free(hook_fn_slab, h->current);
-	h->current = NULL;
+	h->current = DETACHED;
 }
