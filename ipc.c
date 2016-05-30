@@ -169,8 +169,12 @@ static bool check_ipc_module(void)
 		}
 		inv_log("t->status=%s, sendwait_count=%d",
 			sched_status_str(t), sendwait_count);
-		inv_imply1(t->status == TS_SEND_WAIT, sendwait_count == 1);
-		inv_imply1(t->status != TS_SEND_WAIT, sendwait_count == 0);
+		inv_imply1(
+			t->status == TS_SEND_WAIT && !CHECK_FLAG(t->flags, TF_HALT),
+			sendwait_count == 1);
+		inv_imply1(
+			t->status != TS_SEND_WAIT || CHECK_FLAG(t->flags, TF_HALT),
+			sendwait_count == 0);
 
 		int recvwait_count = 0;
 		for(struct thread *cand = htable_first(&recvwait_hash, &it);
