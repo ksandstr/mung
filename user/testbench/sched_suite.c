@@ -998,10 +998,20 @@ START_LOOP_TEST(total_quantum_exhaust_rpc, iter, 0, 3)
 END_TEST
 
 
-/* returns the difference between spinner switch and return therefrom. */
-static int yield_timeslice_case(bool preempt_spinner)
+/* a test on extraordinary scheduling (ThreadSwitch), and its interaction with
+ * preemption.
+ *
+ * TODO: needs better docs. and more variables. and a name that doesn't
+ * mention yielding; that's strictly for switching to who-knows-which thread.
+ */
+START_LOOP_TEST(yield_timeslice, iter, 0, 1)
 {
+	const bool preempt_spinner = CHECK_FLAG(iter, 1);
+	diag("preempt_spinner=%s", btos(preempt_spinner));
+	plan_tests(2);
+
 	int my_pri = find_own_priority();
+	diag("my_pri=%d", my_pri);
 
 	L4_ThreadId_t spinner = start_spinner(my_pri - 2, 15,
 		L4_TimePeriod(2 * 1000), L4_Never, false, false, false);
@@ -1017,26 +1027,22 @@ static int yield_timeslice_case(bool preempt_spinner)
 	L4_ThreadSwitch(spinner);
 	L4_Clock_t end = L4_SystemClock();
 
-	L4_Receive_Timeout(spinner, L4_TimePeriod(45 * 1000));
-	join_thread(spinner);
+	L4_MsgTag_t tag = L4_Receive_Timeout(spinner, L4_TimePeriod(45 * 1000));
+	if(L4_IpcFailed(tag)) {
+		diag("receive failed, ec=%#lx", L4_ErrorCode());
+	}
 
-	if(preempt_spinner) join_thread(preempt);
+	xjoin_thread(spinner);
+	if(preempt_spinner) xjoin_thread(preempt);
 
-	return (end.raw - start.raw + 500) / 1000;
-}
+	int diff_ms = (end.raw - start.raw + 500) / 1000;
 
-
-START_TEST(yield_timeslice_test)
-{
-	plan_tests(2);
-
-	ok(yield_timeslice_case(false) >= 10,
-		"yield should schedule out for at least 10 ms");
-	ok(yield_timeslice_case(true) <= 5,
-		"extraordinary scheduling should be preempted within 5 ms");
+	/* yielding should schedule out for at least 10 ms. */
+	imply_ok1(!preempt_spinner, diff_ms >= 10);
+	/* extraordinary scheduling should be preempted within 5 ms. */
+	imply_ok1(preempt_spinner, diff_ms <= 5);
 }
 END_TEST
-
 
 
 struct chain_param {
@@ -1227,7 +1233,7 @@ Suite *sched_suite(void)
 	{
 		TCase *tc = tcase_create("yield");
 		tcase_set_fork(tc, false);
-		tcase_add_test(tc, yield_timeslice_test);
+		tcase_add_test(tc, yield_timeslice);
 		suite_add_tcase(s, tc);
 	}
 
