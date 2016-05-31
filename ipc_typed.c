@@ -579,7 +579,7 @@ static void send_xfer_fault(
 		(unsigned long)xferto_abs, sched_status_str(t));
 
 	void *utcb = thread_get_utcb(t);
-	struct thread *pager = thread_get_pager(t, utcb);
+	struct thread *pager = get_tcr_thread(t, utcb, L4_TCR_PAGER);
 	t->orig_ipc_from = t->ipc_from;
 	t->orig_ipc_to = t->ipc_to;
 	struct thread *dst = pager;

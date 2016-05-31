@@ -771,7 +771,7 @@ static void maybe_exit_to_preempt(struct thread *current)
 static void send_preempt_ipc(struct thread *t)
 {
 	void *utcb = thread_get_utcb(t);
-	struct thread *exh = thread_get_exnh(t, utcb);
+	struct thread *exh = get_tcr_thread(t, utcb, L4_TCR_EXCEPTIONHANDLER);
 	if(unlikely(exh == NULL)) {
 		thread_halt(t);
 	} else {

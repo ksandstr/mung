@@ -57,7 +57,8 @@ void isr_exn_de_bottom(struct x86_exregs *regs)
 static NORETURN void return_from_gp(struct thread *current, struct x86_exregs *regs)
 {
 	void *utcb = thread_get_utcb(current);
-	struct thread *exh = thread_get_exnh(current, utcb);
+	struct thread *exh = get_tcr_thread(current, utcb,
+		L4_TCR_EXCEPTIONHANDLER);
 	if(likely(exh != NULL)) {
 		return_to_ipc(send_exn_ipc(current, utcb, -5, regs, &exh), exh);
 	} else {
@@ -78,7 +79,8 @@ static NORETURN void return_from_gp(struct thread *current, struct x86_exregs *r
 static NORETURN void return_from_ud(struct thread *current, struct x86_exregs *regs)
 {
 	void *utcb = thread_get_utcb(current);
-	struct thread *exh = thread_get_exnh(current, utcb);
+	struct thread *exh = get_tcr_thread(current, utcb,
+		L4_TCR_EXCEPTIONHANDLER);
 	if(likely(exh != NULL)) {
 		/* indicate "invalid opcode" as though it was an INT# GP on line 6
 		 * (#UD). label will be an architecture-specific exception despite
@@ -709,7 +711,7 @@ static void handle_io_fault(struct thread *current, struct x86_exregs *regs)
 	}
 
 	void *cur_utcb = thread_get_utcb(current);
-	struct thread *pager = thread_get_pager(current, cur_utcb);
+	struct thread *pager = get_tcr_thread(current, cur_utcb, L4_TCR_PAGER);
 	if(unlikely(pager == NULL)) goto fail;
 	L4_Word_t old_br0 = L4_VREG(cur_utcb, L4_TCR_BR(0));
 	L4_VREG(cur_utcb, L4_TCR_BR(0)) = L4_IoFpageLog2(0, 16).raw;
@@ -997,7 +999,7 @@ void isr_exn_pf_bottom(struct x86_exregs *regs)
 
 	save_user_ex(regs);
 	void *utcb = thread_get_utcb(current);
-	struct thread *pager = thread_get_pager(current, utcb);
+	struct thread *pager = get_tcr_thread(current, utcb, L4_TCR_PAGER);
 	if(unlikely(pager == NULL)) {
 		thread_halt(current);
 		assert(current->status == TS_STOPPED);

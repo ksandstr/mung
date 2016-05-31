@@ -322,16 +322,8 @@ static inline struct thread *get_tcr_thread(
 {
 	assert(utcb != NULL);
 	L4_ThreadId_t tid = { .raw = L4_VREG(utcb, tcr) };
-	return L4_IsNilThread(tid) ? NULL : resolve_tid_spec(t->space, tid);
+	return resolve_tid_spec(t->space, tid);
 }
-
-/* legacy accessors, to be removed */
-#define thread_get_pager(t, utcb) get_tcr_thread((t), (utcb), L4_TCR_PAGER)
-#define thread_get_exnh(t, utcb) get_tcr_thread((t), (utcb), L4_TCR_EXCEPTIONHANDLER)
-
-
-/* for htable */
-extern size_t hash_thread_by_id(const void *threadptr, void *dataptr);
 
 
 #endif

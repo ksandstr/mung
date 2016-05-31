@@ -6,7 +6,6 @@
 #include <assert.h>
 
 #include <ccan/likely/likely.h>
-#include <ccan/htable/htable.h>
 #include <ccan/compiler/compiler.h>
 
 #include <l4/types.h>
