@@ -62,6 +62,7 @@ static size_t hash_ipc_wait(const void *threadptr, void *priv) {
 
 static size_t hash_pasv_from(const void *threadptr, void *priv) {
 	const struct thread *t = threadptr;
+	assert(thread_is_valid(t));
 	assert(t->status == TS_RECV_WAIT);
 	assert(L4_IsGlobalId(t->ipc_from));	/* implies !IsNilThread */
 	assert(t->ipc_from.raw != L4_anythread.raw);

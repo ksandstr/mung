@@ -301,6 +301,9 @@ extern struct thread *resolve_tid_spec(
 	struct space *ref_space,
 	L4_ThreadId_t tid);
 
+/* useful for debug only. */
+extern bool thread_is_valid(const struct thread *t);
+
 /* very unsafe, but about as fast as it gets. useful where thread_get() would
  * be used without a null-check.
  */

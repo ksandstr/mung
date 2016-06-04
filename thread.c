@@ -590,6 +590,15 @@ struct thread *resolve_tid_spec(struct space *ref_space, L4_ThreadId_t tid)
 }
 
 
+bool thread_is_valid(const struct thread *t)
+{
+	L4_ThreadId_t tid = L4_GlobalId(ra_ptr2id(thread_ra, t), 1);
+	struct thread *cand = thread_find(tid.raw);
+	assert(cand == NULL || cand == t);
+	return cand != NULL;
+}
+
+
 static void receive_breath_of_life(
 	struct hook *hook,
 	void *param, uintptr_t code, void *priv)
