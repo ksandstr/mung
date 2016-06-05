@@ -26,19 +26,31 @@
 
 struct preempt_wakeup
 {
-	struct list_node result_link;
+	struct list_node link;
 	L4_Clock_t clock;
 	bool was_exn;
+	L4_MsgTag_t tag;
+	L4_Word_t mrs[];	/* excl. tag */
 };
+#define result_link link
 
 
-static bool delay_preempt_case(
-	struct list_head *result_list,	/* adds <struct preempt_wakeup> */
-	L4_Clock_t *start_time_p,
-	bool delay_pe,
-	bool high_sens_pri,
-	bool polite,
-	bool small_ts);
+/* receives preemptions and preemption exceptions from @source. logs them
+ * earliest-first in @wkups. exits early if @max_wait is hit, if the wait
+ * returned more than 500ms after *@start_time_p, or if @source sends a u=0
+ * message to indicate end of experiment.
+ */
+static int pump_wakeups(
+	struct list_head *wkups,	/* adds talloc'd <struct preempt_wakeup> */
+	L4_Clock_t *start_time_p,	/* SystemClock before first wait */
+	L4_ThreadId_t source,
+	L4_Time_t max_wait);
+
+
+/* fuzzy compare for time measurements. */
+static bool fuzz_eq(uint64_t a, uint64_t b, uint32_t slop) {
+	return a >= b - slop && a <= b + slop;
+}
 
 
 /* api tests */
@@ -703,187 +715,31 @@ START_LOOP_TEST(preempt_exn_test, t, 0, 7)
 END_TEST
 
 
-/* setup: spinner thread at priority P-2 for 25 ms; preempt thread at P-1 to
- * interrupt at 5ms. spinner thread set to signal preemptions. spinner
- * thread's maximum delay set to 10 ms.
- *
- * variables:
- *   - spinner thread set to delay preemptions, or not
- *   - spinner thread's sens_pri set to level of preempt thread, or not
- *   - whether spinner thread is polite (i.e. yields on first observation of
- *     pending interrupt), or not
- *   - whether the spinner thread's quantum runs out during the preemption
- *     delay time, or not
- *
- * observe times when preemptions occur. these should cover:
- *   1) whether preemption by higher-priority thread occurs
- *   2) time until preempted by higher-priority thread
- *   3) whether preemption by quantum works despite delay on priority
- *      preemption
- *
- * requisite: when the microkernel preempts a lower-priority thread and this
- * causes it to do IPC to a thread with higher priority than the preemptor's,
- * the IPC recipient should be scheduled first. any selection of preemptor,
- * such as for checking against sens_pri, may not result in a switch to the
- * preemptor thread until after the higher-or-equal priority exception handler
- * has switched off.
- *
- * FIXME: preemption IPC should only be sent once the preempted thread
- * resumes. thus the test cannot rely on this.
- */
-START_LOOP_TEST(delay_preempt, iter, 0, 15)
-{
-	const bool delay_pe = CHECK_FLAG(iter, 1),
-		high_sens_pri = CHECK_FLAG(iter, 2),
-		polite = CHECK_FLAG(iter, 4),
-		small_ts = CHECK_FLAG(iter, 8);
-	diag("delay_pe=%s, high_sens_pri=%s, polite=%s, small_ts=%s",
-		btos(delay_pe), btos(high_sens_pri), btos(polite), btos(small_ts));
-
-	struct list_head preempts = LIST_HEAD_INIT(preempts);
-	L4_Clock_t start_time;
-	bool ok = delay_preempt_case(&preempts, &start_time,
-		delay_pe, high_sens_pri, polite, small_ts);
-	fail_unless(ok, "experiment failed");
-
-	struct preempt_wakeup *wu = list_top(&preempts, struct preempt_wakeup,
-		result_link);
-	uint64_t wake_ms, start_ms = start_time.raw / 1000;
-	int at;
-	if(wu != NULL) {
-		wake_ms = wu->clock.raw / 1000;
-		at = wake_ms - start_ms;
-	} else {
-		wake_ms = 0;
-		at = 0;
-	}
-
-	if(!delay_pe || !high_sens_pri) {
-		/* polite won't matter due to !delay_pe; or, delay_pe won't matter due
-		 * to !high_sens_pri.
-		 *
-		 * FIXME: plan the number of tests as there are ok() primitives, and
-		 * add the inverse condition to their clause.
-		 */
-
-		if(high_sens_pri) {
-			plan_tests(small_ts ? 2 : 1);
-			fail_unless(wu != NULL, "need wakeup");
-			ok(at >= 4 && at <= 6, "first preemption at preempt wakeup");
-
-			/* consume the wakeup. (could be a macro if used twice.) */
-			if(wu->result_link.next != &preempts.n) {
-				wu = container_of(wu->result_link.next, struct preempt_wakeup,
-					result_link);
-				wake_ms = wu->clock.raw / 1000;
-				at = wake_ms - start_ms;
-			} else {
-				wu = NULL;
-			}
-		} else {
-			plan_tests(1);
-		}
-
-		if(small_ts) {
-			/* and (again?) by timeslice running out. */
-			fail_unless(wu != NULL, "need wakeup");
-			if(high_sens_pri) {
-				ok(at >= 11 && at <= 13,
-					"preemption by short timeslice");
-			} else {
-				ok(at >= 11 && at <= 13 && wu == list_top(&preempts,
-						struct preempt_wakeup, result_link),
-					"first preemption by short timeslice");
-			}
-		} else if(!high_sens_pri) {
-			ok(list_empty(&preempts),
-				"no preemption with long ts, low sens_pri");
-		}
-	} else if(!polite && !small_ts) {
-		plan_tests(2);
-		if(wu == NULL) {
-			pass("preemption was delayed");
-			skip(1, "no wakeup");
-		} else {
-			ok(at > 5, "preemption was delayed");
-			ok(wu->was_exn && at >= 14 && at <= 16,
-				"preemption by max delay");
-		}
-	} else if(!polite && small_ts) {
-		plan_tests(2);
-		skip_start(wu == NULL, 2, "no wakeup");
-			ok(at > 5, "preemption was delayed");
-			ok(wu->was_exn && at >= 11 && at <= 13,
-				"preemption by quantum during delay");
-		skip_end;
-	} else if(polite && !small_ts) {
-		plan_tests(1);
-		ok(list_empty(&preempts),
-			"no preemption with polite spinner");
-	} else if(polite && small_ts) {
-		plan_tests(1);
-		skip_start(wu == NULL, 1, "no wakeup");
-			/* politeness gets the spinner first 5 ms of runtime, and then
-			 * another 12 ms due to the ThreadSwitch.
-			 */
-			ok(at >= 16 && at <= 18,
-				"preemption by quantum while polite");
-		skip_end;
-	} else {
-		fail_if(true, "unhandled iter=%d", iter);
-	}
-
-	/* FIXME: free wakeup structs in "preempts" */
-}
-END_TEST
-
-
-static bool delay_preempt_case(
-	struct list_head *preempt_times_list,
+static int pump_wakeups(
+	struct list_head *wkups,
 	L4_Clock_t *start_p,
-	bool delay_pe,
-	bool high_sens_pri,
-	bool polite,
-	bool small_ts)
+	L4_ThreadId_t source,
+	L4_Time_t max_wait)
 {
-	int my_pri = find_own_priority();
-
-	L4_ThreadId_t spinner = start_spinner(my_pri - 2, 25,
-		small_ts ? L4_TimePeriod(12 * 1000) : L4_TimePeriod(50 * 1000),
-		L4_Never, true, polite, delay_pe);
-	if(L4_IsNilThread(spinner)) return false;
-	/* TODO: could split delay_pe into two flags: one controlling whether the
-	 * delay_preemption flag is set in the spinner's TCR, and the other
-	 * controlling the max_delay variable. this tests whether dropping
-	 * max_delay will prevent preemption delay regardless of the delay flag's
-	 * setting.
-	 *
-	 * which could likely be a test on its own.
-	 */
-	L4_Set_PreemptionDelay(spinner,
-		high_sens_pri ? my_pri - 1 : my_pri - 2,
-		delay_pe ? 10 * 1000 : 0);
-
-	L4_ThreadId_t preempt = start_thread_long(&preempt_fn, (void *)5,
-		my_pri - 1, L4_TimePeriod(2 * 1000), L4_Never);
-	if(L4_IsNilThread(preempt)) return false;
-
-	/* TODO: turn this loop into a function. it shows up in a couple of tests
-	 * now.
-	 */
 	bool ok = true;
 	*start_p = L4_SystemClock();
+	L4_Clock_t limit = L4_ClockAddUsec(*start_p, 500 * 1000);
 	do {
-		L4_MsgTag_t tag = L4_Receive_Timeout(spinner,
-			L4_TimePeriod(50 * 1000));
+		L4_MsgTag_t tag = L4_Receive_Timeout(source, max_wait);
+		if(L4_IpcFailed(tag)) return L4_ErrorCode();
+
 		L4_Word_t mrs[64];
 		int num_words = tag.X.u + tag.X.t;
 		if(num_words > 63) num_words = 63;
-		if(L4_IpcSucceeded(tag)) L4_StoreMRs(0, num_words + 1, mrs);
+		L4_StoreMRs(0, num_words + 1, mrs);
 
-		struct preempt_wakeup *wu = malloc(sizeof(*wu));
+		struct preempt_wakeup *wu = talloc_zero_size(wkups,
+			sizeof(*wu) + sizeof(L4_Word_t) * num_words);
 		wu->clock = L4_SystemClock();
 		wu->was_exn = false;
+		wu->tag = tag;
+		memcpy(wu->mrs, mrs, sizeof(L4_Word_t) * num_words);
+
 		if(tag.X.label >> 4 == (-4u & 0xfff)) {
 			wu->was_exn = true;
 
@@ -891,29 +747,314 @@ static bool delay_preempt_case(
 			tag.X.label = 0;
 			L4_LoadMR(0, tag.raw);
 			L4_LoadMRs(1, num_words, &mrs[1]);
-			tag = L4_Reply(spinner);
+			tag = L4_Reply(source);
 			if(L4_IpcFailed(tag)) {
-				log("spinner preempt reply failed: ec %#lx\n",
+				log("%s: preempt reply failed: ec=%#lx\n", __func__,
 					L4_ErrorCode());
 				ok = false;
 				break;
 			}
+		} else if(L4_Label(tag) >> 4 == 0xffd) {
+			wu->was_exn = false;
+			/* the preempt message needs no reply. */
+			if(L4_UntypedWords(tag) != 2) {
+				log("%s: unexpected preempt message (u=%lu, expected 2)\n",
+					__func__, L4_UntypedWords(tag));
+			}
 		} else if(tag.X.u == 0) {
-			/* ordinary regular spinner exit */
+			/* ordinary regular exit message */
 			break;
 		} else {
-			log("got unexpected message (label %#lx, u %#lx, t %#lx)\n",
-				(L4_Word_t)tag.X.label, (L4_Word_t)tag.X.u,
-				(L4_Word_t)tag.X.t);
+			log("%s: unexpected message at %lu (label=%#lx, u=%lu, t=%lu)\n",
+				__func__, L4_SystemClock().raw,
+				L4_Label(tag), L4_UntypedWords(tag), L4_TypedWords(tag));
 		}
-		list_add_tail(preempt_times_list, &wu->result_link);
-	} while(start_p->raw + 100 * 1000 > L4_SystemClock().raw);
+		list_add_tail(wkups, &wu->link);
+	} while(L4_IsClockEarlier(L4_SystemClock(), limit));
 
-	join_thread(spinner);
-	join_thread(preempt);
-
-	return ok;
+	return ok ? 0 : -1;
 }
+
+
+/* test on basic preemption delay functionality. disproves that preemption
+ * delay happens iff the d bit is set && sens_pri >= preemptor.pri &&
+ * max_delay > 0.
+ *
+ * setup: spinner thread at priority P-2 for 25 ms; preempt thread at P-1 to
+ * interrupt at 5ms. spinner thread set to signal preemptions.
+ *
+ * variables:
+ *   - [delay_pe] spinner thread set to delay preemptions, or not
+ *   - [high_sens_pri] spinner thread's sens_pri set to level of preempt
+ *     thread, or not
+ *   - [max_delay_zero] spinner's max_delay set to 0, or 10ms.
+ *
+ * measurement is the time at which the spinner was preempted. if delay was in
+ * effect, preemption should happen at 15ms; if it wasn't, it happens at 5ms.
+ */
+START_LOOP_TEST(delay_basics, iter, 0, 7)
+{
+	const bool delay_pe = CHECK_FLAG(iter, 1),
+		high_sens_pri = CHECK_FLAG(iter, 2),
+		max_delay_zero = CHECK_FLAG(iter, 4);
+	diag("delay_pe=%s, high_sens_pri=%s, max_delay_zero=%s", 
+		btos(delay_pe), btos(high_sens_pri), btos(max_delay_zero));
+	plan_tests(4);
+
+	/* setup */
+	int my_pri = find_own_priority();
+	L4_ThreadId_t preempt = start_thread_long(&preempt_fn, (void *)5,
+		my_pri - 1, L4_TimePeriod(2 * 1000), L4_Never);
+	fail_if(L4_IsNilThread(preempt));
+	preempt = L4_GlobalIdOf(preempt);
+
+	L4_ThreadId_t spinner = start_spinner(my_pri - 2, 25,
+		L4_TimePeriod(50 * 1000), L4_Never, true, false, delay_pe);
+	fail_if(L4_IsNilThread(spinner));
+	spinner = L4_GlobalIdOf(spinner);
+
+	L4_Set_PreemptionDelay(spinner,
+		high_sens_pri ? my_pri - 1 : my_pri - 2,
+		max_delay_zero ? 0 : 10000);
+
+	diag("spinner=%lu:%lu, preempt=%lu:%lu",
+		L4_ThreadNo(spinner), L4_Version(spinner),
+		L4_ThreadNo(preempt), L4_Version(preempt));
+
+	/* measurement */
+	struct list_head *preempts = talloc(NULL, struct list_head);
+	list_head_init(preempts);
+
+	L4_Clock_t start_time;
+	int n = pump_wakeups(preempts, &start_time, spinner, TEST_IPC_DELAY);
+	if(!ok1(n == 0)) diag("error n=%d from pump_wakeups()", n);
+
+	if(!high_sens_pri) todo_start("expected breakage");
+
+	struct preempt_wakeup *wu = list_pop(preempts,
+		struct preempt_wakeup, link);
+	ok(wu != NULL, "got at least one wakeup");
+	skip_start(wu == NULL, 2, "no wakeups were recorded!") {
+		int at = (wu->clock.raw - start_time.raw + 500) / 1000;
+
+		if(iter == 0 || iter == 1 || iter == 4 || iter == 5) {
+			todo_start("expected breakage");
+		}
+
+		imply_ok1(delay_pe && high_sens_pri && !max_delay_zero,
+			at >= 14 && at <= 16);
+		imply_ok1(!delay_pe || !high_sens_pri || max_delay_zero,
+			at >= 4 && at <= 6);
+
+		diag("at=%d", at);
+	} skip_end;
+
+	/* cleanup */
+	xjoin_thread(spinner);
+	xjoin_thread(preempt);
+	talloc_free(preempts);
+}
+END_TEST
+
+
+/* test on preemption delay and yielding. disproves that a thread that yields
+ * when preemption is delayed will raise an exception at the end of its
+ * max_delay.
+ *
+ * setup: same as delay_basics, but the spinner will be given a timeslice
+ * short enough to pop at least one preemption message.
+ *
+ * variables:
+ *   - [yield] whether spinner will yield or not.
+ *
+ * measurement is the type of preemption that's seen. it should be an
+ * exception iff !yield.
+ */
+START_LOOP_TEST(delay_yield, iter, 0, 1)
+{
+	const bool yield = CHECK_FLAG(iter, 1);
+	diag("yield=%s", btos(yield));
+	plan_tests(5);
+
+	/* setup */
+	int my_pri = find_own_priority();
+	L4_ThreadId_t preempt = start_thread_long(&preempt_fn, (void *)5,
+		my_pri - 1, L4_TimePeriod(2 * 1000), L4_Never);
+	fail_if(L4_IsNilThread(preempt));
+	preempt = L4_GlobalIdOf(preempt);
+
+	L4_ThreadId_t spinner = start_spinner(my_pri - 2, 25,
+		L4_TimePeriod(15 * 1000), L4_Never, true, yield, true);
+	fail_if(L4_IsNilThread(spinner));
+	spinner = L4_GlobalIdOf(spinner);
+	L4_Set_PreemptionDelay(spinner, my_pri - 1, 5000);
+
+	diag("spinner=%lu:%lu, preempt=%lu:%lu",
+		L4_ThreadNo(spinner), L4_Version(spinner),
+		L4_ThreadNo(preempt), L4_Version(preempt));
+
+	/* measurement */
+	struct list_head *preempts = talloc(NULL, struct list_head);
+	list_head_init(preempts);
+
+	L4_Clock_t start_time;
+	int n = pump_wakeups(preempts, &start_time, spinner, TEST_IPC_DELAY);
+	if(!ok1(n == 0)) diag("error n=%d from pump_wakeups()", n);
+
+	struct preempt_wakeup *wu = list_pop(preempts,
+		struct preempt_wakeup, link);
+	ok(wu != NULL, "got at least one wakeup");
+	skip_start(wu == NULL, 3, "no wakeups were recorded!") {
+		int msg_at = (wu->clock.raw - start_time.raw + 500) / 1000;
+		diag("msg_at=%d, wu->was_exn=%s", msg_at, btos(wu->was_exn));
+
+		imply_ok1(yield, msg_at >= 19 && msg_at <= 21);
+		imply_ok1(!yield, msg_at >= 9 && msg_at <= 11);
+		if(yield) todo_start("expected breakage");
+		iff_ok1(wu->was_exn, !yield);
+	} skip_end;
+
+	/* cleanup */
+	xjoin_thread(spinner);
+	xjoin_thread(preempt);
+	talloc_free(preempts);
+}
+END_TEST
+
+
+/* test on the exception message sent when a thread exceeds its preemption
+ * delay. disproves that a thread that exceeds the delay will receive an
+ * exception message, and won't if it switches off before the delay is up.
+ *
+ * setup: same as delay_basics. max_delay set to 5ms.
+ *
+ * variables:
+ *   - [delay] whether spinner will delay preemption or not.
+ *   - [preempt_close] how long preemptor waits, 23ms/5ms.
+ *
+ * measurement is the type of preemption that's seen. it should be an
+ * exception iff delay & preempt_close.
+ */
+START_LOOP_TEST(delay_exception, iter, 0, 3)
+{
+	const bool delay = CHECK_FLAG(iter, 1),
+		preempt_close = CHECK_FLAG(iter, 2);
+	const int preempt_at_ms = preempt_close ? 5 : 23;
+	diag("delay=%s, preempt_close=%s", btos(delay), btos(preempt_close));
+	diag("preempt_at_ms=%d", preempt_at_ms);
+	plan_tests(3);
+
+	/* setup */
+	int my_pri = find_own_priority();
+	L4_ThreadId_t preempt = start_thread_long(&preempt_fn,
+		(void *)preempt_at_ms, my_pri - 1, L4_TimePeriod(2 * 1000),
+		L4_Never);
+	fail_if(L4_IsNilThread(preempt));
+	preempt = L4_GlobalIdOf(preempt);
+
+	L4_ThreadId_t spinner = start_spinner(my_pri - 2, 25,
+		L4_TimePeriod(50 * 1000), L4_Never, true, false, delay);
+	fail_if(L4_IsNilThread(spinner));
+	spinner = L4_GlobalIdOf(spinner);
+	L4_Set_PreemptionDelay(spinner, my_pri - 1, 5000);
+
+	diag("spinner=%lu:%lu, preempt=%lu:%lu",
+		L4_ThreadNo(spinner), L4_Version(spinner),
+		L4_ThreadNo(preempt), L4_Version(preempt));
+
+	/* measurement */
+	struct list_head *preempts = talloc(NULL, struct list_head);
+	list_head_init(preempts);
+
+	L4_Clock_t start_time;
+	int n = pump_wakeups(preempts, &start_time, spinner, TEST_IPC_DELAY);
+	if(!ok1(n == 0)) diag("error n=%d from pump_wakeups()", n);
+
+	struct preempt_wakeup *wu = list_pop(preempts,
+		struct preempt_wakeup, link);
+	iff_ok1(wu == NULL, delay && !preempt_close);
+	skip_start(wu == NULL, 1, "no wakeups were recorded") {
+		int msg_at = (wu->clock.raw - start_time.raw + 500) / 1000;
+		diag("msg_at=%d, wu->was_exn=%s", msg_at, btos(wu->was_exn));
+
+		if(!delay) todo_start("expected breakage");
+		iff_ok1(wu->was_exn, delay && preempt_close);
+	} skip_end;
+
+	/* cleanup */
+	xjoin_thread(spinner);
+	xjoin_thread(preempt);
+	talloc_free(preempts);
+}
+END_TEST
+
+
+/* test on the effect of max_delay on preemption. disproves that max_delay
+ * doesn't affect the spinner's preemption time, and that a quantum that runs
+ * out during the delay period interrupts the delay.
+ *
+ * setup: same as delay_basics. preempt at 5ms.
+ *
+ * variables:
+ *   - [is_long] max_delay short (10ms) or long (15ms)
+ *   - [short_ts] quantum runs out during preempt delay, or not
+ *
+ * measurement is the time at which preemption occurs. should be 15ms for
+ * short, 20ms for long.
+ */
+START_LOOP_TEST(delay_max_duration, iter, 0, 3)
+{
+	const bool is_long = CHECK_FLAG(iter, 1), short_ts = CHECK_FLAG(iter, 2);
+	diag("is_long=%s, short_ts=%s", btos(is_long), btos(short_ts));
+	plan_tests(5);
+
+	/* setup */
+	int my_pri = find_own_priority();
+	L4_ThreadId_t preempt = start_thread_long(&preempt_fn, (void *)5,
+		my_pri - 1, L4_TimePeriod(2 * 1000), L4_Never);
+	fail_if(L4_IsNilThread(preempt));
+	preempt = L4_GlobalIdOf(preempt);
+
+	L4_ThreadId_t spinner = start_spinner(my_pri - 2, 25,
+		L4_TimePeriod((short_ts ? 10 : 50) * 1000), L4_Never,
+		true, false, true);
+	fail_if(L4_IsNilThread(spinner));
+	spinner = L4_GlobalIdOf(spinner);
+	L4_Set_PreemptionDelay(spinner, my_pri - 1,
+		is_long ? 15000 : 10000);
+
+	diag("spinner=%lu:%lu, preempt=%lu:%lu",
+		L4_ThreadNo(spinner), L4_Version(spinner),
+		L4_ThreadNo(preempt), L4_Version(preempt));
+
+	/* measurement */
+	struct list_head *preempts = talloc(NULL, struct list_head);
+	list_head_init(preempts);
+
+	L4_Clock_t start_time;
+	int n = pump_wakeups(preempts, &start_time, spinner, TEST_IPC_DELAY);
+	if(!ok1(n == 0)) diag("error n=%d from pump_wakeups()", n);
+
+	struct preempt_wakeup *wu = list_pop(preempts,
+		struct preempt_wakeup, link);
+	ok(wu != NULL, "got at least one preempt");
+	skip_start(wu == NULL, 2, "no wakeups were recorded") {
+		fail_if(wu->clock.raw - start_time.raw > ULONG_MAX);
+		L4_Word_t msg_at = wu->clock.raw - start_time.raw;
+		diag("msg_at=%lu", msg_at);
+
+		iff_ok1(fuzz_eq(msg_at, 10000, 1000), short_ts);
+
+		imply_ok1(!is_long && !short_ts, fuzz_eq(msg_at, 15000, 1000));
+		imply_ok1(is_long && !short_ts, fuzz_eq(msg_at, 20000, 1000));
+	} skip_end;
+
+	/* cleanup */
+	xjoin_thread(spinner);
+	xjoin_thread(preempt);
+	talloc_free(preempts);
+}
+END_TEST
 
 
 /* start a thread that spins for longer than its total quantum. this should
@@ -1224,7 +1365,10 @@ Suite *sched_suite(void)
 		tcase_set_fork(tc, false);
 		tcase_add_test(tc, simple_preempt_test);
 		tcase_add_test(tc, preempt_exn_test);
-		tcase_add_test(tc, delay_preempt);
+		tcase_add_test(tc, delay_basics);
+		tcase_add_test(tc, delay_yield);
+		tcase_add_test(tc, delay_exception);
+		tcase_add_test(tc, delay_max_duration);
 		tcase_add_test(tc, total_quantum_exhaust_rpc);
 		suite_add_tcase(s, tc);
 	}
