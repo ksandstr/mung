@@ -32,7 +32,6 @@ struct preempt_wakeup
 	L4_MsgTag_t tag;
 	L4_Word_t mrs[];	/* excl. tag */
 };
-#define result_link link
 
 
 /* receives preemptions and preemption exceptions from @source. logs them
@@ -556,43 +555,55 @@ static void preempt_exn_case(
 }
 
 
-START_TEST(simple_preempt_test)
+START_LOOP_TEST(simple_preempt_test, iter, 0, 1)
 {
-	plan_tests(2);
+	const bool get_signal = CHECK_FLAG(iter, 1);
+	diag("get_signal=%s", btos(get_signal));
+	plan_tests(4);
 
 	struct preempt_exn_result *res = talloc(NULL, struct preempt_exn_result);
 	list_head_init(&res->wakeups);
-	preempt_exn_case(res, L4_TimePeriod(120 * 1000), false, 0, 25, 4);
+	preempt_exn_case(res, L4_TimePeriod(5 * 1000), get_signal, 0, 50, 150);
 
-	todo_start("expected breakage");
+	/* # of wakeups depends on the spinner's "s" flag. */
+	diag("num_wake=%d", res->num_wake);
+	imply_ok1(!get_signal, res->num_wake == 0);
+	imply_ok1(get_signal, res->num_wake >= 5);
 
-	/* part #1: result should be at least five wakeups */
-	if(!ok1(res->num_wake >= 5)) {
-		diag("num_wake=%d", (int)res->num_wake);
-	}
-
-	/* part #2: they should have at least three ms in between. */
-	uint64_t prev = 0;
-	int count = 0;	/* # of intervals seen */
-	struct preempt_wakeup *w;
-	bool time_ok = true;
-	list_for_each(&res->wakeups, w, result_link) {
-		diag("  wkup@=%lu, was_exn=%s", (unsigned long)w->clock.raw,
-			btos(w->was_exn));
-		if(prev == 0) {
-			fail_unless(w == list_top(&res->wakeups, struct preempt_wakeup,
-				result_link));
-			prev = w->clock.raw;
-		} else {
-			int diff = w->clock.raw / 1000 - prev / 1000;
-			if(diff < 3) {
-				diag("preemption at %d ms (expected _ < 3)", diff);
-				time_ok = false;
+	/* where wakeups came in, they should have at least 4..6 ms in between. */
+	skip_start(res->num_wake < 2, 1, "not enough wakeups to measure") {
+		uint64_t prev = 0;
+		uint64_t min_interval_us = ~0ull;
+		struct preempt_wakeup *w;
+		list_for_each(&res->wakeups, w, link) {
+			diag("  wkup@=%lu, was_exn=%s", (unsigned long)w->clock.raw,
+				btos(w->was_exn));
+			if(prev > 0) {
+				if(w->clock.raw < prev) diag("    (too close!)");
+				else {
+					min_interval_us = MIN(uint64_t, min_interval_us,
+						w->clock.raw - prev);
+				}
 			}
-			if(++count == 4) break;
+			prev = w->clock.raw;
 		}
-	}
-	if(!ok1(time_ok && count == 4)) diag("count=%d", count);
+		if(!ok1(fuzz_eq(min_interval_us, 5000, 1000))) {
+			diag("min_interval_us=%lu", (unsigned long)min_interval_us);
+		}
+	} skip_end;
+
+	/* no wakeup should be an exception. */
+	skip_start(res->num_wake < 1, 1, "no wakeups at all") {
+		struct preempt_wakeup *w;
+		bool no_exns = true;
+		list_for_each(&res->wakeups, w, link) {
+			if(w->was_exn) {
+				no_exns = false;
+				break;
+			}
+		}
+		ok1(no_exns);	/* NO EXCEPTIONS. */
+	} skip_end;
 
 	talloc_free(res);
 }
