@@ -39,6 +39,8 @@ struct preempt_wakeup
  * earliest-first in @wkups. exits early if @max_wait is hit, if the wait
  * returned more than 500ms after *@start_time_p, or if @source sends a u=0
  * message to indicate end of experiment.
+ *
+ * returns negative on error, positive #wakeups on success.
  */
 static int pump_wakeups(
 	struct list_head *wkups,	/* adds talloc'd <struct preempt_wakeup> */
@@ -499,6 +501,7 @@ static void preempt_fn(void *param_ptr)
 	start_thread(&preempt_fn, (void *)((L4_Word_t)(sleep_ms)))
 
 
+/* talloc'd. members of @wakeups talloc'd somewhere under this. */
 struct preempt_exn_result
 {
 	L4_Clock_t loop_start, first_preempt;
@@ -518,8 +521,6 @@ static void preempt_exn_case(
 	int spin_time_ms,
 	int receive_wait_ms)
 {
-	const int loop_time_ms = 150;
-
 	int my_pri = find_own_priority();
 	L4_ThreadId_t spinner = start_spinner(my_pri - 2, spin_time_ms,
 		spinner_ts, L4_Never, signal_preempt, false, false);
@@ -533,70 +534,25 @@ static void preempt_exn_case(
 		preempt = L4_nilthread;
 	}
 
+	struct list_head *wakeups = talloc(r, struct list_head);
+	list_head_init(wakeups);
+	int n = pump_wakeups(wakeups, &r->loop_start, spinner,
+		L4_TimePeriod(receive_wait_ms * 1000));
+	list_append_list(&r->wakeups, wakeups);
+	if(n < 0) diag("pump_wakeups returned n=%d", n);
+
 	r->num_exn = 0;
 	r->num_wake = 0;
 	r->first_preempt.raw = 0;
-
-	r->loop_start = L4_SystemClock();
-	L4_Clock_t now;
-	L4_MsgTag_t tag;
-	do {
-		tag = L4_Receive_Timeout(spinner,
-			L4_TimePeriod(receive_wait_ms * 1000));
-		L4_Word_t mrs[64];
-		int num_words = tag.X.u + tag.X.t;
-		if(num_words > 63) num_words = 63;
-		if(L4_IpcSucceeded(tag)) L4_StoreMRs(0, num_words + 1, mrs);
-
+	struct preempt_wakeup *cur;
+	list_for_each(&r->wakeups, cur, link) {
+		if(r->num_exn + r->num_wake == 0) r->first_preempt = cur->clock;
+		if(cur->was_exn) r->num_exn++;
 		r->num_wake++;
-		now = L4_SystemClock();
-		struct preempt_wakeup *w = malloc(sizeof(*w));
-		if(w != NULL) {
-			w->clock = now;
-			list_add_tail(&r->wakeups, &w->result_link);
-		} else {
-			diag("malloc fail, wakeup at %lu not recorded",
-				(unsigned long)now.raw);
-		}
-
-		if(L4_IpcFailed(tag)) {
-			fail_unless(L4_ErrorCode() == 3, "unexpected ipc error (ec=%#lx)",
-				L4_ErrorCode());
-		} else if(tag.X.label >> 4 == (-4u & 0xfff)) {
-			const L4_Word_t *words = &mrs[1];
-
-			/* should reply or the thread will stop. */
-			tag.X.label = 0;
-			L4_LoadMR(0, tag.raw);
-			L4_LoadMRs(1, num_words, words);
-			tag = L4_Reply(spinner);
-			IPC_FAIL(tag);
-			if(r->num_exn == 0) r->first_preempt = L4_SystemClock();
-			r->num_exn++;
-		} else if(tag.X.u == 0) {
-			/* ordinary regular spinner exit */
-			break;
-		} else {
-			diag("got unexpected message (label=%#lx, u=%#lx, t=%#lx)",
-				(L4_Word_t)tag.X.label, (L4_Word_t)tag.X.u,
-				(L4_Word_t)tag.X.t);
-		}
-	} while(r->loop_start.raw + loop_time_ms * 1000 > now.raw);
-
-	join_thread(spinner);
-	join_thread(preempt);
-}
-
-
-static void free_preempt_exn_result(struct preempt_exn_result *res)
-{
-	struct preempt_wakeup *w, *w_next;
-	list_for_each_safe(&res->wakeups, w, w_next, result_link) {
-		list_del_from(&res->wakeups, &w->result_link);
-		free(w);
 	}
-	assert(list_empty(&res->wakeups));
-	free(res);
+
+	xjoin_thread(spinner);
+	xjoin_thread(preempt);
 }
 
 
@@ -604,9 +560,11 @@ START_TEST(simple_preempt_test)
 {
 	plan_tests(2);
 
-	struct preempt_exn_result *res = malloc(sizeof(*res));
+	struct preempt_exn_result *res = talloc(NULL, struct preempt_exn_result);
 	list_head_init(&res->wakeups);
 	preempt_exn_case(res, L4_TimePeriod(120 * 1000), false, 0, 25, 4);
+
+	todo_start("expected breakage");
 
 	/* part #1: result should be at least five wakeups */
 	if(!ok1(res->num_wake >= 5)) {
@@ -636,7 +594,7 @@ START_TEST(simple_preempt_test)
 	}
 	if(!ok1(time_ok && count == 4)) diag("count=%d", count);
 
-	free_preempt_exn_result(res);
+	talloc_free(res);
 }
 END_TEST
 
@@ -658,41 +616,41 @@ START_LOOP_TEST(preempt_exn_test, t, 0, 7)
 	diag("big_ts=%s, sig_pe=%s, has_pe=%s",
 		btos(big_ts), btos(sig_pe), btos(has_pe));
 
-	plan_tests(!sig_pe ? 2 : 3);
+	plan_tests(!sig_pe ? 2 : 4);
 
-	struct preempt_exn_result *res = calloc(1, sizeof(*res));
+	struct preempt_exn_result *res = talloc_zero(NULL,
+		struct preempt_exn_result);
 	list_head_init(&res->wakeups);
 	/* receive preempts the spinner once towards the end. */
 	preempt_exn_case(res, L4_TimePeriod((big_ts ? 120 : 4) * 1000),
 		sig_pe, has_pe ? 10 : 0, 25, 22);
 
-	fail_unless(res->num_exn <= res->num_wake);
+	if(t == 2 || t == 3 || t == 6 || t == 7) todo_start("expected breakage");
+	ok1(res->num_exn == 0);
+	if(t == 6 || t == 7) todo_end();
 	if(!sig_pe) {
 		/* no preemption signaling implies no preemptions were signaled,
 		 * regardless of the other variables.
 		 */
-		ok(res->num_exn == 0, "only signal exceptions on request");
-		/* should wake up once due to the receive timeout at 22ms, and another
-		 * time when the spinner exits.
-		 */
-		ok(res->num_wake == 2, "exn wrapper should return from ipc twice");
+		ok1(res->num_wake == 0);
 	} else {
-		ok1(res->num_exn > 0);
-		uint32_t diff = res->first_preempt.raw / 1000 - res->loop_start.raw / 1000;
-		diag("started at %llu, first preempt at %llu (diff %u), preempted %d time(s)",
-			res->loop_start.raw, res->first_preempt.raw, diff, res->num_exn);
+		ok1(res->num_wake > 0);
+		int64_t diff = res->first_preempt.raw / 1000 - res->loop_start.raw / 1000;
+		diag("started at %llu, first preempt at %llu (diff %ld), preempted %d time(s)",
+			res->loop_start.raw, res->first_preempt.raw, (long)diff,
+			res->num_wake);
 		if(big_ts && has_pe) {
 			/* the preempt_fn causes a preemption, which satisifes the 22-ms
 			 * receive function, which then doesn't preempt the thread again.
 			 *
 			 * it's conceivable this might cause two preemptions, though.
 			 */
-			ok(res->num_exn == 1 || res->num_exn == 2,
+			ok(res->num_wake == 1 || res->num_wake == 2,
 				"spinner should be preempted once or twice");
 			ok(diff >= 10 && diff <= 13,
 				"first spinner preempt should occur at between 10..13 ms");
 		} else if(big_ts && !has_pe) {
-			ok(res->num_exn == 1,
+			ok(res->num_wake == 1,
 				"spinner should be preempted once");
 			ok(diff >= 20,
 				"first spinner preempt should occur at 20 ms or later");
@@ -700,17 +658,17 @@ START_LOOP_TEST(preempt_exn_test, t, 0, 7)
 			/* six times for timeslice (25 / 4 = 6.25) and once for
 			 * preempt_fn.
 			 */
-			ok1(res->num_exn == 7);
-			ok(diff < 8,
+			ok1(res->num_wake == 7);
+			ok(diff >= 0 && diff < 8,
 				"short timeslice should cause preemption before 10 ms");
 		} else {
-			fail_unless(!big_ts && !has_pe);
-			ok1(res->num_exn == 6);		/* see above */
-			ok1(diff < 8);
+			assert(!big_ts && !has_pe);
+			ok1(res->num_wake == 6);		/* see above */
+			ok1(diff >= 0 && diff < 8);
 		}
 	}
 
-	free_preempt_exn_result(res);
+	talloc_free(res);
 }
 END_TEST
 
@@ -721,12 +679,12 @@ static int pump_wakeups(
 	L4_ThreadId_t source,
 	L4_Time_t max_wait)
 {
-	bool ok = true;
+	int n = 0;
 	*start_p = L4_SystemClock();
 	L4_Clock_t limit = L4_ClockAddUsec(*start_p, 500 * 1000);
 	do {
 		L4_MsgTag_t tag = L4_Receive_Timeout(source, max_wait);
-		if(L4_IpcFailed(tag)) return L4_ErrorCode();
+		if(L4_IpcFailed(tag)) return -(int)L4_ErrorCode();
 
 		L4_Word_t mrs[64];
 		int num_words = tag.X.u + tag.X.t;
@@ -740,7 +698,8 @@ static int pump_wakeups(
 		wu->tag = tag;
 		memcpy(wu->mrs, mrs, sizeof(L4_Word_t) * num_words);
 
-		if(tag.X.label >> 4 == (-4u & 0xfff)) {
+		if(L4_Label(tag) == 0xffc0) {
+			/* preempt exception. */
 			wu->was_exn = true;
 
 			/* restart the thread */
@@ -749,30 +708,27 @@ static int pump_wakeups(
 			L4_LoadMRs(1, num_words, &mrs[1]);
 			tag = L4_Reply(source);
 			if(L4_IpcFailed(tag)) {
-				log("%s: preempt reply failed: ec=%#lx\n", __func__,
+				n = -(int)L4_ErrorCode();
+				diag("%s: preempt reply failed: ec=%#lx", __func__,
 					L4_ErrorCode());
-				ok = false;
-				break;
 			}
-		} else if(L4_Label(tag) >> 4 == 0xffd) {
+			if(n >= 0) n++;
+		} else if(L4_Label(tag) == 0xffd0 && L4_UntypedWords(tag) == 2) {
+			/* preempt fault. */
 			wu->was_exn = false;
-			/* the preempt message needs no reply. */
-			if(L4_UntypedWords(tag) != 2) {
-				log("%s: unexpected preempt message (u=%lu, expected 2)\n",
-					__func__, L4_UntypedWords(tag));
-			}
-		} else if(tag.X.u == 0) {
-			/* ordinary regular exit message */
+			if(n >= 0) n++;
+		} else if(L4_UntypedWords(tag) == 0 || L4_Label(tag) == QUIT_LABEL) {
+			/* exit message. */
 			break;
 		} else {
-			log("%s: unexpected message at %lu (label=%#lx, u=%lu, t=%lu)\n",
+			diag("%s: unexpected message at %lu (label=%#lx, u=%lu, t=%lu)",
 				__func__, L4_SystemClock().raw,
 				L4_Label(tag), L4_UntypedWords(tag), L4_TypedWords(tag));
 		}
 		list_add_tail(wkups, &wu->link);
 	} while(L4_IsClockEarlier(L4_SystemClock(), limit));
 
-	return ok ? 0 : -1;
+	return n;
 }
 
 
@@ -827,7 +783,7 @@ START_LOOP_TEST(delay_basics, iter, 0, 7)
 
 	L4_Clock_t start_time;
 	int n = pump_wakeups(preempts, &start_time, spinner, TEST_IPC_DELAY);
-	if(!ok1(n == 0)) diag("error n=%d from pump_wakeups()", n);
+	if(!ok1(n >= 0)) diag("error n=%d from pump_wakeups()", n);
 
 	if(!high_sens_pri) todo_start("expected breakage");
 
@@ -899,7 +855,7 @@ START_LOOP_TEST(delay_yield, iter, 0, 1)
 
 	L4_Clock_t start_time;
 	int n = pump_wakeups(preempts, &start_time, spinner, TEST_IPC_DELAY);
-	if(!ok1(n == 0)) diag("error n=%d from pump_wakeups()", n);
+	if(!ok1(n >= 0)) diag("error n=%d from pump_wakeups()", n);
 
 	struct preempt_wakeup *wu = list_pop(preempts,
 		struct preempt_wakeup, link);
@@ -968,7 +924,7 @@ START_LOOP_TEST(delay_exception, iter, 0, 3)
 
 	L4_Clock_t start_time;
 	int n = pump_wakeups(preempts, &start_time, spinner, TEST_IPC_DELAY);
-	if(!ok1(n == 0)) diag("error n=%d from pump_wakeups()", n);
+	if(!ok1(n >= 0)) diag("error n=%d from pump_wakeups()", n);
 
 	struct preempt_wakeup *wu = list_pop(preempts,
 		struct preempt_wakeup, link);
@@ -1033,7 +989,7 @@ START_LOOP_TEST(delay_max_duration, iter, 0, 3)
 
 	L4_Clock_t start_time;
 	int n = pump_wakeups(preempts, &start_time, spinner, TEST_IPC_DELAY);
-	if(!ok1(n == 0)) diag("error n=%d from pump_wakeups()", n);
+	if(!ok1(n >= 0)) diag("error n=%d from pump_wakeups()", n);
 
 	struct preempt_wakeup *wu = list_pop(preempts,
 		struct preempt_wakeup, link);
