@@ -768,6 +768,31 @@ static void maybe_exit_to_preempt(struct thread *current)
 }
 
 
+static struct thread *send_preempt_exception(struct thread *t)
+{
+	void *utcb = thread_get_utcb(t);
+	struct thread *exh = get_tcr_thread(t, utcb, L4_TCR_EXCEPTIONHANDLER);
+	if(unlikely(exh == NULL)) {
+		thread_halt(t);
+	} else {
+		TRACE("%s: exh=%lu:%lu\n", __func__,
+			TID_THREADNUM(exh->id), TID_VERSION(exh->id));
+		struct x86_exregs fake_exregs = {
+			.r = t->ctx.r,
+			.eip = t->ctx.eip,
+			.esp = t->ctx.r.esp,
+			.reason = -4,
+		};
+		ipc_user_complete(t,
+			send_exn_ipc(t, utcb, -4, &fake_exregs, &exh),
+			&exh);
+		assert(IS_IPC(t->status));
+	}
+
+	return exh;
+}
+
+
 /* used to send a preemption fault at thread resume. returns exh for preempt
  * checks.
  */
@@ -808,7 +833,13 @@ static NORETURN void schedule(void *param_ptr)
 			void *utcb = thread_get_utcb(prev);
 			L4_Word_t *preempt_p = &L4_VREG(utcb, L4_TCR_COP_PREEMPT);
 			if(CHECK_FLAG(*preempt_p, 0x20)) {	/* "s"ignal? */
-				prev->flags |= TF_PREEMPT;
+				if(CHECK_FLAG(*preempt_p & p_status, PS_DELAYED)) {
+					/* max delay ran out. pop the exception. */
+					prev->flags &= ~TF_PREEMPT;
+					send_preempt_exception(prev);
+				} else {
+					prev->flags |= TF_PREEMPT;
+				}
 			}
 			if(CHECK_FLAG(*preempt_p & p_status, PS_DELAYED)) {
 				/* clear the "d" flag; delay was exceeded. this happens
@@ -816,7 +847,7 @@ static NORETURN void schedule(void *param_ptr)
 				 */
 				*preempt_p &= ~0x40;
 			}
-			*preempt_p &= ~0x80;
+			*preempt_p &= ~0x80;	/* clear "I" */
 		}
 		x86_irq_enable();
 	}

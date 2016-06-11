@@ -876,7 +876,6 @@ START_LOOP_TEST(delay_yield, iter, 0, 1)
 
 		imply_ok1(yield, msg_at >= 19 && msg_at <= 21);
 		imply_ok1(!yield, msg_at >= 9 && msg_at <= 11);
-		if(!yield) todo_start("expected breakage");
 		iff_ok1(wu->was_exn, !yield);
 	} skip_end;
 
@@ -942,8 +941,6 @@ START_LOOP_TEST(delay_exception, iter, 0, 3)
 	skip_start(wu == NULL, 1, "no wakeups were recorded") {
 		int msg_at = (wu->clock.raw - start_time.raw + 500) / 1000;
 		diag("msg_at=%d, wu->was_exn=%s", msg_at, btos(wu->was_exn));
-
-		if(delay) todo_start("expected breakage");
 		iff_ok1(wu->was_exn, delay && preempt_close);
 	} skip_end;
 
