@@ -6,10 +6,59 @@ This file documents scheduling in the ``mung'' microkernel.
   - the kernel-side scheduling mechanism
   - the Schedule system call
     - the per-thread ``scheduler'' property
-  - quantum refilling
-  - pre-emption
-    - signaling
-    - delaying]
+  - quantum refilling]
+
+
+Preëmption
+-----------
+
+The L4.X2 specification defines the concept of asynchronous preëmption as the
+event that occurs when the currently-executing thread's quantum runs out or a
+higher-priority thread is activated due to IPC timeout or interrupt,
+displacing the current thread. If the current thread's PreemptFlags TCR has
+its "s" (for "signal") flag set, asynchronous preëmptions will be signaled to
+its exception handler when the incoming thread's priority is equal or lower
+than the current thread's sensitive priority (set in the Schedule syscall); if
+the priority condition isn't met, no signal is sent.
+
+The format of these signal messages is determined by another PreemptFlags bit,
+"d" (for "delay"). When "d" is clear, a preëmption fault message is sent when
+the preëmpted thread is resumed; it carries the SystemClock value from when
+the preëmption occurred. This message is sent with RecvTimeout=0 so that a
+misbehaving ExceptionHandler cannot retard execution; similarly if the
+ExceptionHandler TCR doesn't designate a valid thread a message will not be
+sent.
+
+When "d" is set, a preëmpt exception message is sent when the earlier of
+the current thread's maximum preëmption delay, or its remaining quantum, runs
+out. If the current thread's maximum delay is zero, the exception will be sent
+immediately. When the exception is sent, the kernel clears the "d" and "I"
+bits of the thread's PreemptFlags TCR.
+
+The preëmpt exception is a two-way exception message like architectural
+exceptions, carrying the usermode integer register frame, and requires that
+the exception handler reply before the preëmpted thread can resume. If the
+ExceptionHandler TCR doesn't designate a valid thread, the preëmpted thread
+will halt as though with ExchangeRegisters.
+
+### Compatibility ###
+
+The L4.X2 specification gives conflicting information on when preëmption
+faults are sent. As such the details are left up to the implementation, so
+``mung'' sends preëmption faults at thread resume, and preëmption exceptions
+immediately.
+
+The choice of sending preëmpt faults lazily is justified primarily with
+reduction of preëmpt latency for incoming threads. Secondarily there's a of
+use cases for the content of the fault message besides a hypothetical
+user-mode threading facility's opportunity for switching between CPU-bound
+user contexts.
+
+Similarly, sending of preëmpt exceptions immediately is justified with the
+urgency of performing e.g. deadlock detection, the wounding operation of
+wait/wound mutexes, enforcement of userspace RCU quiet sections, or other
+concurrency-assisting things.
+
 
 
 The total_quantum variable
