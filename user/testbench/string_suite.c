@@ -957,7 +957,7 @@ static void *bump_and_align(void *ptr, size_t bump, size_t align)
  */
 START_TEST(echo_with_long_hole)
 {
-	plan_tests(8);
+	plan_tests(9);
 
 	const size_t buf_size = 16 * 1024;
 	const char *echostr = "what did the pope say to the bear?";
@@ -991,17 +991,19 @@ START_TEST(echo_with_long_hole)
 	L4_Set_Pager(stats_tid);
 	for(int i=0; i < NUM_ELEMENTS(flush); i++) {
 		L4_Set_Rights(&flush[i], L4_FullyAccessible);
-#if 0
 		diag("flushing %#lx:%#lx", L4_Address(flush[i]), L4_Size(flush[i]));
-#endif
 	}
 	stats->n_faults = 0;
 	stats->n_write = 0;
 	L4_FlushFpages(NUM_ELEMENTS(flush), flush);
 
 	L4_StringItem_t got_si;
-	fail_unless(stats->n_faults == 0, "had %d faults before test",
-		stats->n_faults);
+	/* FIXME: this is dependent on text-segment faults. fault-counting tests
+	 * should force the entire testbench program in before executing.
+	 */
+	if(!ok(stats->n_faults == 0, "stats recorded no faults before test")) {
+		diag("stats->n_faults=%d", stats->n_faults);
+	}
 	echo(test_tid, replyptr, buf_size - (sendptr - sendbuf),
 		&got_si, sendptr, strlen(echostr));
 	L4_Set_Pager(old_pager);
