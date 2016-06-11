@@ -41,6 +41,13 @@ extern bool ipc_user_complete(
 	void *msg_utcb,			/* return value of ipc_user() */
 	struct thread **to_p);
 
+/* ipc_user_complete() without the receive phase. to avoid send-phase sleep,
+ * set @from->send_timeout to L4_ZeroTime. returns as ipc_user_complete().
+ */
+extern bool ipc_user_complete_oneway(
+	struct thread *from, void *msg_utcb,
+	struct thread **to_p);
+
 /* effect a string transfer timeout on the ongoing IPC transaction and its
  * peers. drops both out of IPC, sets error code, destroys @st, makes peers
  * READY.

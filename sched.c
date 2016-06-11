@@ -768,25 +768,29 @@ static void maybe_exit_to_preempt(struct thread *current)
 }
 
 
-static void send_preempt_ipc(struct thread *t)
+/* used to send a preemption fault at thread resume. returns exh for preempt
+ * checks.
+ */
+static struct thread *send_preempt_fault(struct thread *t, L4_Clock_t at)
 {
-	void *utcb = thread_get_utcb(t);
-	struct thread *exh = get_tcr_thread(t, utcb, L4_TCR_EXCEPTIONHANDLER);
-	if(unlikely(exh == NULL)) {
-		thread_halt(t);
-	} else {
+	assert(t->status == TS_READY);
+
+	void *t_utcb = thread_get_utcb(t);
+	struct thread *exh = get_tcr_thread(t, t_utcb, L4_TCR_EXCEPTIONHANDLER);
+	if(exh != NULL) {
 		struct thread *dst = exh;
-		struct x86_exregs fake_exregs = {
-			.r = t->ctx.r,
-			.eip = t->ctx.eip,
-			.esp = t->ctx.r.esp,
-			.reason = -4,
-		};
-		ipc_user_complete(t,
-			send_exn_ipc(t, utcb, -4, &fake_exregs, &dst),
-			&dst);
-		assert(IS_IPC(t->status));
+		void *msg_utcb = ipc_user((L4_MsgTag_t){ .X.label = 0xffd0, .X.u = 2 },
+			t, t_utcb, &dst, 2);
+		L4_VREG(msg_utcb, L4_TCR_MR(1)) = at.raw >> 32;
+		L4_VREG(msg_utcb, L4_TCR_MR(2)) = at.raw & 0xffffffff;
+		t->send_timeout = L4_ZeroTime;
+		bool done = ipc_user_complete_oneway(t, msg_utcb, &dst);
+		if(!done) exh = NULL;	/* can't itself preempt. */
+		assert(hook_empty(&t->post_exn_call));
 	}
+
+	assert(t->status == TS_READY || t->status == TS_RUNNING);
+	return exh;
 }
 
 
@@ -874,8 +878,10 @@ again:
 	if(CHECK_FLAG(next->flags, TF_PREEMPT)) {
 		/* signal preemption. */
 		next->flags &= ~TF_PREEMPT;
-		send_preempt_ipc(next);
-		assert(next->status != TS_READY && next->status != TS_RUNNING);
+		/* FIXME: get preempt time from somewhere */
+		send_preempt_fault(next, (L4_Clock_t){ .raw = ksystemclock() });
+		/* (XFER and R_RECV threads don't preempt.) */
+		assert(next->status == TS_READY || next->status == TS_RUNNING);
 		goto again;
 	}
 

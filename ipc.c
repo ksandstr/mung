@@ -107,8 +107,6 @@ static bool verify_recv_wait(struct thread *t)
 	}
 	return false;
 }
-#else
-#define verify_recv_wait(t) true
 #endif
 
 
@@ -940,10 +938,12 @@ static bool ipc_send_half(
 	} else {
 send_timeout:
 		/* instant timeout. */
-		set_ipc_error(self_utcb, (1 << 1) | 0);
-		/* TODO: is this required? instant return would indicate "no". */
-		set_ipc_return_thread(self, self_utcb);
-		self->status = TS_READY;
+		if(hook_empty(&self->post_exn_call)) {
+			set_ipc_error(self_utcb, (1 << 1) | 0);
+			/* TODO: is this required? instant return would indicate "no". */
+			set_ipc_return_thread(self, self_utcb);
+			self->status = TS_READY;
+		}
 		return false;
 	}
 	assert(false);
@@ -1022,9 +1022,6 @@ void *ipc_user(
 	from->send_timeout = L4_Never;
 	from->recv_timeout = L4_Never;
 
-	/* to exclude the fastpath in a debug situation, uncomment this. */
-	//goto slow;
-
 	struct thread *dest = *to_p;
 
 	/* basic fastpath filter. */
@@ -1066,7 +1063,11 @@ void *ipc_user(
 		}
 	}
 
-	if(in_recv_wait(dest)) remove_recv_wait(dest);
+	if(in_recv_wait(dest)) {
+		assert(verify_recv_wait(dest));
+		remove_recv_wait(dest);
+	}
+	assert(!verify_recv_wait(dest));
 	dest->status = 0x42;	/* a dummy */
 	assert(!in_recv_wait(dest));
 
@@ -1136,26 +1137,34 @@ fast:
 }
 
 
-static bool ipc_user_complete_oneway(
+bool ipc_user_complete_oneway(
 	struct thread *from, void *msg_utcb,
 	struct thread **to_p)
 {
 	from->ipc_from.raw = L4_nilthread.raw;
 	from->recv_timeout = L4_ZeroTime;
 
+	bool done = false;	/* wtf, gcc */
 	void *from_utcb = thread_get_utcb(from);
 	if(msg_utcb != from_utcb) {
 		set_ipc_return_thread(*to_p, msg_utcb);
 		thread_wake(*to_p);
 		post_exn_ok(from, NULL);
-		assert(check_ipc_module());
-		return true;
-	} else {
+		done = true;
+	} else if(from->send_timeout.raw != L4_ZeroTime.raw) {
+		/* the long way around to passive send. or immediate success. that may
+		 * happen.
+		 */
 		bool done = ipc_send_half(from, from_utcb, to_p);
 		if(done) post_exn_ok(from, NULL);
-		assert(check_ipc_module());
-		return done;
+	} else {
+		/* instant timeout. */
+		post_exn_fail(from);
+		done = false;
 	}
+
+	assert(check_ipc_module());
+	return done;
 }
 
 

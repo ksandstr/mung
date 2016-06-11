@@ -636,9 +636,8 @@ START_LOOP_TEST(preempt_exn_test, t, 0, 7)
 	preempt_exn_case(res, L4_TimePeriod((big_ts ? 120 : 4) * 1000),
 		sig_pe, has_pe ? 10 : 0, 25, 22);
 
-	if(t == 2 || t == 3 || t == 6 || t == 7) todo_start("expected breakage");
 	ok1(res->num_exn == 0);
-	if(t == 6 || t == 7) todo_end();
+	if(t == 3) todo_start("expected breakage");
 	if(!sig_pe) {
 		/* no preemption signaling implies no preemptions were signaled,
 		 * regardless of the other variables.
@@ -877,7 +876,7 @@ START_LOOP_TEST(delay_yield, iter, 0, 1)
 
 		imply_ok1(yield, msg_at >= 19 && msg_at <= 21);
 		imply_ok1(!yield, msg_at >= 9 && msg_at <= 11);
-		if(yield) todo_start("expected breakage");
+		if(!yield) todo_start("expected breakage");
 		iff_ok1(wu->was_exn, !yield);
 	} skip_end;
 
@@ -944,7 +943,7 @@ START_LOOP_TEST(delay_exception, iter, 0, 3)
 		int msg_at = (wu->clock.raw - start_time.raw + 500) / 1000;
 		diag("msg_at=%d, wu->was_exn=%s", msg_at, btos(wu->was_exn));
 
-		if(!delay) todo_start("expected breakage");
+		if(delay) todo_start("expected breakage");
 		iff_ok1(wu->was_exn, delay && preempt_close);
 	} skip_end;
 
