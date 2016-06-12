@@ -616,35 +616,28 @@ END_TEST
  *   - timeslice length (big/small)
  *   - preemption signaling switch (on/off)
  *   - whether there'll be a higher-priority wakeup 10 ms in (yes/no)
- *
- * TODO: break this test the fuck up. it's ugly and came from the ugly olden
- * times.
  */
-START_LOOP_TEST(preempt_exn_test, t, 0, 7)
+START_LOOP_TEST(preempt_exn_test, iter, 0, 7)
 {
-	bool big_ts = CHECK_FLAG(t, 1), sig_pe = CHECK_FLAG(t, 2),
-		has_pe = CHECK_FLAG(t, 4);
+	const bool big_ts = CHECK_FLAG(iter, 1),
+		sig_pe = CHECK_FLAG(iter, 2),
+		has_pe = CHECK_FLAG(iter, 4);
 	diag("big_ts=%s, sig_pe=%s, has_pe=%s",
 		btos(big_ts), btos(sig_pe), btos(has_pe));
 
-	plan_tests(!sig_pe ? 2 : 4);
+	plan_tests(5);
 
 	struct preempt_exn_result *res = talloc_zero(NULL,
 		struct preempt_exn_result);
 	list_head_init(&res->wakeups);
-	/* receive preempts the spinner once towards the end. */
 	preempt_exn_case(res, L4_TimePeriod((big_ts ? 120 : 4) * 1000),
 		sig_pe, has_pe ? 10 : 0, 25, 22);
 
 	ok1(res->num_exn == 0);
-	if(t == 3) todo_start("expected breakage");
-	if(!sig_pe) {
-		/* no preemption signaling implies no preemptions were signaled,
-		 * regardless of the other variables.
-		 */
-		ok1(res->num_wake == 0);
-	} else {
-		ok1(res->num_wake > 0);
+	imply_ok1(!sig_pe, res->num_wake == 0);
+	if(iter == 3) todo_start("expected breakage");
+	imply_ok1(sig_pe, res->num_wake > 0);
+	skip_start(!sig_pe, 2, "preemption signaling is off") {
 		int64_t diff = res->first_preempt.raw / 1000 - res->loop_start.raw / 1000;
 		diag("started at %llu, first preempt at %llu (diff %ld), preempted %d time(s)",
 			res->loop_start.raw, res->first_preempt.raw, (long)diff,
@@ -655,13 +648,11 @@ START_LOOP_TEST(preempt_exn_test, t, 0, 7)
 			 *
 			 * it's conceivable this might cause two preemptions, though.
 			 */
-			ok(res->num_wake == 1 || res->num_wake == 2,
-				"spinner should be preempted once or twice");
+			ok1(res->num_wake == 1 || res->num_wake == 2);
 			ok(diff >= 10 && diff <= 13,
 				"first spinner preempt should occur at between 10..13 ms");
 		} else if(big_ts && !has_pe) {
-			ok(res->num_wake == 1,
-				"spinner should be preempted once");
+			ok1(res->num_wake == 1);
 			ok(diff >= 20,
 				"first spinner preempt should occur at 20 ms or later");
 		} else if(!big_ts && has_pe) {
@@ -676,7 +667,7 @@ START_LOOP_TEST(preempt_exn_test, t, 0, 7)
 			ok1(res->num_wake == 6);		/* see above */
 			ok1(diff >= 0 && diff < 8);
 		}
-	}
+	} skip_end;
 
 	talloc_free(res);
 }
