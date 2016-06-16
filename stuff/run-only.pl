@@ -32,10 +32,10 @@ sub parse_iters {
 	my $spec = shift;
 	return '*' if $spec =~ /\*/;
 	my @output;
-	for(split /,/) {
+	for(split /,/, $spec) {
 		if(/(\d+)-(\d+)/) {
 			for(my $i = int($1); $i <= int($2); $i++) {
-				push @output, $i
+				push @output, $i;
 			}
 		} elsif(/(\d+)/) {
 			push @output, int($1);
