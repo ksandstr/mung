@@ -2355,19 +2355,6 @@ COLD void init_mapdb(void)
 {
 	assert(map_group_ra == NULL);
 
-	/* TODO: add a proper interface for enabling/disabling trace IDs.
-	 * kernel commandline perhaps?
-	 */
-#if 0
-	static bool first = true;
-	if(first) {
-		first = false;
-		// trace_enable(TRID_MAPDB);
-		// trace_enable(TRID_IPC);
-		// trace_enable(TRID_SCHED);
-	}
-#endif
-
 	/* 18 bits for the group ID + 4 bits for its content = 8 MiB of address
 	 * space.
 	 *

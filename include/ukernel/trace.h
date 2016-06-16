@@ -36,11 +36,12 @@ extern bool trace_is_opt(int id, int option);
 extern void trace_set_opt(int id, int option, bool value);
 
 
-/* directory of trace IDs */
-
+/* all defined trace IDs. keep this in sync with the table in
+ * exception.c:check_trace_control(), or else.
+ */
 enum trace_id {
-	TRID_SCHED = 1,		/* everything in sched.c */
-	TRID_THREAD,		/* everything in thread.c */
+	TRID_SCHED = 1,
+	TRID_THREAD,
 	TRID_MAPDB,
 	TRID_IPC,
 	TRID_IPC_REDIR,

@@ -25,6 +25,7 @@
 #include <ukernel/kip.h>
 #include <ukernel/util.h>
 #include <ukernel/misc.h>
+#include <ukernel/trace.h>
 #include <ukernel/ktest.h>
 #include <ukernel/config.h>
 
@@ -507,6 +508,45 @@ static void kdb_print_char(struct x86_exregs *regs) {
 }
 
 
+static void check_trace_control(const char *str)
+{
+	static const char *const opts[] = {
+		[TRID_SCHED] = "sched",
+		[TRID_THREAD] = "thread",
+		[TRID_MAPDB] = "mapdb",
+		[TRID_IPC] = "ipc",
+		[TRID_IPC_REDIR] = "redir",
+	};
+
+/* NDEBUG disables tracing, so trace enable/disable becomes irrelevant. */
+#ifndef NDEBUG
+	bool found = false, enable = false;
+	if(strstr(str, "[[mung-trace-enable") != NULL) {
+		found = true;
+		enable = true;
+	} else if(strstr(str, "[[mung-trace-disable") != NULL) {
+		found = true;
+		enable = false;
+	}
+
+	for(int i=0; found && i < NUM_ELEMENTS(opts); i++) {
+		if(opts[i] == NULL) continue;
+
+		char pat[16];
+		snprintf(pat, 16, "{%s}", opts[i]);
+		if(strstr(str, pat) == NULL) continue;
+		if(enable) {
+			printf("KDB: enabling trace mode `%s'\n", opts[i]);
+			trace_enable(i);
+		} else {
+			printf("KDB: disabling trace mode `%s'\n", opts[i]);
+			trace_disable(i);
+		}
+	}
+#endif
+}
+
+
 static void kdb_print_string(struct x86_exregs *regs)
 {
 	struct thread *current = get_current_thread();
@@ -533,7 +573,9 @@ static void kdb_print_string(struct x86_exregs *regs)
 	}
 #endif
 
-	printf("KDB[PrintString]: %s\n", sbuf);
+	printf("KDB[%lu:%lu|PrintString]: %s\n",
+		TID_THREADNUM(current->id), TID_VERSION(current->id), sbuf);
+	check_trace_control(sbuf);
 }
 
 
