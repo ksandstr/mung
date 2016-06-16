@@ -110,8 +110,12 @@ restarts via ExchangeRegisters, and resumption by Schedule.
 
 The L4.X2 specification decrees the tq=0 IPC have SndTimeout=0, but since a
 thread with tq=0 will never execute, ``mung'' sets SndTimeout=∞ instead. The
-specification is silent on whether a reply is expected, so ``mung'' only
-sends.
+specification is silent on whether a reply is expected, so ``mung'' only sends.
 
 Similarly, the spec doesn't say what a freshly-created thread's total_quantum
 is, so ``mung'' sets it to ∞. The default ts_len is 10 milliseconds.
+
+Also, the spec is silent on what the form of the tq=0 IPC should be. ``mung''
+sends a preëmption fault message (i.e. same format as to a thread's
+ExceptionHandler when PreemptFlags.s is set) that carries the SystemClock value
+from when the thread's total quantum was exhausted.
