@@ -625,49 +625,27 @@ START_LOOP_TEST(preempt_exn_test, iter, 0, 7)
 	diag("big_ts=%s, sig_pe=%s, has_pe=%s",
 		btos(big_ts), btos(sig_pe), btos(has_pe));
 
-	plan_tests(5);
+	plan_tests(7);
 
 	struct preempt_exn_result *res = talloc_zero(NULL,
 		struct preempt_exn_result);
 	list_head_init(&res->wakeups);
 	preempt_exn_case(res, L4_TimePeriod((big_ts ? 120 : 4) * 1000),
-		sig_pe, has_pe ? 10 : 0, 25, 22);
+		sig_pe, has_pe ? 10 : 0, 25, 200);
+
+	int64_t diff = res->first_preempt.raw / 1000 - res->loop_start.raw / 1000;
+	diag("started at %llu, first preempt at %llu (diff %ld)",
+		res->loop_start.raw, res->first_preempt.raw, (long)diff);
+	diag("res->num_exn=%d, res->num_wake=%d", res->num_exn, res->num_wake);
 
 	ok1(res->num_exn == 0);
-	imply_ok1(!sig_pe, res->num_wake == 0);
-	if(iter == 3) todo_start("expected breakage");
-	imply_ok1(sig_pe, res->num_wake > 0);
-	skip_start(!sig_pe, 2, "preemption signaling is off") {
-		int64_t diff = res->first_preempt.raw / 1000 - res->loop_start.raw / 1000;
-		diag("started at %llu, first preempt at %llu (diff %ld), preempted %d time(s)",
-			res->loop_start.raw, res->first_preempt.raw, (long)diff,
-			res->num_wake);
-		if(big_ts && has_pe) {
-			/* the preempt_fn causes a preemption, which satisifes the 22-ms
-			 * receive function, which then doesn't preempt the thread again.
-			 *
-			 * it's conceivable this might cause two preemptions, though.
-			 */
-			ok1(res->num_wake == 1 || res->num_wake == 2);
-			ok(diff >= 10 && diff <= 13,
-				"first spinner preempt should occur at between 10..13 ms");
-		} else if(big_ts && !has_pe) {
-			ok1(res->num_wake == 1);
-			ok(diff >= 20,
-				"first spinner preempt should occur at 20 ms or later");
-		} else if(!big_ts && has_pe) {
-			/* six times for timeslice (25 / 4 = 6.25) and once for
-			 * preempt_fn.
-			 */
-			ok1(res->num_wake == 7);
-			ok(diff >= 0 && diff < 8,
-				"short timeslice should cause preemption before 10 ms");
-		} else {
-			assert(!big_ts && !has_pe);
-			ok1(res->num_wake == 6);		/* see above */
-			ok1(diff >= 0 && diff < 8);
-		}
-	} skip_end;
+	iff_ok1(res->num_wake == 0, !sig_pe || (big_ts && !has_pe));
+	imply_ok1(sig_pe && big_ts && has_pe, res->num_wake == 1);
+	imply_ok1(sig_pe && !big_ts, res->num_wake > 1);
+
+	imply_ok1(sig_pe && !big_ts, diff >= 0 && diff < 8);
+	imply_ok1(sig_pe && big_ts && has_pe, diff >= 10 && diff <= 13);
+	imply_ok1(sig_pe && big_ts && !has_pe, diff <= 0);
 
 	talloc_free(res);
 }
@@ -720,6 +698,7 @@ static int pump_wakeups(
 			if(n >= 0) n++;
 		} else if(L4_UntypedWords(tag) == 0 || L4_Label(tag) == QUIT_LABEL) {
 			/* exit message. */
+			diag("%s: exiting, n=%d", __func__, n);
 			break;
 		} else {
 			diag("%s: unexpected message at %lu (label=%#lx, u=%lu, t=%lu)",
