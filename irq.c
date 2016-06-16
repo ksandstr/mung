@@ -9,7 +9,6 @@
 #include <l4/vregs.h>
 
 #include <ukernel/thread.h>
-#include <ukernel/thread.h>
 #include <ukernel/sched.h>
 #include <ukernel/space.h>
 #include <ukernel/misc.h>
@@ -83,7 +82,7 @@ static void irq_defer(int vec_num)
 
 /* call latent interrupt handlers, resolve preemptions, return the winner.
  * caller must check for retval == current && I ∈ current.PreemptFlags, and
- * engate max_delay as appropriate.
+ * engage max_delay as appropriate.
  */
 struct thread *irq_call_deferred(struct thread *next)
 {
