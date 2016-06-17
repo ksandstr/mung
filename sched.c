@@ -601,8 +601,12 @@ static struct thread *preemptor_of(struct thread *self, uint64_t run_until)
 }
 
 
-/* set preemption parameters, current_thread */
-static void sched_next_thread(struct thread *next)
+/* set preemption parameters, current_thread. returns the thread that should
+ * actually be returned into, which is different from @next iff a
+ * higher-priority thread's wakeup happens before @switch_at.
+ */
+static struct thread *enter_next_thread(
+	struct thread *next, uint64_t switch_at)
 {
 	assert(get_current_thread() == NULL);
 	assert(hook_empty(&next->post_exn_call));
@@ -629,29 +633,25 @@ static void sched_next_thread(struct thread *next)
 	}
 
 	next->status = TS_RUNNING;
-	uint64_t switch_at = ksystemclock();
-	/* FIXME: modify the incoming @next and return the new value. for now
-	 * we'll just noisily ignore preemptions that happened before switching.
-	 */
 	struct thread *preemptor = preemptor_of(next, switch_at + runtime);
+	/* modify the incoming @next in this rarest of cases. */
 	if(preemptor != NULL && switch_at >= preemptor->wakeup_time) {
-		printf("%s: disregarding preemptor=%lu:%lu (switch_at=%u >= wakeup_time=%u)\n",
+		TRACE("%s: bumping preemptor=%lu:%lu over next=%lu:%lu\n",
 			__func__, TID_THREADNUM(preemptor->id), TID_VERSION(preemptor->id),
-			(unsigned)switch_at, (unsigned)preemptor->wakeup_time);
+			TID_THREADNUM(next->id), TID_VERSION(next->id));
+		next = preemptor;
 		preemptor = NULL;
 	}
 	if(preemptor != NULL) {
 		assert(switch_at < preemptor->wakeup_time);
 		runtime = preemptor->wakeup_time - switch_at;
 
-#if 0
-		printf("%s: next=%lu:%lu will be preempted by %lu:%lu in %uµs\n",
+		TRACE("%s: next=%lu:%lu will be preempted by %lu:%lu in %uµs\n",
 			__func__, TID_THREADNUM(next->id), TID_VERSION(next->id),
 			TID_THREADNUM(preemptor->id), TID_VERSION(preemptor->id),
 			(unsigned)runtime);
-		printf("%s: ... next->pri=%d, preemptor->pri=%d\n",
+		TRACE("%s: ... next->pri=%d, preemptor->pri=%d\n",
 			__func__, (int)next->pri, (int)preemptor->pri);
-#endif
 	}
 
 	/* set up us the interrupt. */
@@ -666,6 +666,8 @@ static void sched_next_thread(struct thread *next)
 	preempt_status = 0;
 	task_switch_time = switch_at / 1000;
 	x86_irq_restore();
+
+	return next;
 }
 
 
@@ -676,13 +678,14 @@ static void sched_next_thread(struct thread *next)
  */
 static void entering_thread(struct thread **next_p)
 {
+	uint64_t now = ksystemclock();
 	struct thread *next = *next_p, *orig = next;
 	if(CHECK_FLAG(next->flags, TF_PREEMPT)) {
 		/* FIXME: get preemption time from somewhere! */
 		TRACE("%s: sending preempt fault for %lu:%lu\n",
 			__func__, TID_THREADNUM(next->id), TID_VERSION(next->id));
 		struct thread *exh = send_preempt_fault(next,
-				(L4_Clock_t){ .raw = ksystemclock() }),
+				(L4_Clock_t){ .raw = now }),
 			*oldnext = next;
 		next = sched_resolve_next(NULL, NULL, next, exh);
 		if(next == exh) {
@@ -704,8 +707,7 @@ static void entering_thread(struct thread **next_p)
 			|| next->status == TS_RUNNING);
 	}
 
-	sched_next_thread(next);
-	*next_p = next;
+	*next_p = enter_next_thread(next, now);
 }
 
 
@@ -715,7 +717,9 @@ static void entering_thread(struct thread **next_p)
 static void handoff_epilog(struct thread *src, struct thread *dst)
 {
 	/* FIXME: resolve TF_PREEMPT for @dst! */
-	sched_next_thread(dst);
+	/* FIXME: modify caller's @dst! */
+	struct thread *actual = enter_next_thread(dst, ksystemclock());
+	assert(actual == dst);
 	assert(dst->status == TS_RUNNING);
 	if(src->u0.partner == dst) {
 		/* break it up */
@@ -1029,10 +1033,12 @@ static NORETURN void schedule(void *param_ptr)
 {
 	assert(get_current_thread() == NULL);
 	struct thread *prev = param_ptr;
+	uint64_t now;
 
 again:
 	assert(x86_irq_is_enabled());
 	x86_irq_disable();
+	now = ksystemclock();
 	if(irq_defer_active) {
 		/* the singing scheduler */
 		irq_call_deferred(NULL);
@@ -1075,7 +1081,6 @@ again:
 	} else if(next == NULL) {
 		/* add timeslices to threads that're ready and have none. */
 		TRACE("%s: refilling!\n", __func__);
-		uint64_t now = ksystemclock();
 		RB_FOREACH(node, &sched_tree) {
 			struct thread *t = rb_entry(node, struct thread, sched_rb);
 			if(IS_READY(t->status) && t->quantum == 0
@@ -1105,7 +1110,7 @@ again:
 		next->flags &= ~TF_PREEMPT;
 		/* FIXME: get preempt time from somewhere */
 		struct thread *exh = send_preempt_fault(next,
-			(L4_Clock_t){ .raw = ksystemclock() });
+			(L4_Clock_t){ .raw = now });
 		TRACE("%s: ... next->status'=%s\n", __func__, sched_status_str(next));
 		/* (XFER and R_RECV threads don't preempt.) */
 		assert(next->status == TS_READY || next->status == TS_RUNNING);
@@ -1145,7 +1150,8 @@ again:
 	x86_irq_disable();
 	assert(get_current_thread() == NULL);
 	if(irq_defer_active) next = irq_call_deferred(next);
-	sched_next_thread(next);
+	struct thread *actual = enter_next_thread(next, now);
+	assert(actual == next);	/* always true. */
 	exit_to_thread(next);
 }
 
