@@ -510,21 +510,27 @@ struct thread *on_preempt(int vec_num)
 		assert(cand->pri <= current->sens_pri);
 
 		preempt_status = 0;
-		L4_VREG(cur_utcb, L4_TCR_COP_PREEMPT) &= ~0xc0;	/* clear I, d */
-		/* send exception IPC immediately & resolve preemption of the existing
-		 * candidate.
-		 */
-		struct thread *exh = send_preempt_exception(current);
-		next = sched_resolve_next(current, cur_utcb, cand, exh);
-		if(next == exh) {
-			TRACE("%s: exh trumping! status'=%s\n", __func__,
-				sched_status_str(current));
-			TRACE("%s: ... activating exh=%lu:%lu instead of cand=%lu:%lu\n",
-				__func__, TID_THREADNUM(exh->id), TID_VERSION(exh->id),
-				TID_THREADNUM(cand->id), TID_VERSION(cand->id));
+		L4_Word_t *ctl_p = &L4_VREG(cur_utcb, L4_TCR_COP_PREEMPT);
+		*ctl_p &= ~0xc0;	/* clear I, d */
+		if(!CHECK_FLAG(*ctl_p, 0x20)) {
+			/* silent but delayed. */
+			TRACE("%s: SBD.\n", __func__);
+			next = sched_resolve_next(current, cur_utcb, current, cand);
+		} else {
+			/* send exception IPC immediately & resolve preemption of the
+			 * existing candidate.
+			 */
+			TRACE("%s: sending preëmpt exception\n", __func__);
+			struct thread *exh = send_preempt_exception(current);
+			next = sched_resolve_next(current, cur_utcb, cand, exh);
+			if(next == exh) {
+				TRACE("%s: ... activating exh=%lu:%lu over cand=%lu:%lu\n",
+					__func__, TID_THREADNUM(exh->id), TID_VERSION(exh->id),
+					TID_THREADNUM(cand->id), TID_VERSION(cand->id));
+			}
+			assert(IS_IPC(current->status));
 		}
 		assert(next != current);
-		assert(IS_IPC(current->status));
 	} else {
 		assert(current->status == TS_RUNNING);
 		next = sched_resolve_next(current, cur_utcb, current, cand);

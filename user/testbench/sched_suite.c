@@ -1022,7 +1022,6 @@ START_TEST(delay_without_signal)
 		(unsigned long)c_start.raw, (unsigned long)c_mid.raw,
 		(unsigned long)c_end.raw);
 
-	todo_start("expected breakage");
 	/* validation tests. */
 	ok1(fuzz_eq(c_mid.raw - c_start.raw, 10000, 2000));
 	ok1(fuzz_eq(c_end.raw - c_start.raw, 20000, 2000));
