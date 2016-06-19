@@ -984,6 +984,56 @@ START_LOOP_TEST(delay_max_duration, iter, 0, 3)
 END_TEST
 
 
+/* ¬s ∧ d.
+ *
+ * experiment: spin for 10 ms, preempt at 5 ms, spin for another 10 ms.
+ * measurement: when the I flag is set.
+ */
+START_TEST(delay_without_signal)
+{
+	int my_pri = find_own_priority();
+	diag("my_pri=%d", my_pri);
+	plan_tests(5);
+
+	L4_DisablePreemptionFaultException();
+
+	L4_ThreadId_t pre = start_preempt(5);
+	L4_Word_t rc = L4_Set_Priority(pre, my_pri - 1);
+	fail_if(rc == L4_SCHEDRESULT_ERROR);
+	rc = L4_Set_PreemptionDelay(L4_Myself(), my_pri, 10 * 1000);
+	fail_if(rc == L4_SCHEDRESULT_ERROR);
+	rc = L4_Set_Priority(L4_Myself(), my_pri - 2);
+	fail_if(rc == L4_SCHEDRESULT_ERROR);
+	L4_ThreadSwitch(pre);
+
+	L4_Clock_t c_start = L4_SystemClock();
+	bool pending_start = L4_PreemptionPending();
+	L4_DisablePreemption();
+	usleep(10 * 1000);
+	bool pending_mid = L4_PreemptionPending();
+	L4_Clock_t c_mid = L4_SystemClock();
+	usleep(10 * 1000);
+	bool pending_end = L4_PreemptionPending();
+	L4_Clock_t c_end = L4_SystemClock();
+	L4_EnablePreemption();
+
+	xjoin_thread(pre);
+	diag("c_start=%lu, c_mid=%lu, c_end=%lu",
+		(unsigned long)c_start.raw, (unsigned long)c_mid.raw,
+		(unsigned long)c_end.raw);
+
+	todo_start("expected breakage");
+	/* validation tests. */
+	ok1(fuzz_eq(c_mid.raw - c_start.raw, 10000, 2000));
+	ok1(fuzz_eq(c_end.raw - c_start.raw, 20000, 2000));
+
+	ok1(!pending_start);
+	ok1(pending_mid);
+	ok1(!pending_end);
+}
+END_TEST
+
+
 /* start a thread that spins for longer than its total quantum. this should
  * cause a preemption message.
  *
@@ -1296,6 +1346,7 @@ Suite *sched_suite(void)
 		tcase_add_test(tc, delay_yield);
 		tcase_add_test(tc, delay_exception);
 		tcase_add_test(tc, delay_max_duration);
+		tcase_add_test(tc, delay_without_signal);
 		tcase_add_test(tc, total_quantum_exhaust_rpc);
 		suite_add_tcase(s, tc);
 	}
