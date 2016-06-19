@@ -105,16 +105,16 @@ static inline void L4_StoreBRs(int i, int num, L4_Word_t *ptr)
 /* "bit test and set" */
 #define __BTAS(bit, word) ({ \
 		L4_Word8_t _v = 0; \
-		__asm__ __volatile__ ("btsl %1, %2; setc %0" \
-			: "=r" (_v) \
+		__asm__ __volatile__ ("bts %1, %2; setc %0" \
+			: "=a" (_v) \
 			: "i" ((bit)), "m" ((word))); \
 		_v; \
 	})
 /* "bit test and clear" */
 #define __BTAC(bit, word) ({ \
 		L4_Word8_t _v = 0; \
-		__asm__ __volatile__ ("btrl %1, %2; setc %0" \
-			: "=r" (_v) \
+		__asm__ __volatile__ ("btr %1, %2; setc %0" \
+			: "=a" (_v) \
 			: "i" ((bit)), "m" ((word))); \
 		_v; \
 	})
