@@ -16,6 +16,7 @@
 #include "defs.h"
 #include "test.h"
 #include "forkserv-defs.h"
+#include "threadmgr-defs.h"
 
 
 #define now_ms() (L4_SystemClock().raw / 1000)
@@ -914,6 +915,57 @@ START_TEST(many_threads_test)
 END_TEST
 
 
+/* check that the manager thread will log preempt faults as it should. as the
+ * microkernel can't be relied on to produce those fault messages (that test
+ * is in sched_suite.c which runs later), we'll send some manually.
+ */
+START_TEST(preempt_fault_logging)
+{
+	plan_tests(6);
+
+	L4_ThreadId_t child = xstart_thread(&taking_a_nap_fn, NULL),
+		mgr_tid = get_mgr_tid();
+	diag("child=%lu:%lu, mgr=%lu:%lu", L4_ThreadNo(child), L4_Version(child),
+		L4_ThreadNo(mgr_tid), L4_Version(mgr_tid));
+	L4_ThreadSwitch(child);
+
+	L4_Word_t hi, lo;
+	bool ret, was_exn;
+	int n = __tmgr_get_preempt_record(mgr_tid, &ret, child.raw,
+		&hi, &lo, &was_exn);
+	fail_if(n != 0, "n=%d", n);
+	ok(!ret, "no faults before experiment");
+
+	L4_Clock_t funny = { .raw = 0xbadcafe };
+	L4_MsgTag_t tag = { .X.u = 2, .X.label = 0xffd0 };
+	L4_Set_Propagation(&tag);
+	L4_Set_VirtualSender(child);
+	L4_LoadMR(0, tag.raw);
+	L4_LoadMR(1, funny.raw >> 32);
+	L4_LoadMR(2, funny.raw & 0xffffffff);
+	tag = L4_Send_Timeout(mgr_tid, TEST_IPC_DELAY);
+	ok(L4_IpcSucceeded(tag), "send to mgr didn't fail");
+
+	ret = false;
+	n = __tmgr_get_preempt_record(mgr_tid, &ret, child.raw,
+		&hi, &lo, &was_exn);
+	fail_if(n != 0, "n=%d", n);
+	ok(ret, "fault was recorded");
+	ok(hi == funny.raw >> 32 && lo == (funny.raw & 0xffffffff),
+		"returned clock value was correct");
+	ok(!was_exn, "didn't indicate an exception");
+
+	ret = true;
+	n = __tmgr_get_preempt_record(mgr_tid, &ret, child.raw,
+		&hi, &lo, &was_exn);
+	fail_if(n != 0, "n=%d", n);
+	ok(!ret, "no further faults were recorded");
+
+	xjoin_thread(child);
+}
+END_TEST
+
+
 static void add_thread_tests(TCase *tc)
 {
 	tcase_add_test(tc, basic_thread_test);
@@ -923,6 +975,7 @@ static void add_thread_tests(TCase *tc)
 	tcase_add_test(tc, uncaught_segv_test);
 	tcase_add_test(tc, segv_on_special_fault);
 	tcase_add_test(tc, many_threads_test);
+	tcase_add_test(tc, preempt_fault_logging);
 }
 
 

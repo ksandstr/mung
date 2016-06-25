@@ -4,7 +4,7 @@
 
 
 [StubPrefix(__tmgr), IfaceLabel(0x8ac3)]
-interface ThreadMgr: L4X2::ExceptionHandler
+interface ThreadMgr: L4X2::ExceptionHandler, L4X2::PreemptHandler
 {
 	void add_thread(in L4X2::ThreadId new_tid);
 
@@ -24,6 +24,16 @@ interface ThreadMgr: L4X2::ExceptionHandler
 		[MR(2)] out L4X2::word result)
 			raises(muidl::NoReply);
 
+	/* forkserv's interface, informing the client about sum ting wong. */
 	[StubSendTimeout]
 	oneway void segv(in L4X2::ThreadId dead_tid, in L4X2::word fault_addr);
+
+	/* for pumping per-thread preëmpt fault & exception data one entry at a
+	 * time. returns false when no more records were available.
+	 */
+	boolean get_preempt_record(
+		in L4X2::ThreadId thread,
+		out L4X2::word clock_hi,
+		out L4X2::word clock_lo,
+		out boolean was_exception);
 };

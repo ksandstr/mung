@@ -69,6 +69,19 @@ interface ExceptionHandler
 			raises(muidl::NoReply);
 };
 
+
+/* the preëmption message, sent to a thread's ExceptionHandler at async
+ * preëmpt when s ∧ ¬d.
+ */
+[StubPrefix(__l4x2)]
+interface PreemptHandler
+{
+	[TagMask(0xfff00000), Label(0xffd0)]
+	oneway void preempt_fault(
+		[MR(1)] in word clock_hi,
+		[MR(2)] in word clock_lo);
+};
+
 }; // module L4X2
 
 #endif

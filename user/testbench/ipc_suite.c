@@ -962,49 +962,6 @@ end:
 }
 
 
-/* handle exception & preemption messages from any old thread. quit when
- * instructed.
- */
-static void exception_catcher_fn(void *param_ptr)
-{
-	bool running = true;
-	while(running) {
-		L4_ThreadId_t sender;
-		L4_MsgTag_t tag = L4_Wait(&sender);
-		for(;;) {
-			if(L4_IpcFailed(tag)) {
-				diag("%s: IPC failed, ec=%#lx", __func__, L4_ErrorCode());
-				break;
-			}
-
-			bool reply;
-			switch(L4_Label(tag)) {
-				case QUIT_LABEL: return;
-				case 0xffd0:
-					sender = L4_GlobalIdOf(sender);
-					diag("%s: preempt message from %lu:%lu", __func__,
-						L4_ThreadNo(sender), L4_Version(sender));
-					reply = false;
-					break;
-				case 0xffc0:
-					sender = L4_GlobalIdOf(sender);
-					diag("%s: preempt exception from %lu:%lu", __func__,
-						L4_ThreadNo(sender), L4_Version(sender));
-					reply = true;
-					break;
-				default:
-					diag("%s: unknown label=%#lx from %lu:%lu",
-						__func__, L4_Label(tag),
-						L4_ThreadNo(sender), L4_Version(sender));
-					reply = false;
-			}
-			if(!reply) break;
-			tag = L4_ReplyWait(sender, &sender);
-		}
-	}
-}
-
-
 /* tests that a send from a lower to higher priority thread causes a
  * scheduling preemption. also tests that a send to a lower-priority thread
  * causes no preemption. (sending to a same-priority thread may cause the IPC
@@ -1030,9 +987,6 @@ START_LOOP_TEST(send_preempt, iter, 0, 15)
 		btos(full_delay), btos(short_delay), start_pri, spin_us);
 	fail_unless(start_pri >= 12,
 		"need start_pri at least 12, got %d", start_pri);
-
-	L4_ThreadId_t catcher = xstart_thread(&exception_catcher_fn, NULL);
-	L4_Set_ExceptionHandler(L4_GlobalIdOf(catcher));
 
 	L4_Word_t *param = malloc(sizeof(L4_Word_t));
 	param[0] = spin_us;
@@ -1083,8 +1037,6 @@ START_LOOP_TEST(send_preempt, iter, 0, 15)
 	imply_ok1(p_preempt && full_delay, was_pending && was_disabled);
 
 	xjoin_thread(other);
-	send_quit(catcher);
-	xjoin_thread(catcher);
 }
 END_TEST
 
@@ -1140,9 +1092,6 @@ START_LOOP_TEST(recv_preempt, iter, 0, 31)
 		btos(full_delay), btos(short_delay), start_pri, spin_us);
 	fail_unless(start_pri >= 12,
 		"need start_pri at least 12, got %d", start_pri);
-
-	L4_ThreadId_t catcher = xstart_thread(&exception_catcher_fn, NULL);
-	L4_Set_ExceptionHandler(L4_GlobalIdOf(catcher));
 
 	L4_Word_t *param = malloc(sizeof(L4_Word_t) * 3);
 	param[0] = spin_us;
@@ -1227,8 +1176,6 @@ START_LOOP_TEST(recv_preempt, iter, 0, 31)
 
 	xjoin_thread(other);
 	if(!L4_IsNilThread(other2)) xjoin_thread(other2);
-	send_quit(catcher);
-	xjoin_thread(catcher);
 }
 END_TEST
 

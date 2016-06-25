@@ -233,7 +233,7 @@ int thread_on_fork(
 static void thread_wrapper(L4_ThreadId_t parent)
 {
 	L4_Set_UserDefinedHandle(0);
-	L4_Set_ExceptionHandler(parent);
+	L4_Set_ExceptionHandler(mgr_tid);
 
 	L4_LoadBR(0, 0);
 	L4_MsgTag_t tag = L4_Receive(parent);
@@ -500,11 +500,19 @@ struct mgrs {
 	L4_ThreadId_t tid;		/* local TID */
 };
 
+struct mgrp {
+	/* preëmpt record. */
+	struct list_node link;
+	L4_Clock_t clock;
+	L4_Word_t exno, ec;
+	bool was_exn;
+};
+
 struct mgrt {
 	L4_ThreadId_t tid;		/* global TID (for hash & cmp) */
 	bool alive, segfault;
 	L4_Word_t result;
-	struct list_head sleepers;
+	struct list_head sleepers, preempts;
 };
 
 
@@ -531,7 +539,7 @@ static struct mgrt *get_mgrt(L4_ThreadId_t tid)
 }
 
 
-static void t_handle_exn(
+static void t_sys_exn(
 	L4_Word_t *eip_p,
 	L4_Word_t *eflags_p,
 	L4_Word_t *exception_no_p,
@@ -539,8 +547,87 @@ static void t_handle_exn(
 	L4_Word_t *edi_p, L4_Word_t *esi_p, L4_Word_t *ebp_p, L4_Word_t *esp_p,
 	L4_Word_t *ebx_p, L4_Word_t *edx_p, L4_Word_t *ecx_p, L4_Word_t *eax_p)
 {
-	printf("%s: exception received\n", __func__);
+	L4_ThreadId_t sender = L4_GlobalIdOf(muidl_get_sender());
+	struct mgrt *t = get_mgrt(sender);
+	if(t == NULL) {
+		printf("%s: unknown sender=%lu:%lu\n", __func__,
+			L4_ThreadNo(sender), L4_Version(sender));
+		return;
+	}
+
+	struct mgrp *p = talloc(t, struct mgrp);
+	p->clock = L4_SystemClock();
+	p->exno = *exception_no_p;
+	p->ec = *errorcode_p;
+	p->was_exn = true;
+	list_add_tail(&t->preempts, &p->link);
+}
+
+
+static void t_arch_exn(
+	L4_Word_t *eip_p,
+	L4_Word_t *eflags_p,
+	L4_Word_t *exception_no_p,
+	L4_Word_t *errorcode_p,
+	L4_Word_t *edi_p, L4_Word_t *esi_p, L4_Word_t *ebp_p, L4_Word_t *esp_p,
+	L4_Word_t *ebx_p, L4_Word_t *edx_p, L4_Word_t *ecx_p, L4_Word_t *eax_p)
+{
+	/* no idea what to do. previously we'd halt the sender, so let's do that
+	 * here as well.
+	 */
+	L4_ThreadId_t sender = L4_GlobalIdOf(muidl_get_sender());
+	printf("%s: exception from %lu:%lu; eip=%#lx, eflags=%#lx\n", __func__,
+		L4_ThreadNo(sender), L4_Version(sender),
+		*eip_p, *eflags_p);
 	muidl_raise_no_reply();
+}
+
+
+static void t_preempt_fault(L4_Word_t clock_hi, L4_Word_t clock_lo)
+{
+	L4_ThreadId_t sender = L4_GlobalIdOf(muidl_get_sender());
+	L4_Clock_t clock = { .raw = (L4_Word64_t)clock_hi << 32 | clock_lo };
+#if 0
+	printf("%s: sender=%lu:%lu, clock=%lu (%#lx)\n", __func__,
+		L4_ThreadNo(sender), L4_Version(sender),
+		(unsigned long)clock.raw, (L4_Word_t)clock.raw);
+#endif
+
+	struct mgrt *t = get_mgrt(sender);
+	if(t == NULL) {
+		printf("%s: unknown sender=%lu:%lu\n", __func__,
+			L4_ThreadNo(sender), L4_Version(sender));
+		return;
+	}
+	struct mgrp *p = talloc(t, struct mgrp);
+	*p = (struct mgrp){ .clock = clock, .was_exn = false };
+	list_add_tail(&t->preempts, &p->link);
+}
+
+
+static bool t_get_preempt_record(
+	L4_Word_t tid_raw,
+	L4_Word_t *clock_hi_p,
+	L4_Word_t *clock_lo_p,
+	bool *was_exn_p)
+{
+	L4_ThreadId_t tid = { .raw = tid_raw };
+	struct mgrt *t = get_mgrt(tid);
+	if(t == NULL) {
+		printf("%s: unknown tid=%lu:%lu\n", __func__,
+			L4_ThreadNo(tid), L4_Version(tid));
+		return false;
+	}
+
+	struct mgrp *p = list_pop(&t->preempts, struct mgrp, link);
+	if(p == NULL) return false;
+	else {
+		*clock_hi_p = p->clock.raw >> 32;
+		*clock_lo_p = p->clock.raw & 0xffffffff;
+		*was_exn_p = p->was_exn;
+		talloc_free(p);
+		return true;
+	}
 }
 
 
@@ -566,6 +653,7 @@ static void t_add_thread(L4_Word_t arg_tid)
 	}
 	*t = (struct mgrt){ .tid = tid, .alive = true };
 	list_head_init(&t->sleepers);
+	list_head_init(&t->preempts);
 	htable_add(&mgr_threads, hash_mgrt_ptr(t, NULL), t);
 	mgrt_alive++;
 }
@@ -724,13 +812,15 @@ static void t_join_thread(
 static void mgr_thread_fn(L4_ThreadId_t first_client)
 {
 	static const struct thread_mgr_vtable vt = {
-		.sys_exception = &t_handle_exn,
-		.arch_exception = &t_handle_exn,
+		.sys_exception = &t_sys_exn,
+		.arch_exception = &t_arch_exn,
+		.preempt_fault = &t_preempt_fault,
 		.add_thread = &t_add_thread,
 		.remove_thread = &t_rm_thread,
 		.exit_thread = &t_exit_thread,
 		.join_thread = &t_join_thread,
 		.segv = &t_segv,
+		.get_preempt_record = &t_get_preempt_record,
 	};
 
 	/* reset state (discard & release fork parent's things) */
