@@ -1115,9 +1115,7 @@ START_LOOP_TEST(exception_without_delay, iter, 0, 3)
 	/* measurement */
 	ok1(!pending);
 	skip_start(!ok1(sig_before_end), 2, "no preemption") {
-		if(d_set) todo_start("s ∧ d ∧ max_delay=0 known broken");
 		iff_ok1(p.was_exn, d_set && !low_sens_pri);
-		todo_end();
 		ok1(fuzz_eq(p.clock.raw - start.raw, 5000, 2000));
 	} skip_end;
 

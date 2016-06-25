@@ -192,7 +192,13 @@ void isr_irq0_bottom(struct x86_exregs *regs)
 
 	struct thread *current = get_current_thread();
 	bool ctx_saved = false;
-	if(CHECK_FLAG(preempt_status, PS_DELAYED)) {
+	if(CHECK_FLAG(preempt_status, PS_DELAYED)
+		|| (current != NULL && preempt_thread != NULL
+			&& preempt_thread->pri <= current->sens_pri
+			&& current->max_delay == 0
+			&& CHECK_FLAG_ALL(L4_VREG(thread_get_utcb(current),
+				L4_TCR_COP_PREEMPT), 0x60)))
+	{
 		assert(!CHECK_FLAG(current->flags, TF_SYSCALL));
 		save_user_ex(regs);
 		ctx_saved = true;

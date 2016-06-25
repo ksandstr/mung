@@ -497,11 +497,18 @@ struct thread *on_preempt(int vec_num)
 		goto end;
 	}
 	void *cur_utcb = thread_get_utcb(current);
+	L4_Word_t *ctl_p = &L4_VREG(cur_utcb, L4_TCR_COP_PREEMPT);
 
 	int old_preempt_status = preempt_status,
-		old_preemptflags = L4_VREG(cur_utcb, L4_TCR_COP_PREEMPT);
-	if(CHECK_FLAG(preempt_status, PS_DELAYED)) {
-		/* max preëmption delay hit. */
+		old_preemptflags = *ctl_p;
+	if(CHECK_FLAG(preempt_status, PS_DELAYED)
+		|| (CHECK_FLAG_ALL(*ctl_p, 0x60)
+			&& current->max_delay == 0
+			&& cand != NULL && cand->pri <= current->sens_pri))
+	{
+		/* previously-delayed preëmption's max_delay was hit; or preëmpted,
+		 * set to signal and delay, is sensitive to cand.pri, but max_delay=0.
+		 */
 		assert(cand != NULL);		/* FIXME: this is wrong. */
 		TRACE("%s: current=%lu:%lu hit max preempt delay; next=%lu:%lu\n",
 			__func__, TID_THREADNUM(current->id), TID_VERSION(current->id),
@@ -510,7 +517,6 @@ struct thread *on_preempt(int vec_num)
 		assert(cand->pri <= current->sens_pri);
 
 		preempt_status = 0;
-		L4_Word_t *ctl_p = &L4_VREG(cur_utcb, L4_TCR_COP_PREEMPT);
 		*ctl_p &= ~0xc0;	/* clear I, d */
 		if(!CHECK_FLAG(*ctl_p, 0x20)) {
 			/* silent but delayed. */
@@ -536,7 +542,7 @@ struct thread *on_preempt(int vec_num)
 		next = sched_resolve_next(current, cur_utcb, current, cand);
 	}
 
-	if(CHECK_FLAG(L4_VREG(cur_utcb, L4_TCR_COP_PREEMPT), 0x80)) {
+	if(CHECK_FLAG(*ctl_p, 0x80)) {
 		/* async preemption of @current was delayed. */
 		assert(next == current);
 		assert(!CHECK_FLAG(old_preemptflags, 0x80));
@@ -553,7 +559,6 @@ struct thread *on_preempt(int vec_num)
 			TID_THREADNUM(current->id), TID_VERSION(current->id), pe_after);
 	} else {
 		/* async preemption of @current. */
-		L4_Word_t *ctl_p = &L4_VREG(cur_utcb, L4_TCR_COP_PREEMPT);
 		if(CHECK_FLAG(*ctl_p, 0x20)
 			&& !CHECK_FLAG(old_preempt_status, PS_DELAYED)
 			&& (next != current || current->quantum == 0))
