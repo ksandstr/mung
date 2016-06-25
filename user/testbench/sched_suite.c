@@ -1074,6 +1074,58 @@ START_LOOP_TEST(delay_without_signal, iter, 0, 1)
 END_TEST
 
 
+/* s ∧ d? ∧ max_delay=0. should pop a message immediately; it'll be an
+ * exception iff d ∧ cur.sens_pri >= pre.pri.
+ */
+START_LOOP_TEST(exception_without_delay, iter, 0, 3)
+{
+	const bool d_set = CHECK_FLAG(iter, 1),
+		low_sens_pri = CHECK_FLAG(iter, 2);
+	diag("d_set=%s, low_sens_pri=%s", btos(d_set), btos(low_sens_pri));
+	int my_pri = find_own_priority();
+	diag("my_pri=%d", my_pri);
+	plan_tests(6);
+
+	L4_DisablePreemptionFaultException();
+	L4_EnablePreemption();
+	L4_ThreadId_t pre = start_preempt(5);
+	L4_Set_Priority(pre, my_pri - 1);
+	L4_Set_PreemptionDelay(L4_Myself(),
+		low_sens_pri ? my_pri - 2 : my_pri, 0);
+	L4_Set_Priority(L4_Myself(), my_pri - 2);
+	L4_ThreadSwitch(pre);
+
+	L4_Clock_t start = L4_SystemClock();
+	L4_PreemptionPending();		/* clear "I" */
+	bool sig_before_start = get_preempt(NULL);
+	L4_EnablePreemptionFaultException();
+	if(d_set) L4_DisablePreemption();
+	usleep(10 * 1000);
+	bool pending = L4_PreemptionPending();
+	if(d_set) L4_EnablePreemption();
+	L4_DisablePreemptionFaultException();
+	L4_Clock_t end = L4_SystemClock();
+	struct preempt p;
+	bool sig_before_end = get_preempt(&p);
+
+	/* validation */
+	ok1(fuzz_eq(end.raw - start.raw, 10000, 2000));
+	ok1(!sig_before_start);
+
+	/* measurement */
+	ok1(!pending);
+	skip_start(!ok1(sig_before_end), 2, "no preemption") {
+		if(d_set) todo_start("s ∧ d ∧ max_delay=0 known broken");
+		iff_ok1(p.was_exn, d_set && !low_sens_pri);
+		todo_end();
+		ok1(fuzz_eq(p.clock.raw - start.raw, 5000, 2000));
+	} skip_end;
+
+	xjoin_thread(pre);
+}
+END_TEST
+
+
 /* start a thread that spins for longer than its total quantum. this should
  * cause a preemption message.
  *
@@ -1387,6 +1439,7 @@ Suite *sched_suite(void)
 		tcase_add_test(tc, delay_exception);
 		tcase_add_test(tc, delay_max_duration);
 		tcase_add_test(tc, delay_without_signal);
+		tcase_add_test(tc, exception_without_delay);
 		tcase_add_test(tc, total_quantum_exhaust_rpc);
 		suite_add_tcase(s, tc);
 	}
