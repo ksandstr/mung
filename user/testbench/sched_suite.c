@@ -19,6 +19,7 @@
 
 #include "defs.h"
 #include "test.h"
+#include "threadmgr-defs.h"
 
 
 #define log(fmt, ...) log_f("%s: " fmt, __func__, ##__VA_ARGS__)
@@ -990,6 +991,32 @@ START_LOOP_TEST(delay_max_duration, iter, 0, 3)
 END_TEST
 
 
+struct preempt {
+	bool was_exn;
+	L4_Clock_t clock;
+};
+
+
+static bool get_preempt(struct preempt *p)
+{
+	L4_Word_t hi, lo;
+	bool ret, was_exn;
+	int n = __tmgr_get_preempt_record(get_mgr_tid(), &ret,
+		L4_Myself().raw, &hi, &lo, &was_exn);
+	fail_if(n != 0, "n=%d", n);
+	if(!ret) return false;
+	else {
+		if(p != NULL) {
+			*p = (struct preempt){
+				.clock = { .raw = (L4_Word64_t)hi << 32 | lo },
+				.was_exn = was_exn,
+			};
+		}
+		return true;
+	}
+}
+
+
 /* ¬s ∧ d.
  *
  * experiment: spin for 10 ms, preempt at 5 ms, spin for another 10 ms.
@@ -999,7 +1026,7 @@ START_TEST(delay_without_signal)
 {
 	int my_pri = find_own_priority();
 	diag("my_pri=%d", my_pri);
-	plan_tests(5);
+	plan_tests(7);
 
 	L4_DisablePreemptionFaultException();
 
@@ -1012,6 +1039,7 @@ START_TEST(delay_without_signal)
 	fail_if(rc == L4_SCHEDRESULT_ERROR);
 	L4_ThreadSwitch(pre);
 
+	bool sig_before_start = get_preempt(NULL);
 	L4_Clock_t c_start = L4_SystemClock();
 	bool pending_start = L4_PreemptionPending();
 	L4_DisablePreemption();
@@ -1022,6 +1050,7 @@ START_TEST(delay_without_signal)
 	bool pending_end = L4_PreemptionPending();
 	L4_Clock_t c_end = L4_SystemClock();
 	L4_EnablePreemption();
+	bool sig_after_end = get_preempt(NULL);
 
 	xjoin_thread(pre);
 	diag("c_start=%lu, c_mid=%lu, c_end=%lu",
@@ -1032,8 +1061,9 @@ START_TEST(delay_without_signal)
 	ok1(fuzz_eq(c_mid.raw - c_start.raw, 10000, 2000));
 	ok1(fuzz_eq(c_end.raw - c_start.raw, 20000, 2000));
 
+	ok1(!sig_before_start);
+	ok1(!sig_after_end);
 	ok1(!pending_start);
-	if(!pending_mid) todo_start("unstable, somehow");
 	ok1(pending_mid);
 	ok1(!pending_end);
 }
