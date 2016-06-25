@@ -1021,9 +1021,12 @@ static bool get_preempt(struct preempt *p)
  *
  * experiment: spin for 10 ms, preempt at 5 ms, spin for another 10 ms.
  * measurement: when the I flag is set.
+ * variables: max_delay = 0 | 10ms.
  */
-START_TEST(delay_without_signal)
+START_LOOP_TEST(delay_without_signal, iter, 0, 1)
 {
+	const bool max_delay_zero = CHECK_FLAG(iter, 1);
+	diag("max_delay_zero=%s", btos(max_delay_zero));
 	int my_pri = find_own_priority();
 	diag("my_pri=%d", my_pri);
 	plan_tests(7);
@@ -1033,7 +1036,8 @@ START_TEST(delay_without_signal)
 	L4_ThreadId_t pre = start_preempt(5);
 	L4_Word_t rc = L4_Set_Priority(pre, my_pri - 1);
 	fail_if(rc == L4_SCHEDRESULT_ERROR);
-	rc = L4_Set_PreemptionDelay(L4_Myself(), my_pri, 10 * 1000);
+	rc = L4_Set_PreemptionDelay(L4_Myself(), my_pri,
+		max_delay_zero ? 0 : 10 * 1000);
 	fail_if(rc == L4_SCHEDRESULT_ERROR);
 	rc = L4_Set_Priority(L4_Myself(), my_pri - 2);
 	fail_if(rc == L4_SCHEDRESULT_ERROR);
@@ -1064,7 +1068,7 @@ START_TEST(delay_without_signal)
 	ok1(!sig_before_start);
 	ok1(!sig_after_end);
 	ok1(!pending_start);
-	ok1(pending_mid);
+	iff_ok1(pending_mid, !max_delay_zero);
 	ok1(!pending_end);
 }
 END_TEST
