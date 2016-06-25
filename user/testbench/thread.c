@@ -12,6 +12,7 @@
 #include <ccan/compiler/compiler.h>
 #include <ccan/htable/htable.h>
 #include <ccan/list/list.h>
+#include <ccan/talloc/talloc.h>
 
 #include <l4/types.h>
 #include <l4/thread.h>
@@ -500,7 +501,7 @@ struct mgrs {
 };
 
 struct mgrt {
-	L4_ThreadId_t tid;
+	L4_ThreadId_t tid;		/* global TID (for hash & cmp) */
 	bool alive, segfault;
 	L4_Word_t result;
 	struct list_head sleepers;
@@ -521,6 +522,13 @@ static bool mgrt_cmp(const void *cand, void *arg) {
 static struct htable mgr_threads = HTABLE_INITIALIZER(
 	mgr_threads, &hash_mgrt_ptr, NULL);
 static int mgrt_alive = 0;
+
+
+static struct mgrt *get_mgrt(L4_ThreadId_t tid)
+{
+	tid = L4_GlobalIdOf(tid);
+	return htable_get(&mgr_threads, int_hash(tid.raw), &mgrt_cmp, &tid);
+}
 
 
 static void t_handle_exn(
@@ -551,9 +559,9 @@ static void t_add_thread(L4_Word_t arg_tid)
 	L4_ThreadId_t tid = { .raw = arg_tid };
 	tid = L4_GlobalIdOf(tid);
 
-	struct mgrt *t = malloc(sizeof(*t));
+	struct mgrt *t = talloc(NULL, struct mgrt);
 	if(t == NULL) {
-		printf("%s: malloc failed\n", __func__);
+		printf("%s: talloc failed\n", __func__);
 		abort();
 	}
 	*t = (struct mgrt){ .tid = tid, .alive = true };
@@ -572,8 +580,7 @@ static void t_end_thread(
 {
 	tid = L4_GlobalIdOf(tid);
 	assert(L4_ThreadNo(tid) - base_tnum < MAX_THREADS);
-	size_t hash = int_hash(tid.raw);
-	struct mgrt *t = htable_get(&mgr_threads, hash, &mgrt_cmp, &tid);
+	struct mgrt *t = get_mgrt(tid);
 	if(t == NULL) {
 		printf("%s: tid %lu:%lu not found\n", __func__,
 			L4_ThreadNo(tid), L4_Version(tid));
@@ -584,27 +591,21 @@ static void t_end_thread(
 	if(!list_empty(&t->sleepers)) {
 		struct mgrs *s, *next;
 		list_for_each_safe(&t->sleepers, s, next, link) {
-			// printf("  sending wakeup to %lu:%lu\n",
-			//	L4_ThreadNo(s->tid), L4_Version(s->tid));
 			L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 2 }.raw);
 			L4_LoadMR(1, join_status);
 			L4_LoadMR(2, result);
 			L4_MsgTag_t tag = L4_Reply(s->tid);
 			if(L4_IpcSucceeded(tag)) reply_ok = true;
-
 			list_del_from(&t->sleepers, &s->link);
-			free(s);
 		}
 		assert(list_empty(&t->sleepers));
 	}
 	if(reply_ok) {
 		/* don't retain exit record on successful join */
-		// printf("  immediate deletion.\n");
-		htable_del(&mgr_threads, hash, t);
-		free(t);
+		htable_del(&mgr_threads, hash_mgrt_ptr(t, NULL), t);
+		talloc_free(t);
 		destroy_thread(tid, &threads[L4_ThreadNo(tid) - base_tnum]);
 	} else {
-		// printf("  waiting until join.\n");
 		t->alive = false;
 		t->segfault = (join_status == 1);
 		t->result = result;
@@ -613,7 +614,6 @@ static void t_end_thread(
 	mgrt_alive--;
 	assert(mgrt_alive <= mgr_threads.elems);
 	if(mgrt_alive == 0) {
-		// printf("  process exit because last thread is gone.\n");
 		exit(exit_status);
 	}
 }
@@ -665,17 +665,10 @@ static void t_rm_thread(L4_Word_t arg_tid)
 		return;
 	}
 
-	dead_tid = L4_GlobalIdOf(dead_tid);
-	size_t hash = int_hash(dead_tid.raw);
-	struct mgrt *t = htable_get(&mgr_threads, hash, &mgrt_cmp, &dead_tid);
+	struct mgrt *t = get_mgrt(dead_tid);
 	if(t != NULL) {
-		struct mgrs *s, *next;
-		list_for_each_safe(&t->sleepers, s, next, link) {
-			list_del_from(&t->sleepers, &s->link);
-			free(s);
-		}
-		htable_del(&mgr_threads, hash, t);
-		free(t);
+		htable_del(&mgr_threads, hash_mgrt_ptr(t, NULL), t);
+		talloc_free(t);
 	}
 
 	/* FIXME: shouldn't this be inside the non-NULL test's block, above? */
@@ -699,29 +692,24 @@ static void t_join_thread(
 		return;
 	}
 
-	join_tid = L4_GlobalIdOf(join_tid);
 	assert(L4_ThreadNo(join_tid) - base_tnum < MAX_THREADS);
-	// printf("join for %lu:%lu\n", L4_ThreadNo(join_tid), L4_Version(join_tid));
-	size_t hash = int_hash(join_tid.raw);
-	struct mgrt *t = htable_get(&mgr_threads, hash, &mgrt_cmp, &join_tid);
+	struct mgrt *t = get_mgrt(join_tid);
 	if(t == NULL) {
 		/* not found. */
 		*status_p = -1;
 		*result_p = 0;
-		// printf("... thread not found\n");
 	} else if(!t->alive) {
 		/* immediate join. */
 		assert(list_empty(&t->sleepers));
 		*status_p = t->segfault ? 1 : 0;
 		*result_p = t->result;
-		htable_del(&mgr_threads, hash, t);
-		free(t);
+		htable_del(&mgr_threads, hash_mgrt_ptr(t, NULL), t);
+		talloc_free(t);
 		destroy_thread(join_tid,
 			&threads[L4_ThreadNo(join_tid) - base_tnum]);
-		// printf("... immediate success\n");
 	} else {
 		/* sleep. */
-		struct mgrs *s = malloc(sizeof(*s));
+		struct mgrs *s = talloc(t, struct mgrs);
 		if(s == NULL) {
 			printf("%s: can't allocate mgrs\n", __func__);
 			abort();
@@ -729,7 +717,6 @@ static void t_join_thread(
 		s->tid = sender;
 		list_add(&t->sleepers, &s->link);
 		muidl_raise_no_reply();
-		// printf("... deferred\n");
 	}
 }
 
