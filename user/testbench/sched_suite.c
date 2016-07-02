@@ -477,9 +477,15 @@ L4_ThreadId_t start_spinner(
 /* TODO: move this into a misc.c or some such! */
 int find_own_priority(void)
 {
-	int pri = 254;
+	/* FIXME: in theory this should be 254, because that's where the roottask
+	 * starts out at. in practice anything different than 100 causes the
+	 * test-running thread not to start at all. so let's leave it here for the
+	 * time being.
+	 */
+	int pri = 100;
 	L4_ThreadId_t self = L4_Myself();
-	while(pri > 0 && (L4_Set_Priority(self, pri) & 0xff) == 0
+	while(pri > 0
+		&& (L4_Set_Priority(self, pri) & 0xff) == L4_SCHEDRESULT_ERROR
 		&& L4_ErrorCode() == 5)
 	{
 		/* invalid parameter means the priority was too high. this loop stops
@@ -489,7 +495,7 @@ int find_own_priority(void)
 		pri--;
 	}
 	if(pri == 0) {
-		log("loop result was zero (supplanting with 100)\n");
+		diag("loop result was zero (supplanting with 100)\n");
 		pri = 100;		/* make shit up! */
 	}
 	return pri;

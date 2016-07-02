@@ -384,6 +384,7 @@ static COLD struct thread *spawn_kernel_server(
 	space_set_kip_area(sp, L4_FpageLog2((L4_Word_t)kip_mem, PAGE_BITS));
 	struct thread *t = thread_new(thread_id);
 	t->space = sp;
+	t->scheduler = L4_GlobalId(TID_THREADNUM(t->id), TID_VERSION(t->id));
 	assert(t->utcb_pos < 0 && t->utcb_page == NULL);
 	bool ok = thread_set_utcb(t, L4_Address(sp->utcb_area));
 	BUG_ON(!ok, "thread_set_utcb() failed");
@@ -553,6 +554,7 @@ void kmain(void *bigp, unsigned int magic)
 	struct thread *s0_thread = spawn_kernel_server(
 		THREAD_ID(next_user_tno++, 1), &s0_mod, NULL,
 		PAGE_BITS, true);
+	s0_thread->pri = 254;
 	sigma0_space = s0_thread->space;
 	/* (burn one TID for sigma1, which is missing from the spec.) */
 	next_user_tno++;
@@ -560,6 +562,7 @@ void kmain(void *bigp, unsigned int magic)
 	if(roottask_mod.high >= PAGE_SIZE) {
 		roottask = spawn_kernel_server(THREAD_ID(next_user_tno++, 1),
 			&roottask_mod, s0_thread, 16, false);
+		roottask->pri = 253;
 		roottask->space->flags |= SF_PRIVILEGE;
 		printf("roottask [%#lx .. %#lx] created as %lu:%lu.\n",
 			roottask_mod.low, roottask_mod.high,
