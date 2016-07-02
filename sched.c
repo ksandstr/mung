@@ -501,7 +501,7 @@ struct thread *on_preempt(int vec_num)
 
 	int old_preempt_status = preempt_status,
 		old_preemptflags = *ctl_p;
-	if(CHECK_FLAG(preempt_status, PS_DELAYED)
+	if(CHECK_FLAG(preempt_status & *ctl_p, PS_DELAYED)
 		|| (CHECK_FLAG_ALL(*ctl_p, 0x60)
 			&& current->max_delay == 0
 			&& cand != NULL && cand->pri <= current->sens_pri))
@@ -567,7 +567,7 @@ struct thread *on_preempt(int vec_num)
 				TID_THREADNUM(current->id), TID_VERSION(current->id));
 			current->flags |= TF_PREEMPT;
 		} else {
-			TRACE("%s: silent async preempt (q=0 | tq=0) on current=%lu:%lu\n",
+			TRACE("%s: async preempt (q=0 | tq=0) on current=%lu:%lu\n",
 				__func__, TID_THREADNUM(current->id), TID_VERSION(current->id));
 		}
 		if(next == current) next = NULL;

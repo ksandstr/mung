@@ -1258,10 +1258,8 @@ START_LOOP_TEST(clear_preempt_flags_while_pending, iter, 0, 3)
 	diag("msg=%s", btos(msg));
 	if(msg) diag("p.clock=%lu", (unsigned long)p.clock.raw);
 	iff_ok1(!msg, clear_s);
-	if(iter == 2) todo_start("known broken");
 	iff_ok1(msg && p.was_exn, !clear_s && !clear_d);
 	iff_ok1(msg && !p.was_exn, !clear_s && clear_d);
-	if(iter == 2) todo_end();
 	imply_ok1(msg, fuzz_eq(p.clock.raw, start.raw + 15000, 2000));
 
 	xjoin_thread(oth);

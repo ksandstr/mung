@@ -13,7 +13,7 @@
 
 
 /* preempt_status flags. coincides with TCR CopPreempt fields by design. */
-#define PS_DELAYED 0x80		/* preemption is being delayed */
+#define PS_DELAYED 0x40		/* preemption is being delayed */
 
 
 /* global data from sched.c */
