@@ -1206,6 +1206,69 @@ START_LOOP_TEST(total_quantum_exhaust_rpc, iter, 0, 3)
 END_TEST
 
 
+/* if a thread in preëmpt delay clears "d" or "s" before an entered delay is
+ * exceeded, either a preëmpt fault or nothing at all is sent, but never a
+ * max-delay exceeded exception.
+ *
+ * variables:
+ *   - [clear_s] whether to clear "s" after observing the "I" flag
+ *   - [clear_d] the same for "d"
+ */
+START_LOOP_TEST(clear_preempt_flags_while_pending, iter, 0, 3)
+{
+	const bool clear_s = CHECK_FLAG(iter, 1), clear_d = CHECK_FLAG(iter, 2);
+	diag("clear_s=%s, clear_d=%s", btos(clear_s), btos(clear_d));
+	plan_tests(7);
+	int my_pri = find_own_priority();
+	diag("my_pri=%d, myself=%lu:%lu", my_pri,
+		L4_ThreadNo(L4_MyGlobalId()), L4_Version(L4_MyGlobalId()));
+
+	L4_ThreadId_t oth = start_preempt(5);
+	L4_Set_Priority(oth, my_pri - 1);
+	L4_Set_PreemptionDelay(L4_Myself(), my_pri, 10000);
+	L4_Set_Priority(L4_Myself(), my_pri - 2);
+
+	/* TODO: while the kernel doesn't properly handle Schedule that changes
+	 * the current thread's preëmption status, we'll yield here to bring
+	 * things to a correct status regardless.
+	 */
+	L4_ThreadSwitch(L4_nilthread);
+
+	L4_Clock_t start = L4_SystemClock();
+	L4_EnablePreemptionFaultException();
+	L4_DisablePreemption();
+	L4_PreemptionPending();	/* clear "I" */
+	usleep(10 * 1000);
+	bool pending = L4_PreemptionPending();
+	if(clear_s) L4_DisablePreemptionFaultException();
+	if(clear_d) L4_EnablePreemption();
+	usleep(15 * 1000);
+
+	bool s_after = L4_DisablePreemptionFaultException();
+	bool nd_after = L4_EnablePreemption();
+
+	/* validation */
+	ok1(pending);
+	iff_ok1(s_after, !clear_s);
+	ok1(!nd_after);
+
+	/* measurement */
+	struct preempt p;
+	bool msg = get_preempt(&p);
+	diag("msg=%s", btos(msg));
+	if(msg) diag("p.clock=%lu", (unsigned long)p.clock.raw);
+	iff_ok1(!msg, clear_s);
+	if(iter == 2) todo_start("known broken");
+	iff_ok1(msg && p.was_exn, !clear_s && !clear_d);
+	iff_ok1(msg && !p.was_exn, !clear_s && clear_d);
+	if(iter == 2) todo_end();
+	imply_ok1(msg, fuzz_eq(p.clock.raw, start.raw + 15000, 2000));
+
+	xjoin_thread(oth);
+}
+END_TEST
+
+
 /* a test on extraordinary scheduling (ThreadSwitch), and its interaction with
  * preemption.
  *
@@ -1439,6 +1502,7 @@ Suite *sched_suite(void)
 		tcase_add_test(tc, delay_without_signal);
 		tcase_add_test(tc, exception_without_delay);
 		tcase_add_test(tc, total_quantum_exhaust_rpc);
+		tcase_add_test(tc, clear_preempt_flags_while_pending);
 		suite_add_tcase(s, tc);
 	}
 
