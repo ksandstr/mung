@@ -25,6 +25,7 @@
 #define log(fmt, ...) log_f("%s: " fmt, __func__, ##__VA_ARGS__)
 
 
+/* output of pump_wakeups() */
 struct preempt_wakeup
 {
 	struct list_node link;
@@ -32,6 +33,13 @@ struct preempt_wakeup
 	bool was_exn;
 	L4_MsgTag_t tag;
 	L4_Word_t mrs[];	/* excl. tag */
+};
+
+
+/* output of get_preempt(), via ThreadMgr::get_preempt_record */
+struct preempt {
+	bool was_exn;
+	L4_Clock_t clock, msg_clock;
 };
 
 
@@ -55,11 +63,32 @@ static bool fuzz_eq(uint64_t a, uint64_t b, uint32_t slop) {
 }
 
 
-/* easy access to ThreadMgr::get_preempt_record */
-struct preempt {
-	bool was_exn;
-	L4_Clock_t clock, msg_clock;
-};
+/* utility function for measuring preëmptions. */
+
+static void preempt_fn(void *param_ptr)
+{
+	unsigned int sleep_ms = (L4_Word_t)param_ptr & ~0x80000000;
+	L4_Sleep(L4_TimePeriod(sleep_ms * 1000));
+
+	/* report back at request. */
+	if(CHECK_FLAG((L4_Word_t)param_ptr, 0x80000000)) {
+		L4_Clock_t wakeup = L4_SystemClock();
+		L4_ThreadId_t sender;
+		L4_Accept(L4_UntypedWordsAcceptor);
+		L4_MsgTag_t tag = L4_Wait_Timeout(TEST_IPC_DELAY, &sender);
+		if(L4_IpcFailed(tag)) return;
+		L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 2 }.raw);
+		L4_LoadMR(1, wakeup.raw >> 32);
+		L4_LoadMR(2, wakeup.raw & 0xffffffff);
+		L4_Reply(sender);
+	}
+}
+
+
+#define start_preempt(sleep_ms) \
+	start_thread(&preempt_fn, (void *)((L4_Word_t)(sleep_ms)))
+#define start_preempt_and_report(sleep_ms) \
+	start_preempt((sleep_ms) | 0x80000000)
 
 
 static bool get_preempt(struct preempt *p)
@@ -230,6 +259,78 @@ START_TEST(sleeping_ipc)
 }
 END_TEST
 
+
+/* tcase "edge" */
+
+/* Schedule changes a higher-priority sleeping thread to a lower-priority
+ * thread, compared to that of the current thread.
+ *
+ * variables:
+ *   - [sched] whether the lowering Schedule occurs
+ *   - [yield] whether a ThreadSwitch happens after the Schedule
+ *
+ * measure:
+ *   - occurrence of preëmption in the primary thread
+ *   - wakeup time in the preëmptor
+ */
+START_LOOP_TEST(sched_other_to_lower_priority, iter, 0, 3)
+{
+	const bool sched = CHECK_FLAG(iter, 1), yield = CHECK_FLAG(iter, 2);
+	diag("sched=%s, yield=%s", btos(sched), btos(yield));
+	plan_tests(6);
+	int my_pri = find_own_priority();
+	diag("my_pri=%d", my_pri);
+
+	/* setup */
+	L4_ThreadSwitch(L4_nilthread);
+	L4_ThreadId_t oth = start_preempt_and_report(5);
+	L4_Set_Priority(oth, my_pri - 1);
+	L4_Set_Priority(L4_Myself(), my_pri - 2);
+	L4_ThreadSwitch(L4_nilthread);
+
+	/* experiment */
+	L4_Clock_t start = L4_SystemClock();
+	L4_EnablePreemptionFaultException();
+	L4_EnablePreemption();
+	if(sched) L4_Set_Priority(oth, my_pri - 5);
+	if(yield) L4_ThreadSwitch(L4_nilthread);
+	usleep(10 * 1000);
+	L4_DisablePreemptionFaultException();
+
+	/* measure & validate */
+	L4_Accept(L4_UntypedWordsAcceptor);
+	L4_LoadMR(0, 0);
+	L4_MsgTag_t tag = L4_Call_Timeouts(oth, TEST_IPC_DELAY, TEST_IPC_DELAY);
+	L4_Clock_t oth_wakeup = { .raw = 0 };
+	if(L4_IpcSucceeded(tag)) {
+		L4_Word_t hi, lo;
+		L4_StoreMR(1, &hi);
+		L4_StoreMR(2, &lo);
+		oth_wakeup.raw = (L4_Word64_t)hi << 32 | lo;
+	}
+	ok(L4_IpcSucceeded(tag), "got preëmptor's measurement");
+	struct preempt p;
+	bool msg = get_preempt(&p);
+
+	/* examine the entrails. note that "yield" doesn't appear anywhere; it
+	 * only increases operational coverage.
+	 */
+	if(iter == 1) todo_start("known breakage");
+	iff_ok1(msg, !sched);
+	if(iter == 1) todo_end();
+	skip_start(!msg, 2, "no preëmption message") {
+		ok1(!p.was_exn);
+		ok1(fuzz_eq(p.clock.raw, start.raw + 5000, 2000));
+	} skip_end;
+	imply_ok1(sched, fuzz_eq(oth_wakeup.raw, start.raw + 10000, 2000));
+	imply_ok1(!sched, fuzz_eq(oth_wakeup.raw, start.raw + 5000, 2000));
+
+	xjoin_thread(oth);
+}
+END_TEST
+
+
+/* tcase "kip" */
 
 /* simple ReadPrecision (SystemClock latency) test. */
 START_TEST(kip_sysclock_latency)
@@ -527,17 +628,6 @@ int find_own_priority(void)
 	}
 	return pri;
 }
-
-
-static void preempt_fn(void *param_ptr)
-{
-	unsigned int sleep_ms = (L4_Word_t)param_ptr;
-	L4_Sleep(L4_TimePeriod(sleep_ms * 1000));
-}
-
-
-#define start_preempt(sleep_ms) \
-	start_thread(&preempt_fn, (void *)((L4_Word_t)(sleep_ms)))
 
 
 /* talloc'd. members of @wakeups talloc'd somewhere under this. */
@@ -1524,6 +1614,10 @@ Suite *sched_suite(void)
 {
 	Suite *s = suite_create("sched");
 
+	/* basic API tests concerning the Schedule syscall.
+	 *
+	 * TODO: add ones for ThreadSwitch also.
+	 */
 	{
 		TCase *tc = tcase_create("api");
 		tcase_set_fork(tc, false);
@@ -1531,6 +1625,17 @@ Suite *sched_suite(void)
 		tcase_add_test(tc, syscall_access);
 		tcase_add_test(tc, range_errors);
 		tcase_add_test(tc, sleeping_ipc);
+		suite_add_tcase(s, tc);
+	}
+
+	/* edge cases concerning the Schedule syscall, i.e. when it's used to
+	 * alter the current thread's scheduling parameters, or another's, in a
+	 * way that changes the current thread's preëmption characteristics.
+	 */
+	{
+		TCase *tc = tcase_create("edge");
+		tcase_set_fork(tc, false);
+		tcase_add_test(tc, sched_other_to_lower_priority);
 		suite_add_tcase(s, tc);
 	}
 
