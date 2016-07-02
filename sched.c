@@ -581,22 +581,25 @@ end:
 }
 
 
-static struct thread *preemptor_of(struct thread *self, uint64_t run_until)
+static struct thread *preemptor_of(
+	struct thread *self,
+	uint64_t switch_at, uint64_t runtime)
 {
+	uint64_t run_until = switch_at + runtime;
 	struct rb_node *pos = &self->sched_rb;
 	pos = rb_next(pos);		/* skip self. */
 	/* skip over threads with equal priority. */
-	while(pos != NULL) {
+	for(; pos != NULL; pos = rb_next(pos)) {
 		struct thread *other = container_of(pos, struct thread, sched_rb);
 		if(other->pri > self->pri) break;
-		pos = rb_next(pos);
 	}
-	/* out of the ones that preempt this thread, choose the one with earliest
-	 * wakeup.
+	/* out of the ones that preempt this thread after @switch_at but before
+	 * @runtime is up, choose the one with earliest wakeup.
 	 */
 	struct thread *preemptor = NULL;
-	while(pos != NULL) {
+	for(; pos != NULL; pos = rb_next(pos)) {
 		struct thread *other = container_of(pos, struct thread, sched_rb);
+		if(other->wakeup_time <= switch_at) continue;
 		if(other->wakeup_time > run_until) break;
 		if(other->pri > self->pri
 			&& (preemptor == NULL
@@ -605,19 +608,17 @@ static struct thread *preemptor_of(struct thread *self, uint64_t run_until)
 		{
 			preemptor = other;
 		}
-		pos = rb_next(pos);
 	}
 
 	return preemptor;
 }
 
 
-/* set preemption parameters, current_thread. returns the thread that should
- * actually be returned into, which is different from @next iff a
- * higher-priority thread's wakeup happens before @switch_at.
+/* set preemption parameters, current_thread. ignores preëmptors that'd be up
+ * for scheduling at or before @switch_at; these will be resolved using the
+ * latent interrupt mechanism.
  */
-static struct thread *enter_next_thread(
-	struct thread *next, uint64_t switch_at)
+static void enter_next_thread(struct thread *next, uint64_t switch_at)
 {
 	assert(get_current_thread() == NULL);
 	assert(hook_empty(&next->post_exn_call));
@@ -644,15 +645,8 @@ static struct thread *enter_next_thread(
 	}
 
 	next->status = TS_RUNNING;
-	struct thread *preemptor = preemptor_of(next, switch_at + runtime);
-	/* modify the incoming @next in this rarest of cases. */
-	if(preemptor != NULL && switch_at >= preemptor->wakeup_time) {
-		TRACE("%s: bumping preemptor=%lu:%lu over next=%lu:%lu\n",
-			__func__, TID_THREADNUM(preemptor->id), TID_VERSION(preemptor->id),
-			TID_THREADNUM(next->id), TID_VERSION(next->id));
-		next = preemptor;
-		preemptor = NULL;
-	}
+	struct thread *preemptor = preemptor_of(next, switch_at, runtime);
+	assert(preemptor == NULL || preemptor->wakeup_time > switch_at);
 	if(preemptor != NULL) {
 		assert(switch_at < preemptor->wakeup_time);
 		runtime = preemptor->wakeup_time - switch_at;
@@ -677,8 +671,6 @@ static struct thread *enter_next_thread(
 	preempt_status = 0;
 	task_switch_time = switch_at / 1000;
 	x86_irq_restore();
-
-	return next;
 }
 
 
@@ -718,7 +710,8 @@ static void entering_thread(struct thread **next_p)
 			|| next->status == TS_RUNNING);
 	}
 
-	*next_p = enter_next_thread(next, now);
+	*next_p = next;
+	enter_next_thread(next, now);
 }
 
 
@@ -727,10 +720,8 @@ static void entering_thread(struct thread **next_p)
  */
 static void handoff_epilog(struct thread *src, struct thread *dst)
 {
-	/* FIXME: resolve TF_PREEMPT for @dst! */
-	/* FIXME: modify caller's @dst! */
-	struct thread *actual = enter_next_thread(dst, ksystemclock());
-	assert(actual == dst);
+	/* FIXME: resolve TF_PREEMPT for @dst, or prove that it'll never happen. */
+	enter_next_thread(dst, ksystemclock());
 	assert(dst->status == TS_RUNNING);
 	if(src->u0.partner == dst) {
 		/* break it up */
@@ -1161,8 +1152,7 @@ again:
 	x86_irq_disable();
 	assert(get_current_thread() == NULL);
 	if(irq_defer_active) next = irq_call_deferred(next);
-	struct thread *actual = enter_next_thread(next, now);
-	assert(actual == next);	/* always true. */
+	enter_next_thread(next, now);
 	exit_to_thread(next);
 }
 
