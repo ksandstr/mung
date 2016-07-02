@@ -67,8 +67,19 @@ static bool fuzz_eq(uint64_t a, uint64_t b, uint32_t slop) {
 
 static void preempt_fn(void *param_ptr)
 {
-	unsigned int sleep_ms = (L4_Word_t)param_ptr & ~0x80000000;
-	L4_Sleep(L4_TimePeriod(sleep_ms * 1000));
+	/* sync up? */
+	if(CHECK_FLAG((L4_Word_t)param_ptr, 0x40000000)) {
+		L4_ThreadId_t sender;
+		L4_MsgTag_t tag = L4_Wait_Timeout(TEST_IPC_DELAY, &sender);
+		if(L4_IpcFailed(tag)) {
+			diag("%s: sync failed, ec=%#lx", __func__, L4_ErrorCode());
+		} else if(L4_Label(tag) != 0xf00d) {
+			diag("%s: unexpected sync label=%#lx", __func__, L4_Label(tag));
+		}
+	}
+
+	int sleep_ms = (L4_Word_t)param_ptr & ~0xc0000000;
+	if(sleep_ms > 0) L4_Sleep(L4_TimePeriod(sleep_ms * 1000));
 
 	/* report back at request. */
 	if(CHECK_FLAG((L4_Word_t)param_ptr, 0x80000000)) {
@@ -77,10 +88,18 @@ static void preempt_fn(void *param_ptr)
 		L4_Accept(L4_UntypedWordsAcceptor);
 		L4_MsgTag_t tag = L4_Wait_Timeout(TEST_IPC_DELAY, &sender);
 		if(L4_IpcFailed(tag)) return;
+		if(L4_Label(tag) != 0) {
+			diag("%s: unexpected reportcall label=%#lx", __func__,
+				L4_Label(tag));
+		}
+		sender = L4_GlobalIdOf(sender);
 		L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 2 }.raw);
 		L4_LoadMR(1, wakeup.raw >> 32);
 		L4_LoadMR(2, wakeup.raw & 0xffffffff);
-		L4_Reply(sender);
+		tag = L4_Reply(sender);
+		if(L4_IpcFailed(tag)) {
+			diag("%s: report failed, ec=%#lx", __func__, L4_ErrorCode());
+		}
 	}
 }
 
@@ -324,6 +343,107 @@ START_LOOP_TEST(sched_other_to_lower_priority, iter, 0, 3)
 	} skip_end;
 	imply_ok1(sched, fuzz_eq(oth_wakeup.raw, start.raw + 10000, 2000));
 	imply_ok1(!sched, fuzz_eq(oth_wakeup.raw, start.raw + 5000, 2000));
+
+	xjoin_thread(oth);
+}
+END_TEST
+
+
+/* the test thread calls Schedule to change its own priority below that of a
+ * lower-priority thread. this should cause preëmption, whereas a lack of
+ * Schedule shouldn't.
+ *
+ * variables:
+ *   - [sched] whether the lowering Schedule occurs
+ *   - [sleep] whether the preëmptor is sleeping (or ready if not)
+ *   - [yield] whether a ThreadSwitch happens after the Schedule
+ *
+ * measure:
+ *   - occurrence and time of preëmption in the primary thread
+ *   - wakeup time in the preëmptor
+ */
+START_LOOP_TEST(sched_self_to_lower_priority, iter, 0, 7)
+{
+	const bool sched = CHECK_FLAG(iter, 1),
+		sleep = CHECK_FLAG(iter, 2), yield = CHECK_FLAG(iter, 4);
+	diag("sched=%s, sleep=%s, yield=%s",
+		btos(sched), btos(sleep), btos(yield));
+	plan_tests(8);
+	int my_pri = find_own_priority();
+	diag("my_pri=%d", my_pri);
+
+	/* setup */
+	L4_ThreadSwitch(L4_nilthread);
+	L4_ThreadId_t oth = start_preempt_and_report(sleep ? 5 : 0x40000005);
+	L4_Set_Priority(oth, my_pri - 1);
+	L4_MsgTag_t tag;
+	if(!sleep) {
+		/* sync msg */
+		L4_LoadMR(0, (L4_MsgTag_t){ .X.label = 0xf00d }.raw);
+		tag = L4_Send_Timeout(oth, TEST_IPC_DELAY);
+		IPC_FAIL(tag);
+		fail_unless(get_schedstate(oth) == L4_SCHEDRESULT_RUNNING);
+	} else {
+		/* the other thread must be sleeping. */
+		fail_unless(get_schedstate(oth) == L4_SCHEDRESULT_WAITING);
+	}
+
+	/* experiment */
+	L4_Clock_t start = L4_SystemClock();
+	L4_EnablePreemptionFaultException();
+	L4_EnablePreemption();
+	if(sched) L4_Set_Priority(L4_Myself(), my_pri - 2);
+	if(yield) L4_ThreadSwitch(L4_nilthread);
+	usleep(10 * 1000);
+	L4_DisablePreemptionFaultException();
+
+	/* measure & validate */
+	L4_Accept(L4_UntypedWordsAcceptor);
+	L4_LoadMR(0, 0);
+	tag = L4_Call_Timeouts(oth, TEST_IPC_DELAY, TEST_IPC_DELAY);
+	L4_Word_t ec = L4_ErrorCode();
+	L4_Clock_t oth_wakeup = { .raw = 0 };
+	if(L4_IpcSucceeded(tag)) {
+		L4_Word_t hi, lo;
+		L4_StoreMR(1, &hi);
+		L4_StoreMR(2, &lo);
+		oth_wakeup.raw = (L4_Word64_t)hi << 32 | lo;
+	}
+	if(!ok(L4_IpcSucceeded(tag), "got preëmptor's measurement")) {
+		diag("ec=%#lx", ec);
+	} else {
+		diag("oth_wakeup=%llu", oth_wakeup.raw);
+	}
+	struct preempt p;
+	bool msg = get_preempt(&p);
+	if(msg) diag("p.clock=%llu", p.clock.raw);
+	diag("start=%llu", start.raw);
+
+	/* examine the entrails. note that "yield" doesn't appear anywhere; it
+	 * only increases operational coverage.
+	 */
+	if(iter == 1 || iter == 3) todo_start("known breakage (set 1)");
+	iff_ok1(msg, sched);
+	todo_end();
+	skip_start(!msg, 3, "no preëmption message") {
+		ok1(!p.was_exn);
+		/* preëmption and resume happen at the same time. */
+		ok1(fuzz_eq(p.clock.raw, start.raw + 5000, 2000));
+		ok1(fuzz_eq(p.msg_clock.raw, start.raw + 5000, 2000));
+	} skip_end;
+	if(iter == 1 || iter == 3) todo_start("known breakage (set 1)");
+	int64_t wake_after = (int64_t)oth_wakeup.raw - start.raw;
+	diag("wake_after=%lld", wake_after);
+	imply_ok1(sched, fuzz_eq(wake_after, 5000, 2000));
+	todo_end();
+
+	/* due to the sync message happening when oth is already scheduled to a
+	 * lower priority, its sleep occurs after our spin has completed entirely:
+	 * at 10ms + 5ms (with 2ms for jitter).
+	 */
+	imply_ok1(!sched && !sleep, wake_after >= 13000);
+	/* without sync, oth sleeps concurrently. */
+	imply_ok1(!sched && sleep, fuzz_eq(wake_after, 10000, 2000));
 
 	xjoin_thread(oth);
 }
@@ -1636,6 +1756,7 @@ Suite *sched_suite(void)
 		TCase *tc = tcase_create("edge");
 		tcase_set_fork(tc, false);
 		tcase_add_test(tc, sched_other_to_lower_priority);
+		tcase_add_test(tc, sched_self_to_lower_priority);
 		suite_add_tcase(s, tc);
 	}
 
