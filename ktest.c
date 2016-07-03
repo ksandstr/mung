@@ -108,6 +108,7 @@ void _run_ktest(
 void run_all_tests(void)
 {
 	SUITE(test_util);
+	SUITE(vsnprintf);
 	SUITE(slab);
 	SUITE(heap);
 	SUITE(memdesc);
