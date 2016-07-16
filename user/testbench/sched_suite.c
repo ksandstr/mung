@@ -1263,12 +1263,12 @@ START_LOOP_TEST(clear_preempt_flags_while_pending, iter, 0, 3)
 	/* measurement */
 	struct preempt p;
 	bool msg = get_preempt(&p);
-	diag("msg=%s", btos(msg));
-	if(msg) diag("p.clock=%lu", (unsigned long)p.clock.raw);
+	diag("start=%llu", start.raw);
+	if(msg) diag("p.msg_clock=%llu", p.msg_clock.raw);
 	iff_ok1(!msg, clear_s);
 	iff_ok1(msg && p.was_exn, !clear_s && !clear_d);
 	iff_ok1(msg && !p.was_exn, !clear_s && clear_d);
-	imply_ok1(msg, fuzz_eq(p.clock.raw, start.raw + 15000, 2000));
+	imply_ok1(msg, fuzz_eq(p.msg_clock.raw, start.raw + 15000, 2000));
 
 	xjoin_thread(oth);
 }
