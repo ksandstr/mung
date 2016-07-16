@@ -999,7 +999,7 @@ END_TEST
 
 struct preempt {
 	bool was_exn;
-	L4_Clock_t clock;
+	L4_Clock_t clock, msg_clock;
 };
 
 
@@ -1007,8 +1007,9 @@ static bool get_preempt(struct preempt *p)
 {
 	L4_Word_t hi, lo;
 	bool ret, was_exn;
+	int64_t c_diff;
 	int n = __tmgr_get_preempt_record(get_mgr_tid(), &ret,
-		L4_Myself().raw, &hi, &lo, &was_exn);
+		L4_Myself().raw, &hi, &lo, &c_diff, &was_exn);
 	fail_if(n != 0, "n=%d", n);
 	if(!ret) return false;
 	else {
@@ -1017,6 +1018,7 @@ static bool get_preempt(struct preempt *p)
 				.clock = { .raw = (L4_Word64_t)hi << 32 | lo },
 				.was_exn = was_exn,
 			};
+			p->msg_clock.raw = (int64_t)p->clock.raw + c_diff;
 		}
 		return true;
 	}

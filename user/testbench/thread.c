@@ -504,6 +504,7 @@ struct mgrp {
 	/* preëmpt record. */
 	struct list_node link;
 	L4_Clock_t clock;
+	int64_t msg_diff;
 	L4_Word_t exno, ec;
 	bool was_exn;
 };
@@ -600,15 +601,18 @@ static void t_preempt_fault(L4_Word_t clock_hi, L4_Word_t clock_lo)
 		return;
 	}
 	struct mgrp *p = talloc(t, struct mgrp);
-	*p = (struct mgrp){ .clock = clock, .was_exn = false };
+	*p = (struct mgrp){
+		.clock = clock, .was_exn = false,
+		.msg_diff = (int64_t)L4_SystemClock().raw - clock.raw,
+	};
 	list_add_tail(&t->preempts, &p->link);
 }
 
 
 static bool t_get_preempt_record(
 	L4_Word_t tid_raw,
-	L4_Word_t *clock_hi_p,
-	L4_Word_t *clock_lo_p,
+	L4_Word_t *clock_hi_p, L4_Word_t *clock_lo_p,
+	int64_t *msg_diff_p,
 	bool *was_exn_p)
 {
 	L4_ThreadId_t tid = { .raw = tid_raw };
@@ -624,6 +628,7 @@ static bool t_get_preempt_record(
 	else {
 		*clock_hi_p = p->clock.raw >> 32;
 		*clock_lo_p = p->clock.raw & 0xffffffff;
+		*msg_diff_p = p->msg_diff;
 		*was_exn_p = p->was_exn;
 		talloc_free(p);
 		return true;

@@ -30,10 +30,14 @@ interface ThreadMgr: L4X2::ExceptionHandler, L4X2::PreemptHandler
 
 	/* for pumping per-thread preëmpt fault & exception data one entry at a
 	 * time. returns false when no more records were available.
+	 *
+	 * @sysclock_diff is $SystemClock - msg.clock$ when the preempt handler is
+	 * run.
 	 */
 	boolean get_preempt_record(
 		in L4X2::ThreadId thread,
 		out L4X2::word clock_hi,
 		out L4X2::word clock_lo,
+		out long long sysclock_diff,
 		out boolean was_exception);
 };

@@ -921,7 +921,7 @@ END_TEST
  */
 START_TEST(preempt_fault_logging)
 {
-	plan_tests(6);
+	plan_tests(7);
 
 	L4_ThreadId_t child = xstart_thread(&taking_a_nap_fn, NULL),
 		mgr_tid = get_mgr_tid();
@@ -931,12 +931,13 @@ START_TEST(preempt_fault_logging)
 
 	L4_Word_t hi, lo;
 	bool ret, was_exn;
+	int64_t msg_diff = 0;
 	int n = __tmgr_get_preempt_record(mgr_tid, &ret, child.raw,
-		&hi, &lo, &was_exn);
+		&hi, &lo, &msg_diff, &was_exn);
 	fail_if(n != 0, "n=%d", n);
 	ok(!ret, "no faults before experiment");
 
-	L4_Clock_t funny = { .raw = 0xbadcafe };
+	L4_Clock_t funny = { .raw = 0xbadcafe }, sent_at = L4_SystemClock();
 	L4_MsgTag_t tag = { .X.u = 2, .X.label = 0xffd0 };
 	L4_Set_Propagation(&tag);
 	L4_Set_VirtualSender(child);
@@ -947,17 +948,22 @@ START_TEST(preempt_fault_logging)
 	ok(L4_IpcSucceeded(tag), "send to mgr didn't fail");
 
 	ret = false;
+	msg_diff = 0;
 	n = __tmgr_get_preempt_record(mgr_tid, &ret, child.raw,
-		&hi, &lo, &was_exn);
+		&hi, &lo, &msg_diff, &was_exn);
 	fail_if(n != 0, "n=%d", n);
 	ok(ret, "fault was recorded");
 	ok(hi == funny.raw >> 32 && lo == (funny.raw & 0xffffffff),
 		"returned clock value was correct");
+	if(!ok1((int64_t)sent_at.raw - msg_diff == funny.raw)) {
+		diag("sent_at=%llu, msg_diff=%lld, funny=%llu",
+			sent_at.raw, msg_diff, funny.raw);
+	}
 	ok(!was_exn, "didn't indicate an exception");
 
 	ret = true;
 	n = __tmgr_get_preempt_record(mgr_tid, &ret, child.raw,
-		&hi, &lo, &was_exn);
+		&hi, &lo, &msg_diff, &was_exn);
 	fail_if(n != 0, "n=%d", n);
 	ok(!ret, "no further faults were recorded");
 
