@@ -1488,6 +1488,28 @@ end:
 	if(dest != NULL && dest->status != TS_STOPPED) {
 		sq_update_thread(dest);
 	}
+	/* $Schedule.dest?=current ∨ Schedule.dest?=preempt_thread$. that's to
+	 * say, calls that possibly impact @current's preëmption parameters. these
+	 * are such edge cases that it's better to do it via the heavyweight
+	 * scheduler, rather than reimplementing preëmption logic here.
+	 */
+	if(dest == current) {
+		if((prioctl & 0xff) != 0xff
+			|| timectl != ~0ul
+			|| (preemptctl & 0xffffff) != 0xffffff)
+		{
+			TRACE("%s: dest=current case\n", __func__);
+			kernel_exit_via_sched = true;
+		}
+	} else {
+		x86_irq_disable();
+		struct thread *pe_thread = preempt_thread;
+		x86_irq_enable();
+		if(dest == pe_thread) {
+			TRACE("%s: dest=preempt_thread case\n", __func__);
+			kernel_exit_via_sched = true;
+		}
+	}
 
 end_noupdate:
 	if(unlikely(ec != 0)) {

@@ -334,9 +334,7 @@ START_LOOP_TEST(sched_other_to_lower_priority, iter, 0, 3)
 	/* examine the entrails. note that "yield" doesn't appear anywhere; it
 	 * only increases operational coverage.
 	 */
-	if(iter == 1) todo_start("known breakage");
 	iff_ok1(msg, !sched);
-	if(iter == 1) todo_end();
 	skip_start(!msg, 2, "no preëmption message") {
 		ok1(!p.was_exn);
 		ok1(fuzz_eq(p.clock.raw, start.raw + 5000, 2000));
@@ -422,20 +420,16 @@ START_LOOP_TEST(sched_self_to_lower_priority, iter, 0, 7)
 	/* examine the entrails. note that "yield" doesn't appear anywhere; it
 	 * only increases operational coverage.
 	 */
-	if(iter == 1 || iter == 3) todo_start("known breakage (set 1)");
 	iff_ok1(msg, sched);
-	todo_end();
 	skip_start(!msg, 3, "no preëmption message") {
 		ok1(!p.was_exn);
 		/* preëmption and resume happen at the same time. */
 		ok1(fuzz_eq(p.clock.raw, start.raw + 5000, 2000));
 		ok1(fuzz_eq(p.msg_clock.raw, start.raw + 5000, 2000));
 	} skip_end;
-	if(iter == 1 || iter == 3) todo_start("known breakage (set 1)");
 	int64_t wake_after = (int64_t)oth_wakeup.raw - start.raw;
 	diag("wake_after=%lld", wake_after);
 	imply_ok1(sched, fuzz_eq(wake_after, 5000, 2000));
-	todo_end();
 
 	/* due to the sync message happening when oth is already scheduled to a
 	 * lower priority, its sleep occurs after our spin has completed entirely:

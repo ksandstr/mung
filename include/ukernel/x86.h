@@ -119,6 +119,11 @@ extern void cop_init(void);
 extern void cop_switch(struct thread *next);
 extern void cop_killa(struct thread *dead);
 
+/* set in sys_*() to indicate that userspace return should happen via the
+ * scheduler; e.g. in the self-modifying case of Schedule.
+ */
+extern bool kernel_exit_via_sched;
+
 
 /* calls ipc_user() and constructs a per-architecture exception message to
  * *@handler_p using the given context. sets up a reply handler that stores

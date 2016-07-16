@@ -41,6 +41,8 @@ static void *next_fpu_context = NULL;
 jmp_buf catch_pf_env;
 volatile bool catch_pf_ok = false;
 
+bool kernel_exit_via_sched = false;
+
 
 static void receive_pf_reply(
 	struct hook *hook,
@@ -301,19 +303,23 @@ static void glue_ipc(struct x86_regs *regs)
 	regs->esi = L4_VREG(utcb, L4_TCR_MR(0));
 	regs->ebx = L4_VREG(utcb, L4_TCR_MR(1));
 	regs->ebp = L4_VREG(utcb, L4_TCR_MR(2));
+	assert(!kernel_exit_via_sched);
 }
 
 
 static void glue_threadswitch(struct x86_regs *regs)
 {
 	struct thread *current = get_current_thread();
-	/* NOTE: somewhat magical! */
+	/* FIXME: should be just a straight exregs parameter to
+	 * glue_threadswitch(), instead of this arcane wank
+	 */
 	save_user_ex(container_of(regs, struct x86_exregs, r));
 
 	L4_ThreadId_t target = { .raw = regs->eax };
 	current->flags |= TF_SYSCALL;
 	sys_threadswitch(target);
 	current->flags &= ~TF_SYSCALL;
+	assert(!kernel_exit_via_sched);
 }
 
 
@@ -392,6 +398,15 @@ void isr_exn_basic_sc_bottom(struct x86_exregs *regs)
 			assert(current->status == TS_STOPPED);
 			return_to_scheduler();
 		}
+	}
+
+	/* TODO: untested. try removing it & seeing what happens. */
+	if(kernel_exit_via_sched) {
+		kernel_exit_via_sched = false;
+		save_user_ex(regs);
+		current->status = TS_READY;
+		sq_update_thread(current);
+		return_to_scheduler();
 	}
 
 	return_from_exn();
@@ -497,6 +512,14 @@ void sysenter_bottom(struct x86_exregs *regs)
 				(*sys_fns[target])(&regs->r);
 		}
 		regs->eip = kip_base + ret_offset;
+		if(kernel_exit_via_sched) {
+			kernel_exit_via_sched = false;
+			save_user_ex(regs);
+			current->status = TS_READY;
+			current->flags |= TF_SYSCALL;
+			sq_update_thread(current);
+			return_to_scheduler();
+		}
 		return_from_exn();
 	}
 }
