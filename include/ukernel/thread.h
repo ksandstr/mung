@@ -153,6 +153,8 @@ struct thread
 			L4_ThreadId_t dest_tid;		/* global ID */
 			L4_ThreadId_t send_tid;		/* ->id or vs, may be local */
 		} ipc_wait;
+		/* valid when $TF_PREEMPT ∈ ->flags$. */
+		L4_Clock_t preempt_clock;
 	} u2;
 
 	union {

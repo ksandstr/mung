@@ -566,6 +566,7 @@ struct thread *on_preempt(int vec_num)
 			TRACE("%s: set TF_PREEMPT on current=%lu:%lu\n", __func__,
 				TID_THREADNUM(current->id), TID_VERSION(current->id));
 			current->flags |= TF_PREEMPT;
+			current->u2.preempt_clock.raw = ksystemclock();
 		} else {
 			TRACE("%s: async preempt (q=0 | tq=0) on current=%lu:%lu\n",
 				__func__, TID_THREADNUM(current->id), TID_VERSION(current->id));
@@ -684,12 +685,11 @@ static void entering_thread(struct thread **next_p)
 	uint64_t now = ksystemclock();
 	struct thread *next = *next_p, *orig = next;
 	if(CHECK_FLAG(next->flags, TF_PREEMPT)) {
-		/* FIXME: get preemption time from somewhere! */
 		TRACE("%s: sending preempt fault for %lu:%lu\n",
 			__func__, TID_THREADNUM(next->id), TID_VERSION(next->id));
-		struct thread *exh = send_preempt_fault(next,
-				(L4_Clock_t){ .raw = now }),
-			*oldnext = next;
+		next->flags &= ~TF_PREEMPT;
+		struct thread *oldnext = next,
+			*exh = send_preempt_fault(next, next->u2.preempt_clock);
 		next = sched_resolve_next(NULL, NULL, next, exh);
 		if(next == exh) {
 			*next_p = next;
@@ -1110,9 +1110,7 @@ again:
 		TRACE("%s: sending preempt fault for next=%lu:%lu\n", __func__,
 			TID_THREADNUM(next->id), TID_VERSION(next->id));
 		next->flags &= ~TF_PREEMPT;
-		/* FIXME: get preempt time from somewhere */
-		struct thread *exh = send_preempt_fault(next,
-			(L4_Clock_t){ .raw = now });
+		struct thread *exh = send_preempt_fault(next, next->u2.preempt_clock);
 		TRACE("%s: ... next->status'=%s\n", __func__, sched_status_str(next));
 		/* (XFER and R_RECV threads don't preempt.) */
 		assert(next->status == TS_READY || next->status == TS_RUNNING);

@@ -688,12 +688,10 @@ START_TEST(preempt_fault_msg)
 	ok1(msg);
 	ok1(!p.was_exn);
 	/* preëmpt message should say 5ms. */
-	todo_start("known breakage (preëmpt fault content)");
 	int64_t preempt_diff = (int64_t)p.clock.raw - start.raw;
 	if(!ok1(fuzz_eq(preempt_diff, 5000, 2000))) {
 		diag("preempt_diff=%lld", preempt_diff);
 	}
-	todo_end();
 	/* should have been delivered at resume, i.e. after preempt + spin time =
 	 * 5ms + 5ms = 10ms.
 	 */
