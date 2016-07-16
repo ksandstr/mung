@@ -55,6 +55,33 @@ static bool fuzz_eq(uint64_t a, uint64_t b, uint32_t slop) {
 }
 
 
+/* easy access to ThreadMgr::get_preempt_record */
+struct preempt {
+	bool was_exn;
+	L4_Clock_t clock, msg_clock;
+};
+
+
+static bool get_preempt(struct preempt *p)
+{
+	L4_Word_t hi, lo;
+	bool ret, dummy;
+	int64_t c_diff;
+	int n = __tmgr_get_preempt_record(get_mgr_tid(), &ret,
+		L4_Myself().raw, &hi, &lo, &c_diff,
+		p == NULL ? &dummy : &p->was_exn);
+	fail_if(n != 0, "n=%d", n);
+	if(!ret) return false;
+	else {
+		if(p != NULL) {
+			p->clock.raw = (L4_Word64_t)hi << 32 | lo;
+			p->msg_clock.raw = (int64_t)p->clock.raw + c_diff;
+		}
+		return true;
+	}
+}
+
+
 /* api tests */
 
 static void starvin_marvin(void *param UNUSED)
@@ -623,6 +650,65 @@ START_LOOP_TEST(simple_preempt_test, iter, 0, 1)
 END_TEST
 
 
+static void preempt_and_spin(void *param_ptr)
+{
+	int ms = (int)param_ptr;
+	if(ms > 0) {
+		L4_Sleep(L4_TimePeriod(ms * 1000));
+		usleep(ms * 1000);
+	}
+}
+
+
+/* test properties of the preëmption fault message:
+ *
+ *   - [clock] the value that preëmption faults carry indicates time of
+ *     preëmption, rather than time of resumption
+ *   - [msgtime] the message is sent at resumption rather than preëmption.
+ */
+START_TEST(preempt_fault_msg)
+{
+	plan_tests(5);
+
+	int my_pri = find_own_priority();
+	L4_ThreadId_t oth = xstart_thread(&preempt_and_spin, (void *)5);
+	L4_Set_Priority(oth, my_pri - 1);
+	L4_Set_Priority(L4_Myself(), my_pri - 2);
+	L4_ThreadSwitch(L4_nilthread);
+	fail_unless(get_schedstate(oth) == L4_SCHEDRESULT_WAITING);
+
+	L4_EnablePreemptionFaultException();
+	L4_EnablePreemption();
+	L4_Clock_t start = L4_SystemClock();
+	usleep(10 * 1000);
+	L4_DisablePreemptionFaultException();
+
+	struct preempt p;
+	bool msg = get_preempt(&p);
+	ok1(msg);
+	ok1(!p.was_exn);
+	/* preëmpt message should say 5ms. */
+	todo_start("known breakage (preëmpt fault content)");
+	int64_t preempt_diff = (int64_t)p.clock.raw - start.raw;
+	if(!ok1(fuzz_eq(preempt_diff, 5000, 2000))) {
+		diag("preempt_diff=%lld", preempt_diff);
+	}
+	todo_end();
+	/* should have been delivered at resume, i.e. after preempt + spin time =
+	 * 5ms + 5ms = 10ms.
+	 */
+	int64_t tod_diff = (int64_t)p.msg_clock.raw - start.raw;
+	if(!ok1(fuzz_eq(tod_diff, 10000, 2000))) {
+		diag("tod_diff=%lld", tod_diff);
+	}
+
+	ok(!get_preempt(NULL), "exactly one preëmption");
+
+	xjoin_thread(oth);
+}
+END_TEST
+
+
 /* test signaling of preemption exceptions.
  *
  * variables:
@@ -995,34 +1081,6 @@ START_LOOP_TEST(delay_max_duration, iter, 0, 3)
 	talloc_free(preempts);
 }
 END_TEST
-
-
-struct preempt {
-	bool was_exn;
-	L4_Clock_t clock, msg_clock;
-};
-
-
-static bool get_preempt(struct preempt *p)
-{
-	L4_Word_t hi, lo;
-	bool ret, was_exn;
-	int64_t c_diff;
-	int n = __tmgr_get_preempt_record(get_mgr_tid(), &ret,
-		L4_Myself().raw, &hi, &lo, &c_diff, &was_exn);
-	fail_if(n != 0, "n=%d", n);
-	if(!ret) return false;
-	else {
-		if(p != NULL) {
-			*p = (struct preempt){
-				.clock = { .raw = (L4_Word64_t)hi << 32 | lo },
-				.was_exn = was_exn,
-			};
-			p->msg_clock.raw = (int64_t)p->clock.raw + c_diff;
-		}
-		return true;
-	}
-}
 
 
 /* ¬s ∧ d.
@@ -1500,6 +1558,7 @@ Suite *sched_suite(void)
 		TCase *tc = tcase_create("preempt");
 		tcase_set_fork(tc, false);
 		tcase_add_test(tc, simple_preempt_test);
+		tcase_add_test(tc, preempt_fault_msg);
 		tcase_add_test(tc, preempt_exn_test);
 		tcase_add_test(tc, delay_basics);
 		tcase_add_test(tc, delay_yield);
