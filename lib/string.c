@@ -42,17 +42,24 @@ static void *memcpy_forward(void *dst, const void *src, size_t len);
 static void *memcpy_forward(void *dst, const void *src, size_t len)
 {
 	int32_t d0, d1, d2;
-	asm volatile (
-		"rep; movsl\n"
-		"movl %4, %%ecx\n"
-		"andl $3, %%ecx\n"
-		/* avoids rep;movsb with ecx==0, faster on post-2008 iron */
-		"jz 1f\n"
-		"rep; movsb\n"
-		"1:\n"
-		: "=&c" (d0), "=&D" (d1), "=&S" (d2)
-		: "0" (len / 4), "g" (len), "1" (dst), "2" (src)
-		: "memory");
+	if(__builtin_constant_p(len) && (len & 3) == 0) {
+		asm volatile ("rep; movsl\n"
+			: "=&c" (d0), "=&D" (d1), "=&S" (d2)
+			: "0" (len / 4), "g" (len), "1" (dst), "2" (src)
+			: "memory");
+	} else {
+		asm volatile (
+			"rep; movsl\n"
+			"movl %4, %%ecx\n"
+			"andl $3, %%ecx\n"
+			/* avoids rep;movsb with ecx==0, faster on post-2008 iron */
+			"jz 1f\n"
+			"rep; movsb\n"
+			"1:\n"
+			: "=&c" (d0), "=&D" (d1), "=&S" (d2)
+			: "0" (len / 4), "g" (len), "1" (dst), "2" (src)
+			: "memory");
+	}
 	return dst;
 }
 
