@@ -196,9 +196,11 @@ static bool check_ipc_module(void)
 		t != NULL;
 		t = htable_next(&recvwait_hash, &it))
 	{
-		inv_push("t=%lu:%lu (%p), ->status=%s, ->ipc_from=%lu:%lu",
+		inv_push("recvwait_hash: t=%lu:%lu (%p), ->status=%s, ->ipc_from=%lu:%lu",
 			TID_THREADNUM(t->id), TID_VERSION(t->id), t, sched_status_str(t),
 			L4_ThreadNo(t->ipc_from), L4_Version(t->ipc_from));
+
+		inv_ok1(thread_is_valid(t));
 
 		inv_ok1(t->status == TS_RECV_WAIT);	/* no R_RECV plz. */
 		inv_ok1(!L4_IsNilThread(t->ipc_from));
@@ -211,7 +213,35 @@ static bool check_ipc_module(void)
 		inv_pop();
 	}
 
-	/* TODO: sendwait_hash, redir_hash */
+	for(struct thread *t = htable_first(&sendwait_hash, &it);
+		t != NULL;
+		t = htable_next(&sendwait_hash, &it))
+	{
+		inv_push("sendwait_hash: t=%lu:%lu (%p), ->status=%s, ->ipc_from=%lu:%lu",
+			TID_THREADNUM(t->id), TID_VERSION(t->id), t, sched_status_str(t),
+			L4_ThreadNo(t->ipc_from), L4_Version(t->ipc_from));
+
+		inv_ok1(thread_is_valid(t));
+
+		/* TODO: other sendwait things */
+
+		inv_pop();
+	}
+
+	for(struct thread *t = htable_first(&redir_wait, &it);
+		t != NULL;
+		t = htable_next(&redir_wait, &it))
+	{
+		inv_push("redir_wait: t=%lu:%lu (%p), ->status=%s, ->ipc_from=%lu:%lu",
+			TID_THREADNUM(t->id), TID_VERSION(t->id), t, sched_status_str(t),
+			L4_ThreadNo(t->ipc_from), L4_Version(t->ipc_from));
+
+		inv_ok1(thread_is_valid(t));
+
+		/* TODO: other redir things */
+
+		inv_pop();
+	}
 
 	return true;
 
