@@ -141,11 +141,11 @@ void *memset(void *start, int c, size_t len)
 int memcmp(const void *s1, const void *s2, size_t n)
 {
 	const uint8_t *a = s1, *b = s2;
-	size_t i = 0;
-	while(i < n && a[i] == b[i]) i++;
-	if(i == n) return 0;
-	else if(a[i] < b[i]) return -1;
-	else return 1;
+	for(size_t i = 0; i < n; i++) {
+		int c = (int)a[i] - b[i];
+		if(c != 0) return c;
+	}
+	return 0;
 }
 
 
@@ -189,24 +189,24 @@ end:
 
 int strcmp(const char *a, const char *b)
 {
-	int i = 0;
+	size_t i = 0;
 	while(a[i] != '\0' && b[i] != '\0') {
-		if(a[i] < b[i]) return -1;
-		else if(a[i] > b[i]) return 1;
+		int c = (int)a[i] - b[i];
+		if(c != 0) return c;
 		i++;
 	}
 	if(a[i] == '\0' && b[i] == '\0') return 0;
-	/* "a ends first" means it sorts first. */
+	/* shorter first. */
 	if(a[i] == '\0') return -1; else return 1;
 }
 
 
 int strncmp(const char *a, const char *b, size_t n)
 {
-	int i = 0;
+	size_t i = 0;
 	while(i < n && a[i] != '\0' && b[i] != '\0') {
-		if(a[i] < b[i]) return -1;
-		else if(a[i] > b[i]) return 1;
+		int c = (int)a[i] - b[i];
+		if(c != 0) return c;
 		i++;
 	}
 	if(i == n || (a[i] == '\0' && b[i] == '\0')) return 0;
@@ -219,7 +219,7 @@ char *strdup(const char *str)
 {
 	size_t n = strlen(str);
 	char *buf = malloc(n+1);
-	if(buf != NULL) memcpy(buf, str, n+1);
+	if(buf != NULL) memcpy(buf, str, n + 1);
 	return buf;
 }
 
@@ -253,7 +253,7 @@ size_t strnlen(const char *str, size_t max) {
 
 char *strncpy(char *dest, const char *src, size_t n)
 {
-	size_t i=0;
+	size_t i = 0;
 	while(i < n && src[i] != '\0') {
 		dest[i] = src[i];
 		i++;
@@ -323,7 +323,7 @@ char *strpbrk(const char *s, const char *needles)
 		present_len = (256 + long_bits - 1) / long_bits;
 	unsigned long present[present_len];
 
-	for(int i=0; i<present_len; i++) present[i] = 0;
+	for(int i=0; i < present_len; i++) present[i] = 0;
 	for(int i=0; needles[i] != '\0'; i++) {
 		int c = (unsigned char)needles[i], o = c / long_bits,
 			b = c & (long_bits - 1);
