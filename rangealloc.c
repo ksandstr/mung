@@ -318,3 +318,238 @@ void *ra_next(const struct rangealloc *ra, struct ra_iter *it)
 		ret + (1 << ra->ob_size_log2) - 1));
 	return (void *)ret;
 }
+
+
+#include <ukernel/ktest.h>
+#if KTEST
+
+/* in-kernel tests for rangealloc id2ptr, ptr2id ops. */
+
+struct tobj {
+	struct list_node link;
+	char name[32];
+	int value;
+};
+
+
+static void dancing_rals(struct rangealloc *ra, int test_size)
+{
+	struct tobj *ary[test_size];
+	for(int i=0; i < test_size; i++) ary[i] = ra_alloc(ra, -1);
+	for(int i=0; i < test_size; i += 2) ra_free(ra, ary[i]);
+	for(int i=0; i < test_size; i += 2) ary[i] = ra_alloc(ra, -1);
+	for(int i=0; i < test_size; i++) ra_free(ra, ary[i]);
+}
+
+
+START_TEST(masks)
+{
+	plan_tests(3);
+
+	assert(alignof(struct tobj) <= 64);
+	struct rangealloc *ra = ra_create(20, sizeof(struct tobj),
+		alignof(struct tobj));
+
+	uintptr_t and_mask = ra->and_mask, or_mask = ra->or_mask;
+	diag("and_mask=%#lx, or_mask=%#lx", and_mask, or_mask);
+	ok1(POPCOUNT(and_mask) == 14);
+	ok1((or_mask & and_mask) == 0);
+	ok1((and_mask & 0x3f) == 0);
+}
+END_TEST
+
+
+/* allocations must have the common bits given in or_mask . */
+START_TEST(alloc)
+{
+	plan_tests(4);
+	const size_t test_size = 5000, ob_align = 64;
+
+	assert(alignof(struct tobj) <= ob_align);
+	struct rangealloc *ra = ra_create(20,
+		sizeof(struct tobj), ob_align);
+
+	uintptr_t and_mask = ra->and_mask, or_mask = ra->or_mask;
+	diag("and_mask=%#lx, or_mask=%#lx", and_mask, or_mask);
+
+	struct tobj **tobs = calloc(test_size, sizeof(struct tobj *));
+	bool all_ok = true, all_aligned = true;
+	for(size_t i=0; i < test_size; i++) {
+		struct tobj *o = ra_zalloc(ra, -1);
+		assert(o != NULL);
+		tobs[i] = o;
+
+		uintptr_t op = (uintptr_t)o;
+		if((op & (ob_align - 1)) != 0) {
+			if(all_aligned) {
+				diag("first misalign is o=%p (align=%u)",
+					o, (unsigned)ob_align);
+			}
+			all_aligned = false;
+		}
+		if((op & ~and_mask) != or_mask) {
+			diag("tobs[%u]=%p, masked=%#lx (!= or_mask=%#lx)",
+				(unsigned)i, o, (uintptr_t)o & ~and_mask, or_mask);
+			all_ok = false;
+			break;
+		}
+	}
+	ok(all_ok, "initial allocations");
+	ok1(all_aligned);
+
+	dancing_rals(ra, 234);
+	ok(true, "alive after dancing_rals()");
+
+	/* free the first few. */
+	for(size_t i=0; i < 456; i++) {
+		if(tobs[i] == NULL) {
+			ra_free(ra, tobs[i]);
+			tobs[i] = NULL;
+		}
+	}
+	/* and allocate some of them again, start to finish. */
+	for(size_t i=0; i < 456; i+=3) tobs[i] = ra_zalloc(ra, -1);
+	ok(true, "still alive after recycling");
+
+	/* toss all. */
+	for(size_t i=0; i < test_size; i++) {
+		if(tobs[i] != NULL) ra_free(ra, tobs[i]);
+	}
+
+	free(tobs);
+}
+END_TEST
+
+
+/* test that the reference macros work for casting between IDs and pointers in
+ * the aligned segment.
+ */
+START_TEST(id_casting)
+{
+	plan_tests(1);
+	const size_t test_size = 5007;
+
+	assert(alignof(struct tobj) <= 64);
+	struct rangealloc *ra = ra_create(20, sizeof(struct tobj), 64);
+
+	/* NOTE: zero_ix handling is pointless because no object will be allocated
+	 * over the slab in the first page.
+	 */
+	struct tobj **tobs = calloc(test_size, sizeof(struct tobj *));
+	uint16_t *tids = calloc(test_size, sizeof(uint16_t));
+	int zero_ix = -1;
+	for(size_t i=0; i < test_size; i++) {
+		tobs[i] = ra_zalloc(ra, -1);
+		assert(tobs[i] != NULL);
+
+		tids[i] = ra_ptr2id(ra, tobs[i]);
+		if(tids[i] == 0) {
+			assert(zero_ix == -1);
+			zero_ix = i;
+		}
+	}
+	diag("initial allocs ok");
+
+	/* go back to pointer from id. */
+	bool all_ok = true;
+	for(size_t i=0; i < test_size; i++) {
+		if(tids[i] == 0 && (int)i != zero_ix) {
+			diag("skipping i=%u for being 0 (tobs[%u]=%p)", i, i, tobs[i]);
+			continue;
+		}
+
+		struct tobj *o = ra_id2ptr(ra, tids[i]);
+		if(o != tobs[i]) {
+			diag("i=%u: o=%p, tobs[i]=%p, tids[i]=%#x",
+				i, o, tobs[i], tids[i]);
+			all_ok = false;
+			break;
+		}
+	}
+	ok1(all_ok);
+
+	free(tobs);
+	free(tids);
+}
+END_TEST
+
+
+START_TEST(id2ptr_safe)
+{
+	plan_tests(4);
+	const size_t test_size = 5005;		/* sAUcE!1! */
+
+	assert(alignof(struct tobj) <= 64);
+	struct rangealloc *ra = ra_create(20, sizeof(struct tobj), 64);
+	void *burn0 = ra_alloc(ra, 0);
+	ok1(burn0 != NULL);
+
+	struct tobj **tobs = calloc(test_size, sizeof(struct tobj *));
+	uint16_t *tids = calloc(test_size, sizeof(uint16_t));
+	bool all_ok = true;
+	for(size_t i=0; i < test_size; i++) {
+		tobs[i] = ra_zalloc(ra, -1);
+		assert(tobs[i] != NULL);
+
+		tids[i] = ra_ptr2id(ra, tobs[i]);
+		if(tids[i] == 0) {
+			diag("id for ptr=%p is zero?");
+			all_ok = false;
+			break;
+		}
+	}
+	ok(all_ok, "zero id didn't occur");		/* because it was burnt */
+
+	/* check that all returned objects are valid. */
+	all_ok = true;
+	for(size_t i=0; i < test_size; i++) {
+		if(tids[i] == 0) continue;
+		void *ptr = ra_id2ptr_safe(ra, tids[i]);
+		if(ptr != tobs[i]) {
+			diag("ptr=%p, tobs[%d]=%p, tid=%u",
+				ptr, (int)i, tobs[i], tids[i]);
+			all_ok = false;
+			break;
+		}
+	}
+	ok(all_ok, "returned objects are valid");
+
+	/* perturb tobs[] by freeing groups of 345 and 456 first; these should
+	 * cause page drops. then re-test validity.
+	 */
+	int steps[] = { 345, 456 };
+	for(int j=0; j < NUM_ELEMENTS(steps); j++) {
+		for(size_t i = j * 1000 + steps[j]; i < j * 1000 + steps[j] * 2; i++) {
+			if(tobs[i] == NULL) continue;
+			ra_free(ra, tobs[i]);
+			tobs[i] = NULL;
+		}
+	}
+	all_ok = true;
+	for(size_t i=0; i < test_size; i++) {
+		if(tids[i] == 0) continue;
+		void *ptr = ra_id2ptr_safe(ra, tids[i]);
+		if(ptr == NULL && tobs[i] != NULL) {
+			diag("ptr=%p, tobs[%d]=%p, tid=%u",
+				ptr, (int)i, tobs[i], tids[i]);
+			all_ok = false;
+			break;
+		}
+	}
+	ok(all_ok, "post-free IDs convert properly");
+
+	free(tobs);
+	free(tids);
+}
+END_TEST
+
+
+void ktest_rangealloc(void)
+{
+	RUN(masks);
+	RUN(alloc);
+	RUN(id_casting);
+	RUN(id2ptr_safe);
+}
+
+#endif

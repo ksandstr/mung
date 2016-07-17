@@ -110,6 +110,7 @@ void run_all_tests(void)
 	SUITE(test_util);
 	SUITE(vsnprintf);
 	SUITE(slab);
+	SUITE(rangealloc);
 	SUITE(heap);
 	SUITE(memdesc);
 }
