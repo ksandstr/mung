@@ -142,6 +142,44 @@ int memcmp(const void *s1, const void *s2, size_t n)
 }
 
 
+void *memswap(void *a, void *b, size_t n)
+{
+	if(a == b || n == 0) return a;
+	void *retval = a;
+
+	if(n <= 16) {
+		char *aa = a, *bb = b;
+		for(int i=0; i < n; i++) {
+			char t = aa[i];
+			aa[i] = bb[i];
+			bb[i] = t;
+		}
+		goto end;
+	}
+
+	char buf[256];
+	size_t head = n % sizeof(buf);
+	if(head > 0) {
+		memcpy(buf, a, head);
+		memcpy(a, b, head);
+		memcpy(b, buf, head);
+		a += head; b += head;
+		if(n <= head) goto end;
+	}
+
+	/* i like the part where he said "sizeof(buf)" */
+	for(size_t i = 0, l = n / sizeof(buf); i < l; i++) {
+		memcpy(buf, a, sizeof(buf));
+		memcpy(a, b, sizeof(buf));
+		memcpy(b, buf, sizeof(buf));
+		a += sizeof(buf); b += sizeof(buf);
+	}
+
+end:
+	return retval;
+}
+
+
 int strcmp(const char *a, const char *b)
 {
 	int i = 0;

@@ -32,6 +32,10 @@ extern void *memmove(void *dest, const void *src, size_t n);
 extern void *memset(void *s, int c, size_t n);
 extern int memcmp(const void *s1, const void *s2, size_t n);
 
+/* such nonstandard, very clever, wow. */
+/* returns @l. undefined results when @l[0..n-1] and @r[0..n-1] overlap. */
+extern void *memswap(void *l, void *r, size_t n);
+
 /* note absence of strcpy(). */
 extern char *strncpy(char *dest, const char *src, size_t n);
 

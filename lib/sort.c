@@ -6,6 +6,7 @@
  *
  * 18 February 2000: Modified for GSL by Brian Gough
  * 20 November 2007: Modified for µiX by Kalle A. Sandström <ksandstr@iki.fi>
+ * 17 July 2016: Modified for mung by Kalle A. Sandström <ksandstr@iki.fi>
  *
  * This is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -19,6 +20,7 @@
  */
 
 #include <stdlib.h>
+#include <string.h>
 
 typedef int (*compare_fn_t)(const void *, const void *);
 
@@ -27,50 +29,25 @@ static inline void downheap (void *data, const size_t size, const size_t N, size
 
 /* Inline swap function for moving objects around */
 
-static inline void
-swap (void *base, size_t size, size_t i, size_t j)
+static inline void swap(void *base, size_t size, size_t i, size_t j)
 {
-  register char *a = size * i + (char *) base;
-  register char *b = size * j + (char *) base;
-  register size_t s = size;
-
-  if (i == j)
-    return;
-
-  do
-    {
-      char tmp = *a;
-      *a++ = *b;
-      *b++ = tmp;
-    }
-  while (--s > 0);
+	if(i == j) return;
+	memswap(base + size * i, base + size * j, size);
 }
 
-#define CMP(data,size,j,k) (compare((char *)(data) + (size) * (j), (char *)(data) + (size) * (k)))
+#define CMP(data,size,j,k) (compare((char *)(data) + (size) * (j), \
+	(char *)(data) + (size) * (k)))
 
-static inline void
-downheap (void *data, const size_t size, const size_t N, size_t k, compare_fn_t compare)
+static inline void downheap(
+	void *data, const size_t size, const size_t N,
+	size_t k, compare_fn_t compare)
 {
-  while (k <= N / 2)
-    {
-      size_t j = 2 * k;
-
-      if (j < N && CMP (data, size, j, j + 1) < 0)
-        {
-          j++;
-        }
-
-      if (CMP (data, size, k, j) < 0)
-        {
-          swap (data, size, j, k);
-        }
-      else
-        {
-          break;
-        }
-
-      k = j;
-    }
+	while (k <= N / 2) {
+		size_t j = 2 * k;
+		if(j < N && CMP(data, size, j, j + 1) < 0) j++;
+		if(CMP(data, size, k, j) >= 0) break; else swap(data, size, j, k);
+		k = j;
+	}
 }
 
 /* ksandstr: I don't think it's actually specified anywhere that qsort(3) must
