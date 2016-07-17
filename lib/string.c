@@ -37,7 +37,6 @@
 static void *memcpy_forward(void *dst, const void *src, size_t len);
 
 
-
 #ifdef __i386__
 /* via uClibc */
 static void *memcpy_forward(void *dst, const void *src, size_t len)
@@ -196,17 +195,60 @@ end:
 }
 
 
+/* sets the high bit for every byte in @x that's zero. */
+static inline unsigned long zeroes_mask(unsigned long x) {
+	return (x - 0x01010101u) & ~x & 0x80808080;
+}
+
+
 int strcmp(const char *a, const char *b)
 {
-	size_t i = 0;
-	while(a[i] != '\0' && b[i] != '\0') {
-		int c = (int)a[i] - b[i];
-		if(c != 0) return c;
-		i++;
+	if(a == b) return 0;
+
+	/* the word-at-a-time optimization requires that long loads are valid,
+	 * i.e. that they don't cross a 4k boundary in memory. so the loop
+	 * consists of two parts: the one that runs before such a boundary in
+	 * either operand, and one that runs over it.
+	 */
+	size_t pos = 0;
+	for(;;) {
+		/* NOTE: could add a second byte-at-a-time segment here to bump @pos
+		 * such that at least one of a[pos] and b[pos] is aligned to 4. but
+		 * that's a can of worms, so let's not.
+		 */
+
+		uintptr_t a_left = 0x1000 - ((uintptr_t)(a + pos) & 0xfff),
+			b_left = 0x1000 - ((uintptr_t)(b + pos) & 0xfff);
+		int words = MIN(int, a_left, b_left) / 4;
+		const unsigned long *ap = (const unsigned long *)(a + pos),
+			*bp = (const unsigned long *)(b + pos);
+		for(int i=0; i < words; i++) {
+			unsigned long la = BE32_TO_CPU(ap[i]), lb = BE32_TO_CPU(bp[i]),
+				za = zeroes_mask(la), zb = zeroes_mask(lb),
+				m = ((za & zb) >> 7) * 0xff;
+			if(m == 0) m = 0xff;
+			m |= m << 8;
+			m |= m << 16;
+			long c = (la & m) - (lb & m);
+			if(c != 0) return c;
+			if((za | zb) != 0) return (za & m) - (zb & m);
+		}
+		pos += words * 4;
+
+		/* then byte at a time. */
+		assert(words * 4 <= a_left);
+		assert(words * 4 <= b_left);
+		int bytes = MIN(int, a_left - words * 4, b_left - words * 4);
+		for(int i=0; i < bytes; i++) {
+			int c = (int)a[pos + i] - b[pos + i];
+			if(c != 0) return c;
+			if(a[pos + i] == '\0') {
+				assert(b[pos + i] == '\0');
+				return 0;
+			}
+		}
+		pos += bytes;
 	}
-	if(a[i] == '\0' && b[i] == '\0') return 0;
-	/* shorter first. */
-	if(a[i] == '\0') return -1; else return 1;
 }
 
 
