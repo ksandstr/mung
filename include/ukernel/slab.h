@@ -46,9 +46,7 @@ extern const char *kmem_cache_name(struct kmem_cache *cache);
 /* does Grodey Memory Hax to find the slab that swallowed the rat. or not. */
 extern struct kmem_cache *kmem_cache_find(void *allocation);
 
-/* external API that must be implemented by users of slab.c, unless
- * KMEM_POLICY is used for all slabs without depending on them.
- */
+/* external API that must be implemented by users of slab.c. */
 extern void *kmem_alloc_new_page(void);
 extern void kmem_free_page(void *ptr);
 
