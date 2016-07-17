@@ -24,6 +24,7 @@
 #include <stdlib.h>
 #include <stdint.h>
 #include <assert.h>
+#include <ccan/endian/endian.h>
 
 #include <ukernel/util.h>
 
@@ -140,8 +141,16 @@ void *memset(void *start, int c, size_t len)
 
 int memcmp(const void *s1, const void *s2, size_t n)
 {
+	size_t major = n & ~3u;
+	for(size_t i = 0, w = major / 4; i < w; i++) {
+		unsigned long a = BE32_TO_CPU(*(unsigned long *)(s1 + i * 4)),
+			b = BE32_TO_CPU(*(unsigned long *)(s2 + i * 4));
+		long c = a - b;
+		if(c != 0) return c;
+	}
+
 	const uint8_t *a = s1, *b = s2;
-	for(size_t i = 0; i < n; i++) {
+	for(size_t i = major; i < n; i++) {
 		int c = (int)a[i] - b[i];
 		if(c != 0) return c;
 	}
