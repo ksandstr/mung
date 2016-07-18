@@ -37,6 +37,12 @@
 static void *memcpy_forward(void *dst, const void *src, size_t len);
 
 
+/* sets the high bit for every byte in @x that's zero. */
+static inline unsigned long zeroes_mask(unsigned long x) {
+	return (x - 0x01010101u) & ~x & 0x80808080;
+}
+
+
 #ifdef __i386__
 /* via uClibc */
 static void *memcpy_forward(void *dst, const void *src, size_t len)
@@ -195,12 +201,6 @@ end:
 }
 
 
-/* sets the high bit for every byte in @x that's zero. */
-static inline unsigned long zeroes_mask(unsigned long x) {
-	return (x - 0x01010101u) & ~x & 0x80808080;
-}
-
-
 int strcmp(const char *a, const char *b)
 {
 	if(a == b) return 0;
@@ -289,9 +289,30 @@ char *strndup(const char *str, size_t n)
 
 size_t strlen(const char *str)
 {
-	size_t n = 0;
-	while(str[n] != '\0') n++;
-	return n;
+	/* fancy-pants word-at-a-time algorithm w/ byte-at-a-time fallback for
+	 * crossing 4k page boundaries safely under POSIX.
+	 */
+	size_t pos = 0;
+	for(;;) {
+		uintptr_t left = 0x1000 - ((uintptr_t)(str + pos) & 0xfff);
+		int words = left / sizeof(long);
+		const unsigned long *wp = (const unsigned long *)(str + pos);
+		for(int i=0; i < words; i++) {
+			unsigned long z = zeroes_mask(wp[i]);
+			if(z != 0) {
+				size_t len = pos + i * sizeof(long) + ffsl(z) / 8 - 1;
+				assert(str[len] == '\0');
+				return len;
+			}
+		}
+		pos += words * sizeof(long);
+
+		int bytes = left - words * sizeof(long);
+		for(int i=0; i < bytes; i++) {
+			if(str[pos + i] == '\0') return pos + i;
+		}
+		pos += bytes;
+	}
 }
 
 
