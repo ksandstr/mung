@@ -37,19 +37,24 @@
 static void *memcpy_forward(void *dst, const void *src, size_t len);
 
 
-/* sets the high bit for every byte in @x that's zero. generally the first
- * expression is used to _detect_ a zero byte in @x, however, we're interested
- * not only in that but its/their _location_, so there's a few more cycles of
- * processing afterward to exclude the 0x0100 -> 0x8080 case.
+/* returns nonzero if there are zero bytes in @x. see caveat in zero_mask()
+ * comment.
  *
  * via https://graphics.stanford.edu/~seander/bithacks.html#ZeroInWord and
  * others.
  */
-static inline unsigned long zero_mask(unsigned long x)
-{
-	unsigned long m = (x - 0x01010101ul) & ~x & 0x80808080ul;
-	m &= ~(x & 0x01010101ul) << 7;
-	return m;
+static inline unsigned long haszero(unsigned long x) {
+	return (x - 0x01010101ul) & ~x & 0x80808080ul;
+}
+
+
+/* sets the high bit for every byte in @x that's zero. generally haszero() is
+ * used to _detect_ a zero byte in @x, however, we're interested not only in
+ * that but its/their _location_, so there's a few more cycles of processing
+ * afterward to exclude the 0x0100 -> 0x8080 case.
+ */
+static inline unsigned long zero_mask(unsigned long x) {
+	return haszero(x) & (~(x & 0x01010101ul) << 7);
 }
 
 
@@ -294,7 +299,7 @@ int strncmp(const char *a, const char *b, size_t n)
 char *strdup(const char *str)
 {
 	size_t n = strlen(str);
-	char *buf = malloc(n+1);
+	char *buf = malloc(n + 1);
 	if(buf != NULL) memcpy(buf, str, n + 1);
 	return buf;
 }
@@ -323,8 +328,9 @@ size_t strlen(const char *str)
 		int words = left / sizeof(long);
 		const unsigned long *wp = (const unsigned long *)(str + pos);
 		for(int i=0; i < words; i++) {
-			unsigned long z = zero_mask(wp[i]);
-			if(z != 0) {
+			unsigned long w = LE32_TO_CPU(wp[i]);
+			if(haszero(w) != 0) {
+				unsigned long z = zero_mask(w);
 				size_t len = pos + i * sizeof(long) + ffsl(z) / 8 - 1;
 				assert(str[len] == '\0');
 				return len;
