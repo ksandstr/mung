@@ -37,9 +37,19 @@
 static void *memcpy_forward(void *dst, const void *src, size_t len);
 
 
-/* sets the high bit for every byte in @x that's zero. */
-static inline unsigned long zeroes_mask(unsigned long x) {
-	return (x - 0x01010101u) & ~x & 0x80808080;
+/* sets the high bit for every byte in @x that's zero. generally the first
+ * expression is used to _detect_ a zero byte in @x, however, we're interested
+ * not only in that but its/their _location_, so there's a few more cycles of
+ * processing afterward to exclude the 0x0100 -> 0x8080 case.
+ *
+ * via https://graphics.stanford.edu/~seander/bithacks.html#ZeroInWord and
+ * others.
+ */
+static inline unsigned long zero_mask(unsigned long x)
+{
+	unsigned long m = (x - 0x01010101ul) & ~x & 0x80808080ul;
+	m &= ~(x & 0x01010101ul) << 7;
+	return m;
 }
 
 
@@ -224,7 +234,7 @@ int strcmp(const char *a, const char *b)
 			*bp = (const unsigned long *)(b + pos);
 		for(int i=0; i < words; i++) {
 			unsigned long la = BE32_TO_CPU(ap[i]), lb = BE32_TO_CPU(bp[i]),
-				za = zeroes_mask(la), zb = zeroes_mask(lb),
+				za = zero_mask(la), zb = zero_mask(lb),
 				m = ((za & zb) >> 7) * 0xff;
 			if(m == 0) m = 0xff;
 			m |= m << 8;
@@ -298,7 +308,7 @@ size_t strlen(const char *str)
 		int words = left / sizeof(long);
 		const unsigned long *wp = (const unsigned long *)(str + pos);
 		for(int i=0; i < words; i++) {
-			unsigned long z = zeroes_mask(wp[i]);
+			unsigned long z = zero_mask(wp[i]);
 			if(z != 0) {
 				size_t len = pos + i * sizeof(long) + ffsl(z) / 8 - 1;
 				assert(str[len] == '\0');
