@@ -53,6 +53,21 @@ static inline unsigned long zero_mask(unsigned long x)
 }
 
 
+/* same, but for a given byte. */
+static inline unsigned long byte_mask(unsigned long x, int c) {
+	unsigned long ret = zero_mask(x ^ (~0ul / 255 * c));
+#ifdef DEBUG_ME_HARDER
+	unsigned long t = ret;
+	while(t != 0) {
+		int p = ffsl(t) / 8 - 1;
+		assert(((x >> (p * 8)) & 0xff) == c);
+		t &= ~(0xfful << (p * 8));
+	}
+#endif
+	return ret;
+}
+
+
 #ifdef __i386__
 /* via uClibc */
 static void *memcpy_forward(void *dst, const void *src, size_t len)
@@ -348,8 +363,34 @@ char *strncpy(char *dest, const char *src, size_t n)
 
 char *strchr(const char *s, int c)
 {
-	while(*s != '\0' && *s != c) s++;
-	return *s == '\0' ? NULL : (char *)s;
+	if(c == '\0') return (char *)s + strlen(s);
+
+	/* WAAT w/ fallback for page borders */
+	size_t pos = 0;
+	for(;;) {
+		int left = 0x1000 - ((uintptr_t)(s + pos) & 0xfff),
+			words = left / sizeof(long);
+		const unsigned long *wp = (const unsigned long *)(s + pos);
+		for(int i=0; i < words; i++) {
+			unsigned long x = LE32_TO_CPU(wp[i]),
+				found = byte_mask(x, c), zero = zero_mask(x);
+			assert((found | zero) == 0 || found != zero);
+			if(found != 0 && (zero == 0 || found < zero)) {
+				size_t len = pos + i * sizeof(long) + ffsl(found) / 8 - 1;
+				assert(s[len] == c);
+				return (char *)s + len;
+			}
+			if(zero != 0) return NULL;
+		}
+		pos += words * sizeof(long);
+
+		int bytes = left - words * sizeof(long);
+		for(int i=0; i < bytes; i++) {
+			if(s[pos + i] == '\0') return NULL;
+			if(s[pos + i] == c) return (char *)s + pos + i;
+		}
+		pos += bytes;
+	}
 }
 
 
