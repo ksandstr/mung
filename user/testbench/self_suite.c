@@ -110,7 +110,6 @@ START_LOOP_TEST(strchr_basic, iter, 0, 51)
 	diag("arena=%p", arena);
 
 	/* align(0..3) x step(0..3) */
-	if(ref_strchr(test_string, c) == NULL) todo_start("terminator fail");
 	for(int align = 0; align <= 3; align++) {
 		memset(arena, 0, arena_size);
 		char *buf = &arena[align];

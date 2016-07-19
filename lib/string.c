@@ -381,7 +381,7 @@ char *strchr(const char *s, int c)
 			unsigned long x = LE32_TO_CPU(wp[i]),
 				found = byte_mask(x, c), zero = zero_mask(x);
 			assert((found | zero) == 0 || found != zero);
-			if(found != 0 && (zero == 0 || found < zero)) {
+			if(found != 0 && (zero == 0 || ffsl(found) < ffsl(zero))) {
 				size_t len = pos + i * sizeof(long) + ffsl(found) / 8 - 1;
 				assert(s[len] == c);
 				return (char *)s + len;
