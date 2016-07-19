@@ -35,6 +35,106 @@ static void fresh_tick(void)
 }
 
 
+/* tcase str: <string.h> exports */
+
+static const char test_string[] =
+	"What the fuck did you just fucking say about me, you little bitch? "
+	"I’ll have you know I graduated top of my class in the Navy Seals, and "
+	"I’ve been involved in numerous secret raids on Al-Quaeda, and I have "
+	"over 300 confirmed kills. I am trained in gorilla warfare and I’m the "
+	"top sniper in the entire US armed forces. You are nothing to me but "
+	"just another target. I will wipe you the fuck out with precision the "
+	"likes of which has never been seen before on this Earth, mark my "
+	"fucking words.";
+
+
+static size_t ref_strlen(const char *s)
+{
+	size_t n = 0;
+	while(s[n] != '\0') n++;
+	return n;
+}
+
+
+START_TEST(strlen_basic)
+{
+	const int ref_len = ref_strlen(test_string);
+	diag("ref_len=%d", ref_len);
+	plan_tests(4);
+
+	const size_t arena_size = PAGE_SIZE * 3;
+	char *arena = aligned_alloc(PAGE_SIZE, arena_size);
+	diag("arena=%p", arena);
+
+	/* align(0..3) x step(0..3) */
+	for(int align = 0; align <= 3; align++) {
+		memset(arena, 0, arena_size);
+		char *buf = &arena[align];
+		memcpy(buf, test_string, ref_len + 1);
+		bool steps_ok = true;
+		for(int step = 0; step <= 3; step++) {
+			int test_len = strlen(&buf[step]);
+			if(test_len != ref_len - step) {
+				diag("align=%d, step=%d: test_len=%d", align, step, test_len);
+				steps_ok = false;
+			}
+		}
+		ok(steps_ok, "steps_ok for align=%d", align);
+	}
+
+	free(arena);
+}
+END_TEST
+
+
+static char *ref_strchr(const char *s, int c)
+{
+	size_t n = 0;
+	while(s[n] != '\0' && s[n] != c) n++;
+	return s[n] == '\0' ? NULL : (char *)&s[n];
+}
+
+
+START_LOOP_TEST(strchr_basic, iter, 0, 51)
+{
+	const char *alphabet = "abcdefghijklmnopqrstuvwxyz";
+	size_t ref_len = ref_strlen(test_string);
+	bool upcase = CHECK_FLAG(iter, 1);
+	char c = alphabet[iter >> 1];
+	if(upcase) c = toupper(c);
+	diag("upcase=%s, c=`%c'", btos(upcase), c);
+	plan_tests(4);
+
+	const size_t arena_size = PAGE_SIZE * 3;
+	char *arena = aligned_alloc(PAGE_SIZE, arena_size);
+	diag("arena=%p", arena);
+
+	/* align(0..3) x step(0..3) */
+	if(ref_strchr(test_string, c) == NULL) todo_start("terminator fail");
+	for(int align = 0; align <= 3; align++) {
+		memset(arena, 0, arena_size);
+		char *buf = &arena[align];
+		memcpy(buf, test_string, ref_len + 1);
+		assert(buf[ref_len] == '\0');
+		buf[ref_len + 1] = c;		/* sneaky, sneaky */
+		bool steps_ok = true;
+		for(int step = 0; step <= 3; step++) {
+			char *test_out = strchr(&buf[step], c),
+				*ref_out = ref_strchr(&buf[step], c);
+			if(test_out != ref_out) {
+				diag("align=%d, step=%d: test_out=%p, ref_out=%p",
+					align, step, test_out, ref_out);
+				steps_ok = false;
+			}
+		}
+		ok(steps_ok, "steps_ok for align=%d", align);
+	}
+
+	free(arena);
+}
+END_TEST
+
+
 /* tcase util: tests of whatever's in defs.h */
 
 START_TEST(basic_delay_test)
@@ -1144,6 +1244,20 @@ static void stats_teardown(void)
 Suite *self_suite(void)
 {
 	Suite *s = suite_create("self");
+
+	/* tests on lib/string.c, lib/strl{cpy,cat}.c .
+	 *
+	 * generally the "_basic" ones test short strings and buffers on various
+	 * alignments and combinations thereof, and "_page" test the same but with
+	 * a page-crossing in the middle.
+	 */
+	{
+		TCase *tc = tcase_create("str");
+		tcase_add_checked_fixture(tc, &stats_setup, &stats_teardown);
+		tcase_add_test(tc, strlen_basic);
+		tcase_add_test(tc, strchr_basic);
+		suite_add_tcase(s, tc);
+	}
 
 	{
 		TCase *tc = tcase_create("util");
