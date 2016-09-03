@@ -1658,6 +1658,7 @@ bool ipc_recv_half(struct thread *self, void *self_utcb)
 			assert(check_ipc_module());
 			return false;
 		} else if(n < 0) {
+			TRACE("%s: transfer caused pagefault\n", __func__);
 			assert(n == -EFAULT);
 			assert(IS_IPC(self->status));
 			/* FIXME: reinsert or free `w' */
@@ -1698,6 +1699,7 @@ bool ipc_recv_half(struct thread *self, void *self_utcb)
 		/* userspace IPC state transition to the receive phase. */
 		if(L4_IsNilThread(from->ipc_from)) {
 			/* no receive phase. */
+			TRACE("%s: ... sender becomes ready.\n", __func__);
 			thread_wake(from);
 			if(!post_exn_ok(from, NULL)) {	/* clear total_quantum RPC */
 				/* only set regs in syscall-generated IPC */
@@ -1705,6 +1707,7 @@ bool ipc_recv_half(struct thread *self, void *self_utcb)
 			}
 		} else {
 			/* go to a deferred receive half */
+			TRACE("%s: ... sender waits to receive.\n", __func__);
 			from->status = TS_R_RECV;
 			from->wakeup_time = wakeup_at(from->recv_timeout);
 			sq_update_thread(from);
@@ -1717,6 +1720,11 @@ bool ipc_recv_half(struct thread *self, void *self_utcb)
 			assert(IS_READY(from->status)
 				|| (CHECK_FLAG(from->flags, TF_HALT)
 					&& from->status == TS_STOPPED));
+			set_ipc_return_regs(&self->ctx.r, self, self_utcb);
+			TRACE("%s: ... receiver was in userspace\n", __func__);
+		} else {
+			/* don't load Ipc/Lipc output registers. */
+			TRACE("%s: ... receiver was a hook\n", __func__);
 		}
 
 		assert(check_ipc_module());
