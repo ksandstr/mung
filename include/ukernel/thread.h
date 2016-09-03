@@ -6,7 +6,6 @@
 #include <stdbool.h>
 #include <assert.h>
 
-#include <ccan/list/list.h>
 #include <ccan/likely/likely.h>
 #include <ccan/compiler/compiler.h>
 

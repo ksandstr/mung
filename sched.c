@@ -1,7 +1,6 @@
 
 #include <stdio.h>
 #include <stdlib.h>
-#include <ccan/list/list.h>
 #include <ccan/likely/likely.h>
 
 #include <l4/types.h>
