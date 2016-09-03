@@ -1485,7 +1485,7 @@ SYSCALL L4_Word_t sys_schedule(
 	if(max_delay != 0xffff) dest->max_delay = max_delay;
 
 end:
-	if(dest != NULL && dest->status != TS_STOPPED) {
+	if(dest != NULL && dest->status != TS_STOPPED && dest->total_quantum > 0) {
 		sq_update_thread(dest);
 	}
 	/* $Schedule.dest?=current ∨ Schedule.dest?=preempt_thread$. that's to
