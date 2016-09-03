@@ -224,6 +224,16 @@ static inline L4_Word_t L4_PageRights(void *kip_ptr) {
 	return kip->PageInfo.X.rwx;
 }
 
+static inline L4_Time_t L4_SchedulePrecision(void *kip_ptr) {
+	L4_KernelInterfacePage_t *kip = kip_ptr;
+	return (L4_Time_t){ .raw = kip->ClockInfo.X.SchedulePrecision };
+}
+
+static inline L4_Time_t L4_ReadPrecision(void *kip_ptr) {
+	L4_KernelInterfacePage_t *kip = kip_ptr;
+	return (L4_Time_t){ .raw = kip->ClockInfo.X.ReadPrecision };
+}
+
 static inline L4_Word_t L4_ThreadIdBits(void *kip_ptr) {
 	L4_KernelInterfacePage_t *kip = kip_ptr;
 	return kip->ThreadInfo.X.t;
