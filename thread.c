@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <stdbool.h>
 #include <assert.h>
+#include <errno.h>
 
 #include <ccan/likely/likely.h>
 #include <ccan/compiler/compiler.h>
@@ -279,10 +280,8 @@ static void copy_tcrs(void *dst, const void *src)
 }
 
 
-/* FIXME: this is only atomic on space_get_utcb_page() failure, and not on
- * reserved_gdt_ptr_seg() failure. that's bad.
- */
-bool thread_set_utcb(struct thread *t, L4_Word_t start)
+/* FIXME: this isn't atomic on reserved_gdt_ptr_seg() failure. */
+int thread_set_utcb(struct thread *t, L4_Word_t start, bool excl)
 {
 	assert(t->space != NULL);
 	assert(t->utcb_pos < 0 || t->utcb_page != NULL);
@@ -292,10 +291,14 @@ bool thread_set_utcb(struct thread *t, L4_Word_t start)
 	struct space *sp = t->space;
 
 	int new_pos = (start - L4_Address(sp->utcb_area)) / UTCB_SIZE,
-		page = new_pos / UTCB_PER_PAGE;
+		page = new_pos / UTCB_PER_PAGE, slot = new_pos % UTCB_PER_PAGE;
 	assert(page < NUM_UTCB_PAGES(sp->utcb_area));
 	struct utcb_page *up = space_get_utcb_page(sp, page);
-	if(up == NULL) return false;
+	if(up == NULL) return -ENOMEM;
+	if(excl && CHECK_FLAG(up->occmap, 1 << slot)) {
+		/* invalid destination: thread present. */
+		return -EEXIST;
+	}
 	const uint16_t hold_mask = 1 << UTCB_PER_PAGE;
 	assert(!CHECK_FLAG(up->occmap, hold_mask));
 	up->occmap |= hold_mask;	/* hold despite space_remove_thread() */
@@ -341,11 +344,11 @@ bool thread_set_utcb(struct thread *t, L4_Word_t start)
 		t->utcb_ptr_seg = reserve_gdt_ptr_seg(start + 256 + TCR_UTCB_PTR * 4);
 		if(unlikely(t->utcb_ptr_seg < 0)) {
 			t->utcb_ptr_seg = 0;
-			return false;
+			return -ENOMEM;
 		}
 	}
 
-	return true;
+	return 0;
 }
 
 
@@ -1253,18 +1256,22 @@ SYSCALL L4_Word_t sys_threadcontrol(
 	}
 
 	if(utcb_loc != ~0ul) {
+		assert(!L4_IsNilThread(spacespec));
 		bool created = dest->utcb_pos < 0;
 
 		/* set utcb_pos. */
-		if(utcb_loc < L4_Address(sp->utcb_area)
-			|| utcb_loc + UTCB_SIZE > L4_Address(sp->utcb_area) + L4_Size(sp->utcb_area)
+		if(!ADDR_IN_FPAGE(sp->utcb_area, utcb_loc)
 			|| (utcb_loc & (UTCB_SIZE - 1)) != 0)
 		{
-			ec = 6;		/* "bad UTCB location" */
-			goto end;
+			goto bad_utcb;
 		}
-		bool ok = thread_set_utcb(dest, utcb_loc);
-		if(!ok) goto out_of_mem;
+
+		int n = thread_set_utcb(dest, utcb_loc, true);
+		if(n < 0) {
+			if(n == -ENOMEM) goto out_of_mem;
+			if(n == -EEXIST) goto bad_utcb;
+			NOT_REACHED;
+		}
 
 		if(created) {
 			dest_utcb = thread_get_utcb(dest);
@@ -1338,5 +1345,9 @@ invd_space:
 
 invd_sched:
 	ec = 4;
+	goto end;
+
+bad_utcb:
+	ec = 6;
 	goto end;
 }

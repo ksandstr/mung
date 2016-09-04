@@ -207,8 +207,10 @@ extern SYSCALL L4_Word_t sys_threadcontrol(
 extern struct thread *thread_new(thread_id tid);
 
 extern void thread_set_spip(struct thread *t, L4_Word_t sp, L4_Word_t ip);
-/* returns false on some error (generally when out of GDT slots). */
-extern bool thread_set_utcb(struct thread *t, L4_Word_t start);
+/* returns 0 on success; -ENOMEM on out of memory or GDT slots; and -EEXIST
+ * iff @excl && @start is already occupied by another thread in @t->space.
+ */
+extern int thread_set_utcb(struct thread *t, L4_Word_t start, bool excl);
 
 /* schedules a stopped thread with a cleared TF_HALT bit. this status only
  * occurs in freshly-created threads.
