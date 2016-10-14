@@ -9,6 +9,7 @@
 #include <ccan/container_of/container_of.h>
 #include <l4/types.h>
 
+#include <ukernel/rbtree.h>
 #include <ukernel/thread.h>
 #include <ukernel/mm.h>
 #include <ukernel/setjmp.h>
@@ -33,6 +34,8 @@ struct thread;
  */
 struct utcb_page
 {
+	struct rb_node rb;	/* in <struct space>.utcb_pages, by pos */
+
 	/* page position in UTCB area.
 	 *
 	 * this limits the number of thread slots to 64k * 8 = 512k on 32-bit
@@ -63,7 +66,7 @@ struct space
 	struct thread *redirector;
 
 	struct htable ptab_groups;	/* <struct map_group *>, by MG_START(grp) */
-	struct htable utcb_pages;	/* <struct utcb_page *>, by ->pos */
+	struct rb_root utcb_pages;	/* of <struct utcb_page> */
 	struct list_node link;		/* in the global space list */
 
 	/* x86 specific bits */

@@ -22,6 +22,8 @@
 #include <ukernel/rangealloc.h>
 #include <ukernel/misc.h>
 #include <ukernel/util.h>
+#include <ukernel/bug.h>
+#include <ukernel/rbtree.h>
 #include <ukernel/thread.h>
 #include <ukernel/ipc.h>
 #include <ukernel/sched.h>
@@ -46,19 +48,6 @@ static struct space kernel_space_mem;
 
 static struct kmem_cache *space_slab = NULL, *utcb_page_slab = NULL;
 static struct list_head space_list = LIST_HEAD_INIT(space_list);
-
-
-/* hash & cmp functions for utcb_pages */
-static size_t hash_utcb_page(const void *ptr, void *priv) {
-	const struct utcb_page *p = ptr;
-	return int_hash(p->pos);
-}
-
-
-static inline bool cmp_utcb_page(const void *cand, void *key) {
-	const struct utcb_page *p = cand;
-	return p->pos == *(uint16_t *)key;
-}
 
 
 #define NO_PTAB_TO_MAPDB (1 << 0)
@@ -244,13 +233,56 @@ static bool check_all_spaces(int opt) { return true; }
 #endif
 
 
+/* accessors for <struct space>.utcb_pages */
+
+static inline struct utcb_page *insert_utcb_page_helper(
+	struct rb_root *root, struct utcb_page *u)
+{
+	struct rb_node **p = &root->rb_node, *parent = NULL;
+	while(*p != NULL) {
+		parent = *p;
+		struct utcb_page *oth = rb_entry(parent, struct utcb_page, rb);
+		int v = (int)u->pos - (int)oth->pos;	/* ->pos, ascending */
+		if(v < 0) p = &(*p)->rb_left;
+		else if(v > 0) p = &(*p)->rb_right;
+		else return oth;
+	}
+	rb_link_node(&u->rb, parent, p);
+	return NULL;
+}
+
+
+static void insert_utcb_page(struct space *sp, struct utcb_page *u)
+{
+	struct utcb_page *dupe = insert_utcb_page_helper(&sp->utcb_pages, u);
+	BUG_ON(dupe != NULL,
+		"utcb_page with pos=%u already in tree (space tno=%lu)",
+		u->pos, L4_ThreadNo(space_name(sp)));
+	rb_insert_color(&u->rb, &sp->utcb_pages);
+}
+
+
+static struct utcb_page *find_utcb_page(struct space *sp, int pos)
+{
+	struct rb_node *n = sp->utcb_pages.rb_node;
+	struct utcb_page *p;
+	while(n != NULL) {
+		p = rb_entry(n, struct utcb_page, rb);
+		int v = pos - (int)p->pos;
+		if(v < 0) n = n->rb_left;
+		else if(v > 0) n = n->rb_right;
+		else return p;
+	}
+	return NULL;
+}
+
+
 static void space_init(struct space *sp, struct list_head *resv_list)
 {
 	sp->utcb_top = 0;
 	sp->kip_area = L4_Nilpage;
 	sp->utcb_area = L4_Nilpage;
-
-	htable_init(&sp->utcb_pages, &hash_utcb_page, NULL);
+	sp->utcb_pages = RB_ROOT;
 
 	sp->pdirs = get_kern_page(0);
 	if(unlikely(resv_list != NULL)) {
@@ -279,11 +311,11 @@ static inline void for_each_thread_in_space(
 	bool (*fn)(struct thread *t, void *priv),
 	void *priv)
 {
-	struct htable_iter it;
-	for(struct utcb_page *up = htable_first(&sp->utcb_pages, &it);
-		up != NULL;
-		up = htable_next(&sp->utcb_pages, &it))
+	for(struct rb_node *rb = rb_first(&sp->utcb_pages);
+		rb != NULL;
+		rb = rb_next(rb))
 	{
+		struct utcb_page *up = rb_entry(rb, struct utcb_page, rb);
 		for(int i=0; i < UTCB_PER_PAGE; i++) {
 			if(up->slots[i] != NULL && !(*fn)(up->slots[i], priv)) return;
 		}
@@ -329,16 +361,18 @@ struct space *space_new(void)
 static void clear_utcb_pages(struct space *sp)
 {
 	assert(sp != kernel_space);
-	struct htable_iter it;
-	for(struct utcb_page *up = htable_first(&sp->utcb_pages, &it);
-		up != NULL;
-		up = htable_next(&sp->utcb_pages, &it))
+	for(struct rb_node *next, *rb = rb_first(&sp->utcb_pages);
+		rb != NULL;
+		rb = next)
 	{
+		next = rb_next(rb);
+		struct utcb_page *up = rb_entry(rb, struct utcb_page, rb);
 		assert(up->occmap == 0);
+		rb_erase(rb, &sp->utcb_pages);
 		free_kern_page(up->pg);
 		kmem_cache_free(utcb_page_slab, up);
 	}
-	htable_clear(&sp->utcb_pages);
+	assert(RB_EMPTY_ROOT(&sp->utcb_pages));
 }
 
 
@@ -407,11 +441,11 @@ void space_remove_thread(struct space *sp, struct thread *t)
 		pt_iter_destroy(&it);
 #endif
 
+		rb_erase(&up->rb, &sp->utcb_pages);
 		free_kern_page(up->pg);
-		htable_del(&sp->utcb_pages, int_hash(up->pos), up);
 		kmem_cache_free(utcb_page_slab, up);
 
-		if(sp->utcb_pages.elems == 0) space_free(sp);
+		if(RB_EMPTY_ROOT(&sp->utcb_pages)) space_free(sp);
 	}
 
 	t->utcb_page = NULL;
@@ -421,36 +455,36 @@ void space_remove_thread(struct space *sp, struct thread *t)
 
 struct utcb_page *space_get_utcb_page(struct space *sp, uint16_t page_pos)
 {
-	struct utcb_page *up = htable_get(&sp->utcb_pages, int_hash(page_pos),
-		&cmp_utcb_page, &page_pos);
-	if(up == NULL) {
-		if(page_pos >= L4_Size(sp->utcb_area) / PAGE_SIZE) return NULL;
+	struct utcb_page *up = find_utcb_page(sp, page_pos);
+	if(up != NULL) return up;
 
-		assert(sp != kernel_space);
-		up = kmem_cache_alloc(utcb_page_slab);
-		up->pos = page_pos;
-		up->occmap = 0;
-		up->pg = get_kern_page(0);
-		memset(up->pg->vm_addr, 0, PAGE_SIZE);
-		for(int i=0; i < UTCB_PER_PAGE; i++) up->slots[i] = NULL;
-		htable_add(&sp->utcb_pages, int_hash(page_pos), up);
+	/* allocate and insert, where possible. */
+	if(page_pos >= L4_Size(sp->utcb_area) / PAGE_SIZE) return NULL;
 
-		if(likely(sp != kernel_space)) {
-			L4_Fpage_t u_page = L4_FpageLog2(L4_Address(sp->utcb_area)
-				+ page_pos * PAGE_SIZE, PAGE_BITS);
-			L4_Set_Rights(&u_page, L4_Readable | L4_Writable);
-			/* TODO: pass error result from mapdb_add_map() */
-			mapdb_add_map(sp, NULL, 2, u_page, up->pg->id);
+	assert(sp != kernel_space);
+	up = kmem_cache_alloc(utcb_page_slab);
+	up->pos = page_pos;
+	up->occmap = 0;
+	up->pg = get_kern_page(0);
+	memset(up->pg->vm_addr, 0, PAGE_SIZE);
+	for(int i=0; i < UTCB_PER_PAGE; i++) up->slots[i] = NULL;
+	insert_utcb_page(sp, up);
+
+	if(likely(sp != kernel_space)) {
+		L4_Fpage_t u_page = L4_FpageLog2(L4_Address(sp->utcb_area)
+			+ page_pos * PAGE_SIZE, PAGE_BITS);
+		L4_Set_Rights(&u_page, L4_Readable | L4_Writable);
+		/* TODO: pass error result from mapdb_add_map() */
+		mapdb_add_map(sp, NULL, 2, u_page, up->pg->id);
 
 #ifndef NDEBUG
-			struct pt_iter it;
-			pt_iter_init(&it, sp);
-			bool upper = false;
-			assert(pt_get_pgid(&it, &upper, L4_Address(u_page)) == up->pg->id
-				|| !upper);
-			pt_iter_destroy(&it);
+		struct pt_iter it;
+		pt_iter_init(&it, sp);
+		bool upper = false;
+		assert(pt_get_pgid(&it, &upper, L4_Address(u_page)) == up->pg->id
+			|| !upper);
+		pt_iter_destroy(&it);
 #endif
-		}
 	}
 
 	return up;
@@ -515,7 +549,7 @@ int space_set_utcb_area(struct space *sp, L4_Fpage_t area)
 
 int space_set_kip_area(struct space *sp, L4_Fpage_t area)
 {
-	assert(sp->utcb_pages.elems == 0);
+	assert(RB_EMPTY_ROOT(&sp->utcb_pages));
 
 	if(FPAGE_LOW(area) >= KERNEL_SEG_START
 		|| FPAGE_HIGH(area) >= KERNEL_SEG_START)
@@ -592,8 +626,7 @@ struct thread *space_find_local_thread(struct space *sp, L4_LthreadId_t ltid)
 	if(unlikely((off & (UTCB_SIZE - 1)) != 0)) return NULL;
 
 	uint16_t page_pos = off / PAGE_SIZE;
-	struct utcb_page *up = htable_get(&sp->utcb_pages,
-		int_hash(page_pos), &cmp_utcb_page, &page_pos);
+	struct utcb_page *up = find_utcb_page(sp, page_pos);
 	if(likely(up != NULL)) {
 		int slot = (off / UTCB_SIZE) % UTCB_PER_PAGE;
 		t = up->slots[slot];
