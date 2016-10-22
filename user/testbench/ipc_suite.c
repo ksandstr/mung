@@ -1870,11 +1870,11 @@ static void receive_once(void *param UNUSED) {
  */
 START_LOOP_TEST(tid_spec_to_ok, iter, 0, MUTATE_NUM_WAYS * 2 - 1)
 {
-	plan_tests(7);
-
 	const bool local = CHECK_FLAG(iter, 1);
 	const char *kind = local ? "local" : "global";
 	const int mut_way = iter >> 1;
+	diag("local=%s, kind=%s, mut_way=%d", btos(local), kind, mut_way);
+	plan_tests(7);
 
 	L4_ThreadId_t gtid = xstart_thread(&receive_once, NULL),
 		test_tid = local ? L4_LocalIdOf(gtid) : gtid,
