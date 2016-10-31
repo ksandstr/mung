@@ -8,7 +8,7 @@ CFLAGS=-O2 -Wall -march=native -std=gnu99 -m32 \
 	-I $(CFGDIR)/include -I $(CFGDIR)/include/fake_clib \
 	-I . -I $(MUIDL_DIR)/include -I $(CCAN_DIR) \
 	-D_GNU_SOURCE -D__KERNEL__ -DENABLE_SELFTEST \
-	-mno-avx -mno-sse2 -fuse-ld=gold \
+	-mno-avx -mno-sse2 -fno-pic -fuse-ld=gold \
 	-fno-builtin -nostdlib \
 	#-DDEBUG_ME_HARDER #-D_L4_DEBUG_ME_HARDER #-DCCAN_LIST_DEBUG
 
