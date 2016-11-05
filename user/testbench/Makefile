@@ -33,8 +33,9 @@ covercheck:
 	@PERL5OPT=-MDevel::Cover tests/run_all.pl
 
 
-testbench: testbench.ld crt0.o testbench.o dlmalloc.o heap.o thread.o tsd.o \
-		delay.o process.o exn-store.o log.o tap.o test.o util.o ll.o \
+testbench: testbench.ld crt0.o testbench.o dlmalloc.o heap.o \
+		process.o thread.o tsd.o mutex.o \
+		delay.o exn-store.o log.o tap.o test.o util.o ll.o \
 		idlsupp.o pg_stats.o pg_drop.o \
 		sched_suite.o space_suite.o thread_suite.o string_suite.o \
 		ipc_suite.o self_suite.o type_suite.o redir_suite.o \
