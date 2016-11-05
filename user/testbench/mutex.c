@@ -6,6 +6,7 @@
 
 #include <l4/types.h>
 #include <l4/thread.h>
+#include <l4/ipc.h>
 
 
 #define MTX_UNOWNED ((L4_Word_t)0)
@@ -46,6 +47,7 @@ int mtx_lock(mtx_t *mtx)
 	}
 
 	/* TODO: mark conflict and handle it. */
+	L4_Sleep(L4_Never);
 
 	return thrd_error;
 }

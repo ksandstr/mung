@@ -3,6 +3,7 @@
 #include <string.h>
 #include <assert.h>
 #include <errno.h>
+#include <threads.h>
 
 #include <ccan/str/str.h>
 #include <ccan/crc/crc.h>
@@ -1414,6 +1415,141 @@ static void add_thread_tests(TCase *tc)
 }
 
 
+/* tcase "mutex" */
+
+START_TEST(init_plain_mutex)
+{
+	plan_tests(1);
+
+	mtx_t *mtx = malloc(sizeof(mtx_t));
+	fail_if(mtx == NULL);
+	int n = mtx_init(mtx, mtx_plain);
+	ok(n == thrd_success, "mtx_init returned success");
+
+	mtx_destroy(mtx);
+	free((void *)mtx);
+}
+END_TEST
+
+
+START_TEST(trylock_plain_mutex)
+{
+	plan_tests(3);
+
+	mtx_t *mtx = malloc(sizeof(mtx_t));
+	fail_if(mtx == NULL);
+	int n = mtx_init(mtx, mtx_plain);
+	fail_if(n != thrd_success);
+
+	n = mtx_trylock(mtx);
+	ok(n == thrd_success, "mtx_trylock returned success");
+	n = mtx_trylock(mtx);
+	ok(n == thrd_busy, "mtx_trylock returned busy");
+	mtx_destroy(mtx);
+	pass("mtx_destroy didn't abort");
+
+	free((void *)mtx);
+}
+END_TEST
+
+
+START_TEST(lock_plain_mutex)
+{
+	plan_tests(2);
+
+	mtx_t *mtx = malloc(sizeof(mtx_t));
+	fail_if(mtx == NULL);
+	int n = mtx_init(mtx, mtx_plain);
+	fail_if(n != thrd_success);
+
+	n = mtx_lock(mtx);
+	if(!ok(n == thrd_success, "mtx_lock returned success")) {
+		diag("n=%d", n);
+	}
+	n = mtx_unlock(mtx);
+	if(!ok(n == thrd_success, "mtx_unlock returned success")) {
+		diag("n=%d", n);
+	}
+
+	mtx_destroy(mtx);
+	free((void *)mtx);
+}
+END_TEST
+
+
+static void lock_and_hold_fn(void *param_ptr)
+{
+	mtx_t *mtx = param_ptr;
+	int n = mtx_lock(mtx);
+	fail_unless(n == thrd_success);
+
+	L4_Accept(L4_UntypedWordsAcceptor);
+	L4_ThreadId_t sender;
+	L4_MsgTag_t tag = L4_Wait(&sender);
+	if(L4_IpcFailed(tag)) {
+		diag("%s: ipc failed, ec=%#lx", __func__, L4_ErrorCode());
+	} else if(L4_Label(tag) != QUIT_LABEL) {
+		diag("%s: weird tag=%#lx", __func__, tag.raw);
+	}
+
+	n = mtx_unlock(mtx);
+	int *status = malloc(sizeof(int));
+	*status = n;
+	exit_thread(status);
+}
+
+
+/* variables:
+ *   - [do_trylock] whether the main thread locks the mutex using
+ *     mtx_trylock(), or mtx_lock()
+ */
+START_LOOP_TEST(conflict_plain_mutex, iter, 0, 1)
+{
+	bool do_trylock = CHECK_FLAG(iter, 1);
+	diag("do_trylock=%s", btos(do_trylock));
+	plan_tests(7);
+	todo_start("not done yet");
+
+	mtx_t *mtx = malloc(sizeof(mtx_t));
+	mtx_init(mtx, mtx_plain);
+	int n;
+	if(do_trylock) n = mtx_trylock(mtx); else n = mtx_lock(mtx);
+	if(!ok(n == thrd_success, "own lock succeeds")) {
+		diag("n=%d", (int)n);
+	}
+
+	L4_ThreadId_t oth = xstart_thread(&lock_and_hold_fn, (void *)mtx);
+	bool quit_ok = send_quit(oth);
+	ok(!quit_ok, "other thread blocks");
+
+	n = mtx_unlock(mtx);
+	if(!ok(n == thrd_success, "own unlock succeeds")) {
+		diag("n=%d", (int)n);
+	}
+	L4_ThreadSwitch(oth);
+	n = mtx_trylock(mtx);
+	ok(n == thrd_busy, "other thread owns lock");
+	send_quit(oth);
+	L4_ThreadSwitch(oth);
+	n = mtx_trylock(mtx);
+	ok(n == thrd_success, "trylock succeeded after quit");
+
+	n = mtx_unlock(mtx);
+	if(!ok(n == thrd_success, "own unlock succeeds (after trylock)")) {
+		diag("n=%d", (int)n);
+	}
+
+	int *retp = xjoin_thread(oth);
+	ok(retp != NULL && *retp == thrd_success,
+		"other thread unlock succeeded");
+	free(retp);
+
+	mtx_destroy(mtx);
+	free((void *)mtx);
+}
+END_TEST
+
+
 /* tcase "env" */
 
 /* note: this'll examine at most DROP_PAGER_LOG_SIZE pages, which is typically
@@ -1654,6 +1790,16 @@ Suite *self_suite(void)
 		tcase_add_test(tc, multi_fork_tid);
 		tcase_add_test(tc, many_fork_sequence);
 		tcase_add_test(tc, retain_tsd_on_fork);
+		suite_add_tcase(s, tc);
+	}
+
+	/* tests about the C11-like mutexes in <threads.h>. */
+	{
+		TCase *tc = tcase_create("mutex");
+		tcase_add_test(tc, init_plain_mutex);
+		tcase_add_test(tc, trylock_plain_mutex);
+		tcase_add_test(tc, lock_plain_mutex);
+		tcase_add_test(tc, conflict_plain_mutex);
 		suite_add_tcase(s, tc);
 	}
 
