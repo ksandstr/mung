@@ -68,6 +68,11 @@ static COLD void init_threading(void)
 	self->stack = NULL;
 	self->version = L4_Version(L4_Myself());
 	self->alive = true;
+
+	if(!init_mutexes(false)) {
+		printf("%s: init_mutexes() failed\n", __func__);
+		abort();
+	}
 }
 
 
@@ -265,6 +270,12 @@ int thread_on_fork(
 	free(mgr_stk_base);
 	mgr_tid = L4_nilthread;
 	start_mgr_thread(new_mgr_tid);
+
+	/* restart the mutex serializer thread. */
+	if(!init_mutexes(true)) {
+		printf("%s: init_mutexes() failed\n", __func__);
+		abort();
+	}
 
 	/* TODO: instead figure out the caller's priority. */
 	int pri = find_own_priority();

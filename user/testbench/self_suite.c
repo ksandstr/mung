@@ -1508,7 +1508,6 @@ START_LOOP_TEST(conflict_plain_mutex, iter, 0, 1)
 	bool do_trylock = CHECK_FLAG(iter, 1);
 	diag("do_trylock=%s", btos(do_trylock));
 	plan_tests(7);
-	todo_start("not done yet");
 
 	mtx_t *mtx = malloc(sizeof(mtx_t));
 	mtx_init(mtx, mtx_plain);

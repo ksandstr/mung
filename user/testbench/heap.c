@@ -122,6 +122,10 @@ int getpagesize(void) {
 
 /* interface for lib/slab.c */
 
+/* FIXME: make this threadsafe (and sbrk() as well). slab allocation is used
+ * in the mutex serializer thread, so a custom spinlock implementation is
+ * indicated.
+ */
 static struct list_head kmem_list = LIST_HEAD_INIT(kmem_list);
 
 void *kmem_alloc_new_page(void) {

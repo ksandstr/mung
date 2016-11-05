@@ -252,6 +252,11 @@ extern void tsd_set(int key, void *ptr);
 extern void *tsd_get(int key);
 
 
+/* from mutex.c */
+
+extern bool init_mutexes(bool on_fork);
+
+
 /* from delay.c */
 
 extern unsigned long iters_per_tick;
