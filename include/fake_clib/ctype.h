@@ -37,10 +37,15 @@ static inline int tolower(int c) {
 }
 
 
+static inline int isalpha(int c) {
+	c = tolower(c);
+	return c >= 'a' && c <= 'z';
+}
+
+
 /* NOTE: none of this shit works!, quoth captain kirk */
 
 extern int isalnum(int c);
-extern int isalpha(int c);
 extern int isascii(int c);
 extern int isblank(int c);
 extern int iscntrl(int c);

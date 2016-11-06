@@ -6,11 +6,14 @@
 #include <stdarg.h>
 #include <ctype.h>
 #include <assert.h>
+
 #include <ccan/list/list.h>
 #include <ccan/container_of/container_of.h>
 #include <ccan/htable/htable.h>
 #include <ccan/hash/hash.h>
 #include <ccan/str/str.h>
+#include <ccan/strset/strset.h>
+#include <ccan/talloc/talloc.h>
 
 #include <l4/types.h>
 #include <l4/thread.h>
@@ -347,134 +350,171 @@ void srunner_add_suite(SRunner *run, Suite *s)
 			ent->tc = tc;
 			ent->s = s;
 			memcpy(ent->path, path, pchars + 1);
+			assert(get_test_entry(&run->test_by_path, ent->path) == NULL);
 			htable_add(&run->test_by_path, hash(ent->path, pchars, 0), ent);
 		}
 	}
 }
 
 
-/* all-to-all prefix length. a disambiguating prefix for something specific
- * could be shorter.
- */
-static int prefix_length_all(char **names_ptr, int num_names)
-{
-	const char *names[num_names];
-	for(int i=0; i < num_names; i++) names[i] = names_ptr[i];
-
-	int pfx = 0, n_valid = num_names;
-	bool hit;
-	do {
-		hit = false;
-		bool seen[256];
-		for(int i=0; i < 256; i++) seen[i] = false;
-		for(int i=0; i < num_names && !hit; i++) {
-			if(names[i] == NULL) continue;
-			int c = (unsigned char)names[i][pfx];
-			if(c == '\0') {
-				names[i] = NULL;
-				n_valid--;
-			} else if(seen[c]) {
-				hit = true;
-			} else {
-				seen[c] = true;
-			}
-		}
-		if(hit) pfx++;
-	} while(hit && n_valid > 0);
-
-	return pfx + 1;
+static int cmp_strptr(const void *ap, const void *bp) {
+	const char *a = *(const char **)ap, *b = *(const char **)bp;
+	return strcmp(a, b);
 }
 
 
-/* picks out a list of names as struct flexmembers, and calls
- * prefix_length_all() on them.
+/* compute longest common name prefix within @list, extracted per
+ * @link_off and @name_off.
  */
-static int name_prefix_length_all(
-	struct list_head *list,
-	size_t link_offset,
-	size_t name_offset)
+static size_t prefix_length(
+	struct list_head *list, size_t link_off, size_t name_off)
 {
-	int len = list_length(list);
-	char *names[len];
-	int ix = 0;
+	size_t num_names = list_length(list);
+	char *names[num_names];
+	int pos = 0;
 	void *ptr;
-	list_for_each_off(list, ptr, link_offset) {
-		names[ix++] = ptr + name_offset;
+	list_for_each_off(list, ptr, link_off) {
+		names[pos++] = ptr + name_off;
 	}
-	return prefix_length_all(names, len);
+	qsort(names, num_names, sizeof(char *), &cmp_strptr);
+
+	size_t max_prefix = 0;
+	for(size_t i=1; i < num_names; i++) {
+		const char *prev = names[i - 1], *cur = names[i];
+		size_t p = 0;
+		while(prev[p] == cur[p] && prev[p] != '\0') p++;
+#if 0
+		if(p > max_prefix) {
+			printf("%s: between `%s' and `%s', p=%u, max_prefix=%u\n",
+				__func__, prev, cur,
+				(unsigned)p, (unsigned)max_prefix);
+		}
+#endif
+		max_prefix = MAX(size_t, p, max_prefix);
+	}
+
+	return max_prefix;
 }
 
 
-/* this is objectively the worst thing i've ever written. -ks */
+/* grab up to @take - [# of digits in @iter if > 0] alpha characters from
+ * @name, capitalize the first letter, and add @iter converted to a base-10
+ * number (of at most 2 digits). the @iter goes on top of the last two if
+ * the result would otherwise be longer than 4 characters.
+ */
+static void make_padded_name(
+	char *out, const char *name, size_t take, size_t iter)
+{
+	char tmp[take + 1];
+	int t = 0;
+	for(int i = 0; name[i] != '\0' && t < take; i++) {
+		if(isalpha(name[i])) tmp[t++] = name[i];
+	}
+	tmp[t] = '\0';
+	if(iter == 0) {
+		memcpy(out, tmp, t + 1);
+	} else if(iter <= 10) {
+		if(take > 3) tmp[--t] = '\0';
+		snprintf(out, take + 2, "%s%d", tmp, iter - 1);
+	} else if(iter <= 100) {
+		if(take > 3) tmp[--t] = '\0';
+		if(take > 2) tmp[--t] = '\0';
+		snprintf(out, take + 3, "%s%02d", tmp, iter - 1);
+	} else {
+		assert(iter <= 100);
+	}
+	out[0] = toupper(out[0]);
+}
+
+
+/* this used to be objectively the worst thing i'd ever written. now it's
+ * slightly better. i sincerely hope it's as painful to read as it was to
+ * write. -ks
+ */
 static void add_test_ids(struct htable *table, SRunner *sr)
 {
-	int suite_pfx = name_prefix_length_all(&sr->suites,
+	void *setctx = talloc_new(NULL);
+	struct strset suite_set, id_set;
+	strset_init(&suite_set);
+	strset_init(&id_set);	/* they're global. */
+	size_t suite_pfx = prefix_length(&sr->suites,
 		offsetof(Suite, runner_link), offsetof(Suite, name));
-	if(suite_pfx > 4) suite_pfx = 4;
-
 	Suite *s;
 	list_for_each(&sr->suites, s, runner_link) {
-		char suitename[5];
-		memset(suitename, '\0', sizeof(suitename));
-		memcpy(suitename, s->name, MIN(int, 4, suite_pfx));
-		suitename[0] = toupper(suitename[0]);
+		char suitename[32];
+		for(int i = 0; i <= 100; i++) {
+			make_padded_name(suitename, s->name,
+				MIN(size_t, suite_pfx, 4) + 1, i);
+			if(strset_get(&suite_set, suitename) == NULL) {
+				strset_add(&suite_set, talloc_strdup(setctx, suitename));
+				break;
+			}
+		}
 
-		int tcase_pfx = name_prefix_length_all(&s->cases,
+		struct strset tcase_set;
+		strset_init(&tcase_set);
+		void *tcctx = talloc_new(setctx);
+		size_t tcase_pfx = prefix_length(&s->cases,
 			offsetof(TCase, suite_link), offsetof(TCase, name));
-		if(tcase_pfx > 4) tcase_pfx = 4;
 		TCase *tc;
 		list_for_each(&s->cases, tc, suite_link) {
-			char tcasename[5];
-			memset(tcasename, '\0', sizeof(tcasename));
-			memcpy(tcasename, tc->name, MIN(int, 4, tcase_pfx));
-			tcasename[0] = toupper(tcasename[0]);
+			char tcasename[64];
+			for(int i=0; i <= 100; i++) {
+				make_padded_name(tcasename, tc->name,
+					MIN(size_t, tcase_pfx, 3) + 1, i);
+				char combined[64];
+				snprintf(combined, 64, "%s%s", suitename, tcasename);
+				if(strset_get(&tcase_set, combined) == NULL) {
+					strset_add(&tcase_set, talloc_strdup(tcctx, combined));
+					break;
+				}
+			}
 
-			int test_pfx = name_prefix_length_all(&tc->tests,
+			size_t test_pfx = prefix_length(&tc->tests,
 				offsetof(struct test, tcase_link),
 				offsetof(struct test, name));
-			if(test_pfx > 4) test_pfx = 4;
-
 			struct test *t;
 			list_for_each(&tc->tests, t, tcase_link) {
-				char tid[24], testname[5];
-				memset(testname, '\0', sizeof(testname));
-				memcpy(testname, t->name, MIN(int, 4, test_pfx));
-				testname[0] = toupper(testname[0]);
-
-				snprintf(tid, sizeof(tid), "%s%s%s",
-					suitename, tcasename, testname);
-
-				int counter = 0;
-				struct test_entry *prior;
-				while((prior = get_test_entry(table, tid)) != NULL) {
-					assert(counter <= 0xffff);
-					snprintf(tid, sizeof(tid), "%s%s%s%x", suitename, tcasename,
-						testname, (unsigned)counter);
-					counter++;
+				char tid[64];
+				for(int i=0; i <= 100; i++) {
+					char testname[32];
+					make_padded_name(testname, t->name,
+						MIN(size_t, test_pfx, 3) + 1, i);
+					snprintf(tid, sizeof(tid), "%s%s%s",
+						suitename, tcasename, testname);
+					if(strset_get(&id_set, tid) == NULL) {
+						strset_add(&id_set, talloc_strdup(setctx, tid));
+						break;
+					}
 				}
 
 				int tid_len = strlen(tid);
-				struct test_entry *ent = malloc(sizeof(struct test_entry)
-					 + tid_len + 1);
+				struct test_entry *ent = malloc(
+					sizeof(struct test_entry) + tid_len + 1);
 				memcpy(ent->path, tid, tid_len);
 				ent->path[tid_len] = '\0';
 				ent->s = s;
 				ent->tc = tc;
 				ent->test = t;
-				htable_add(table, hash(tid, tid_len, 0), ent);
+				assert(get_test_entry(table, ent->path) == NULL);
+				bool ok = htable_add(table, hash(tid, tid_len, 0), ent);
+				assert(ok);
 			}
 		}
+
+		strset_clear(&tcase_set);
+		talloc_free(tcctx);
 	}
+
+	strset_clear(&suite_set);
+	strset_clear(&id_set);
+	talloc_free(setctx);
 }
 
 
 /* lazy add. */
-static void gen_test_ids(SRunner *sr)
-{
-	struct htable_iter it;
-	if(htable_first(&sr->test_by_id, &it) == NULL) {
-		add_test_ids(&sr->test_by_id, sr);
-	}
+static void gen_test_ids(SRunner *sr) {
+	if(sr->test_by_id.elems == 0) add_test_ids(&sr->test_by_id, sr);
 }
 
 
