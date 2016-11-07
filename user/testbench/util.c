@@ -144,7 +144,7 @@ L4_ThreadId_t xstart_thread(void (*fn)(void *), void *param)
 }
 
 
-void xjoin_thread(L4_ThreadId_t other)
+void *xjoin_thread(L4_ThreadId_t other)
 {
 	L4_Word_t ec = 0;
 	void *ptr = join_thread_long(other, L4_TimePeriod(1000 * 1000), &ec);
@@ -154,6 +154,7 @@ void xjoin_thread(L4_ThreadId_t other)
 			L4_ThreadNo(g), L4_Version(g));
 		kill_thread(other);
 	}
+	return ptr;
 }
 
 
