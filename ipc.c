@@ -1991,8 +1991,10 @@ SYSCALL L4_Word_t sys_lipc(
 	assert(sender->u0.partner != dest);
 	if(to.raw == fromspec.raw && likely(!dest_was_partner)) {
 		assert(get_local_id(dest).raw == to.raw);
-		/* FIXME: call a sched_set_partner() or some such instead */
-		assert(dest->u0.partner == NULL);	/* FIXME: lift this */
+		/* FIXME: when dest->u0.partner != NULL, break the existing scheduling
+		 * partnership. (it may be enough to just set the pointer.) that
+		 * should happen with a sched_set_partner() call or some such.
+		 */
 		dest->u0.partner = sender;
 	}
 	/* set the receiver's epilogue frame up. */
