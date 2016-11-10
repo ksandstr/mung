@@ -195,6 +195,97 @@ START_LOOP_TEST(basic_fork_and_wait, iter, 0, 1)
 END_TEST
 
 
+static void wait_for_some_child_fn(void *param_ptr)
+{
+	int st, n = wait(&st);
+	diag("%s: n=%d, st=%d", __func__, n, st);
+}
+
+
+/* arrange for a child process to call wait() while there are no children,
+ * then exit.
+ *
+ * variables:
+ *   - [many] whether there's five waiting threads, or just one.
+ */
+START_LOOP_TEST(wait_without_child, iter, 0, 1)
+{
+	int n_waits = CHECK_FLAG(iter, 1) ? 5 : 1;
+	diag("n_waits=%d", n_waits);
+	plan_tests(1);
+	todo_start("provokes a forkserv bug");
+
+	int waiter_pid = fork();
+	if(waiter_pid == 0) {
+		diag("starting waiter threads");
+		for(int i=0; i < n_waits; i++) {
+			xstart_thread(&wait_for_some_child_fn, NULL);
+		}
+		diag("waiter threads started");
+		L4_Sleep(A_SHORT_NAP);
+		diag("waiter child exiting");
+		/* note that we don't join those threads. they're expected to get
+		 * killed at process exit.
+		 */
+		exit(0);
+	}
+
+	diag("waiter_pid=%d", waiter_pid);
+	int st, pid = wait(&st);
+	if(!ok1(pid == waiter_pid)) {
+		diag("st=%d, pid=%d", st, pid);
+	}
+}
+END_TEST
+
+
+/* arrange for a child process to call wait() from more threads than it has
+ * children, then exit the children it does have, then exit itself.
+ *
+ * variables:
+ *   - [many] whether there's three actual children, or just one.
+ */
+START_LOOP_TEST(wait_more_children, iter, 0, 1)
+{
+	int n_children = CHECK_FLAG(iter, 1) ? 3 : 1;
+	diag("n_children=%d", n_children);
+	plan_tests(1);
+	todo_start("provokes a forkserv bug");
+
+	int waiter_pid = fork();
+	if(waiter_pid == 0) {
+		int children[n_children];
+		diag("starting children");
+		for(int i=0; i < n_children; i++) {
+			children[i] = fork();
+			if(children[i] == 0) {
+				L4_Sleep(A_SHORT_NAP);
+				exit(0);
+			} else {
+				diag("children[%d]=%d", i, children[i]);
+			}
+		}
+		diag("starting waiters");
+		for(int i=0; i < n_children + 2; i++) {
+			xstart_thread(&wait_for_some_child_fn, NULL);
+		}
+		diag("waiters started");
+		L4_Sleep(A_SHORT_NAP);
+		L4_Sleep(A_SHORT_NAP);
+		diag("waiter child exiting");
+		/* see comment in wait_without_child */
+		exit(0);
+	}
+
+	diag("waiter_pid=%d", waiter_pid);
+	int st, pid = wait(&st);
+	if(!ok1(pid == waiter_pid)) {
+		diag("st=%d, pid=%d", st, pid);
+	}
+}
+END_TEST
+
+
 START_TEST(copy_on_write)
 {
 	plan_tests(2);
@@ -1289,6 +1380,8 @@ Suite *self_suite(void)
 		TCase *tc = tcase_create("fork");
 		tcase_set_fork(tc, false);
 		tcase_add_test(tc, basic_fork_and_wait);
+		tcase_add_test(tc, wait_without_child);
+		tcase_add_test(tc, wait_more_children);
 		tcase_add_test(tc, copy_on_write);
 		tcase_add_test(tc, return_exit_status);
 		tcase_add_test(tc, reparent_orphans);
