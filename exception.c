@@ -828,7 +828,15 @@ static void receive_exn_reply(
 
 	/* only do a valid thing for a valid reply. seems reasonable, right? */
 	L4_MsgTag_t tag = { .raw = L4_VREG(msg_utcb, L4_TCR_MR(0)) };
-	if(unlikely(L4_UntypedWords(tag) < 12 || sender == NULL)) return;
+	if(unlikely(L4_UntypedWords(tag) < 12 || sender == NULL)) {
+		/* this used to just return from the hook, which would cause the IPC
+		 * state machine to explode. instead we'll break here.
+		 *
+		 * FIXME: write a test that tickles this panic, and then fix the panic
+		 * with thread_halt().
+		 */
+		panic("pants on fire (invalid exception reply) [FIXME]");
+	}
 
 	/* ignores "ExceptionNo", "ErrorCode" in MR3, MR4 resp. */
 	struct x86_ctx *c = &t->ctx;
