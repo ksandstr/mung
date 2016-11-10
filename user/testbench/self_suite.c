@@ -166,8 +166,14 @@ END_TEST
 
 /* tcase fork: tests of forkserv's own process management features. */
 
-START_TEST(basic_fork_and_wait)
+/* variables:
+ *   - [sleeping_child] child should sleep to let parent get to wait() first.
+ *     if false, parent sleeps to let child get to exit() first.
+ */
+START_LOOP_TEST(basic_fork_and_wait, iter, 0, 1)
 {
+	bool sleeping_child = CHECK_FLAG(iter, 1);
+	diag("sleeping_child=%s", btos(sleeping_child));
 	plan_tests(3);
 
 	int parent_pid = getpid();
@@ -175,11 +181,13 @@ START_TEST(basic_fork_and_wait)
 	if(spid == 0) {
 		/* child side */
 		diag("child running, sees pid=%d (parent=%d)", getpid(), parent_pid);
+		if(sleeping_child) L4_Sleep(A_SHORT_NAP);
 		exit(abs(parent_pid - getpid()));
 		assert(false);
 	}
 	diag("spid=%d", spid);
 	ok(spid > 0, "fork succeeded");
+	if(!sleeping_child) L4_Sleep(A_SHORT_NAP);
 	int status = 0, dead = wait(&status);
 	ok(dead > 0 && dead == spid, "child exited");
 	ok(status == abs(getpid() - spid), "exit status was delivered");
