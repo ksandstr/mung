@@ -213,7 +213,6 @@ START_LOOP_TEST(wait_without_child, iter, 0, 1)
 	int n_waits = CHECK_FLAG(iter, 1) ? 5 : 1;
 	diag("n_waits=%d", n_waits);
 	plan_tests(1);
-	todo_start("provokes a forkserv bug");
 
 	int waiter_pid = fork();
 	if(waiter_pid == 0) {
@@ -250,7 +249,6 @@ START_LOOP_TEST(wait_more_children, iter, 0, 1)
 	int n_children = CHECK_FLAG(iter, 1) ? 3 : 1;
 	diag("n_children=%d", n_children);
 	plan_tests(1);
-	todo_start("provokes a forkserv bug");
 
 	int waiter_pid = fork();
 	if(waiter_pid == 0) {

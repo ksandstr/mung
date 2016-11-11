@@ -1468,6 +1468,7 @@ static void destroy_space(struct fs_space *sp)
 static int32_t handle_wait(int32_t *status_ptr)
 {
 	L4_ThreadId_t ipc_from = muidl_get_sender();
+	assert(L4_IsGlobalId(ipc_from));
 	struct fs_space *sp = get_space_by_tid(ipc_from);
 	if(sp == NULL) {
 		printf("forkserv: don't know space for %lu:%lu\n",
@@ -1500,28 +1501,15 @@ static int32_t handle_getpid(void)
 }
 
 
-static bool end_thread(L4_ThreadId_t tid)
+static bool end_thread_by_tno(struct fs_space *sp, int tno)
 {
-	struct fs_thread *t = get_thread(tid);
-	if(t == NULL) return false;
-
-	struct fs_space *sp = t->space;
-	bool found = false;
-	for(int i=0; i < THREADS_PER_SPACE; i++) {
-		if(sp->threads[i] == t) {
-			assert(!found);		/* must only occur once. */
-			sp->threads[i] = NULL;
-			found = true;
-		}
-	}
-	if(!found) {
-		printf("tid=%lu:%lu wasn't found\n",
-			L4_ThreadNo(tid), L4_Version(tid));
-		abort();
-	}
+	assert(tno >= 0 && tno < THREADS_PER_SPACE);
+	if(sp->threads[tno] == NULL) return false;
+	struct fs_thread *t = sp->threads[tno];
+	sp->threads[tno] = NULL;
 
 	L4_MsgTag_t tag;
-	L4_Word_t ec = 0, res = fpager_threadctl(&tag, &ec, tid, L4_nilthread,
+	L4_Word_t ec = 0, res = fpager_threadctl(&tag, &ec, t->tid, L4_nilthread,
 		L4_nilthread, L4_nilthread, (void *)-1);
 	if(res != 1) {
 		printf("forkserv/end_thread: threadctl failed, %s ec %#lx\n",
@@ -1535,24 +1523,55 @@ static bool end_thread(L4_ThreadId_t tid)
 }
 
 
+static bool end_thread(L4_ThreadId_t tid)
+{
+	struct fs_thread *t = get_thread(tid);
+	if(t == NULL) return false;
+
+	struct fs_space *sp = t->space;
+	int tno = -1;
+	for(int i=0; i < THREADS_PER_SPACE; i++) {
+		if(sp->threads[i] == t) {
+			assert(tno < 0);		/* must only occur once. */
+			tno = i;
+		}
+	}
+	if(tno < 0) {
+		printf("tid=%lu:%lu wasn't found\n",
+			L4_ThreadNo(tid), L4_Version(tid));
+		abort();
+	}
+
+	return end_thread_by_tno(sp, tno);
+}
+
+
 static void handle_exit(int32_t status)
 {
 	L4_ThreadId_t ipc_from = muidl_get_sender();
+	assert(L4_IsGlobalId(ipc_from));
 	struct fs_space *sp = get_space_by_tid(ipc_from);
 	if(sp == NULL) {
 		printf("forkserv/exit: unknown TID %lu:%lu\n",
 			L4_ThreadNo(ipc_from), L4_Version(ipc_from));
 		return;
 	}
-	for(int i=0; i < THREADS_PER_SPACE; i++) {
-		if(sp->threads[i] != NULL) end_thread(sp->threads[i]->tid);
+
+	/* chuck threads in a slightly redundant manner, i.e. by killing the ones
+	 * currently in wait(2) first. this enforces a little bit of consistency
+	 * under !NDEBUG, which is good in a test runtime such as per forkserv's
+	 * design.
+	 */
+	struct fs_thread *t, *next;
+	list_for_each_safe(&sp->waiting_threads, t, next, wait_link) {
+		list_del_from(&sp->waiting_threads, &t->wait_link);
+		bool was_found = end_thread(t->tid);
+		assert(was_found);
 	}
+	assert(list_empty(&sp->waiting_threads));
+	for(int i=0; i < THREADS_PER_SPACE; i++) end_thread_by_tno(sp, i);
 
 	/* destroy the virtual memory bits and zombify the address space */
-	/* (assert disabled because a test would hit it, causing testbench
-	 * failure.)
-	 */
-	// assert(list_empty(&sp->waiting_threads));
 	htable_del(&space_hash, int_hash(sp->id), &sp->id);
 	struct htable_iter it;
 	for(struct fs_vpage *vp = htable_first(&sp->pages, &it);
