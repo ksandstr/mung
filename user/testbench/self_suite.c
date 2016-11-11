@@ -2,9 +2,11 @@
 #include <stdlib.h>
 #include <string.h>
 #include <assert.h>
+#include <errno.h>
 
 #include <ccan/str/str.h>
 #include <ccan/crc/crc.h>
+#include <ccan/talloc/talloc.h>
 
 #include <l4/types.h>
 #include <l4/ipc.h>
@@ -197,39 +199,92 @@ END_TEST
 
 static void wait_for_some_child_fn(void *param_ptr)
 {
+	int *result_p = param_ptr;
 	int st, n = wait(&st);
 	diag("%s: n=%d, st=%d", __func__, n, st);
+	if(result_p != NULL) {
+		*result_p = n > 0 ? n : -errno;
+		exit_thread(result_p);
+	}
 }
 
 
-/* arrange for a child process to call wait() while there are no children,
- * then exit.
+/* arrange for a child process to call wait(2) while there are no children,
+ * store the wait(2) result, then exit.
  *
  * variables:
  *   - [many] whether there's five waiting threads, or just one.
+ *   - [do_join] whether the test threads will be joined and reported back
+ *     before subprocess exit.
  */
-START_LOOP_TEST(wait_without_child, iter, 0, 1)
+START_LOOP_TEST(wait_without_child, iter, 0, 3)
 {
 	int n_waits = CHECK_FLAG(iter, 1) ? 5 : 1;
-	diag("n_waits=%d", n_waits);
-	plan_tests(1);
+	bool do_join = CHECK_FLAG(iter, 2);
+	diag("n_waits=%d, do_join=%s", n_waits, btos(do_join));
+	plan_tests(4);
+	if(do_join) todo_start("ECHILD reporting not implemented");
 
-	int waiter_pid = fork();
+	L4_ThreadId_t parent_tid = do_join ? L4_Myself() : L4_nilthread,
+		child_tid;
+	int waiter_pid = fork_tid(&child_tid);
 	if(waiter_pid == 0) {
 		diag("starting waiter threads");
+		int *ctx = talloc_new(NULL);
+		L4_ThreadId_t tids[n_waits];
 		for(int i=0; i < n_waits; i++) {
-			xstart_thread(&wait_for_some_child_fn, NULL);
+			tids[i] = xstart_thread(&wait_for_some_child_fn,
+				talloc(ctx, int));
 		}
 		diag("waiter threads started");
 		L4_Sleep(A_SHORT_NAP);
+		if(do_join) {
+			/* collect results & report back. */
+			L4_Word_t results[n_waits];
+			for(int i=0; i < n_waits; i++) {
+				L4_Word_t ec = 0;
+				int *p = join_thread_long(tids[i], A_SHORT_NAP, &ec);
+				results[i] = p != NULL ? *p : -ENOSYS;
+			}
+			L4_MsgTag_t tag = (L4_MsgTag_t){ .X.u = n_waits };
+			L4_LoadMR(0, tag.raw);
+			L4_LoadMRs(1, n_waits, results);
+			tag = L4_Send_Timeout(parent_tid, TEST_IPC_DELAY);
+			if(L4_IpcFailed(tag)) {
+				diag("child send failed, ec=%#lx", L4_ErrorCode());
+			}
+		} else {
+			/* don't. we don't join those threads; they're expected to get
+			 * killed at process exit. this tests for a particular assert()
+			 * which used to exist in forkserv.c:handle_exit().
+			 */
+		}
 		diag("waiter child exiting");
-		/* note that we don't join those threads. they're expected to get
-		 * killed at process exit.
-		 */
 		exit(0);
 	}
 
 	diag("waiter_pid=%d", waiter_pid);
+
+	int num_echild = 0;
+	skip_start(!do_join, 2, "!do_join") {
+		L4_Word_t results[n_waits];
+		L4_MsgTag_t tag = L4_Receive_Timeout(child_tid,
+			L4_TimePeriod(200 * 1000));
+		if(!ok(L4_IpcSucceeded(tag), "child reported back")) {
+			diag("ec=%#lx", L4_ErrorCode());
+		}
+		int n_got = MIN(int, n_waits, L4_UntypedWords(tag));
+		L4_StoreMRs(1, n_got, results);
+		ok1(n_got > 0);
+		for(int i=0; i < n_waits; i++) {
+			if(results[i] == (L4_Word_t)-ECHILD) num_echild++;
+			// else diag("non-ECHILD results[%d]=%#lx", i, results[i]);
+		}
+	} skip_end;
+	if(!imply_ok1(do_join, num_echild == n_waits)) {
+		diag("num_echild=%d", num_echild);
+	}
+
 	int st, pid = wait(&st);
 	if(!ok1(pid == waiter_pid)) {
 		diag("st=%d, pid=%d", st, pid);
@@ -243,14 +298,25 @@ END_TEST
  *
  * variables:
  *   - [many] whether there's three actual children, or just one.
+ *   - [do_join] whether the test threads will be joined and reported back
+ *     before subprocess exit.
+ *
+ * this test shares a lot of code with wait_without_child. it could be merged
+ * in, with a flag to set whether it'll actually start children or not. for
+ * now, however...
  */
-START_LOOP_TEST(wait_more_children, iter, 0, 1)
+START_LOOP_TEST(wait_more_children, iter, 0, 3)
 {
 	int n_children = CHECK_FLAG(iter, 1) ? 3 : 1;
-	diag("n_children=%d", n_children);
-	plan_tests(1);
+	bool do_join = CHECK_FLAG(iter, 2);
+	diag("n_children=%d, do_join=%s", n_children, btos(do_join));
+	plan_tests(4);
+	if(do_join) todo_start("ECHILD reporting not implemented");
 
-	int waiter_pid = fork();
+	const int n_waits = n_children + 2;
+	L4_ThreadId_t parent_tid = do_join ? L4_Myself() : L4_nilthread,
+		child_tid;
+	int waiter_pid = fork_tid(&child_tid);
 	if(waiter_pid == 0) {
 		int children[n_children];
 		diag("starting children");
@@ -264,18 +330,59 @@ START_LOOP_TEST(wait_more_children, iter, 0, 1)
 			}
 		}
 		diag("starting waiters");
-		for(int i=0; i < n_children + 2; i++) {
-			xstart_thread(&wait_for_some_child_fn, NULL);
+		void *ctx = talloc_new(NULL);
+		L4_ThreadId_t tids[n_waits];
+		for(int i=0; i < n_waits; i++) {
+			tids[i] = xstart_thread(&wait_for_some_child_fn,
+				talloc(ctx, int));
 		}
 		diag("waiters started");
 		L4_Sleep(A_SHORT_NAP);
 		L4_Sleep(A_SHORT_NAP);
+		if(do_join) {
+			/* collect results & report back. */
+			L4_Word_t results[n_waits];
+			for(int i=0; i < n_waits; i++) {
+				L4_Word_t ec = 0;
+				int *p = join_thread_long(tids[i], A_SHORT_NAP, &ec);
+				results[i] = p != NULL ? *p : -ENOSYS;
+			}
+			L4_MsgTag_t tag = (L4_MsgTag_t){ .X.u = n_waits };
+			L4_LoadMR(0, tag.raw);
+			L4_LoadMRs(1, n_waits, results);
+			tag = L4_Send_Timeout(parent_tid, TEST_IPC_DELAY);
+			if(L4_IpcFailed(tag)) {
+				diag("child send failed, ec=%#lx", L4_ErrorCode());
+			}
+		} else {
+			/* see comment in same position of wait_without_child */
+		}
 		diag("waiter child exiting");
-		/* see comment in wait_without_child */
 		exit(0);
 	}
 
 	diag("waiter_pid=%d", waiter_pid);
+
+	int num_echild = 0;
+	skip_start(!do_join, 2, "!do_join") {
+		L4_Word_t results[n_waits];
+		L4_MsgTag_t tag = L4_Receive_Timeout(child_tid,
+			L4_TimePeriod(200 * 1000));
+		if(!ok(L4_IpcSucceeded(tag), "child reported back")) {
+			diag("ec=%#lx", L4_ErrorCode());
+		}
+		int n_got = MIN(int, n_waits, L4_UntypedWords(tag));
+		L4_StoreMRs(1, n_got, results);
+		ok1(n_got > 0);
+		for(int i=0; i < n_waits; i++) {
+			if(results[i] == (L4_Word_t)-ECHILD) num_echild++;
+			// else diag("non-ECHILD results[%d]=%#lx", i, results[i]);
+		}
+	} skip_end;
+	if(!imply_ok1(do_join, num_echild == 2)) {
+		diag("num_echild=%d", num_echild);
+	}
+
 	int st, pid = wait(&st);
 	if(!ok1(pid == waiter_pid)) {
 		diag("st=%d, pid=%d", st, pid);
