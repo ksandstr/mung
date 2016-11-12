@@ -64,9 +64,8 @@ struct fs_space
 	struct htable pages;
 	struct fs_thread *threads[THREADS_PER_SPACE];
 	L4_Fpage_t utcb_area, kip_area;
-	struct list_head dead_children;
-	struct list_head waiting_threads;
-	struct list_node dead_link;		/* in parent's dead_children */
+	struct list_head children, dead_children, waiting_threads;
+	struct list_node child_link;	/* in parent's children | dead_children */
 	int exit_status;
 
 	L4_ThreadId_t child_redir_tid;
@@ -456,11 +455,26 @@ static struct fs_space *make_initial_space(int id)
 		.kip_area = L4_FpageLog2(0x2f000, 12),
 		.child_redir_tid = L4_anythread,
 	};
+	list_head_init(&sp->children);
 	list_head_init(&sp->dead_children);
 	list_head_init(&sp->waiting_threads);
 	htable_init(&sp->pages, &hash_word, NULL);
-	htable_add(&space_hash, int_hash(id), &sp->id);
+	if(sp->id == 0) {
+		/* catch all early orphans. generally this only affects pid=1, i.e.
+		 * the testbench root task.
+		 */
+		struct htable_iter it;
+		for(struct fs_space *orphan = htable_first(&space_hash, &it);
+			orphan != NULL;
+			orphan = htable_next(&space_hash, &it))
+		{
+			if(orphan->parent_id != 0) continue;
+			assert(orphan->child_link.next == NULL);
+			list_add(&sp->children, &orphan->child_link);
+		}
+	}
 
+	htable_add(&space_hash, int_hash(id), &sp->id);
 	return sp;
 }
 
@@ -1193,8 +1207,10 @@ static int32_t handle_fork(void)
 	copy_space->kip_area = sp->kip_area;
 	copy_space->mgr_tid = L4_nilthread;
 	copy_space->child_redir_tid = sp->child_redir_tid;
+	list_head_init(&copy_space->children);
 	list_head_init(&copy_space->dead_children);
 	list_head_init(&copy_space->waiting_threads);
+	list_add(&sp->children, &copy_space->child_link);
 	htable_init(&copy_space->pages, &hash_word, NULL);
 	htable_add(&space_hash, int_hash(copy_space->id), &copy_space->id);
 
@@ -1443,24 +1459,22 @@ static void handle_discontig(L4_Fpage_t page, int32_t grain)
  */
 static void destroy_space(struct fs_space *sp)
 {
-	/* find children, reset parent_id. */
-	struct htable_iter it;
-	for(void *space_ptr = htable_first(&space_hash, &it);
-		space_ptr != NULL;
-		space_ptr = htable_next(&space_hash, &it))
-	{
-		struct fs_space *child = container_of(space_ptr, struct fs_space, id);
-		if(child->parent_id != sp->id) continue;
+	/* reparent children to space 0. */
+	struct fs_space *child, *next_space, *zero = get_space(0);
+	list_for_each_safe(&sp->children, child, next_space, child_link) {
 		child->parent_id = 0;
+		if(zero == NULL) list_del_from(&sp->children, &child->child_link);
 	}
+	if(zero != NULL) list_append_list(&zero->children, &sp->children);
+	assert(list_empty(&sp->children));
 
 	/* destroy dead children. */
-	struct fs_space *cur, *next;
-	list_for_each_safe(&sp->dead_children, cur, next, dead_link) {
-		list_del(&cur->dead_link);
-		destroy_space(cur);
+	list_for_each_safe(&sp->dead_children, child, next_space, child_link) {
+		list_del_from(&sp->dead_children, &child->child_link);
+		destroy_space(child);
 	}
 	assert(list_empty(&sp->dead_children));
+
 	free(sp);
 }
 
@@ -1476,20 +1490,24 @@ static int32_t handle_wait(int32_t *status_ptr)
 		return -1;
 	}
 
-	struct fs_space *dead = list_top(&sp->dead_children,
-		struct fs_space, dead_link);
-	if(dead == NULL) {
+	struct fs_space *dead = list_pop(&sp->dead_children,
+		struct fs_space, child_link);
+	if(dead != NULL) {
+		/* immediate success */
+		int id = dead->id;
+		*status_ptr = dead->exit_status;
+		destroy_space(dead);
+		return id;
+	} else if(!list_empty(&sp->children)) {
+		/* delayed */
 		struct fs_thread *t = get_thread(ipc_from);
 		list_add_tail(&sp->waiting_threads, &t->wait_link);
 		muidl_raise_no_reply();
 		return -666;
 	} else {
-		int id = dead->id;
-		*status_ptr = dead->exit_status;
-		list_del_from(&sp->dead_children, &dead->dead_link);
-		destroy_space(dead);
-
-		return id;
+		/* immediate -ECHILD */
+		*status_ptr = 0;
+		return -ECHILD;
 	}
 }
 
@@ -1571,6 +1589,11 @@ static void handle_exit(int32_t status)
 	assert(list_empty(&sp->waiting_threads));
 	for(int i=0; i < THREADS_PER_SPACE; i++) end_thread_by_tno(sp, i);
 
+	struct fs_space *parent = get_space(sp->parent_id);
+	assert(parent != NULL);
+	assert(parent->id == sp->parent_id);
+	assert(sp != parent);		/* space 0 cannot die */
+
 	/* destroy the virtual memory bits and zombify the address space */
 	htable_del(&space_hash, int_hash(sp->id), &sp->id);
 	struct htable_iter it;
@@ -1588,20 +1611,15 @@ static void handle_exit(int32_t status)
 	}
 	htable_clear(&sp->pages);
 	sp->utcb_area = L4_Nilpage;
-	L4_Word_t dead_id = sp->id;
 
 	/* activate waiting thread, or make it immediately reapable (when there's
 	 * no waiter)
 	 */
-	struct fs_space *parent = get_space(sp->parent_id);
-	assert(parent != NULL);
-	assert(parent->id == sp->parent_id);
-	assert(sp != parent);		/* space 0 cannot die */
-	struct fs_thread *wakeup = list_top(&parent->waiting_threads,
+	list_del_from(&parent->children, &sp->child_link);
+	struct fs_thread *wakeup = list_pop(&parent->waiting_threads,
 		struct fs_thread, wait_link);
 	if(wakeup != NULL) {
-		list_del_from(&parent->waiting_threads, &wakeup->wait_link);
-		/* move own dead children over to parent */
+		L4_Word_t dead_id = sp->id;
 		destroy_space(sp);
 
 		L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 2 }.raw);
@@ -1612,9 +1630,36 @@ static void handle_exit(int32_t status)
 			printf("forkserv: can't send wakeup, ec=%#lx\n",
 				L4_ErrorCode());
 		}
+
+		/* if this was the parent's last child, send -ECHILD to other
+		 * waiters.
+		 *
+		 * also, !empty(dead) --> empty(waiting).
+		 */
+		assert(list_empty(&parent->dead_children)
+			|| list_empty(&parent->waiting_threads));
+		if(list_empty(&parent->children)
+			&& list_empty(&parent->dead_children)
+			&& !list_empty(&parent->waiting_threads))
+		{
+			list_for_each_safe(&parent->waiting_threads,
+				wakeup, next, wait_link)
+			{
+				L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 2 }.raw);
+				L4_LoadMR(1, (L4_Word_t)-ECHILD);
+				L4_LoadMR(2, 0);
+				L4_MsgTag_t tag = L4_Reply(wakeup->tid);
+				if(L4_IpcFailed(tag)) {
+					printf("forkserv: can't send -ECHILD, ec=%#lx\n",
+						L4_ErrorCode());
+				}
+
+				list_del_from(&parent->waiting_threads, &wakeup->wait_link);
+			}
+		}
 	} else {
 		/* the dead walk */
-		list_add_tail(&parent->dead_children, &sp->dead_link);
+		list_add_tail(&parent->dead_children, &sp->child_link);
 		sp->exit_status = status;
 	}
 

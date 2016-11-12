@@ -2,6 +2,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <errno.h>
+
 #include <ccan/list/list.h>
 #include <ccan/likely/likely.h>
 #include <ccan/compiler/compiler.h>
@@ -428,7 +430,18 @@ int wait(int *status)
 {
 	int32_t id;
 	int n = forkserv_wait(L4_Pager(), &id, status);
-	return n == 0 ? id : -1;
+	if(n < 0) {
+		/* IPC errors. */
+		errno = -n;
+		return -1;
+	} else if(id < 0) {
+		/* wait(2) errors. */
+		errno = -id;
+		return -1;
+	} else {
+		/* wait(2) success. */
+		return id;
+	}
 }
 
 

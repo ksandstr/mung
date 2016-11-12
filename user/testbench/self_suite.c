@@ -223,7 +223,6 @@ START_LOOP_TEST(wait_without_child, iter, 0, 3)
 	bool do_join = CHECK_FLAG(iter, 2);
 	diag("n_waits=%d, do_join=%s", n_waits, btos(do_join));
 	plan_tests(4);
-	if(do_join) todo_start("ECHILD reporting not implemented");
 
 	L4_ThreadId_t parent_tid = do_join ? L4_Myself() : L4_nilthread,
 		child_tid;
@@ -311,7 +310,6 @@ START_LOOP_TEST(wait_more_children, iter, 0, 3)
 	bool do_join = CHECK_FLAG(iter, 2);
 	diag("n_children=%d, do_join=%s", n_children, btos(do_join));
 	plan_tests(4);
-	if(do_join) todo_start("ECHILD reporting not implemented");
 
 	const int n_waits = n_children + 2;
 	L4_ThreadId_t parent_tid = do_join ? L4_Myself() : L4_nilthread,
