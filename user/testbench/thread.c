@@ -1,5 +1,10 @@
 
-/* simple threading for the purposes of the testbench personality. */
+/* simple threading for the purposes of the testbench personality.
+ *
+ * TODO: this has quite the rich sediment. it could use a proper rework, for
+ * example to have either mutexes and global data, or comprehensive use of the
+ * manager thread for all serializing operations.
+ */
 
 #define THREADMGR_IMPL_SOURCE 1
 
@@ -7,6 +12,7 @@
 #include <stdlib.h>
 #include <stdint.h>
 #include <stdbool.h>
+#include <threads.h>
 #include <assert.h>
 #include <errno.h>
 #include <ccan/likely/likely.h>
@@ -40,11 +46,14 @@ struct thread
 };
 
 
+static mtx_t thread_lock;
 static struct thread threads[MAX_THREADS];
-static int base_tnum = -1;		/* indicates "no init" */
-static L4_Word_t utcb_base;
 static L4_ThreadId_t mgr_tid;
 static uint8_t *mgr_stk_base;
+
+/* written at init, read-only thereafter */
+static int base_tnum = -1;
+static L4_Word_t utcb_base;
 
 
 static void mgr_thread_fn(L4_ThreadId_t first_client);
@@ -73,9 +82,18 @@ static COLD void init_threading(void)
 		printf("%s: init_mutexes() failed\n", __func__);
 		abort();
 	}
+
+	int n = mtx_init(&thread_lock, mtx_plain);
+	if(n != thrd_success) {
+		printf("%s: mtx_init failed, errno=%d\n", __func__, errno);
+		abort();
+	}
 }
 
 
+/* must be called with thread_lock taken, or in a single-threaded runtime
+ * state.
+ */
 static COLD void start_mgr_thread(L4_ThreadId_t given_tid)
 {
 	assert(L4_IsNilThread(mgr_tid));
@@ -155,7 +173,9 @@ L4_ThreadId_t get_mgr_tid(void)
 	assert(base_tnum > 0);
 
 	if(L4_IsNilThread(mgr_tid)) {
-		start_mgr_thread(L4_nilthread);
+		mtx_lock(&thread_lock);
+		if(L4_IsNilThread(mgr_tid)) start_mgr_thread(L4_nilthread);
+		mtx_unlock(&thread_lock);
 		assert(!L4_IsNilThread(mgr_tid));
 	}
 
@@ -183,27 +203,37 @@ int thrd_set_daemon_NP(thrd_t tno, bool is_daemon)
 		return -1;
 	}
 
+	L4_ThreadId_t mgr_tid = get_mgr_tid();
+
+	int n;
+	mtx_lock(&thread_lock);
 	struct thread *t = &threads[tno];
 	assert(t->alive);
 	bool cleared = !t->daemon && is_daemon;
 	if(cleared) {
-		int n = __tmgr_remove_thread(get_mgr_tid(), tid_of(tno).raw);
+		n = __tmgr_remove_thread(mgr_tid, tid_of(tno).raw);
 		if(n > 0) {
 			errno = n;
-			return -1;
+			n = thrd_error;
 		} else if(n < 0) {
 			printf("%s: comm failure to mgr thread\n", __func__);
 			abort();
+		} else {
+			assert(n == thrd_success);
 		}
 	} else if(t->daemon && !is_daemon) {
-		int n = __tmgr_add_thread(get_mgr_tid(), tid_of(tno).raw);
+		n = __tmgr_add_thread(mgr_tid, tid_of(tno).raw);
 		if(n > 0) {
 			errno = n;
-			return -1;
+			n = thrd_error;
 		} else if(n < 0) {
 			printf("%s: comm failure to mgr thread\n", __func__);
 			abort();
+		} else {
+			assert(n == thrd_success);
 		}
+	} else {
+		n = thrd_success;
 	}
 	t->daemon = is_daemon;
 
@@ -221,7 +251,8 @@ int thrd_set_daemon_NP(thrd_t tno, bool is_daemon)
 		if(!saw_nondaemon) exit(0);
 	}
 
-	return 0;
+	mtx_unlock(&thread_lock);
+	return n;
 }
 
 
@@ -277,19 +308,27 @@ int thread_on_fork(
 		abort();
 	}
 
+	int n = mtx_init(&thread_lock, mtx_plain);
+	if(n != thrd_success) {
+		printf("%s: mtx_init() failed, errno=%d\n", __func__, errno);
+		abort();
+	}
+
 	/* TODO: instead figure out the caller's priority. */
 	int pri = find_own_priority();
-	int n = forkserv_new_thread(L4_Pager(), &caller_tid->raw, ~0ul,
+	n = forkserv_new_thread(L4_Pager(), &caller_tid->raw, ~0ul,
 		caller_ip, caller_sp, caller, L4_TimePeriod(10 * 10000), L4_Never,
 		pri, pri, 0);
 	if(n != 0) {
 		printf("%s: new_thread failed, n=%d\n", __func__, n);
 		abort();
 	}
+	mtx_lock(&thread_lock);
 	int new_caller = L4_ThreadNo(L4_GlobalIdOf(*caller_tid)) - base_tnum;
 	assert(new_caller == caller);	/* avoids cleaning threads[caller] */
 	threads[caller] = copy;
 	threads[caller].version = L4_Version(*caller_tid);
+	mtx_unlock(&thread_lock);
 
 	n = __tmgr_add_thread(mgr_tid, caller_tid->raw);
 	if(n != 0) {
@@ -328,6 +367,7 @@ end:
 void exit_thread(void *return_value)
 {
 	/* FIXME: move these into the ThreadMgr impl. */
+	mtx_lock(&thread_lock);
 	struct thread *t = &threads[thrd_current()];
 	t->retval = return_value;
 	t->version = -t->version;
@@ -347,6 +387,7 @@ void exit_thread(void *return_value)
 		}
 		if(!saw_nondaemon) exit(0);
 	}
+	mtx_unlock(&thread_lock);
 
 	int n = __tmgr_exit_thread(get_mgr_tid(), (L4_Word_t)return_value);
 	printf("%s: ThreadMgr::exit_thread() returned, n=%d\n", __func__, n);
@@ -376,6 +417,7 @@ L4_ThreadId_t start_thread_long(
 	}
 	L4_ThreadId_t mgr_tid = get_mgr_tid();
 
+	mtx_lock(&thread_lock);
 	int t;
 	for(t = 0; t < MAX_THREADS; t++) {
 		if(!threads[t].alive) {
@@ -391,7 +433,7 @@ L4_ThreadId_t start_thread_long(
 			break;
 		}
 	}
-	if(t == MAX_THREADS) return L4_nilthread;
+	if(t == MAX_THREADS) goto fail;
 	L4_ThreadId_t self = L4_Myself(), tid = tid_of(t);
 	assert(L4_IsGlobalId(tid));
 
@@ -429,7 +471,7 @@ L4_ThreadId_t start_thread_long(
 				__func__, n, L4_ThreadNo(out_tid), L4_Version(out_tid),
 				(int)L4_ThreadNo(out_tid) - base_tnum);
 			/* TODO: problem, officer? */
-			return L4_nilthread;
+			goto fail;
 		}
 
 		tid = out_tid;
@@ -443,7 +485,7 @@ L4_ThreadId_t start_thread_long(
 			threads[t].version = -threads[t].version;
 			assert(!threads[t].alive);
 			assert(threads[t].version <= 0);
-			return L4_nilthread;
+			goto fail;
 		}
 
 		/* let forkserv know this should be paged for testbench, for which
@@ -456,13 +498,14 @@ L4_ThreadId_t start_thread_long(
 			if(r == L4_SCHEDRESULT_ERROR) {
 				printf("%s: L4_Set_Priority() failed: errorcode %lu\n",
 					__func__, L4_ErrorCode());
-				/* TODO: cleanups? */
-				return L4_nilthread;
+				goto fail;
 			}
 		}
 		L4_Set_Timeslice(tid, ts_len, total_quantum);
 		L4_Start_SpIp(tid, stk_top, (L4_Word_t)&thread_wrapper);
 	}
+
+	mtx_unlock(&thread_lock);
 
 	int n = __tmgr_add_thread(mgr_tid, tid.raw);
 	if(n != 0) {
@@ -483,9 +526,15 @@ L4_ThreadId_t start_thread_long(
 	}
 
 	return tid;
+
+fail:
+	/* TODO: cleanups! */
+	mtx_unlock(&thread_lock);
+	return L4_nilthread;
 }
 
 
+/* must be called with thread_lock taken! */
 static void *destroy_thread(L4_ThreadId_t tid, struct thread *th)
 {
 	if(is_privileged()) {
@@ -520,7 +569,7 @@ void *join_thread_long(L4_ThreadId_t tid, L4_Time_t timeout, L4_Word_t *ec_p)
 
 	tid = L4_GlobalIdOf(tid);
 	int t = L4_ThreadNo(tid) - base_tnum;
-	assert(t < MAX_THREADS);
+	assert(t >= 0 && t < MAX_THREADS);
 	assert(abs(threads[t].version) == L4_Version(tid));
 
 	int32_t status;
@@ -551,19 +600,22 @@ void kill_thread(L4_ThreadId_t tid)
 		printf("%s: tried to kill non-local TID %lu:%lu (base %d)\n",
 			__func__, L4_ThreadNo(tid), L4_Version(tid), base_tnum);
 	}
+	mtx_lock(&thread_lock);
 	assert(t < MAX_THREADS && t >= 0);
 	assert(abs(threads[t].version) == L4_Version(tid));
 
-	if(!threads[t].alive) return;
+	if(threads[t].alive) {
+		int n = __tmgr_remove_thread(get_mgr_tid(), tid.raw);
+		if(n != 0) {
+			printf("%s: ipc fail, n=%d\n", __func__, n);
+			abort();
+		}
 
-	int n = __tmgr_remove_thread(get_mgr_tid(), tid.raw);
-	if(n != 0) {
-		printf("%s: ipc fail, n=%d\n", __func__, n);
-		abort();
+		destroy_thread(tid, &threads[t]);
+		/* TODO: call Schedule to ensure that "tid" is truly gone */
 	}
 
-	destroy_thread(tid, &threads[t]);
-	/* TODO: call Schedule to ensure that "tid" is truly gone */
+	mtx_unlock(&thread_lock);
 }
 
 
@@ -782,7 +834,9 @@ static void t_end_thread(
 		/* don't retain exit record on successful join */
 		htable_del(&mgr_threads, hash_mgrt_ptr(t, NULL), t);
 		talloc_free(t);
+		mtx_lock(&thread_lock);
 		destroy_thread(tid, &threads[L4_ThreadNo(tid) - base_tnum]);
+		mtx_unlock(&thread_lock);
 	} else {
 		t->alive = false;
 		t->segfault = (join_status == 1);
@@ -882,8 +936,10 @@ static void t_join_thread(
 		*result_p = t->result;
 		htable_del(&mgr_threads, hash_mgrt_ptr(t, NULL), t);
 		talloc_free(t);
+		mtx_lock(&thread_lock);
 		destroy_thread(join_tid,
 			&threads[L4_ThreadNo(join_tid) - base_tnum]);
+		mtx_unlock(&thread_lock);
 	} else {
 		/* sleep. */
 		struct mgrs *s = talloc(t, struct mgrs);
