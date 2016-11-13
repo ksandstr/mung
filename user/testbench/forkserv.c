@@ -95,7 +95,7 @@ struct fs_thread
 {
 	L4_ThreadId_t tid;
 	struct fs_space *space;
-	struct list_node wait_link;	/* in space's waiting_threads */
+	struct list_node wait_link;	/* in space->waiting_threads | next == NULL */
 };
 
 
@@ -906,9 +906,14 @@ static void handle_add_tid(int32_t space_id, L4_Word_t raw_tid)
 			t->tid = tid;
 			htable_add(&thread_hash, int_hash(tid.raw), &t->tid.raw);
 		}
+		if(t->wait_link.next != NULL) {
+			list_del_from(&t->space->waiting_threads, &t->wait_link);
+			t->wait_link.next = NULL;
+		}
 	} else {
 		t = malloc(sizeof(struct fs_thread));
 		*t = (struct fs_thread){ .tid = tid, .space = sp };
+		assert(t->wait_link.next == NULL);
 		htable_add(&thread_hash, tno_hash, &t->tid);
 
 		int slot;
@@ -1501,6 +1506,7 @@ static int32_t handle_wait(int32_t *status_ptr)
 	} else if(!list_empty(&sp->children)) {
 		/* delayed */
 		struct fs_thread *t = get_thread(ipc_from);
+		assert(t->wait_link.next == NULL);
 		list_add_tail(&sp->waiting_threads, &t->wait_link);
 		muidl_raise_no_reply();
 		return -666;
@@ -1533,6 +1539,10 @@ static bool end_thread_by_tno(struct fs_space *sp, int tno)
 		printf("forkserv/end_thread: threadctl failed, %s ec %#lx\n",
 			L4_IpcFailed(tag) ? "ipc" : "syscall", ec);
 		/* can't do much else. */
+	}
+	if(t->wait_link.next != NULL) {
+		list_del_from(&t->space->waiting_threads, &t->wait_link);
+		t->wait_link.next = NULL;
 	}
 	htable_del(&thread_hash, int_hash(L4_ThreadNo(t->tid)), &t->tid);
 	free(t);
@@ -1583,6 +1593,7 @@ static void handle_exit(int32_t status)
 	struct fs_thread *t, *next;
 	list_for_each_safe(&sp->waiting_threads, t, next, wait_link) {
 		list_del_from(&sp->waiting_threads, &t->wait_link);
+		t->wait_link.next = NULL;
 		bool was_found = end_thread(t->tid);
 		assert(was_found);
 	}
@@ -1619,6 +1630,8 @@ static void handle_exit(int32_t status)
 	struct fs_thread *wakeup = list_pop(&parent->waiting_threads,
 		struct fs_thread, wait_link);
 	if(wakeup != NULL) {
+		wakeup->wait_link.next = NULL;
+
 		L4_Word_t dead_id = sp->id;
 		destroy_space(sp);
 
@@ -1655,6 +1668,7 @@ static void handle_exit(int32_t status)
 				}
 
 				list_del_from(&parent->waiting_threads, &wakeup->wait_link);
+				wakeup->wait_link.next = NULL;
 			}
 		}
 	} else {
