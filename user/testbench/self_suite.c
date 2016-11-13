@@ -1288,6 +1288,32 @@ static void add_thread_tests(TCase *tc)
 
 /* tcase "env" */
 
+/* note: this'll examine at most DROP_PAGER_LOG_SIZE pages, which is typically
+ * less than 100. so it's inappropriate for readings over more than low tens
+ * of faults.
+ *
+ * TODO: move this to an adjoining position with the stats pager, and export
+ * it for the benefit of various other tests.
+ */
+static size_t count_nontext_faults(struct pager_stats *stats, int max_faults)
+{
+	extern const char _start, _end;
+	assert(max_faults >= 0);
+	size_t num = 0;
+	max_faults = MIN(int, max_faults, DROP_PAGER_LOG_SIZE);
+	for(int i = 0, l = MIN(int, max_faults, stats->n_faults); i < l; i++) {
+		int ix = stats->log_top - i;
+		if(ix < 0) ix += sizeof(stats->log) / sizeof(stats->log[0]);
+		assert(ix >= 0);
+		L4_Fpage_t p = stats->log[ix];
+		if(!BETWEEN((L4_Word_t)&_start, (L4_Word_t)&_end, L4_Address(p))) {
+			num++;
+		}
+	}
+	return num;
+}
+
+
 /* check that Forkserv::discontiguate() preserves existing data in the same
  * process, and unmaps the memory region it's being applied to.
  *
@@ -1324,9 +1350,11 @@ START_LOOP_TEST(discontiguate_basic, iter, 0, 15)
 	L4_ThreadId_t old_pager = L4_Pager();
 	int old_faults = stats->n_faults;
 	L4_Set_Pager(stats_tid);
+	asm volatile ("" ::: "memory");
 	L4_Word_t refcrc = crc32c(0, regptr, region_size);
 	L4_Set_Pager(old_pager);
-	int n_faults = stats->n_faults - old_faults;
+	asm volatile ("" ::: "memory");
+	int n_faults = count_nontext_faults(stats, stats->n_faults - old_faults);
 	diag("refcrc=%#lx", refcrc);
 	if(!ok1(n_faults == 0)) {
 		diag("n_faults=%d", n_faults);
@@ -1341,8 +1369,10 @@ START_LOOP_TEST(discontiguate_basic, iter, 0, 15)
 	 */
 	old_faults = stats->n_faults;
 	L4_Set_Pager(stats_tid);
+	asm volatile ("" ::: "memory");
 	L4_Word_t aftercrc = crc32c(0, regptr, region_size);
 	L4_Set_Pager(old_pager);
+	asm volatile ("" ::: "memory");
 	n_faults = stats->n_faults - old_faults;
 	if(!ok1(n_faults == region_size / PAGE_SIZE)) {
 		diag("n_faults=%d", n_faults);
