@@ -184,6 +184,15 @@ extern void add_fs_tid(L4_Word_t space_id, L4_ThreadId_t tid);
 
 
 /* from thread.c */
+
+/* TODO: move prototypes etc. for thrd_*() into <threads.h> once the mutex
+ * branch merges.
+ */
+typedef int thrd_t;
+
+extern thrd_t thrd_current(void);
+extern int thrd_set_daemon_NP(thrd_t thread, bool is_daemon);
+
 extern int thread_self(void);
 
 /* gets the manager thread's thread ID, starting it if necessary. */

@@ -1022,6 +1022,134 @@ START_LOOP_TEST(exit_with_thread_test, iter, 0, 1)
 END_TEST
 
 
+struct exiter_param {
+	bool daemon_flag;
+	int exit_value;
+};
+
+
+static void daemon_exiter_fn(void *param_ptr)
+{
+	const struct exiter_param *p = param_ptr;
+
+	int n = thrd_set_daemon_NP(thrd_current(), p->daemon_flag);
+	if(n < 0) {
+		diag("%s: setdaemon failed, errno=%d", __func__, errno);
+		exit_thread("this string is not an ok value");
+	}
+
+	L4_Accept(L4_UntypedWordsAcceptor);
+	L4_ThreadId_t sender;
+	L4_MsgTag_t tag = L4_Wait(&sender);
+	if(L4_IpcFailed(tag)) {
+		diag("%s: wait failed, ec=%#lx", __func__, L4_ErrorCode());
+		exit_thread("this string is not an ok value");
+	}
+	sender = L4_GlobalIdOf(sender);
+	L4_LoadMR(0, 0);
+	L4_Reply(sender);
+
+	/* wait until the main thread disappears. */
+	tag = L4_Receive_Timeout(sender, L4_TimePeriod(
+		L4_PeriodUs_NP(A_SHORT_NAP) * 3));
+	L4_Word_t ec = L4_ErrorCode();
+	if(L4_IpcSucceeded(tag) || ec != 3) {
+		diag("ipc %s, ec=%#lx",
+			L4_IpcSucceeded(tag) ? "succeeded" : "failed", ec);
+		exit_thread("this string is not an ok value");
+	}
+
+	exit(p->exit_value);
+}
+
+
+static L4_ThreadId_t launch_exiter(bool daemon_flag, int ev)
+{
+	struct exiter_param *p = talloc(NULL, struct exiter_param);
+	p->daemon_flag = daemon_flag;
+	p->exit_value = ev;
+	L4_ThreadId_t oth = xstart_thread(&daemon_exiter_fn, p);
+	L4_Accept(L4_UntypedWordsAcceptor);
+	L4_LoadMR(0, 0);
+	L4_MsgTag_t tag = L4_Call_Timeouts(oth, TEST_IPC_DELAY, TEST_IPC_DELAY);
+	if(L4_IpcFailed(tag)) {
+		diag("child's sync call failed, ec=%#lx", L4_ErrorCode());
+		kill_thread(oth);
+		return L4_nilthread;
+	} else {
+		return oth;
+	}
+}
+
+
+START_LOOP_TEST(daemon_allows_exit, iter, 0, 1)
+{
+	const bool daemon_flag = CHECK_FLAG(iter, 1);
+	diag("daemon_flag=%s", btos(daemon_flag));
+	plan_tests(2);
+
+	int child = fork();
+	if(child == 0) {
+		launch_exiter(daemon_flag, 2);
+		L4_Sleep(A_SHORT_NAP);
+		exit_thread(NULL);
+	}
+
+	int st, pid = wait(&st);
+	fail_if(pid != child, "pid=%d, errno=%d", pid, errno);
+
+	diag("st=%d", st);
+	todo_start("implementation missing");
+	imply_ok1(!daemon_flag, st == 2);
+	imply_ok1(daemon_flag, st == 0);
+}
+END_TEST
+
+
+START_LOOP_TEST(daemon_set_triggers_exit, iter, 0, 3)
+{
+	const bool other_thread = CHECK_FLAG(iter, 1),
+		daemonize_self = CHECK_FLAG(iter, 2);
+	diag("other_thread=%s, daemonize_self=%s",
+		btos(other_thread), btos(daemonize_self));
+	if(!other_thread && daemonize_self) {
+		plan_skip_all("redundant combination");
+		goto end;
+	}
+	plan_tests(2);
+
+	int child = fork();
+	if(child == 0) {
+		if(other_thread) {
+			launch_exiter(true, 2);
+			if(!daemonize_self) exit_thread(NULL);
+			else {
+				int n = thrd_set_daemon_NP(thrd_current(), true);
+				if(n < 0) {
+					printf("main child's setdaemon failed, errno=%d", errno);
+				}
+			}
+			exit(666);
+		} else {
+			int n = thrd_set_daemon_NP(thrd_current(), true);
+			if(n < 0) exit(10000 + errno); else exit(2);
+		}
+	}
+
+	int st, pid = wait(&st);
+	fail_if(pid != child, "pid=%d, st=%d", pid, st);
+
+	diag("st=%d", st);
+	todo_start("implementation missing");
+	ok(st == 0 || st == 2, "exit status is valid");
+	ok(st == 0, "child didn't exit(3)");
+
+end:
+	;;
+}
+END_TEST
+
+
 void access_memory_fn(void *ptr)
 {
 	diag("accessing %p", ptr);
@@ -1278,6 +1406,8 @@ static void add_thread_tests(TCase *tc)
 	tcase_add_test(tc, basic_thread_test);
 	tcase_add_test(tc, join_thread_test);
 	tcase_add_test(tc, exit_with_thread_test);
+	tcase_add_test(tc, daemon_allows_exit);
+	tcase_add_test(tc, daemon_set_triggers_exit);
 	tcase_add_test(tc, segv_test);
 	tcase_add_test(tc, uncaught_segv_test);
 	tcase_add_test(tc, segv_on_special_fault);

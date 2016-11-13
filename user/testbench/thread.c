@@ -8,6 +8,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <assert.h>
+#include <errno.h>
 #include <ccan/likely/likely.h>
 #include <ccan/compiler/compiler.h>
 #include <ccan/htable/htable.h>
@@ -34,7 +35,7 @@ struct thread
 {
 	uint8_t *stack;
 	int version;
-	bool alive;
+	bool alive, daemon;
 	void *retval;
 };
 
@@ -158,6 +159,24 @@ L4_ThreadId_t get_mgr_tid(void)
 
 int thread_self(void) {
 	return L4_ThreadNo(L4_Myself()) - base_tnum;
+}
+
+
+thrd_t thrd_current(void) {
+	return thread_self();
+}
+
+
+int thrd_set_daemon_NP(thrd_t tno, bool is_daemon)
+{
+	if(tno != thrd_current()) {
+		errno = -EINVAL;
+		return -1;
+	}
+
+	struct thread *t = &threads[tno];
+	t->daemon = is_daemon;
+	return 0;
 }
 
 
