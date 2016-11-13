@@ -1099,7 +1099,6 @@ START_LOOP_TEST(daemon_allows_exit, iter, 0, 1)
 	fail_if(pid != child, "pid=%d, errno=%d", pid, errno);
 
 	diag("st=%d", st);
-	todo_start("implementation missing");
 	imply_ok1(!daemon_flag, st == 2);
 	imply_ok1(daemon_flag, st == 0);
 }
@@ -1140,7 +1139,6 @@ START_LOOP_TEST(daemon_set_triggers_exit, iter, 0, 3)
 	fail_if(pid != child, "pid=%d, st=%d", pid, st);
 
 	diag("st=%d", st);
-	todo_start("implementation missing");
 	ok(st == 0 || st == 2, "exit status is valid");
 	ok(st == 0, "child didn't exit(3)");
 

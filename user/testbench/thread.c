@@ -141,6 +141,7 @@ static COLD void start_mgr_thread(L4_ThreadId_t given_tid)
 	}
 	threads[t].version = L4_Version(mgr_tid);
 	threads[t].alive = true;
+	threads[t].daemon = true;
 }
 
 
@@ -157,8 +158,11 @@ L4_ThreadId_t get_mgr_tid(void)
 }
 
 
-int thread_self(void) {
-	return L4_ThreadNo(L4_Myself()) - base_tnum;
+int thread_self(void)
+{
+	int tno = L4_ThreadNo(L4_Myself()) - base_tnum;
+	assert(tno >= 0 && tno < MAX_THREADS);
+	return tno;
 }
 
 
@@ -175,7 +179,43 @@ int thrd_set_daemon_NP(thrd_t tno, bool is_daemon)
 	}
 
 	struct thread *t = &threads[tno];
+	assert(t->alive);
+	bool cleared = !t->daemon && is_daemon;
+	if(cleared) {
+		int n = __tmgr_remove_thread(get_mgr_tid(), tid_of(tno).raw);
+		if(n > 0) {
+			errno = n;
+			return -1;
+		} else if(n < 0) {
+			printf("%s: comm failure to mgr thread\n", __func__);
+			abort();
+		}
+	} else if(t->daemon && !is_daemon) {
+		int n = __tmgr_add_thread(get_mgr_tid(), tid_of(tno).raw);
+		if(n > 0) {
+			errno = n;
+			return -1;
+		} else if(n < 0) {
+			printf("%s: comm failure to mgr thread\n", __func__);
+			abort();
+		}
+	}
 	t->daemon = is_daemon;
+
+	/* check for being the last non-daemon thread. */
+	if(cleared) {
+		bool saw_nondaemon = false;
+		for(int i=0; i < MAX_THREADS; i++) {
+			t = &threads[i];
+			if(!t->alive) continue;
+			if(!t->daemon) {
+				saw_nondaemon = true;
+				break;
+			}
+		}
+		if(!saw_nondaemon) exit(0);
+	}
+
 	return 0;
 }
 
@@ -201,6 +241,7 @@ int thread_on_fork(
 			free(threads[i].stack);
 			threads[i].stack = NULL;
 			threads[i].alive = false;
+			threads[i].daemon = false;
 			threads[i].version = -abs(threads[i].version);
 			threads[i].retval = NULL;
 
@@ -276,12 +317,25 @@ end:
 void exit_thread(void *return_value)
 {
 	/* FIXME: move these into the ThreadMgr impl. */
-	int tnum = L4_ThreadNo(L4_MyGlobalId()) - base_tnum;
-	assert(tnum < MAX_THREADS);
-	threads[tnum].retval = return_value;
-	threads[tnum].version = -threads[tnum].version;
+	struct thread *t = &threads[thrd_current()];
+	t->retval = return_value;
+	t->version = -t->version;
+	bool test_exit = !t->daemon;
 
 	tsd_clear();
+
+	if(test_exit) {
+		bool saw_nondaemon = false;
+		for(int i=0; i < MAX_THREADS; i++) {
+			if(!threads[i].alive) continue;
+			if(t == &threads[i]) continue;
+			if(!threads[i].daemon) {
+				saw_nondaemon = true;
+				break;
+			}
+		}
+		if(!saw_nondaemon) exit(0);
+	}
 
 	int n = __tmgr_exit_thread(get_mgr_tid(), (L4_Word_t)return_value);
 	printf("%s: ThreadMgr::exit_thread() returned, n=%d\n", __func__, n);
@@ -331,6 +385,7 @@ L4_ThreadId_t start_thread_long(
 	assert(L4_IsGlobalId(tid));
 
 	threads[t].alive = true;
+	threads[t].daemon = false;
 	assert(threads[t].version > 0);
 	uint8_t *stack = malloc(THREAD_STACK_SIZE);
 	if(stack == NULL) {
@@ -781,11 +836,10 @@ static void t_rm_thread(L4_Word_t arg_tid)
 	if(t != NULL) {
 		htable_del(&mgr_threads, hash_mgrt_ptr(t, NULL), t);
 		talloc_free(t);
+		mgrt_alive--;
 	}
 
-	/* FIXME: shouldn't this be inside the non-NULL test's block, above? */
-	mgrt_alive--;
-	assert(mgrt_alive > 0);
+	assert(mgrt_alive >= 0);
 	assert(mgrt_alive <= mgr_threads.elems);
 }
 
