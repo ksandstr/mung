@@ -695,6 +695,22 @@ static void print_boot_info(void)
 }
 
 
+static void add_to_fs_and_stop(L4_ThreadId_t tid, void *ptr)
+{
+	if(L4_SameThreads(tid, L4_Myself())) return;
+	add_fs_tid(1, tid);
+	L4_Stop(tid);
+}
+
+
+static void set_forkserv_pager_and_start(L4_ThreadId_t tid, void *ptr)
+{
+	if(L4_SameThreads(tid, L4_Myself())) return;
+	L4_Set_PagerOf(tid, forkserv_tid);
+	L4_Start(tid);
+}
+
+
 int main(void)
 {
 	printf("hello, world!\n");
@@ -708,11 +724,11 @@ int main(void)
 	htable_init(&opts, &rehash_cmd_opt, NULL);
 	parse_cmd_opts(&opts, boot_cmdline);
 
-	add_fs_tid(1, get_mgr_tid());
-	L4_Stop(get_mgr_tid());
+	/* start manager thread lest it be unknown to forkserv. */
+	get_mgr_tid();
+	for_each_thread(&add_to_fs_and_stop, NULL);
 	transfer_to_forkserv();
-	L4_Set_PagerOf(get_mgr_tid(), forkserv_tid);
-	L4_Start(get_mgr_tid());
+	for_each_thread(&set_forkserv_pager_and_start, NULL);
 
 	const suite_ctor *suites;
 	int n_suites = 0;
