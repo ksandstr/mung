@@ -3137,7 +3137,9 @@ START_LOOP_TEST(map_smaller_pages, iter, 0, 7)
 		exit(L4_IpcSucceeded(tag) ? 0 : 1);
 	}
 
-	while(CHECK_FLAG_ANY((uintptr_t)sbrk(0), PAGE_SIZE * num_pages - 1)) {
+	while(CHECK_FLAG_ANY((uintptr_t)sbrk(0) + PAGE_SIZE,
+		PAGE_SIZE * num_pages - 1))
+	{
 		void *throwaway = sbrk(PAGE_SIZE);
 		fail_unless(throwaway != NULL);
 		diag("backed sbrk() to %p", throwaway);
