@@ -72,7 +72,7 @@ forkserv: forkserv.ld crt0.o forkserv.o dlmalloc.o idlsupp.o tsd.o ll.o \
 
 %.o: ../../%.c
 	@echo "  CC $@ <toplevel>"
-	@$(CC) -c -o $@ $< $(CFLAGS) -DUSE_LOCKS=1 -Wno-unused
+	@$(CC) -c -o $@ $< $(CFLAGS) -DUSE_LOCKS=2 -Wno-unused
 
 
 # muidl outputs.

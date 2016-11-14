@@ -1854,6 +1854,16 @@ static FORCEINLINE int win32munmap(void* ptr, size_t size) {
 /* #define TRY_LOCK(lk) ... */
 /* static MLOCK_T malloc_global_mutex = ... */
 
+#include <threads.h>
+
+#define MLOCK_T mtx_t
+#define INITIAL_LOCK(lk) mtx_init((lk), mtx_plain)
+#define DESTROY_LOCK(lk) mtx_destroy((lk))
+#define ACQUIRE_LOCK(lk) mtx_lock((lk))
+#define RELEASE_LOCK(lk) mtx_unlock((lk))
+#define TRY_LOCK(lk) (mtx_trylock((lk)) == thrd_success)
+static MLOCK_T malloc_global_mutex;
+
 #elif USE_SPIN_LOCKS
 
 /* First, define CAS_LOCK and CLEAR_LOCK on ints */

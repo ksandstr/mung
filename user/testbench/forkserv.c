@@ -12,7 +12,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
+#include <stdatomic.h>
 #include <errno.h>
+#include <threads.h>
 #include <ccan/list/list.h>
 #include <ccan/htable/htable.h>
 #include <ccan/likely/likely.h>
@@ -645,6 +647,38 @@ int sched_yield(void)
 {
 	L4_ThreadSwitch(L4_nilthread);
 	return 0;
+}
+
+
+/* degenerate implementation of mtx_init(), mtx_lock(), and mtx_unlock() for
+ * dlmalloc.
+ */
+int mtx_init(mtx_t *mtx, int type) {
+	*mtx = 0;
+	return thrd_success;
+}
+
+
+int mtx_lock(mtx_t *mtx)
+{
+	L4_Word_t prev = 0, next = L4_Myself().raw;
+	while(!atomic_compare_exchange_strong(mtx, &prev, next)) {
+		sched_yield();
+		prev = 0;
+	}
+	return thrd_success;
+}
+
+
+int mtx_unlock(mtx_t *mtx)
+{
+	L4_Word_t prev = L4_Myself().raw;
+	if(!atomic_compare_exchange_strong(mtx, &prev, 0)) {
+		printf("%s: expected prev=%#lx, found prev=%#lx\n", __func__,
+			L4_Myself().raw, prev);
+		abort();
+	}
+	return thrd_success;
 }
 
 
