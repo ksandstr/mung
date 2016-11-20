@@ -7,6 +7,7 @@
 #ifndef SEEN_FAKE_CLIB_THREADS_H
 #define SEEN_FAKE_CLIB_THREADS_H
 
+#include <stdbool.h>
 #include <l4/types.h>
 
 
@@ -27,6 +28,15 @@ enum {
 };
 
 struct timespec;	/* left undefined here */
+
+
+/* C11 threads. */
+
+typedef int thrd_t;
+extern thrd_t thrd_current(void);
+
+/* non-portable outside the testbench runtime. */
+extern int thrd_set_daemon_NP(thrd_t thread, bool is_daemon);
 
 
 /* C11 mutexes. */
