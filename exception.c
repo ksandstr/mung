@@ -934,9 +934,12 @@ void isr_exn_gp_bottom(struct x86_exregs *regs)
 		 */
 		printf("KERNEL #GP(%#lx) at eip %#lx, esp %#lx in %lu:%lu\n",
 			regs->error, regs->eip, regs->esp,
-			TID_THREADNUM(current->id), TID_VERSION(current->id));
-		thread_halt(current);
-		assert(current->status == TS_STOPPED);
+			current == NULL ? 0 : TID_THREADNUM(current->id),
+			current == NULL ? 0 : TID_VERSION(current->id));
+		if(current != NULL) {
+			thread_halt(current);
+			assert(current->status == TS_STOPPED);
+		}
 		return_to_scheduler();
 		assert(false);
 	}
