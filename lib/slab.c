@@ -76,6 +76,14 @@ static COLD void init_kmem_cache_slab(void)
 }
 
 
+static struct kmem_cache *get_meta_slab(void) {
+	struct kmem_cache *meta = container_of(cache_list.n.prev,
+		struct kmem_cache, link);
+	assert(meta->size == sizeof(struct kmem_cache));
+	return meta;
+}
+
+
 struct kmem_cache *kmem_cache_create(
 	const char *name,
 	size_t size,
@@ -93,11 +101,7 @@ struct kmem_cache *kmem_cache_create(
 		init_kmem_cache_slab();
 	}
 
-	struct kmem_cache *meta = container_of(cache_list.n.prev,
-		struct kmem_cache, link);
-	assert(meta->size == sizeof(struct kmem_cache));
-
-	struct kmem_cache *c = kmem_cache_alloc(meta);
+	struct kmem_cache *c = kmem_cache_alloc(get_meta_slab());
 	c->size = size;
 	c->align = align;
 	c->flags = flags;
@@ -115,16 +119,6 @@ struct kmem_cache *kmem_cache_create(
 }
 
 
-void kmem_cache_destroy(struct kmem_cache *cache)
-{
-	/* TODO: destroy the actual cache and release all memory. for now,
-	 * half-assing.
-	 */
-
-	kmem_cache_shrink(cache);
-}
-
-
 static void *get_new_slab(struct kmem_cache *cache) {
 	return kmem_alloc_new_page();
 }
@@ -132,6 +126,35 @@ static void *get_new_slab(struct kmem_cache *cache) {
 
 static void free_slab(struct kmem_cache *cache, void *slab) {
 	kmem_free_page(slab);
+}
+
+
+/* NOTE: this doesn't call the destructor on dangling items! and it never
+ * will. clean up after yourselfves, kids.
+ */
+void kmem_cache_destroy(struct kmem_cache *cache)
+{
+	/* but we do call destructors on freed items. */
+	kmem_cache_shrink(cache);
+
+	struct list_head *slab_lists[] = {
+		&cache->free_list, &cache->partial_list, &cache->full_list,
+	};
+	for(int i=0; i < NUM_ELEMENTS(slab_lists); i++) {
+		struct slab *slab, *next;
+		list_for_each_safe(slab_lists[i], slab, next, link) {
+			assert(slab->magic == SLAB_MAGIC);
+			list_del_from(slab_lists[i], &slab->link);
+			/* could print a warning if in_use > 0. possibly when a flag
+			 * wasn't given.
+			 */
+			slab->magic = 0xdeadbaa5;	/* those poor sheep. */
+			free_slab(cache, slab);
+		}
+		assert(list_empty(slab_lists[i]));
+	}
+	cache->magic = 0xfacef00d;	/* i.e. ordinary food */
+	kmem_cache_free(get_meta_slab(), cache);
 }
 
 
