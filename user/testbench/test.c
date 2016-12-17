@@ -90,7 +90,7 @@ static int in_test_key = 0;		/* ptr value, IN_TEST_MAGIC */
 
 static size_t rehash_test_entry(const void *ptr, void *priv) {
 	const struct test_entry *ent = ptr;
-	return hash(ent->path, strlen(ent->path), 0);
+	return hash_string(ent->path);
 }
 
 
@@ -102,7 +102,7 @@ static bool test_entry_str_compare(const void *cand, void *keyptr) {
 
 static struct test_entry *get_test_entry(struct htable *ht, const char *key)
 {
-	return htable_get(ht, hash(key, strlen(key), 0),
+	return htable_get(ht, hash_string(key),
 		&test_entry_str_compare, key);
 }
 
@@ -351,7 +351,8 @@ void srunner_add_suite(SRunner *run, Suite *s)
 			ent->s = s;
 			memcpy(ent->path, path, pchars + 1);
 			assert(get_test_entry(&run->test_by_path, ent->path) == NULL);
-			htable_add(&run->test_by_path, hash(ent->path, pchars, 0), ent);
+			htable_add(&run->test_by_path, hash_string(ent->path), ent);
+			assert(get_test_entry(&run->test_by_path, ent->path) == ent);
 		}
 	}
 }
@@ -496,9 +497,12 @@ static void add_test_ids(struct htable *table, SRunner *sr)
 				ent->s = s;
 				ent->tc = tc;
 				ent->test = t;
+				size_t old_size = table->elems;
 				assert(get_test_entry(table, ent->path) == NULL);
-				bool ok = htable_add(table, hash(tid, tid_len, 0), ent);
+				bool ok = htable_add(table, hash_string(ent->path), ent);
 				assert(ok);
+				assert(table->elems == old_size + 1);
+				assert(get_test_entry(table, ent->path) == ent);
 			}
 		}
 
@@ -721,10 +725,23 @@ void srunner_run_path(SRunner *sr, const char *path, int report_mode)
 	}
 	if(colon != NULL) *colon = '\0';
 
+	assert(sr->test_by_id.elems == sr->test_by_path.elems);
 	struct htable *tabs[] = { &sr->test_by_id, &sr->test_by_path };
 	struct test_entry *ent = NULL;
 	for(int i=0; i < NUM_ELEMENTS(tabs) && ent == NULL; i++) {
 		ent = get_test_entry(tabs[i], copy);
+#ifndef NDEBUG
+		/* heavy debugging owing to past fuckery in strcmp(): check that @copy
+		 * is indeed not in &sr->test_by_id .
+		 */
+		struct htable_iter it;
+		for(struct test_entry *e = htable_first(&sr->test_by_id, &it);
+			ent == NULL && e != NULL;
+			e = htable_next(&sr->test_by_id, &it))
+		{
+			assert(!streq(copy, e->path));
+		}
+#endif
 	}
 	if(ent == NULL) {
 		printf("*** test path-or-id `%s' not found\n", copy);

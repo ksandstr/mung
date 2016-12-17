@@ -511,7 +511,7 @@ static void transfer_to_forkserv(void)
 
 static size_t rehash_cmd_opt(const void *data, void *priv) {
 	const struct cmd_opt *opt = data;
-	return hash(opt->key, strlen(opt->key), 0);
+	return hash_string(opt->key);
 }
 
 
@@ -525,7 +525,7 @@ static bool cmd_opt_eq_keystr(const void *cand_ptr, void *key)
 static const char *cmd_opt(struct htable *ht, const char *key)
 {
 	struct cmd_opt *opt = htable_get(ht,
-		hash(key, strlen(key), 0), &cmd_opt_eq_keystr, key);
+		hash_string(key), &cmd_opt_eq_keystr, key);
 	return opt != NULL ? opt->value : NULL;
 }
 
