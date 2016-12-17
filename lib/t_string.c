@@ -19,7 +19,6 @@ START_LOOP_TEST(strcmp_breakage_TyTiPtva, iter, 0, 7)
 
 	diag("align=%d, copy=%p, teststr=%p", iter, copy, teststr);
 	plan_tests(1 + 8);
-	todo_start("known breakage");
 
 	ok1(strcmp(copy, teststr) == 0);
 	for(int oth_align = 0; oth_align < 8; oth_align++) {

@@ -246,7 +246,6 @@ int strcmp(const char *a, const char *b)
 		 * such that at least one of a[pos] and b[pos] is aligned to 4. but
 		 * that's a can of worms, so let's not.
 		 */
-
 		uintptr_t a_left = 0x1000 - ((uintptr_t)(a + pos) & 0xfff),
 			b_left = 0x1000 - ((uintptr_t)(b + pos) & 0xfff);
 		int words = MIN(int, a_left, b_left) / 4;
@@ -255,7 +254,7 @@ int strcmp(const char *a, const char *b)
 		for(int i=0; i < words; i++) {
 			unsigned long la = BE32_TO_CPU(ap[i]), lb = BE32_TO_CPU(bp[i]),
 				za = zero_mask(la), zb = zero_mask(lb),
-				m = ((za & zb) >> 7) * 0xff;
+				m = ((1ul << MSB(za | zb | 1)) >> 7) * 0xff;
 			if(m == 0) m = 0xff;
 			m |= m << 8;
 			m |= m << 16;
