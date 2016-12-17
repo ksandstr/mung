@@ -113,6 +113,7 @@ void run_all_tests(void)
 	SUITE(rangealloc);
 	SUITE(heap);
 	SUITE(memdesc);
+	SUITE(string);
 }
 
 
