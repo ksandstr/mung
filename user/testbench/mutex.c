@@ -47,7 +47,7 @@ struct mtx_wait {
 };
 
 
-static L4_ThreadId_t mutex_serializer_tid = L4_nilthread;
+static L4_ThreadId_t mutex_serializer_tid = { .raw = 0 };
 
 /* private state of ser_fn(), initialized in init_mutexes() */
 static struct kmem_cache *info_slab = NULL, *wait_slab = NULL;
