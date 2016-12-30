@@ -737,7 +737,7 @@ int find_own_priority(void)
 		pri--;
 	}
 	if(pri == 0) {
-		diag("loop result was zero (supplanting with 100)\n");
+		diag("loop result was zero (supplanting with 100)");
 		pri = 100;		/* make shit up! */
 	}
 	return pri;
