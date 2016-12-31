@@ -178,7 +178,9 @@ START_TEST(serial_interrupt_test)
 	outb(com_base + UART_RDWR, '\r');
 
 	int n_expect = (strlen(message) + 15) / 16;
-	ok(num_ints == n_expect, "num_ints == %d", n_expect);
+	if(!ok(num_ints == n_expect, "num_ints == %d", n_expect)) {
+		diag("num_ints=%d", num_ints);
+	}
 	ok1(label_ok);
 	ok1(reply_ok);
 	ok1(double_ok);

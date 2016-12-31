@@ -583,7 +583,7 @@ void kmain(void *bigp, unsigned int magic)
 	x86_irq_disable();
 	setup_timer_ch0();
 	if(apic_enabled) ioapic_route_legacy_irq(0, 0x20);
-	else (*global_pic.unmask_irq)(0, false, false);	/* act-low, edge */
+	else (*global_pic.unmask_irq)(0, IHF_ACT_LOW);
 	x86_irq_enable();
 
 	printf("entering scheduler\n");

@@ -150,14 +150,22 @@ static void ioapic_mask_irq(int irq)
 }
 
 
-static void ioapic_unmask_irq(int irq, bool act_high, bool level_trig)
+static void ioapic_unmask_irq(int irq, unsigned flags)
 {
 	struct ioapic_info *ioa = &global_ioapics[irq / 24];
 	int vec = irq % 24;
 
-	uint32_t ctl = ioapic_read(ioa, IOREDTBL(vec) + 0);
+	/* transfer the act-low/level-trig pattern into the APIC setting word
+	 * directly.
+	 */
+	assert(IHF_ACT_LOW == (1 << 0));
+	assert(IHF_LEVEL_TRIG == (1 << 2));
+	int trig_pol = (flags & (IHF_ACT_LOW | IHF_LEVEL_TRIG)) << 13;
 
-	int trig = level_trig ? 1 : 0, pol = act_high ? 0 : 1;
+	assert(CHECK_FLAG(trig_pol, 1 << 13)
+		== CHECK_FLAG(flags, IHF_ACT_LOW));
+	assert(CHECK_FLAG(trig_pol, 1 << 15)
+		== CHECK_FLAG(flags, IHF_LEVEL_TRIG));
 
 	/* bit 16 = interrupt mask bit.
 	 *     15 = trigger mode (0 = edge, 1 = level)
@@ -167,8 +175,9 @@ static void ioapic_unmask_irq(int irq, bool act_high, bool level_trig)
 	 * other fields select fixed (regular) delivery to a physical LAPIC (CPU
 	 * 0, since mung is still not a SMP kernel).
 	 */
-	ctl &= ~((1 << 16) | (!pol << 13) | (!trig << 15) | 0xff);
-	ctl |= (pol << 13) | (trig << 15) | (0x20 + irq);
+	uint32_t ctl = ioapic_read(ioa, IOREDTBL(vec) + 0);
+	ctl &= ~((1 << 16) | (1 << 13) | (1 << 15) | 0xff);
+	ctl |= trig_pol | (0x20 + irq);
 	ioapic_write(ioa, IOREDTBL(vec) + 0, ctl);
 }
 
@@ -494,7 +503,8 @@ COLD int ioapic_init(struct pic_ops *ops)
 		.unmask_irq = &ioapic_unmask_irq,
 	};
 
+	/* preallocate all vectors, permit defer, and direct to userspace. */
 	int num_ints = num_global_ioapics * 24 - 1;
-	set_irq_handler(0x20 + num_ints, NULL);
+	set_irq_handler(num_ints, NULL, 0);
 	return num_ints;
 }

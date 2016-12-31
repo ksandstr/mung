@@ -56,6 +56,7 @@ struct interrupt
 
 
 static struct thread *thread_find(thread_id tid);
+static struct thread *int_trigger(int irqn);
 
 
 /* only accessible with interrupts disabled. */
@@ -885,19 +886,39 @@ fail:
 }
 
 
-#define int_disable(irq) (*global_pic.mask_irq)((irq))
 /* NOTE: "active high", "edge sensitive" is the default. there should be some
  * ACPI shenanigans for recognizing legacy devices that instead do active-low
  * signaling.
  */
-#define int_enable(irq) (*global_pic.unmask_irq)((irq), true, false)
+static void int_enable(int irq)
+{
+	x86_irq_disable();
+	set_irq_handler(irq, &int_trigger, IHF_AUTOMASK);
+	(*global_pic.unmask_irq)(irq, 0);
+	x86_irq_enable();
+}
+
+
+static void int_disable(int irq)
+{
+	x86_irq_disable();
+	(*global_pic.mask_irq)(irq);
+	set_irq_handler(irq, NULL, 0);
+	x86_irq_enable();
+}
+
+
+static void int_unmask(int irq)
+{
+	x86_irq_disable();
+	(*global_pic.unmask_irq)(irq, 0);
+	x86_irq_enable();
+}
 
 
 static L4_Word_t interrupt_ctl(
 	L4_Word_t *ec_p,
-	struct thread *current,
-	L4_ThreadId_t dest_tid,
-	L4_ThreadId_t pager)
+	struct thread *current, L4_ThreadId_t dest_tid, L4_ThreadId_t pager)
 {
 	int intnum = L4_ThreadNo(dest_tid);
 	assert(L4_Version(dest_tid) == 1);
@@ -911,20 +932,17 @@ static L4_Word_t interrupt_ctl(
 	assert(pgt != NULL || pager.raw == dest_tid.raw);
 
 	/* TODO: add mechanism for clearing TF_INTR also */
-	x86_irq_disable();
+	if(pgt == NULL) int_disable(intnum);
+
 	struct interrupt *it = &int_table[intnum];
 	it->pager = pgt;
 	it->pending = false;
 	it->delivered = false;
 
-	if(pgt == NULL) {
-		int_disable(intnum);
-	} else {
-		/* enable it. */
+	if(pgt != NULL) {
 		pgt->flags |= TF_INTR;
 		int_enable(intnum);
 	}
-	x86_irq_enable();
 
 	*ec_p = 0;
 	return 1;
@@ -932,9 +950,9 @@ static L4_Word_t interrupt_ctl(
 
 
 /* returns true if t->status was changed. caller should set
- * int_table[ivec].delivered in that case to avoid double delivery.
+ * int_table[@intnum].delivered in that case to avoid double delivery.
  */
-static bool send_int_ipc(int ivec, struct thread *t)
+static bool send_int_ipc(int intnum, struct thread *t)
 {
 	assert(t != NULL);
 
@@ -942,7 +960,7 @@ static bool send_int_ipc(int ivec, struct thread *t)
 
 	if((t->status != TS_RECV_WAIT && t->status != TS_R_RECV)
 		|| (t->ipc_from.raw != L4_anythread.raw
-			&& t->ipc_from.raw != L4_GlobalId(ivec, 1).raw))
+			&& t->ipc_from.raw != L4_GlobalId(intnum, 1).raw))
 	{
 		/* active signaling can't happen because the recipient isn't waiting.
 		 * this one will be received with int_poll().
@@ -951,7 +969,7 @@ static bool send_int_ipc(int ivec, struct thread *t)
 	} else {
 		void *utcb = thread_get_utcb(t);
 		L4_VREG(utcb, L4_TCR_MR(0)) = (L4_MsgTag_t){ .X.label = 0xfff0 }.raw;
-		t->ipc_from = L4_GlobalId(ivec, 1);
+		t->ipc_from = L4_GlobalId(intnum, 1);
 		set_ipc_return_regs(&t->ctx.r, t, utcb);
 		thread_wake(t);
 		return true;
@@ -962,31 +980,26 @@ static bool send_int_ipc(int ivec, struct thread *t)
 /* called from ThreadControl in the deletion & version stomp cases */
 static void int_kick(struct thread *t)
 {
-	assert(x86_irq_is_enabled());
 	assert(CHECK_FLAG(t->flags, TF_INTR));
 
 	/* brute force, but acceptable because interrupts are usually few. */
-	x86_irq_disable();
 	for(int i=0; i < num_ints; i++) {
 		struct interrupt *it = &int_table[i];
-		if(it->pager != t) continue;
-		it->pager = NULL;
-		it->pending = false;
-		it->delivered = false;
-		int_disable(i);
+		if(it->pager == t) {
+			it->pager = NULL;
+			it->pending = false;
+			it->delivered = false;
+			int_disable(i);
+		}
 	}
-	x86_irq_enable();
 
 	/* no longer applicable. */
 	t->flags &= ~TF_INTR;
 }
 
 
-/* called from irq.c with interrupts deferred */
-struct thread *int_trigger(int vecnum)
+static struct thread *int_trigger(int intnum)
 {
-	assert(vecnum < 0);		/* it's already been masked. */
-	int intnum = -vecnum - 0x20;
 	assert(intnum >= 0 && intnum < num_ints);
 
 	struct interrupt *it = &int_table[intnum];
@@ -1002,17 +1015,16 @@ struct thread *int_trigger(int vecnum)
 }
 
 
-/* called when a recipient doesn't ReplyWait to the interrupt.
+/* called in ipc_recv_half() to deliver interrupt IPC in a case where the
+ * interrupt occurred, and the handler thread wasn't waiting.
  *
- * when @intnum == -1, always selects lowest number first. returns -1 when no
- * interrupt is pending; and non-negative when an interrupt is pending.
+ * when @intnum == -1: returns -1 when no interrupt is pending and
+ * non-negative int# otherwise, always selecting lowest number first.
  */
 int int_poll(struct thread *t, int intnum)
 {
-	assert(x86_irq_is_enabled());
 	assert(intnum == -1 || intnum < num_ints);
 
-	x86_irq_disable();
 	int retval = -1;
 	if(intnum >= 0) {
 		struct interrupt *it = &int_table[intnum];
@@ -1029,7 +1041,6 @@ int int_poll(struct thread *t, int intnum)
 		}
 	}
 	if(retval >= 0) int_table[retval].delivered = true;
-	x86_irq_enable();
 
 	return retval;
 }
@@ -1038,31 +1049,25 @@ int int_poll(struct thread *t, int intnum)
 /* called from ipc_send_half() on reply to interrupt thread */
 int int_clear(int intnum, struct thread *sender)
 {
-	assert(x86_irq_is_enabled());
 	assert(sender != NULL);
 	assert(intnum < num_ints);
 
 	struct interrupt *it = &int_table[intnum];
 	if(unlikely(sender != it->pager)) {
 		return 2;	/* non-existing partner */
+	} else if(unlikely(!it->pending || !it->delivered)) {
+		/* can't clear an undelivered interrupt. the IPC wait isn't
+		 * significant either.
+		 *
+		 * NOTE: this violates a send timeout if one is specified, even
+		 * L4_Never. that's completely fine; interrupts don't get a "signal
+		 * when clearable" mechanism.
+		 */
+		return 1;		/* timeout */
 	} else {
-		x86_irq_disable();
-		if(unlikely(!it->pending || !it->delivered)) {
-			/* can't clear an undelivered interrupt. the IPC wait isn't
-			 * significant either.
-			 *
-			 * NOTE: this violates a send timeout if one is specified, even
-			 * L4_Never. that's completely fine; interrupts don't get a
-			 * "signal when clearable" mechanism.
-			 */
-			x86_irq_enable();
-			return 1;		/* timeout */
-		}
-
 		it->pending = false;
 		it->delivered = false;
-		int_enable(intnum);
-		x86_irq_enable();
+		int_unmask(intnum);
 		return 0;
 	}
 }

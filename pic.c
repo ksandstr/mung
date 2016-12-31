@@ -85,11 +85,12 @@ void pic_mask_irq(int irq)
 
 
 /* NOTE: this completely ignores polarity. */
-void pic_unmask_irq(int irq, bool act_high, bool level_trig)
+void pic_unmask_irq(int irq, unsigned flags)
 {
-	if(!level_trig) {
+	if(!CHECK_FLAG(flags, IHF_LEVEL_TRIG)) {
 		printf("%s: ignoring request for edge-triggered irq%d\n",
 			__func__, irq);
+		return;
 	}
 
 	if(irq >= 8) {
@@ -151,7 +152,8 @@ COLD int xtpic_init(struct pic_ops *ops)
 		.mask_irq = &pic_mask_irq,
 		.unmask_irq = &pic_unmask_irq,
 	};
-	set_irq_handler(0x2f, NULL);	/* enable int_trigger(), deferring */
+	/* preallocate all vectors, permit defer, and direct to userspace. */
+	set_irq_handler(0xf, NULL, 0);
 
 	return 15;		/* highest interrupt number */
 }
