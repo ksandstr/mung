@@ -28,14 +28,13 @@
 #include <ukernel/memdesc.h>
 #include <ukernel/kip.h>
 #include <ukernel/bug.h>
+#include <ukernel/trampoline.h>
 #include <ukernel/ktest.h>
 #include <ukernel/misc.h>
 
 
 struct tss kernel_tss;
 struct space *sigma0_space = NULL;
-
-struct pic_ops global_pic;
 
 static struct list_head resv_page_list = LIST_HEAD_INIT(resv_page_list);
 static struct page *next_dir_page = NULL;
@@ -498,6 +497,7 @@ void kmain(void *bigp, unsigned int magic)
 
 	printf("enabling interrupt controllers...\n");
 	int max_irq = -1;
+	struct pic_ops global_pic;
 	if(apic_probe() < 0 || (max_irq = ioapic_init(&global_pic)) < 0) {
 		printf("IOAPIC not found, or disabled; falling back to XT-PIC\n");
 		if((max_irq = xtpic_init(&global_pic)) < 0) {
@@ -508,6 +508,9 @@ void kmain(void *bigp, unsigned int magic)
 		assert(apic_enabled);
 		xtpic_disable();
 	}
+	SET_TRAMPOLINE(send_eoi, global_pic.send_eoi);
+	SET_TRAMPOLINE(mask_irq, global_pic.mask_irq);
+	SET_TRAMPOLINE(unmask_irq, global_pic.unmask_irq);
 	assert(max_irq >= 0);
 
 	printf("re-enabling interrupt processing...\n");
@@ -583,7 +586,7 @@ void kmain(void *bigp, unsigned int magic)
 	x86_irq_disable();
 	setup_timer_ch0();
 	if(apic_enabled) ioapic_route_legacy_irq(0, 0x20);
-	else (*global_pic.unmask_irq)(0, IHF_ACT_LOW);
+	else unmask_irq(0, IHF_ACT_LOW);
 	x86_irq_enable();
 
 	printf("entering scheduler\n");

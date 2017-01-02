@@ -16,6 +16,7 @@
 #include <ukernel/trace.h>
 #include <ukernel/kip.h>
 #include <ukernel/misc.h>
+#include <ukernel/trampoline.h>
 #include <ukernel/interrupt.h>
 
 
@@ -26,6 +27,11 @@ struct irq_handler {
 	irq_handler_fn fn;
 	unsigned flags;
 };
+
+
+DEFINE_TRAMPOLINE(send_eoi);
+DEFINE_TRAMPOLINE(mask_irq);
+DEFINE_TRAMPOLINE(unmask_irq);
 
 
 /* interrupt handlers set by other parts of the microkernel. these override
@@ -91,8 +97,7 @@ static void irq_defer(int irqn)
 
 	if(!CHECK_FLAG(*limb, m)) {
 		*limb |= m;
-		assert(global_pic.mask_irq != NULL);
-		(*global_pic.mask_irq)(irqn);
+		mask_irq(irqn);
 	}
 }
 
@@ -175,7 +180,7 @@ struct thread *irq_call_deferred(struct thread *next)
 			assert(b >= 0);
 			m_done[i] &= ~(1ul << b);
 			int irqn = i * WORD_BITS + b;
-			(*global_pic.unmask_irq)(irqn, irq_handlers[irqn].flags);
+			unmask_irq(irqn, irq_handlers[irqn].flags);
 			n_total--;
 		}
 	}
@@ -194,8 +199,7 @@ void isr_irq_bottom(struct x86_exregs *regs)
 
 	int irqn = regs->reason - 0x20;	/* TODO: get offset from global_pic */
 	assert(irqn >= 0);
-	assert(global_pic.send_eoi != NULL);
-	(*global_pic.send_eoi)(irqn);
+	send_eoi(irqn);
 
 	bool automask;
 	irq_handler_fn handler = choose_handler(&automask, irqn);
@@ -203,8 +207,7 @@ void isr_irq_bottom(struct x86_exregs *regs)
 		/* masking for interrupts that've been directed to userspace, and ones
 		 * that occurred without handler.
 		 */
-		assert(global_pic.mask_irq != NULL);
-		(*global_pic.mask_irq)(irqn);
+		mask_irq(irqn);
 	}
 
 	if(irq_in_kernel(regs) && !kernel_irq_ok) {
@@ -256,7 +259,7 @@ void isr_irq0_bottom(struct x86_exregs *regs)
 {
 	uint64_t now = ++global_timer_count;
 	(*systemclock_p) += 1000;
-	(*global_pic.send_eoi)(0);
+	send_eoi(0);
 
 	if(now < preempt_timer_count) return;
 	TRACE("%s: preempt hit at now=%u\n", __func__, (unsigned)now);

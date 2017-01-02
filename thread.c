@@ -894,7 +894,7 @@ static void int_enable(int irq)
 {
 	x86_irq_disable();
 	set_irq_handler(irq, &int_trigger, IHF_AUTOMASK);
-	(*global_pic.unmask_irq)(irq, 0);
+	unmask_irq(irq, 0);
 	x86_irq_enable();
 }
 
@@ -902,7 +902,7 @@ static void int_enable(int irq)
 static void int_disable(int irq)
 {
 	x86_irq_disable();
-	(*global_pic.mask_irq)(irq);
+	mask_irq(irq);
 	set_irq_handler(irq, NULL, 0);
 	x86_irq_enable();
 }
@@ -911,7 +911,7 @@ static void int_disable(int irq)
 static void int_unmask(int irq)
 {
 	x86_irq_disable();
-	(*global_pic.unmask_irq)(irq, 0);
+	unmask_irq(irq, 0);
 	x86_irq_enable();
 }
 

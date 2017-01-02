@@ -26,20 +26,16 @@ struct thread;
 /* PIC/APIC operations. @irq is a global interrupt number in the range
  * [0..SystemBase).
  *
- * TODO: make these trampoline functions instead. send_eoi() occurs once per
- * interrupt, so the few cycles spared will be measurably significant.
+ * rather than called directly, these will be used to set up the
+ * similarly-named trampolines when there's exactly 1 PIC in the system; and
+ * used for slower multiplexing if there are more.
  */
 struct pic_ops
 {
 	void (*send_eoi)(int irq);
 	void (*mask_irq)(int irq);
-	void (*unmask_irq)(int irq, unsigned flags);	/* @flags is IHF_* */
+	void (*unmask_irq)(int irq, unsigned flags);
 };
-
-
-/* from kmain.c */
-
-extern struct pic_ops global_pic;
 
 
 /* from pic.c. support for x86 without APIC, or where APIC is disabled. */
@@ -55,6 +51,11 @@ extern int ioapic_init(struct pic_ops *ops);
 
 
 /* from irq.c */
+
+/* operations on the global PIC set. call with interrupts disabled only. */
+extern void send_eoi(int irq);
+extern void mask_irq(int irq);
+extern void unmask_irq(int irq, unsigned flags);	/* @flags is IHF_* */
 
 /* interrupt control variables. access with interrupts disabled only.
  *
