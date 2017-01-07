@@ -82,7 +82,7 @@ extern NORETURN void exit_to_thread(struct thread *next);
 /* called by irq0 handler when preempt_timer_count is hit. convention per
  * set_irq_handler(), but allows !x86_irq_is_enabled().
  */
-extern struct thread *on_preempt(int vec_num);
+extern struct thread *on_preempt(int irqn);
 
 /* for the self-deleting ThreadControl edge case: required before
  * exit_to_scheduler(NULL). also irq_latent().

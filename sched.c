@@ -483,7 +483,7 @@ void leaving_thread(struct thread *self)
 /* translate scheduling events into preëmption events according to existing
  * state.
  */
-struct thread *on_preempt(int vec_num)
+struct thread *on_preempt(int irqn)
 {
 	x86_irq_disable_push();
 

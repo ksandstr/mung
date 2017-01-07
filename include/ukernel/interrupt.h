@@ -64,15 +64,13 @@ extern void unmask_irq(int irq, unsigned flags);	/* @flags is IHF_* */
  */
 extern bool irq_defer_active, kernel_irq_ok;
 
-/* vec_num is the number of the interrupt vector affected (i.e. exregs->reason
- * on x86). since vectors 0..0x20 are mapped to CPU-internal things (in
- * particular 0 is the divide exception), @vec_num != 0. external (platform
- * PIC) interrupts start wherever.
+/* @irqn is the number of the interrupt, which the implementation maps to a
+ * platform PIC vector number. @irqn is always > 0; deferred execution is not
+ * indicated to the handler in any way.
  *
- * IRQs will be enabled during the handler's execution and the generic IRQ
+ * interrupts are enabled during the handler's execution and the generic IRQ
  * bottom half will defer execution of any other handlers until userspace or
- * idle. @vec_num is always positive; deferral is not indicated to the handler
- * in any way.
+ * idle.
  *
  * the handler may return three distinct values to control where the CPU goes
  * afterward:
@@ -80,11 +78,10 @@ extern bool irq_defer_active, kernel_irq_ok;
  *     to scheduler and possibly goes idle.
  *   - [continue] the value of get_current_thread(): the current thread should
  *     keep running.
- *   - [preempt] any other <struct thread *>: the indicated thread should
- *     preempt the current thread, potentially taking precedence over other
- *     preemptors.
+ *   - [preempt] any other <struct thread *>: the indicated thread may preempt
+ *     the current thread, possibly taking precedence over other preëmptors.
  */
-typedef struct thread *(*irq_handler_fn)(int vec_num);
+typedef struct thread *(*irq_handler_fn)(int irqn);
 
 /* set in-kernel handling of external interrupt @irq.
  *
@@ -94,8 +91,8 @@ typedef struct thread *(*irq_handler_fn)(int vec_num);
  * called, and stay masked until something unmasks it explicitly.
  *
  * while @irq is unmasked, @handler may run fewer times than the interrupt is
- * raised, but a condition that the interrupt signals will never go unobserved
- * by @handler.
+ * raised. however, a persistent state-change signaled with the interrupt will
+ * never go unobserved by @handler.
  *
  * by default all interrupts are directed to a spurious-interrupt handler
  * which reports the interrupt and masks it until unmasked somewhere else.
@@ -119,6 +116,5 @@ extern struct thread *irq_call_deferred(struct thread *next);
  */
 extern int int_clear(int intnum, struct thread *sender);
 extern int int_poll(struct thread *t, int intnum);
-
 
 #endif
