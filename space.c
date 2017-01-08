@@ -54,10 +54,10 @@ static struct list_head space_list = LIST_HEAD_INIT(space_list);
 
 #define NO_PTAB_TO_MAPDB (1 << 0)
 
-#ifndef NDEBUG
+#ifdef DEBUG_ME_HARDER
 #include <ukernel/invariant.h>
 
-static UNNEEDED uint32_t max_page_id(void)
+static uint32_t max_page_id(void)
 {
 	static uint32_t max_page = 0;
 	if(unlikely(max_page == 0)) {
@@ -77,10 +77,9 @@ static UNNEEDED uint32_t max_page_id(void)
 }
 
 
-/* TODO: this function is needlessly heavy. it makes unit tests very slow. */
+/* TODO: this function is needlessly heavy. */
 static bool check_space(int opt, struct space *sp)
 {
-#ifdef DEBUG_ME_HARDER
 	INV_CTX;
 
 	L4_ThreadId_t sp_tid = space_name(sp);
@@ -212,9 +211,6 @@ end:
 
 inv_fail:
 	return false;
-#else
-	return true;
-#endif
 }
 
 

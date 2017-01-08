@@ -212,11 +212,9 @@ static inline L4_Word_t addr_to_ref(struct map_group *g, uintptr_t addr)
 
 /* runtime invariant checks. */
 
-static bool check_map_entry(
+static bool check_map_entry(INVCTX_ARG,
 	struct map_group *grp, struct map_entry *e, int opts)
 {
-	INV_CTX;
-
 	/* for each entry, check that
 	 *
 	 *   - it references a valid parent entry, or that its ->parent is
@@ -312,10 +310,8 @@ inv_fail:
 }
 
 
-static bool check_map_group(struct map_group *grp, int opts)
+static bool check_map_group(INVCTX_ARG, struct map_group *grp, int opts)
 {
-	INV_CTX;
-
 	/* group spec. */
 	inv_ok1(MG_N_ENTRIES(grp) <= MAX_ENTRIES_PER_GROUP);
 	inv_ok1(MG_N_ENTRIES(grp) <= 1 << MG_N_ALLOC_LOG2(grp));
@@ -339,7 +335,7 @@ static bool check_map_group(struct map_group *grp, int opts)
 				L4_Address(o->range), L4_Size(o->range));
 		}
 
-		inv_ok1(check_map_entry(grp, e, opts));
+		inv_ok1(check_map_entry(INV_CHILD, grp, e, opts));
 
 		inv_pop();
 	}
@@ -378,7 +374,7 @@ static bool check_mapdb(struct space *sp, int opts)
 		inv_iff1(grp->ptab_page != NULL, CHECK_FLAG(pde, PDIR_PRESENT));
 		inv_imply1(grp->ptab_page != NULL, grp->ptab_page->id == pde >> 12);
 
-		inv_ok1(check_map_group(grp, opts));
+		inv_ok1(check_map_group(INV_CHILD, grp, opts));
 
 		inv_pop();
 	}
