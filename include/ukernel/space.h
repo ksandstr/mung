@@ -3,6 +3,7 @@
 #define SEEN_UKERNEL_SPACE_H
 
 #include <stdint.h>
+#include <setjmp.h>
 #include <ccan/list/list.h>
 #include <ccan/htable/htable.h>
 #include <ccan/likely/likely.h>
@@ -12,7 +13,6 @@
 #include <ukernel/rbtree.h>
 #include <ukernel/thread.h>
 #include <ukernel/mm.h>
-#include <ukernel/setjmp.h>
 #include <ukernel/misc.h>
 
 

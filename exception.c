@@ -1,6 +1,7 @@
 
 #include <stdio.h>
 #include <stdint.h>
+#include <setjmp.h>
 
 #include <ccan/likely/likely.h>
 #include <ccan/compiler/compiler.h>
@@ -11,7 +12,6 @@
 #include <l4/vregs.h>
 
 #include <ukernel/x86.h>
-#include <ukernel/setjmp.h>
 #include <ukernel/thread.h>
 #include <ukernel/sched.h>
 #include <ukernel/space.h>

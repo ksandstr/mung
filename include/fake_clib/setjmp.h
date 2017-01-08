@@ -1,11 +1,10 @@
-/* microkernel setjmp. allows recovery from in-kernel pagefaults. semantics
- * are like regular setjmp/longjmp.
- */
 
-#ifndef SEEN_UKERNEL_SETJMP_H
-#define SEEN_UKERNEL_SETJMP_H
+#ifndef SEEN_FAKE_CLIB_SETJMP_H
+#define SEEN_FAKE_CLIB_SETJMP_H
 
+#include <stdint.h>
 #include <ccan/compiler/compiler.h>
+
 
 typedef struct jmp_buf_s {
 	uint32_t regs[6];		/* ebx, esi, edi, ebp, eip, esp */
