@@ -40,6 +40,8 @@ static void space_memcpy_from_unsafe(
 	struct space *sp,
 	void *dest, L4_Word_t address, size_t size);
 
+static struct utcb_page *find_utcb_page(struct space *sp, int pos);
+
 
 struct space *current_space = NULL;
 
@@ -116,15 +118,13 @@ static bool check_space(int opt, struct space *sp)
 	}
 
 	/* check that correct pages, or holes, are mapped for utcb_pages[]. */
-	if(sp->utcb_pages.elems > 0) {
+	if(!RB_EMPTY_ROOT(&sp->utcb_pages)) {
 		inv_imply1(sp != kernel_space, sp->utcb_area.raw != L4_Nilpage.raw);
 		for(int i=0; i < NUM_UTCB_PAGES(sp->utcb_area); i++) {
 			L4_Word_t page_addr = L4_Address(sp->utcb_area) + i * PAGE_SIZE;
 			inv_push("checking utcb page %d/%d at %#lx:", i,
 				(int)NUM_UTCB_PAGES(sp->utcb_area), page_addr);
-			uint16_t page_pos = i;
-			struct utcb_page *up = htable_get(&sp->utcb_pages,
-				int_hash(page_pos), &cmp_utcb_page, &page_pos);
+			struct utcb_page *up = find_utcb_page(sp, i);
 
 			/* (this just accesses the page tables.) */
 			const uint32_t *ptab_mem;
