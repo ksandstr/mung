@@ -76,19 +76,29 @@ static struct thread **static_threads;
 
 static bool check_thread(int opt, struct thread *t)
 {
-/* BIG FAT TODO */
-#if 0
 	INV_CTX;
 	inv_push("thread %lu:%lu (%p)", TID_THREADNUM(t->id),
 		TID_VERSION(t->id), t);
+
+	inv_ok1(t->space != NULL);
+	/* TODO: verify presence in utcb_page slot. */
+	inv_iff1(t->utcb_page != NULL, t->utcb_pos >= 0);
+	inv_iff1(t->utcb_pos >= 0, t->utcb_ptr_seg > 0);
+
+	/* the halt bit */
+	inv_imply1(CHECK_FLAG(t->flags, TF_HALT) && t->status != TS_STOPPED,
+		IS_IPC_WAIT(t->status));
+
+	/* rangealloc interactions */
+	inv_ok1(ra_alloc(thread_ra, TID_THREADNUM(t->id)) == NULL);
+	inv_ok1(ra_id2ptr(thread_ra, TID_THREADNUM(t->id)) == t);
+	inv_ok1(ra_ptr2id(thread_ra, t) == TID_THREADNUM(t->id));
+
 	inv_pop();
 	return true;
 
 inv_fail:
 	return false;
-#endif
-
-	return true;
 }
 
 
@@ -879,8 +889,8 @@ SYSCALL L4_Word_t sys_exregs(
 end:
 	*control_p = ctl_out;
 	TRACE("%s: returning control'=%#lx\n", __func__, *control_p);
-	/* NB: this line adds about 6k cycles to the exregs benchmark on core2. */
 	assert(dest_thread == NULL || check_thread(0, dest_thread));
+	assert(check_thread_module(0));
 	return result.raw;
 
 fail:
