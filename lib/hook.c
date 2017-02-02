@@ -50,12 +50,12 @@ void hook_init(struct hook *h, void *dataptr)
 }
 
 
-void hook_push_front(struct hook *h, hook_call_t fn, void *dataptr) {
+void _hook_push_front(struct hook *h, hook_call_t fn, void *dataptr) {
 	list_add(&h->fn_list, &h_fn(fn, dataptr)->link);
 }
 
 
-void hook_push_back(struct hook *h, hook_call_t fn, void *dataptr) {
+void _hook_push_back(struct hook *h, hook_call_t fn, void *dataptr) {
 	list_add_tail(&h->fn_list, &h_fn(fn, dataptr)->link);
 }
 

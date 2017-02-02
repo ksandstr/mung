@@ -6,7 +6,9 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+
 #include <ccan/list/list.h>
+#include <ccan/typesafe_cb/typesafe_cb.h>
 
 
 struct hook;
@@ -39,10 +41,18 @@ extern void hook_init(struct hook *h, void *dataptr);
 
 
 /* "prepend" */
-extern void hook_push_front(struct hook *h, hook_call_t fn, void *dataptr);
+extern void _hook_push_front(struct hook *h, hook_call_t fn, void *dataptr);
+#define hook_push_front(h, fn, dataptr) \
+	_hook_push_front((h), \
+		typesafe_cb_preargs(void, void *, (fn), (dataptr), \
+			struct hook *, void *, uintptr_t), (dataptr))
 
 /* "append" */
-extern void hook_push_back(struct hook *h, hook_call_t fn, void *dataptr);
+extern void _hook_push_back(struct hook *h, hook_call_t fn, void *dataptr);
+#define hook_push_back(h, fn, dataptr) \
+	_hook_push_back((h), \
+		typesafe_cb_preargs(void, void *, (fn), (dataptr), \
+			struct hook *, void *, uintptr_t), (dataptr))
 
 /* calls all hooks in a front-to-back order, passing @code and @param as
  * given. returns number of hooks called.

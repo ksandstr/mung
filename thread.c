@@ -160,13 +160,13 @@ COLD void init_threading(void)
 
 static void restore_saved_regs(
 	struct hook *hook,
-	void *param, uintptr_t code, void *priv)
+	void *param, uintptr_t code,
+	struct saved_regs *sr)
 {
 	struct thread *t = container_of(hook, struct thread, post_exn_call);
 	assert(t->utcb_pos >= 0);
 	void *utcb = thread_get_utcb(t);
 
-	struct saved_regs *sr = priv;
 	L4_VREG(utcb, L4_TCR_VA_SENDER) = sr->va_sender.raw;
 	L4_VREG(utcb, L4_TCR_INTENDEDRECEIVER) = sr->ir.raw;
 	memcpy(&L4_VREG(utcb, L4_TCR_MR(0)), sr->mrs,
@@ -612,7 +612,7 @@ bool thread_is_valid(const struct thread *t)
 
 static void receive_breath_of_life(
 	struct hook *hook,
-	void *param, uintptr_t code, void *priv)
+	void *param, uintptr_t code, void *priv UNUSED)
 {
 	hook_detach(hook);
 
