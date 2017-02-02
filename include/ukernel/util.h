@@ -8,6 +8,8 @@
 #include <stdbool.h>
 #include <string.h>
 
+#include <ccan/typesafe_cb/typesafe_cb.h>
+
 #include <l4/types.h>
 #include <l4/message.h>
 
@@ -123,7 +125,9 @@ static inline bool int_eq(const void *elem, void *ref) {
 /* deep_call() returns 0 on success, or -ENOMEM when the new stack couldn't be
  * allocated.
  */
-extern int deep_call(void (*fn)(void *), void *paramptr);
+extern int _deep_call(void (*fn)(void *), void *paramptr);
+#define deep_call(f, p) \
+	_deep_call(typesafe_cb(void, void *, (f), (p)), (p))
 extern bool is_stack_safe(size_t margin);
 
 extern void call_on_stack(void (*fn)(void *), void *sp);

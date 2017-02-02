@@ -2018,8 +2018,8 @@ static void set_pt_range_rights(struct pt_iter *mod_it, L4_Fpage_t range)
 
 
 /* helper for deep_call() recursion */
-static void call_ueig(void *pptr);
-struct ueig_param {
+struct ueig_param
+{
 	struct map_group *g;
 	struct map_entry **e_p;
 	unsigned mode;
@@ -2027,6 +2027,8 @@ struct ueig_param {
 
 	int retval;
 };
+
+static void call_ueig(struct ueig_param *params);
 
 
 /* the core of mapdb_unmap_fpage(). this avoids a hashtable lookup for every
@@ -2202,8 +2204,7 @@ end:
 }
 
 
-static void call_ueig(void *pptr) {
-	struct ueig_param *p = pptr;
+static void call_ueig(struct ueig_param *p) {
 	p->retval = unmap_entry_in_group(p->g, p->e_p, p->mode, p->eff_range);
 }
 

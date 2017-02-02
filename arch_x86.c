@@ -86,7 +86,7 @@ void call_on_stack(void (*fn)(void *), void *stack)
 /* this low-level stuff doesn't have any better place to be in; and anyway,
  * thread stacks are per-architecture.
  */
-int deep_call(void (*fn)(void *), void *paramptr)
+int _deep_call(void (*fn)(void *), void *paramptr)
 {
 	void *stkbase;
 	int n = posix_memalign(&stkbase, KERNEL_STACK_SIZE, KERNEL_STACK_SIZE);
