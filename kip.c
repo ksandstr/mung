@@ -253,9 +253,8 @@ struct rip_param {
 };
 
 
-static COLD void reserve_init_page(struct page *page, void *priv)
+static COLD void reserve_init_page(struct page *page, struct rip_param *p)
 {
-	struct rip_param *p = priv;
 	L4_Word_t addr = page->id << PAGE_BITS;
 	p->ok_acc &= mdb_set(p->mdb, addr, addr + PAGE_SIZE - 1, false,
 		L4_ReservedMemoryType, 0);

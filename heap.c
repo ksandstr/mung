@@ -3,6 +3,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <assert.h>
+
 #include <ccan/list/list.h>
 #include <ccan/likely/likely.h>
 #include <ccan/container_of/container_of.h>
@@ -342,7 +343,7 @@ void init_kernel_heap(void *kcp_base, uintptr_t first_addr)
 
 
 /* iterates over initial memory grabbed in init_kernel_heap(). */
-void heap_for_each_init_page(void (*fn)(struct page *, void *), void *priv)
+void _heap_for_each_init_page(void (*fn)(struct page *, void *), void *priv)
 {
 	for(int i=0; i < N_FIRST_PAGES; i++) {
 		struct page *cur = &first_pages[i];

@@ -4,7 +4,9 @@
 
 #include <stdlib.h>
 #include <stdint.h>
+
 #include <ccan/list/list.h>
+#include <ccan/typesafe_cb/typesafe_cb.h>
 
 
 #define PAGE_BITS 12
@@ -100,8 +102,12 @@ extern void unref_vm_page(struct page *p);
 /* kernel heap initialization. reserves memory starting from @first_addr. */
 extern void init_kernel_heap(void *kcp_base, uintptr_t first_addr);
 
-extern void heap_for_each_init_page(
+extern void _heap_for_each_init_page(
 	void (*fn)(struct page *, void *), void *priv);
+#define heap_for_each_init_page(fn, priv) \
+	_heap_for_each_init_page( \
+		typesafe_cb_preargs(void, void *, (fn), (priv), struct page *), \
+		(priv))
 
 
 /* supervisor page table access from kmain.c */
