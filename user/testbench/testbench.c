@@ -558,7 +558,7 @@ static void parse_cmd_opts(struct htable *ht, const char *boot_cmdline)
 		 */
 		htable_add(ht, rehash_cmd_opt(opt, NULL), opt);
 
-		boot_cmdline = val_end + 1;
+		boot_cmdline = val_end;
 	}
 }
 
