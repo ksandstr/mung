@@ -121,9 +121,6 @@ static int mapdb_add_child(struct map_entry *ent, L4_Word_t child);
 
 struct rangealloc *map_group_ra = NULL;
 
-/* burner to keep group_id=0 from appearing in alloc. */
-static struct map_group *group_0;
-
 
 static void dump_map_group(struct map_group *g)
 {
@@ -2361,10 +2358,6 @@ COLD void init_mapdb(void)
 	 * at once.
 	 */
 	map_group_ra = RA_NEW(struct map_group, 1 << 18);
-
-	/* burn id 0. */
-	group_0 = ra_zalloc(map_group_ra, 0);
-	assert(group_0 != NULL);
-	assert(!is_group_valid(group_0));
-	assert(ra_ptr2id(map_group_ra, group_0) == 0);
+	ra_disable_id_0(map_group_ra);
+	printf("map_group_ra created\n");
 }

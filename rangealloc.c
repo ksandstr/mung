@@ -4,6 +4,7 @@
 #include <stdbool.h>
 #include <string.h>
 #include <assert.h>
+
 #include <ccan/htable/htable.h>
 
 #include <ukernel/mm.h>
@@ -11,6 +12,10 @@
 #include <ukernel/slab.h>
 #include <ukernel/util.h>
 #include <ukernel/rangealloc.h>
+
+
+/* rangealloc.flags */
+#define RAF_DISABLE_0	1
 
 
 struct ra_page
@@ -21,6 +26,9 @@ struct ra_page
 	short n_free;
 	uint32_t freemap[];
 };
+
+
+static struct kmem_cache *ra_slab = NULL;
 
 
 static size_t hash_ra_page(const void *ptr, void *priv) {
@@ -68,8 +76,13 @@ struct rangealloc *ra_create(
 	int range_log2,
 	unsigned short obj_size, unsigned short align)
 {
+	if(unlikely(ra_slab == NULL)) {
+		/* module inits */
+		ra_slab = KMEM_CACHE_NEW("ra_slab", struct rangealloc);
+	}
+
 	assert(range_log2 >= PAGE_BITS && range_log2 <= sizeof(L4_Word_t) * 8);
-	struct rangealloc *ra = malloc(sizeof(*ra));
+	struct rangealloc *ra = kmem_cache_alloc(ra_slab);
 	if(ra == NULL) return NULL;
 
 	uintptr_t start = reserve_heap_range(1 << range_log2);
@@ -87,6 +100,16 @@ struct rangealloc *ra_create(
 		alignof(struct ra_page), 0, NULL, NULL);
 
 	return ra;
+}
+
+
+void ra_disable_id_0(struct rangealloc *ra)
+{
+	BUG_ON(!CHECK_FLAG(ra->flags, RAF_DISABLE_0)
+		&& ra->page_hash.elems > 0,
+		"%s called after allocation", __func__);
+	ra->flags |= RAF_DISABLE_0;
+	assert(CHECK_FLAG(ra->flags, RAF_DISABLE_0));
 }
 
 
@@ -119,6 +142,12 @@ static struct ra_page *alloc_ra_page(
 		p->freemap[0] = (1u << p->n_free) - 1;
 	} else {
 		for(int i=0; i < fmap_limbs(ra); i++) p->freemap[i] = ~0u;
+	}
+	if(address == L4_Address(ra->range)
+		&& CHECK_FLAG(ra->flags, RAF_DISABLE_0))
+	{
+		/* effect burnination of id=0. */
+		p->freemap[0] &= ~1u;
 	}
 	bool ok = htable_add(&ra->page_hash, hash_ra_page(p, NULL), p);
 	if(!ok) {
@@ -208,6 +237,8 @@ void *ra_alloc(struct rangealloc *ra, long id)
 	assert(BETWEEN(p->address, p->address + PAGE_SIZE - 1, ret));
 	assert(BETWEEN(p->address, p->address + PAGE_SIZE - 1,
 		ret + (1 << ra->ob_size_log2) - 1));
+	BUG_ON(CHECK_FLAG(ra->flags, RAF_DISABLE_0) && id == 0,
+		"tried to return id=0 when it's disabled");
 	return (void *)ret;
 }
 

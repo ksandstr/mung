@@ -21,7 +21,8 @@ struct ra_page;		/* private to rangealloc.c */
 struct rangealloc
 {
 	L4_Fpage_t range;
-	short ob_size_log2, id_shift;
+	uint8_t ob_size_log2, id_shift;
+	uint16_t flags;
 	uintptr_t and_mask, or_mask;
 	struct htable page_hash;
 	struct ra_page *partial_head, *full_head;
@@ -46,6 +47,11 @@ extern struct rangealloc *ra_create(
 	unsigned short obj_size, unsigned short obj_align);
 
 /* NOTE: there's no ra_destroy(). */
+
+/* only valid before anything has been allocated on @ra. causes allocs on @ra
+ * to never have ID=0.
+ */
+extern void ra_disable_id_0(struct rangealloc *ra);
 
 extern void ra_free(struct rangealloc *ra, void *ptr);
 extern void *ra_alloc(struct rangealloc *ra, long id)
