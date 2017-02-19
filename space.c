@@ -1068,15 +1068,21 @@ COLD void init_spaces(struct list_head *resv_list)
 }
 
 
-static COLD size_t hash_page_by_id(const void *page_ptr, void *priv) {
-	const struct page *p = page_ptr;
-	return int_hash(p->id);
-}
-
-
-static COLD bool cmp_page_to_id(const void *cand_ptr, void *key) {
-	const struct page *p = cand_ptr;
-	return p->id == *(const uint32_t *)key;
+/* linear search, yay! but doesn't require extra memory unlike the previous,
+ * severely overengineered, htable-using version, which had some glitches
+ * before.
+ */
+static inline struct page *get_resv_page(
+	struct list_head *resv_list, uint32_t pgid)
+{
+	struct page *p, *found = NULL;
+	list_for_each(resv_list, p, link) {
+		if(p->id == pgid) {
+			assert(found == NULL);
+			found = p;
+		}
+	}
+	return found;
 }
 
 
@@ -1096,26 +1102,21 @@ COLD void space_finalize_kernel(
 	 * so it's fine.
 	 */
 	assert(map_group_ra != NULL);
-	struct htable by_id;
-	htable_init(&by_id, &hash_page_by_id, NULL);
-	struct page *p;
-	list_for_each(resv_list, p, link) {
-		bool ok = htable_add(&by_id, int_hash(p->id), p);
-		if(!ok) panic("borkage!");
-	}
 	const pdir_t *dirs = sp->pdirs->vm_addr;
 	for(uintptr_t i = 0; i < KERNEL_SEG_SIZE; i += PT_UPPER_SIZE) {
-		uint32_t pgid = dirs[(KERNEL_SEG_START + i) >> PT_UPPER_BITS] >> 12;
-		p = htable_get(&by_id, int_hash(pgid), &cmp_page_to_id, &pgid);
-		if(p == NULL) panic("spuriously!");		/* but also gravely. */
+		const uint32_t *pde = &dirs[(KERNEL_SEG_START + i) >> PT_UPPER_BITS],
+			pgid = *pde >> 12;
+		assert(CHECK_FLAG(*pde, PDIR_PRESENT));
+		assert(pgid > 0);
+		struct page *p = get_resv_page(resv_list, pgid);
+		if(p == NULL) panic("polly has had enough crackers tonight.");
 		struct map_group *g = ra_alloc(map_group_ra, -1);
-		if(g == NULL) panic("decongestuous!");
+		if(g == NULL) panic("your words are snowflakes.");
 		*g = (struct map_group){
 			.addr = (KERNEL_SEG_START + i) | MGF_ROOT,
 			.entries = NULL, .ptab_page = p, .space = sp,
 		};
 		bool ok = htable_add(&sp->ptab_groups, int_hash(MG_START(g)), g);
-		if(!ok) panic("nacritude!");
+		if(!ok) panic("why do gov'ts borrow money when they can create it?");
 	}
-	htable_clear(&by_id);
 }
