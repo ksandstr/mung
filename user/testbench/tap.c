@@ -337,14 +337,12 @@ void plan_tests(unsigned int num_tests)
 int diag(const char *fmt, ...)
 {
 	print_sub_prefix();
-	fprintf(stderr, "# ");
 	va_list al;
 	va_start(al, fmt);
 	char msg[512];
 	vsnprintf(msg, sizeof(msg), fmt, al);
-	fprintf(stderr, "%s", msg);
+	fprintf(stderr, "# %s\n", msg);
 	va_end(al);
-	fprintf(stderr, "\n");
 
 	return 0;
 }
