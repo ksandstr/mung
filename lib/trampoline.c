@@ -25,16 +25,16 @@ void undefined_trampoline(void)
 
 COLD void __set_trampoline_once(void *tptr, void *fnaddr)
 {
-	/* NOTE: this allows re-set via undefined_trampoline, but assert() down
-	 * below forbids it under !NDEBUG. not sure if that's useful or
-	 * exploitable or what; BUG_ON() is supposed to be a developer tool
-	 * anyway, not a security guarantee.
+	/* this allows re-set via undefined_trampoline, which is exploited in
+	 * early paravirt support. in any case BUG_ON() is supposed to be just a
+	 * developer tool anyway, so this doesn't matter too much.
 	 *
 	 * "+ 5" is for the jmp insn's length.
 	 */
 	BUG_ON(*(uint8_t *)tptr == 0xe9
 		&& *(uint32_t *)(tptr + 1) !=
-			(uintptr_t)&undefined_trampoline - ((uintptr_t)tptr + 5),
+			(uintptr_t)&undefined_trampoline - ((uintptr_t)tptr + 5)
+		&& fnaddr != &undefined_trampoline,
 		"trampoline %p already set!", tptr);
 
 	*(uint8_t *)tptr = 0xe9;	/* jmp rel32 */
@@ -43,6 +43,4 @@ COLD void __set_trampoline_once(void *tptr, void *fnaddr)
 	asm volatile ("clflush (%0)" :: "r" (tptr) : "memory");
 
 	assert(*(uint8_t *)tptr == 0xe9);
-	assert(*(uint32_t *)(tptr + 1) !=
-		(uintptr_t)&undefined_trampoline - ((uintptr_t)tptr + 5));
 }
