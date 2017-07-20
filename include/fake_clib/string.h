@@ -39,6 +39,14 @@ extern void *memswap(void *l, void *r, size_t n);
 /* note absence of strcpy(). */
 extern char *strncpy(char *dest, const char *src, size_t n);
 
+/* copies @src into @dest up to @n bytes, setting exactly one of @dest[0..@n)
+ * to '\0' so that @dest is always a valid C string. returns -E2BIG if '\0'
+ * didn't occur in src[0..n), or the index into @src where the null byte was
+ * found (it'll be at the same place in @dest). [interface via Linux, except
+ * that we don't have ssize_t.]
+ */
+extern int strscpy(char *dest, const char *src, size_t n);
+
 extern int strcmp(const char *a, const char *b)
 	__attribute__((__pure__));
 extern int strncmp(const char *a, const char *b, size_t n)

@@ -24,7 +24,9 @@
 #include <stdlib.h>
 #include <stdint.h>
 #include <assert.h>
+#include <errno.h>
 #include <ccan/endian/endian.h>
+#include <ccan/minmax/minmax.h>
 
 #include <ukernel/util.h>
 
@@ -363,6 +365,64 @@ char *strncpy(char *dest, const char *src, size_t n)
 	memset(&dest[i], '\0', n - i);
 
 	return dest;
+}
+
+
+/* compute bytes until end of page from @p. */
+static inline int until_page(const void *ptr) {
+	/* TODO: make prettier w/ PAGE_SIZE and so forth */
+	return 0x1000 - ((uintptr_t)ptr & 0xfff);
+}
+
+
+int strscpy(char *dest, const char *src, size_t n)
+{
+	size_t pos = 0;
+	if(labs(dest - src) < sizeof(uintptr_t)) goto rest;	/* , you pervert */
+
+	/* again with the usual old WAAT: one loop per page boundary, inner loops
+	 * for words and trailing bytes.
+	 *
+	 * NOTE: could try to align @src for the first segment, if it already
+	 * isn't. unaligned loads are typically slower than unaligned stores (when
+	 * there's any difference).
+	 */
+	while(pos < n) {
+		int bytes = min(until_page(&dest[pos]), until_page(&src[pos])),
+			words = bytes / sizeof(uintptr_t);
+		for(int i=0; i < words; i++, pos += sizeof(uintptr_t)) {
+			uintptr_t x = LE32_TO_CPU(*(const uintptr_t *)&src[pos]);
+			if(haszero(x) == 0) {
+				*(uintptr_t *)&dest[pos] = CPU_TO_LE32(x);
+			} else {
+				uintptr_t z = zero_mask(x);
+				*(uintptr_t *)&dest[pos] = CPU_TO_LE32(x & ~((z >> 7) * 0xff));
+				pos += ffsl(z) / 8 - 1;
+				assert(src[pos] == '\0');
+				goto end;
+			}
+		}
+		assert(pos <= n);
+
+		for(int tail = bytes % sizeof(uintptr_t); tail > 0; pos++, tail--) {
+			assert(pos < n);
+			if(src[pos] == '\0') goto end;
+			dest[pos] = src[pos];
+		}
+		assert(pos <= n);
+	}
+
+rest:
+	for(; pos < n && src[pos] != '\0'; pos++) dest[pos] = src[pos];
+	if(pos >= n) {
+		dest[n - 1] = '\0';
+		return -E2BIG;
+	} else {
+end:
+		dest[pos] = '\0';
+		assert(strcmp(src, dest) == 0);
+		return pos;
+	}
 }
 
 
