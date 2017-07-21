@@ -381,8 +381,10 @@ int strscpy(char *dest, const char *src, size_t n)
 	 * there's any difference).
 	 */
 	while(pos < n) {
-		int bytes = min(until_page(&dest[pos]), until_page(&src[pos])),
+		int bytes = min_t(int, n - pos,
+				min(until_page(&dest[pos]), until_page(&src[pos]))),
 			words = bytes / sizeof(uintptr_t);
+		assert(bytes > 0);
 		for(int i=0; i < words; i++, pos += sizeof(uintptr_t)) {
 			uintptr_t x = LE32_TO_CPU(*(const uintptr_t *)&src[pos]);
 			if(haszero(x) == 0) {

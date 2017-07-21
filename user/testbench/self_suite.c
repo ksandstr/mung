@@ -176,7 +176,6 @@ START_LOOP_TEST(strscpy_basic, iter, 0, 127)
 	if(!ok1(n == test_size)) diag("n=%d", n);
 	ok1(streq(tst, cmp));
 
-	todo_start("impl fails to generate -E2BIG");
 	memset(tst, 'a', test_size * 2);
 	memset(cmp, 'a', test_size * 2);
 	/* when it's smaller, should return -E2BIG and output up to test size less
@@ -188,7 +187,6 @@ START_LOOP_TEST(strscpy_basic, iter, 0, 127)
 	ok1(tst[test_size - 7] == '\0');
 	ok1(strlen(tst) == test_size - 7);
 	ok1(streq(tst, cmp));
-	todo_end();
 
 	talloc_free(tal);
 end: ;;
