@@ -40,7 +40,7 @@ static void fresh_tick(void)
 
 /* tcase str: <string.h> exports */
 
-static const char test_string[] =
+static const char test_copypasta[] __attribute__((aligned(16))) =
 	"What the fuck did you just fucking say about me, you little bitch? "
 	"I’ll have you know I graduated top of my class in the Navy Seals, and "
 	"I’ve been involved in numerous secret raids on Al-Quaeda, and I have "
@@ -61,7 +61,7 @@ static size_t ref_strlen(const char *s)
 
 START_TEST(strlen_basic)
 {
-	const int ref_len = ref_strlen(test_string);
+	const int ref_len = ref_strlen(test_copypasta);
 	diag("ref_len=%d", ref_len);
 	plan_tests(4);
 
@@ -73,7 +73,7 @@ START_TEST(strlen_basic)
 	for(int align = 0; align <= 3; align++) {
 		memset(arena, 0, arena_size);
 		char *buf = &arena[align];
-		memcpy(buf, test_string, ref_len + 1);
+		memcpy(buf, test_copypasta, ref_len + 1);
 		bool steps_ok = true;
 		for(int step = 0; step <= 3; step++) {
 			int test_len = strlen(&buf[step]);
@@ -101,7 +101,7 @@ static char *ref_strchr(const char *s, int c)
 START_LOOP_TEST(strchr_basic, iter, 0, 51)
 {
 	const char *alphabet = "abcdefghijklmnopqrstuvwxyz";
-	size_t ref_len = ref_strlen(test_string);
+	size_t ref_len = ref_strlen(test_copypasta);
 	bool upcase = CHECK_FLAG(iter, 1);
 	char c = alphabet[iter >> 1];
 	if(upcase) c = toupper(c);
@@ -116,7 +116,7 @@ START_LOOP_TEST(strchr_basic, iter, 0, 51)
 	for(int align = 0; align <= 3; align++) {
 		memset(arena, 0, arena_size);
 		char *buf = &arena[align];
-		memcpy(buf, test_string, ref_len + 1);
+		memcpy(buf, test_copypasta, ref_len + 1);
 		assert(buf[ref_len] == '\0');
 		buf[ref_len + 1] = c;		/* sneaky, sneaky */
 		bool steps_ok = true;
@@ -133,6 +133,65 @@ START_LOOP_TEST(strchr_basic, iter, 0, 51)
 	}
 
 	free(arena);
+}
+END_TEST
+
+
+/* yeah, 128 iterations. so what? at least this one doesn't sleep. */
+START_LOOP_TEST(strscpy_basic, iter, 0, 127)
+{
+	const bool page_step = CHECK_FLAG(iter, 1);
+	iter >>= 1;
+	const int src_offset = (iter & 7), dst_offset = ((iter >> 3) & 7);
+	diag("page_step=%s, src_offset=%d, dst_offset=%d",
+		btos(page_step), src_offset, dst_offset);
+	const char *teststr = &test_copypasta[src_offset];
+	assert(((uintptr_t)teststr & 7) == src_offset);
+	const int test_size = strlen(teststr);
+	diag("test_size=%d", test_size);
+	if(page_step) {
+		plan_skip_all("page-stepping not implemented");
+		goto end;
+	}
+	plan_tests(8);
+
+	void *tal = talloc_new(NULL);
+	char *tst = talloc_array(tal, char, test_size * 3) + dst_offset,
+		*cmp = talloc_array(tal, char, test_size * 3);
+	assert(((uintptr_t)tst & 7) == dst_offset);
+
+	memset(tst, 'a', test_size * 2);
+	memset(cmp, 'a', test_size * 2);
+	/* when count is larger than test size, should equal memcpy(). */
+	memcpy(cmp, teststr, test_size + 1);
+	int n = strscpy(tst, teststr, test_size * 2);
+	if(!ok1(n == test_size)) diag("n=%d", n);
+	ok1(streq(tst, cmp));
+
+	memset(tst, 'a', test_size * 2);
+	memset(cmp, 'a', test_size * 2);
+	/* same for count being equal to test size plus terminator. */
+	memcpy(cmp, teststr, test_size + 1);
+	n = strscpy(tst, teststr, test_size + 1);
+	if(!ok1(n == test_size)) diag("n=%d", n);
+	ok1(streq(tst, cmp));
+
+	todo_start("impl fails to generate -E2BIG");
+	memset(tst, 'a', test_size * 2);
+	memset(cmp, 'a', test_size * 2);
+	/* when it's smaller, should return -E2BIG and output up to test size less
+	 * one for terminator.
+	 */
+	memcpy(cmp, teststr, test_size - 7); cmp[test_size - 7] = '\0';
+	n = strscpy(tst, teststr, test_size - 6);
+	ok1(n == -E2BIG);
+	ok1(tst[test_size - 7] == '\0');
+	ok1(strlen(tst) == test_size - 7);
+	ok1(streq(tst, cmp));
+	todo_end();
+
+	talloc_free(tal);
+end: ;;
 }
 END_TEST
 
@@ -1739,7 +1798,7 @@ Suite *self_suite(void)
 {
 	Suite *s = suite_create("self");
 
-	/* tests on lib/string.c, lib/strl{cpy,cat}.c .
+	/* tests on lib/string.c.
 	 *
 	 * generally the "_basic" ones test short strings and buffers on various
 	 * alignments and combinations thereof, and "_page" test the same but with
@@ -1750,6 +1809,7 @@ Suite *self_suite(void)
 		tcase_add_checked_fixture(tc, &stats_setup, &stats_teardown);
 		tcase_add_test(tc, strlen_basic);
 		tcase_add_test(tc, strchr_basic);
+		tcase_add_test(tc, strscpy_basic);
 		suite_add_tcase(s, tc);
 	}
 
