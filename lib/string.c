@@ -75,6 +75,13 @@ static inline unsigned long byte_mask(unsigned long x, int c) {
 }
 
 
+/* compute bytes until end of page from @p. */
+static inline int until_page(const void *ptr) {
+	/* TODO: make prettier w/ PAGE_SIZE and so forth */
+	return 0x1000 - ((uintptr_t)ptr & 0xfff);
+}
+
+
 #ifdef __i386__
 /* via uClibc */
 static void *memcpy_forward(void *dst, const void *src, size_t len)
@@ -136,7 +143,7 @@ void *memcpy(void *dst, const void *src, size_t len) {
 
 void *memmove(void *dst, const void *src, size_t len)
 {
-	if(dst + MIN(size_t, len, 32) < src || dst >= src + len
+	if(dst + min_t(size_t, len, 32) < src || dst >= src + len
 		|| dst + len < src)
 	{
 		/* strictly forward OK, or no overlap */
@@ -248,9 +255,8 @@ int strcmp(const char *a, const char *b)
 		 * such that at least one of a[pos] and b[pos] is aligned to 4. but
 		 * that's a can of worms, so let's not.
 		 */
-		uintptr_t a_left = 0x1000 - ((uintptr_t)(a + pos) & 0xfff),
-			b_left = 0x1000 - ((uintptr_t)(b + pos) & 0xfff);
-		int words = MIN(int, a_left, b_left) / 4;
+		int bytes = min(until_page(&a[pos]), until_page(&b[pos])),
+			words = bytes / 4;
 		const unsigned long *ap = (const unsigned long *)(a + pos),
 			*bp = (const unsigned long *)(b + pos);
 		for(int i=0; i < words; i++) {
@@ -267,18 +273,14 @@ int strcmp(const char *a, const char *b)
 		pos += words * 4;
 
 		/* then byte at a time. */
-		assert(words * 4 <= a_left);
-		assert(words * 4 <= b_left);
-		int bytes = MIN(int, a_left - words * 4, b_left - words * 4);
-		for(int i=0; i < bytes; i++) {
-			int c = (int)a[pos + i] - b[pos + i];
+		for(int tail = bytes % sizeof(unsigned long); tail > 0; pos++, tail--) {
+			int c = (int)a[pos] - b[pos];
 			if(c != 0) return c;
-			if(a[pos + i] == '\0') {
-				assert(b[pos + i] == '\0');
+			if(a[pos] == '\0') {
+				assert(b[pos] == '\0');
 				return 0;
 			}
 		}
-		pos += bytes;
 	}
 }
 
@@ -322,28 +324,26 @@ size_t strlen(const char *str)
 {
 	/* fancy-pants word-at-a-time algorithm w/ byte-at-a-time fallback for
 	 * crossing 4k page boundaries safely under POSIX.
+	 * NB: this, too, could pre-align @str to word boundary.
 	 */
 	size_t pos = 0;
 	for(;;) {
-		uintptr_t left = 0x1000 - ((uintptr_t)(str + pos) & 0xfff);
-		int words = left / sizeof(long);
-		const unsigned long *wp = (const unsigned long *)(str + pos);
+		int bytes = until_page(&str[pos]), words = bytes / sizeof(uintptr_t);
+		const uintptr_t *wp = (const uintptr_t *)(str + pos);
 		for(int i=0; i < words; i++) {
-			unsigned long w = LE32_TO_CPU(wp[i]);
+			uintptr_t w = LE32_TO_CPU(wp[i]);
 			if(haszero(w) != 0) {
-				unsigned long z = zero_mask(w);
-				size_t len = pos + i * sizeof(long) + ffsl(z) / 8 - 1;
+				uintptr_t z = zero_mask(w);
+				size_t len = pos + i * sizeof(uintptr_t) + ffsl(z) / 8 - 1;
 				assert(str[len] == '\0');
 				return len;
 			}
 		}
-		pos += words * sizeof(long);
+		pos += words * sizeof(uintptr_t);
 
-		int bytes = left - words * sizeof(long);
-		for(int i=0; i < bytes; i++) {
-			if(str[pos + i] == '\0') return pos + i;
+		for(int tail = bytes % sizeof(uintptr_t); tail > 0; pos++, tail--) {
+			if(str[pos] == '\0') return pos;
 		}
-		pos += bytes;
 	}
 }
 
@@ -365,13 +365,6 @@ char *strncpy(char *dest, const char *src, size_t n)
 	memset(&dest[i], '\0', n - i);
 
 	return dest;
-}
-
-
-/* compute bytes until end of page from @p. */
-static inline int until_page(const void *ptr) {
-	/* TODO: make prettier w/ PAGE_SIZE and so forth */
-	return 0x1000 - ((uintptr_t)ptr & 0xfff);
 }
 
 
@@ -433,8 +426,7 @@ char *strchr(const char *s, int c)
 	/* WAAT w/ fallback for page borders */
 	size_t pos = 0;
 	for(;;) {
-		int left = 0x1000 - ((uintptr_t)(s + pos) & 0xfff),
-			words = left / sizeof(long);
+		int left = until_page(&s[pos]), words = left / sizeof(long);
 		const unsigned long *wp = (const unsigned long *)(s + pos);
 		for(int i=0; i < words; i++) {
 			unsigned long x = LE32_TO_CPU(wp[i]),
