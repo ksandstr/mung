@@ -680,7 +680,7 @@ START_TEST(local_access)
 	unsigned before_write = L4_Rights(L4_GetStatus(pg));
 	if(!ok1(before_write == 0)) diag("before_write=%#x", before_write);
 
-	strlcpy(testmem, "whatever", PAGE_SIZE);
+	strscpy(testmem, "whatever", PAGE_SIZE);
 	testmem[666] = 0x42;
 	unsigned after_write = L4_Rights(L4_GetStatus(pg));
 	if(!ok1(CHECK_FLAG_ALL(after_write, L4_ReadWriteOnly))) {
@@ -729,7 +729,7 @@ START_TEST(parent_access)
 	L4_Fpage_t pg = L4_FpageLog2((L4_Word_t)testmem, PAGE_BITS);
 	get_status_from_fs(pg);
 
-	strlcpy(testmem, "umm and whatnot", PAGE_SIZE);
+	strscpy(testmem, "umm and whatnot", PAGE_SIZE);
 	int after_write = get_status_from_fs(pg);
 	if(!ok1(CHECK_FLAG_ALL(after_write, L4_ReadWriteOnly))) {
 		diag("after_write=%#x", (unsigned)after_write);
@@ -761,7 +761,7 @@ START_LOOP_TEST(access_interference, iter, 0, 1)
 	get_status_from_fs(pg);
 	L4_GetStatus(pg);
 
-	strlcpy(testmem, "something or other", PAGE_SIZE);
+	strscpy(testmem, "something or other", PAGE_SIZE);
 	unsigned parent = 0, child;
 	if(parent_first) parent = get_status_from_fs(pg);
 	child = L4_Rights(L4_GetStatus(pg));

@@ -117,10 +117,10 @@ static void stt_echo_impl(
 	assert(gs_words >= 2);
 	char *tmp = malloc(tmplen);
 	if(tmp == NULL) {
-		strlcpy(recvbuf, "malloc failed", rbuf_len);
+		strscpy(recvbuf, "malloc failed", rbuf_len);
 	} else {
 		snprintf(tmp, tmplen, "echo, echo! %s", recvbuf);
-		strlcpy(recvbuf, tmp, tmplen);
+		strscpy(recvbuf, tmp, tmplen);
 		free(tmp);
 	}
 
@@ -1511,7 +1511,7 @@ static void str_receiver_fn(void *param_ptr)
 			fail_if(bufs[i] == NULL, "failed to allocate %u bytes (i=%d)",
 				(unsigned)buf_size, i);
 			memset(bufs[i], 0, buf_size);
-			strlcpy(bufs[i], CHECK_FLAG(i, 1) ? "NOTHINGNESS" : "EMPTINESS", buf_size);
+			strscpy(bufs[i], CHECK_FLAG(i, 1) ? "NOTHINGNESS" : "EMPTINESS", buf_size);
 			strs[i] = L4_StringItem(buf_size, (void *)bufs[i]);
 			strs[i].raw[0] |= 1;		/* continuation bit */
 		}

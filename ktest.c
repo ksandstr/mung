@@ -46,7 +46,7 @@ void _run_ktest(
 	const char *begin_str = describe_mode ? "desc" : "begin";
 	int file_len = strlen(file);
 	char suite[file_len + 1];
-	strlcpy(suite, file, file_len);
+	strscpy(suite, file, file_len);
 	char *dot = strrchr(suite, '.');
 	if(dot != NULL) *dot = '\0';
 	if(cur_suite == NULL || !streq(cur_suite, suite)) {

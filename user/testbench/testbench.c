@@ -626,7 +626,7 @@ static void invoke_ktest(bool describe)
 
 	/* copying the cookie ensures it's been mapped. this is important. */
 	char buf[256];
-	strlcpy(buf, cookie, sizeof(buf));
+	strscpy(buf, cookie, sizeof(buf));
 	L4_KDB_PrintString(buf);
 }
 

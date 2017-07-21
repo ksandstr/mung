@@ -398,7 +398,7 @@ START_TEST(copy_on_write)
 	const char *teststr = "the quick brown fox jumps over the lazy dog";
 	uint8_t *buffer = malloc(buffer_size);
 	for(int i=0; i < 256; i++) buffer[i] = i;
-	strlcpy((void *)buffer, teststr, buffer_size);
+	strscpy((void *)buffer, teststr, buffer_size);
 
 	int spid = fork();
 	if(spid != 0) {

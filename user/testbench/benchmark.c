@@ -246,7 +246,7 @@ static void impl_string_bonk(const char *text) {
 
 
 static void impl_string_echo(const char *text, char *reply) {
-	strlcpy(reply, text, 65536);
+	strscpy(reply, text, 65536);
 }
 
 

@@ -56,7 +56,7 @@ static int parse_width(const char *, int *);
 int vsnprintf(char *str, size_t size, const char *fmt, va_list arg_list)
 {
 	if(fmt == NULL) {
-		strlcpy(str, "(null format)", size);
+		strscpy(str, "(null format)", size);
 		return 0;
 	}
 
@@ -261,7 +261,7 @@ int vsnprintf(char *str, size_t size, const char *fmt, va_list arg_list)
 	return out_total;
 
 error:
-	strlcpy(str, "format string error", size);
+	strscpy(str, "format string error", size);
 	va_end(ap);
 	return -1;
 }

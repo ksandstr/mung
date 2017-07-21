@@ -518,15 +518,19 @@ void make_kip(
 		},
 	};
 	memcpy(&kdesc->Supplier, "aGUY", 4);	/* he's our supplier. */
-	int ver_len = strlcpy(kdesc->VersionString,
+	int ver_len = strscpy(kdesc->VersionString,
 		"mung 0.0.1 (Prototype Pidgeon); x86; UP;",
 		PAGE_SIZE - (kip_pos + sizeof(*kdesc)));
+	if(ver_len < 0) panic("couldn't copy version string!");
 	kip->KernelVerPtr = (L4_Word_t)kdesc & PAGE_MASK;
 	kip_pos += ver_len + 1 + sizeof(*kdesc);
 
 	/* feature strings, immediately following kdesc->VersionString */
 #ifndef NDEBUG
-	kip_pos += strlcpy(mem + kip_pos, "zomgwallhax", PAGE_SIZE - kip_pos) + 1;
+	int teh_funnay = strscpy(mem + kip_pos, "zomgwallhax",
+		PAGE_SIZE - kip_pos) + 1;
+	if(teh_funnay < 0) panic("ran out of space for feature strings!");
+	kip_pos += teh_funnay;
 #endif
 	memcpy(mem + kip_pos++, "", 1);		/* terminator */
 
