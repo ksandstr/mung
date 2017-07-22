@@ -24,6 +24,7 @@
 #include <stdlib.h>
 #include <stdint.h>
 #include <assert.h>
+#include <limits.h>
 #include <errno.h>
 #include <ccan/endian/endian.h>
 #include <ccan/minmax/minmax.h>
@@ -240,37 +241,42 @@ end:
 }
 
 
-int strcmp(const char *a, const char *b)
+int strncmp(const char *a, const char *b, size_t max)
 {
 	if(a == b) return 0;
 
 	/* the word-at-a-time optimization requires that long loads are valid,
 	 * i.e. that they don't cross a 4k boundary in memory. so the loop
-	 * consists of two parts: the one that runs before such a boundary in
+	 * consists of two parts: the one that runs up to such a boundary in
 	 * either operand, and one that runs over it.
 	 */
 	size_t pos = 0;
-	for(;;) {
+	while(pos < max) {
 		/* NOTE: could add a second byte-at-a-time segment here to bump @pos
 		 * such that at least one of a[pos] and b[pos] is aligned to 4. but
 		 * that's a can of worms, so let's not.
 		 */
-		int bytes = min(until_page(&a[pos]), until_page(&b[pos])),
-			words = bytes / 4;
-		const unsigned long *ap = (const unsigned long *)(a + pos),
-			*bp = (const unsigned long *)(b + pos);
-		for(int i=0; i < words; i++) {
-			unsigned long la = BE32_TO_CPU(ap[i]), lb = BE32_TO_CPU(bp[i]),
-				za = zero_mask(la), zb = zero_mask(lb),
-				m = ((1ul << MSB(za | zb | 1)) >> 7) * 0xff;
-			if(m == 0) m = 0xff;
-			m |= m << 8;
-			m |= m << 16;
-			long c = (la & m) - (lb & m);
-			if(c != 0) return c;
-			if((za | zb) != 0) return (za & m) - (zb & m);
+		int bytes = min_t(int, max - pos,
+				min(until_page(&a[pos]), until_page(&b[pos]))),
+			words = bytes / sizeof(unsigned long);
+		for(; words > 0; words--, pos += sizeof(unsigned long)) {
+			unsigned long la = BE32_TO_CPU(*(const unsigned long *)&a[pos]),
+				lb = BE32_TO_CPU(*(const unsigned long *)&b[pos]);
+			if((haszero(la) | haszero(lb)) == 0) {
+				long c = la - lb;
+				if(c != 0) return c;		/* by content */
+			} else {
+				unsigned long za = zero_mask(la), zb = zero_mask(lb);
+				assert((za | zb) != 0);
+				unsigned long m = ((1ul << MSB(za | zb)) >> 7) * 0xff;
+				assert(m != 0);
+				m |= m << 8;
+				m |= m << 16;
+				long c = (la & m) - (lb & m);
+				if(c != 0) return c;		/* by content */
+				return (za & m) - (zb & m);	/* by length */
+			}
 		}
-		pos += words * 4;
 
 		/* then byte at a time. */
 		for(int tail = bytes % sizeof(unsigned long); tail > 0; pos++, tail--) {
@@ -282,29 +288,19 @@ int strcmp(const char *a, const char *b)
 			}
 		}
 	}
+
+	assert(a[pos] != '\0' && b[pos] != '\0');
+	return 0;
 }
 
 
-int strncmp(const char *a, const char *b, size_t n)
-{
-	size_t i = 0;
-	while(i < n && a[i] != '\0' && b[i] != '\0') {
-		int c = (int)a[i] - b[i];
-		if(c != 0) return c;
-		i++;
-	}
-	if(i == n || (a[i] == '\0' && b[i] == '\0')) return 0;
-	else if(a[i] == '\0') return -1;
-	else return 1;
+int strcmp(const char *a, const char *b) {
+	return strncmp(a, b, INT_MAX);
 }
 
 
-char *strdup(const char *str)
-{
-	size_t n = strlen(str);
-	char *buf = malloc(n + 1);
-	if(buf != NULL) memcpy(buf, str, n + 1);
-	return buf;
+char *strdup(const char *str) {
+	return strndup(str, INT_MAX);
 }
 
 
@@ -320,50 +316,44 @@ char *strndup(const char *str, size_t n)
 }
 
 
-size_t strlen(const char *str)
+size_t strnlen(const char *str, size_t max)
 {
 	/* fancy-pants word-at-a-time algorithm w/ byte-at-a-time fallback for
 	 * crossing 4k page boundaries safely under POSIX.
 	 * NB: this, too, could pre-align @str to word boundary.
 	 */
 	size_t pos = 0;
-	for(;;) {
-		int bytes = until_page(&str[pos]), words = bytes / sizeof(uintptr_t);
-		const uintptr_t *wp = (const uintptr_t *)(str + pos);
-		for(int i=0; i < words; i++) {
-			uintptr_t w = LE32_TO_CPU(wp[i]);
+	while(pos < max) {
+		int bytes = min_t(int, max - pos, until_page(&str[pos])),
+			words = bytes / sizeof(uintptr_t);
+		for(; words > 0; words--, pos += sizeof(uintptr_t)) {
+			uintptr_t w = LE32_TO_CPU(*(const uintptr_t *)&str[pos]);
 			if(haszero(w) != 0) {
 				uintptr_t z = zero_mask(w);
-				size_t len = pos + i * sizeof(uintptr_t) + ffsl(z) / 8 - 1;
+				size_t len = pos + ffsl(z) / 8 - 1;
 				assert(str[len] == '\0');
 				return len;
 			}
 		}
-		pos += words * sizeof(uintptr_t);
 
 		for(int tail = bytes % sizeof(uintptr_t); tail > 0; pos++, tail--) {
 			if(str[pos] == '\0') return pos;
 		}
 	}
+
+	return pos;
 }
 
 
-size_t strnlen(const char *str, size_t max) {
-	size_t n = 0;
-	while(n < max && str[n] != '\0') n++;
-	return n;
+size_t strlen(const char *str) {
+	return strnlen(str, INT_MAX);
 }
 
 
 char *strncpy(char *dest, const char *src, size_t n)
 {
-	size_t i = 0;
-	while(i < n && src[i] != '\0') {
-		dest[i] = src[i];
-		i++;
-	}
-	memset(&dest[i], '\0', n - i);
-
+	int used = strscpy(dest, src, n);
+	if(used >= 0 && used < n) memset(&dest[used], '\0', n - used);
 	return dest;
 }
 
@@ -385,7 +375,7 @@ int strscpy(char *dest, const char *src, size_t n)
 				min(until_page(&dest[pos]), until_page(&src[pos]))),
 			words = bytes / sizeof(uintptr_t);
 		assert(bytes > 0);
-		for(int i=0; i < words; i++, pos += sizeof(uintptr_t)) {
+		for(; words > 0; words--, pos += sizeof(uintptr_t)) {
 			uintptr_t x = LE32_TO_CPU(*(const uintptr_t *)&src[pos]);
 			if(haszero(x) == 0) {
 				*(uintptr_t *)&dest[pos] = CPU_TO_LE32(x);
@@ -425,30 +415,26 @@ char *strchr(const char *s, int c)
 {
 	if(c == '\0') return (char *)s + strlen(s);
 
-	/* WAAT w/ fallback for page borders */
+	/* WAAT w/ page border safety */
 	size_t pos = 0;
 	for(;;) {
-		int left = until_page(&s[pos]), words = left / sizeof(long);
-		const unsigned long *wp = (const unsigned long *)(s + pos);
-		for(int i=0; i < words; i++) {
-			unsigned long x = LE32_TO_CPU(wp[i]),
+		int bytes = until_page(&s[pos]), words = bytes / sizeof(long);
+		for(; words > 0; words--, pos += sizeof(long)) {
+			unsigned long x = LE32_TO_CPU(*(unsigned long *)&s[pos]),
 				found = byte_mask(x, c), zero = zero_mask(x);
 			assert((found | zero) == 0 || found != zero);
 			if(found != 0 && (zero == 0 || ffsl(found) < ffsl(zero))) {
-				size_t len = pos + i * sizeof(long) + ffsl(found) / 8 - 1;
+				size_t len = pos + ffsl(found) / 8 - 1;
 				assert(s[len] == c);
-				return (char *)s + len;
+				return (char *)&s[len];
 			}
 			if(zero != 0) return NULL;
 		}
-		pos += words * sizeof(long);
 
-		int bytes = left - words * sizeof(long);
-		for(int i=0; i < bytes; i++) {
-			if(s[pos + i] == '\0') return NULL;
-			if(s[pos + i] == c) return (char *)s + pos + i;
+		for(int tail = bytes % sizeof(long); tail > 0; tail--, pos++) {
+			if(s[pos] == '\0') return NULL;
+			if(s[pos] == c) return (char *)s + pos;
 		}
-		pos += bytes;
 	}
 }
 
