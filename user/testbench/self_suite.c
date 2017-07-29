@@ -194,6 +194,54 @@ end: ;;
 END_TEST
 
 
+/* cases where destination and source parameters to strscpy() overlap. this
+ * has less fancy environment setup than strscpy_basic due to implementation
+ * knowledge: either the start and end of the output will be correct, or it'll
+ * be wrong for sure.
+ */
+START_LOOP_TEST(strscpy_overlap, iter, 0, 31)
+{
+	const char *test_str = test_copypasta;
+	const unsigned test_size = strlen(test_str);
+	const int step = iter;
+	diag("test_size=%u, step=%d", test_size, step);
+	plan_tests(4);
+
+	void *tal = talloc_new(NULL);
+	char *dest = talloc_array(tal, char, test_size * 3);
+	memset(dest, 'a', test_size * 3); dest[test_size * 3 - 1] = '\0';
+	memcpy(dest, test_str, test_size + 1);
+	assert(dest[test_size] == '\0');
+	const char *src = dest + step;
+	dest += 16;
+	diag("src=%p, dest=%p", src, dest);
+	assert(strlen(src) <= test_size);
+	int n = strscpy(dest, src, test_size + 1);
+
+	/* when src < dest, should produce a repeating sequence of characters
+	 * until size - 1 and terminate.
+	 */
+	int cycle = labs(dest - src);
+	assert(test_size > cycle * 7);
+	assert(src >= dest || cycle > 0);
+	diag("n=%d, cycle=%d", n, cycle);
+	imply_ok1(src < dest, n == -E2BIG);
+	imply_ok(src < dest,
+		memcmp(dest, test_str + step, cycle) == 0
+		&& memcmp(dest + cycle, test_str + step, cycle) == 0
+		&& memcmp(dest + cycle * 7, test_str + step, cycle) == 0
+		&& dest[test_size] == '\0',
+		"output is a repeating prefix when src < dest");
+
+	/* forward cases, where src >= dest, should function normally. */
+	imply_ok1(src >= dest, n >= 0 && n < test_size + 1);
+	imply_ok1(src >= dest, streq(dest, test_str + step));
+
+	talloc_free(tal);
+}
+END_TEST
+
+
 /* tcase util: tests of whatever's in defs.h */
 
 START_TEST(basic_delay_test)
@@ -1808,6 +1856,7 @@ Suite *self_suite(void)
 		tcase_add_test(tc, strlen_basic);
 		tcase_add_test(tc, strchr_basic);
 		tcase_add_test(tc, strscpy_basic);
+		tcase_add_test(tc, strscpy_overlap);
 		suite_add_tcase(s, tc);
 	}
 
