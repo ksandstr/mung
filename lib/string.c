@@ -405,7 +405,7 @@ rest:
 	} else {
 end:
 		dest[pos] = '\0';
-		assert(strcmp(src, dest) == 0);
+		assert(strcmp(src, dest) == 0 || labs(src - dest) < pos + 1);
 		return pos;
 	}
 }
