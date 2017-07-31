@@ -1814,7 +1814,7 @@ START_TEST(reuse_utcb_pages)
 END_TEST
 
 
-Suite *thread_suite(void)
+static Suite *thread_suite(void)
 {
 	Suite *s = suite_create("thread");
 
@@ -1895,3 +1895,7 @@ Suite *thread_suite(void)
 
 	return s;
 }
+
+
+static const struct suite_spec s = { &thread_suite, 99 };
+AUTODATA(testsuites, &s);

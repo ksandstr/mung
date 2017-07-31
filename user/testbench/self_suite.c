@@ -1873,7 +1873,7 @@ static void stats_teardown(void)
 }
 
 
-Suite *self_suite(void)
+static Suite *self_suite(void)
 {
 	Suite *s = suite_create("self");
 
@@ -1965,3 +1965,7 @@ Suite *self_suite(void)
 
 	return s;
 }
+
+
+static const struct suite_spec s = { &self_suite, 1000 };
+AUTODATA(testsuites, &s);

@@ -10,6 +10,7 @@
 #include <assert.h>
 #include <unistd.h>
 #include <ccan/compiler/compiler.h>
+#include <ccan/autodata/autodata.h>
 
 #include <l4/types.h>
 #include <muidl.h>
@@ -158,20 +159,19 @@ static inline uint64_t x86_rdtsc(void) {
 }
 
 
-/* various test suites */
+/* list of test suites. priority is higher for test suites that should execute
+ * earlier.
+ */
+typedef struct Suite *(*suite_ctor)(void);
+struct suite_spec {
+	suite_ctor fn;
+	int priority;
+};
 
-extern struct Suite *self_suite(void);
-extern struct Suite *sched_suite(void);
-extern struct Suite *space_suite(void);
-extern struct Suite *thread_suite(void);
-extern struct Suite *ipc_suite(void);
-extern struct Suite *string_suite(void);
-extern struct Suite *redir_suite(void);
-extern struct Suite *type_suite(void);
-extern struct Suite *x86_suite(void);
-extern struct Suite *interrupt_suite(void);
+AUTODATA_TYPE(testsuites, struct suite_spec);
 
-/* invoked specially. not included in the microkernel tests. */
+
+/* invoked specially. not included in the microkernel tests via autodata. */
 extern struct Suite *meta_suite(void);
 
 

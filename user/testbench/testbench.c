@@ -41,9 +41,6 @@ struct cmd_opt {
 };
 
 
-typedef Suite *(*suite_ctor)(void);
-
-
 static size_t hash_forkserv_page(const void *key, void *priv);
 
 
@@ -711,6 +708,12 @@ static void set_forkserv_pager_and_start(L4_ThreadId_t tid, void *ptr)
 }
 
 
+static int suite_spec_by_priority_fn(const void *ap, const void *bp) {
+	const struct suite_spec *a = ap, *b = bp;
+	return a->priority - b->priority;
+}
+
+
 int main(void)
 {
 	printf("hello, world!\n");
@@ -730,8 +733,8 @@ int main(void)
 	transfer_to_forkserv();
 	for_each_thread(&set_forkserv_pager_and_start, NULL);
 
-	const suite_ctor *suites;
-	int n_suites = 0;
+	suite_ctor *suites = NULL;
+	size_t n_suites = 0;
 	/* choose between the userspace test suites, the in-kernel test suite, or
 	 * the meta suite, which produces various results to test both generation
 	 * thereof and their capture by the reporting script.
@@ -744,9 +747,7 @@ int main(void)
 		printf("*** notest specified, tests skipped.\n");
 		notest = true;
 	} else if(cmd_opt(&opts, "meta") != NULL) {
-		static const suite_ctor meta_plan[] = {
-			&meta_suite,
-		};
+		static suite_ctor meta_plan[] = { &meta_suite };
 		suites = meta_plan;
 		n_suites = NUM_ELEMENTS(meta_plan);
 	} else if(cmd_opt(&opts, "ktest") != NULL) {
@@ -754,22 +755,12 @@ int main(void)
 		n_suites = 0;
 	} else {
 		/* actual microkernel test suite */
-		static const suite_ctor real_plan[] = {
-			&self_suite,	/* selftests */
-
-			/* microkernel tests */
-			&type_suite,
-			&thread_suite,
-			&x86_suite,
-			&interrupt_suite,
-			&space_suite,
-			&sched_suite,
-			&ipc_suite,
-			&string_suite,
-			&redir_suite,
-		};
-		suites = real_plan;
-		n_suites = NUM_ELEMENTS(real_plan);
+		struct suite_spec **specs_orig = autodata_get(
+			testsuites, &n_suites), specs[n_suites];
+		for(int i=0; i < n_suites; i++) specs[i] = *specs_orig[i];
+		qsort(specs, n_suites, sizeof specs[0], &suite_spec_by_priority_fn);
+		suites = malloc(n_suites * sizeof *suites);
+		for(int i=0; i < n_suites; i++) suites[n_suites - 1 - i] = specs[i].fn;
 	}
 	SRunner *run = srunner_create(NULL);
 	for(int i=0; i < n_suites; i++) {

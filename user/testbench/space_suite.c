@@ -1024,7 +1024,7 @@ START_LOOP_TEST(mapdb_shrimps, iter, 0, 3)
 END_TEST
 
 
-Suite *space_suite(void)
+static Suite *space_suite(void)
 {
 	Suite *s = suite_create("space");
 
@@ -1069,3 +1069,7 @@ Suite *space_suite(void)
 
 	return s;
 }
+
+
+static const struct suite_spec s = { &space_suite, 96 };
+AUTODATA(testsuites, &s);

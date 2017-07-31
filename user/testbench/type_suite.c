@@ -154,7 +154,7 @@ START_TEST(threadid_basic)
 END_TEST
 
 
-Suite *type_suite(void)
+static Suite *type_suite(void)
 {
 	Suite *s = suite_create("type");
 
@@ -179,3 +179,7 @@ Suite *type_suite(void)
 
 	return s;
 }
+
+
+static const struct suite_spec s = { &type_suite, 100 };
+AUTODATA(testsuites, &s);

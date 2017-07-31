@@ -1724,7 +1724,7 @@ START_LOOP_TEST(lipc_chain_timeout, iter, 0, 31)
 END_TEST
 
 
-Suite *sched_suite(void)
+static Suite *sched_suite(void)
 {
 	Suite *s = suite_create("sched");
 
@@ -1806,3 +1806,7 @@ Suite *sched_suite(void)
 
 	return s;
 }
+
+
+static const struct suite_spec s = { &sched_suite, 95 };
+AUTODATA(testsuites, &s);

@@ -758,7 +758,7 @@ START_TEST(sse_math_exn)
 END_TEST
 
 
-struct Suite *x86_suite(void)
+static struct Suite *x86_suite(void)
 {
 	Suite *s = suite_create("x86");
 
@@ -796,3 +796,7 @@ struct Suite *x86_suite(void)
 
 	return s;
 }
+
+
+static const struct suite_spec s = { &x86_suite, 98 };
+AUTODATA(testsuites, &s);

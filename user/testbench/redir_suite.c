@@ -1205,7 +1205,7 @@ static void fixture_teardown(void)
 }
 
 
-Suite *redir_suite(void)
+static Suite *redir_suite(void)
 {
 	Suite *s = suite_create("redir");
 
@@ -1247,3 +1247,7 @@ Suite *redir_suite(void)
 
 	return s;
 }
+
+
+static const struct suite_spec s = { &redir_suite, 92 };
+AUTODATA(testsuites, &s);

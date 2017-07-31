@@ -1901,7 +1901,7 @@ static void add_receiver_tests(TCase *tc)
 
 IDL_FIXTURE(drop, drop_pager, &pg_drop_vtab, FIX_QUIT_COND);
 
-Suite *string_suite(void)
+static Suite *string_suite(void)
 {
 	Suite *s = suite_create("string");
 
@@ -1959,3 +1959,7 @@ Suite *string_suite(void)
 
 	return s;
 }
+
+
+static const struct suite_spec s = { &string_suite, 93 };
+AUTODATA(testsuites, &s);

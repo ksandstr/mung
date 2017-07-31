@@ -345,7 +345,7 @@ START_TEST(int_under_other)
 END_TEST
 
 
-Suite *interrupt_suite(void)
+static Suite *interrupt_suite(void)
 {
 	Suite *s = suite_create("interrupt");
 
@@ -370,3 +370,7 @@ Suite *interrupt_suite(void)
 
 	return s;
 }
+
+
+static const struct suite_spec s = { &interrupt_suite, 97 };
+AUTODATA(testsuites, &s);

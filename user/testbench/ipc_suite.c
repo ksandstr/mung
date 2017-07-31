@@ -3694,7 +3694,7 @@ START_LOOP_TEST(big_pf_stomp, iter, 0, 1)
 END_TEST
 
 
-Suite *ipc_suite(void)
+static Suite *ipc_suite(void)
 {
 	Suite *s = suite_create("ipc");
 
@@ -3819,3 +3819,7 @@ Suite *ipc_suite(void)
 
 	return s;
 }
+
+
+static const struct suite_spec s = { &ipc_suite, 94 };
+AUTODATA(testsuites, &s);
