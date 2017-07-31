@@ -242,6 +242,39 @@ START_LOOP_TEST(strscpy_overlap, iter, 0, 31)
 END_TEST
 
 
+/* null cases of strscpy(). these should happen regardless of alignment and
+ * page crossing, so these can stay outside strscpy_basic.
+ */
+START_TEST(strscpy_null)
+{
+	plan_tests(9);
+
+	/* max=0 with a valid dst, valid src. (base case.) */
+	char dst[16];
+	memset(dst, 'a', sizeof dst); dst[sizeof dst - 1] = '\0';
+	int n = strscpy(dst, "hello", 0);
+	ok1(n == -E2BIG);
+	ok1(dst[0] == 'a');
+
+	/* same but valid dst, NULL src. */
+	n = strscpy(dst, NULL, 0);
+	pass("didn't crash on src=NULL");
+	ok1(n == -E2BIG);
+	ok1(dst[0] == 'a');
+
+	/* same but NULL dst, valid src. */
+	n = strscpy(NULL, "hello", 0);
+	pass("didn't crash on dst=NULL");
+	ok1(n == -E2BIG);
+
+	/* and finally both NULL. */
+	n = strscpy(NULL, NULL, 0);
+	pass("didn't crash on both NULL");
+	ok1(n == -E2BIG);
+}
+END_TEST
+
+
 /* tcase util: tests of whatever's in defs.h */
 
 START_TEST(basic_delay_test)
@@ -1856,6 +1889,7 @@ Suite *self_suite(void)
 		tcase_add_test(tc, strlen_basic);
 		tcase_add_test(tc, strchr_basic);
 		tcase_add_test(tc, strscpy_basic);
+		tcase_add_test(tc, strscpy_null);
 		tcase_add_test(tc, strscpy_overlap);
 		suite_add_tcase(s, tc);
 	}

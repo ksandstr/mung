@@ -361,6 +361,8 @@ char *strncpy(char *dest, const char *src, size_t n)
 int strscpy(char *dest, const char *src, size_t n)
 {
 	size_t pos = 0;
+
+	if(n == 0) return -E2BIG;
 	if(labs(dest - src) < sizeof(uintptr_t)) goto rest;	/* , you pervert */
 
 	/* again with the usual old WAAT: one loop per page boundary, inner loops
