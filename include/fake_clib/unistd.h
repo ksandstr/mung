@@ -2,12 +2,17 @@
 #ifndef SEEN_FAKE_CLIB_UNISTD_H
 #define SEEN_FAKE_CLIB_UNISTD_H
 
+#include <stdint.h>
+
+
 extern int getpagesize(void);
 
 /* FIXME: add pid_t somewhere */
 extern int getpid(void);
 
 extern long sysconf(int name);
+
+extern void *sbrk(intptr_t increment);
 
 
 /* sysconf() names. most of the POSIX ones are missing; this is here only to

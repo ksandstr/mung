@@ -261,7 +261,6 @@ extern void usleep(unsigned long microseconds);
 
 /* from heap.c */
 
-extern void *sbrk(intptr_t adjustment);
 extern L4_Word_t get_heap_top(void);	/* valid after first sbrk() */
 extern L4_Word_t find_phys_mem_top(void);
 
