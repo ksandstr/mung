@@ -39,5 +39,9 @@ extern void qsort(
 	void *data, size_t count, size_t size,
 	int (*compare_fn)(const void *, const void *));
 
+extern void *bsearch(
+	const void *needle, const void *haystack, size_t count, size_t size,
+	int (*compare_fn)(const void *, const void *));
+
 
 #endif
