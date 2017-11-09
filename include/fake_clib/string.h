@@ -36,7 +36,6 @@ extern int memcmp(const void *s1, const void *s2, size_t n);
 /* returns @l. undefined results when @l[0..n-1] and @r[0..n-1] overlap. */
 extern void *memswap(void *l, void *r, size_t n);
 
-/* note absence of strcpy(). */
 extern char *strncpy(char *dest, const char *src, size_t n);
 
 /* copies @src into @dest up to @n bytes, setting exactly one of @dest[0..@n)
@@ -50,6 +49,8 @@ extern int strscpy(char *dest, const char *src, size_t n);
 extern int strcmp(const char *a, const char *b)
 	__attribute__((__pure__));
 extern int strncmp(const char *a, const char *b, size_t n)
+	__attribute__((__pure__));
+extern int strcasecmp(const char *a, const char *b)
 	__attribute__((__pure__));
 
 extern char *strdup(const char *str);
@@ -69,6 +70,13 @@ extern char *strstr(const char *haystack, const char *needle)
 
 extern char *strpbrk(const char *s, const char *a)
 	__attribute__((__pure__));
+
+extern size_t strspn(const char *s, const char *accept);
+extern size_t strcspn(const char *s, const char *reject);
+
+extern long int strtol(const char *nptr, char **endptr, int base);
+extern long long int strtoll(const char *nptr, char **endptr, int base);
+extern double strtod(const char *nptr, char **endptr);
 
 
 #ifdef _GNU_SOURCE
@@ -93,6 +101,16 @@ extern int ffsl(long int __l) __attribute__((__const__));
 
 
 #endif /* IN_LIB_IMPL */
+
+/* there previously wasn't strcpy() here, but CCAN opt requires it, so we'll
+ * do this uglier thing.
+ */
+static inline char *strcpy(char *dest, const char *src)
+{
+	int l = strlen(src);
+	memcpy(dest, src, l + 1);
+	return (char *)dest;
+}
 
 
 #endif

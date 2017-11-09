@@ -21,6 +21,7 @@ static inline void *aligned_alloc(size_t alignment, size_t size) {
 
 
 extern NORETURN void abort(void);
+extern NORETURN void exit(int status);
 
 extern int abs(int j);
 extern long int labs(long int j);
@@ -33,6 +34,10 @@ extern long long int llabs(long long int j);
 #endif
 
 extern int atexit(void (*function)(void));
+
+extern char *getenv(const char *name);
+
+extern int atoi(const char *nptr);
 
 
 extern void qsort(
