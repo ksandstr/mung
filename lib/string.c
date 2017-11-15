@@ -289,7 +289,6 @@ int strncmp(const char *a, const char *b, size_t max)
 		}
 	}
 
-	assert(a[pos] != '\0' && b[pos] != '\0');
 	return 0;
 }
 
