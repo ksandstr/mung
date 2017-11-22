@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <assert.h>
+#include <ccan/array_size/array_size.h>
 
 #include <l4/types.h>
 #include <l4/kcp.h>
@@ -366,19 +367,20 @@ static void load_elf_module(struct boot_module *mod)
 }
 
 
-/* verify that the load ranges of the boot modules don't overlap with one
- * another, or with a later module's MBI load address, or with mbiloader's own
- * range.
+/* verify that the ELF load ranges of selected boot modules (i.e. kernel,
+ * sigma0, sigma1, roottask) don't overlap with one another, or with a
+ * non-boot module's MBI load address, or with mbiloader's own range.
  *
  * in the second case affected modules are moved to malloc()'d sections.
  */
-static void check_boot_modules(void)
+static void check_boot_modules(struct boot_module **mods, int num_mods)
 {
 	extern char _start, _end;
 	const L4_Word_t this_start = (L4_Word_t)&_start,
 		this_end = (L4_Word_t)&_end;
-	for(int i=0; i < num_boot_mods; i++) {
-		struct boot_module *m = &boot_mods[i];
+	for(int i=0; i < num_mods; i++) {
+		struct boot_module *m = mods[i];
+		if(m == NULL) continue;
 
 		/* check for overlap with mbiloader. */
 		if(RANGE_OVERLAP(m->load_start, m->load_end, this_start, this_end)) {
@@ -390,7 +392,7 @@ static void check_boot_modules(void)
 
 		/* verify that the _load addresses_ don't overlap. */
 		for(int j=0; j < i; j++) {
-			struct boot_module *o = &boot_mods[j];
+			struct boot_module *o = mods[j];
 			if(RANGE_OVERLAP(m->load_start, m->load_end,
 				o->load_start, o->load_end))
 			{
@@ -515,7 +517,6 @@ int bootmain(multiboot_info_t *mbi, uint32_t magic)
 	}
 	heap_low = (heap_low + PAGE_SIZE - 1) & ~PAGE_MASK;
 	printf("sbrk() heap starts at %#x\n", heap_low);
-	check_boot_modules();
 
 	/* locate kernel, sigma0, sigma1, roottask modules.
 	 *
@@ -540,6 +541,8 @@ int bootmain(multiboot_info_t *mbi, uint32_t magic)
 		printf("no roottask found, leaving KCP slot empty\n");
 		roottask_mod = NULL;
 	}
+	struct boot_module *mods[] = { kernel_mod, s0_mod, s1_mod, roottask_mod };
+	check_boot_modules(mods, ARRAY_SIZE(mods));
 
 	/* load kernel, s0, s1, roottask */
 	load_elf_module(kernel_mod);
