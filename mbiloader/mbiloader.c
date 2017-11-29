@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <assert.h>
+#include <ccan/minmax/minmax.h>
 #include <ccan/array_size/array_size.h>
 
 #include <l4/types.h>
@@ -117,7 +118,7 @@ void *sbrk(intptr_t increment)
 /* primitive page-grain malloc via an equally primitive sbrk(). */
 void *malloc(size_t size)
 {
-	int shift = MAX(int, 12, size_to_shift(size));
+	int shift = max_t(int, 12, size_to_shift(size));
 	heap_low = (heap_low + PAGE_SIZE - 1) & ~PAGE_MASK;
 	return sbrk(1 << shift);
 }
@@ -185,14 +186,6 @@ static void fill_kcp(
 	*(L4_Word_t *)&kcp_base[0x5c] = 0;		/* kdebug.config1 */
 
 	int resv_pos = 0x100;	/* reserved after the defined KCP bits. */
-	L4_BootInfo_t *binf = (L4_BootInfo_t *)&kcp_base[resv_pos];
-	*(L4_Word_t *)&kcp_base[0xb8] = (L4_Word_t)binf;	/* BootInfo */
-	resv_pos += sizeof(L4_BootInfo_t);
-	*binf = (L4_BootInfo_t){
-		.magic = L4_BOOTINFO_MAGIC,
-		.version = L4_BOOTINFO_VERSION,
-		.size = sizeof(L4_BootInfo_t),
-	};
 
 	/* memory descriptors. the bootloader passes only non-virtual conventional
 	 * and reserved memory; other memory types, and the virtual address
@@ -286,8 +279,16 @@ static void fill_kcp(
 	}
 #endif
 
-	/* BootRecs */
-	binf->num_entries = num_list;
+	/* BootInfo and BootRecs */
+	L4_BootInfo_t *binf = (L4_BootInfo_t *)&kcp_base[resv_pos];
+	*(L4_Word_t *)&kcp_base[0xb8] = (L4_Word_t)binf;	/* BootInfo */
+	resv_pos += sizeof(L4_BootInfo_t);
+	*binf = (L4_BootInfo_t){
+		.magic = L4_BOOTINFO_MAGIC,
+		.version = L4_BOOTINFO_VERSION,
+		.size = sizeof(L4_BootInfo_t),
+		.num_entries = num_list,
+	};
 	L4_BootRec_t *prev = NULL;
 	for(int i=0; i < num_list; i++) {
 		const struct boot_module *m = list_mods[i];
@@ -313,12 +314,13 @@ static void fill_kcp(
 		} else {
 			prev->offset_next = (uint8_t *)mod - (uint8_t *)prev;
 		}
-		binf->size += sizeof(*mod) + cl_resv;
+		binf->size += sizeof *mod + cl_resv;
 		assert(offsetof(L4_Boot_Module_t, offset_next)
 			== offsetof(L4_BootRec_t, offset_next));
 		prev = (L4_BootRec_t *)mod;
 	}
 	assert(binf->num_entries == 0 || binf->first_entry != 0);
+	assert((void *)binf + binf->size == (void *)&kcp_base[resv_pos]);
 }
 
 
@@ -332,9 +334,9 @@ static void parse_elf_range(struct boot_module *mod)
 		const Elf32_Phdr *ph = elf + phoff;
 		if(ph->p_type != PT_LOAD) continue;
 
-		m_start = MIN(uintptr_t, m_start, ph->p_vaddr & ~PAGE_MASK);
+		m_start = min_t(uintptr_t, m_start, ph->p_vaddr & ~PAGE_MASK);
 		uintptr_t past = (ph->p_vaddr + ph->p_memsz + PAGE_SIZE - 1) & ~PAGE_MASK;
-		m_end = MAX(uintptr_t, m_end, past - 1);
+		m_end = max_t(uintptr_t, m_end, past - 1);
 	}
 	mod->load_start = m_start;
 	mod->load_end = m_end;
@@ -439,7 +441,7 @@ static void scan_mbi_mmaps(
 
 		if(e->addr >= 0x100000) *high_p += e->len / 1024;
 		else if(e->addr < 640 * 1024) {
-			uintptr_t end = MIN(uintptr_t, e->addr + e->len, 640 * 1024);
+			uintptr_t end = min_t(uintptr_t, e->addr + e->len, 640 * 1024);
 			*low_p += (end - e->addr) / 1024;
 		}
 		/* NOTE: skips over entries that straddle the 640k..1m high-mem
@@ -458,7 +460,7 @@ int bootmain(multiboot_info_t *mbi, uint32_t magic)
 	int mmap_count = 0;
 	static struct multiboot_mmap_entry mmap_ents[MAX_MMAP_ENTS];
 	if(CHECK_FLAG(mbi->flags, MULTIBOOT_INFO_MEM_MAP)) {
-		mmap_count = MIN(int, MAX_MMAP_ENTS,
+		mmap_count = min_t(int, MAX_MMAP_ENTS,
 			mbi->mmap_length / sizeof(struct multiboot_mmap_entry));
 		/* duplicate them for private use ;) */
 		memcpy(mmap_ents, (void *)mbi->mmap_addr,
@@ -491,7 +493,7 @@ int bootmain(multiboot_info_t *mbi, uint32_t magic)
 		&& mbi->mods_count > 0)
 	{
 		multiboot_module_t *m_base = (multiboot_module_t *)mbi->mods_addr;
-		num_boot_mods = MIN(int, mbi->mods_count, MAX_BOOT_MODS);
+		num_boot_mods = min_t(int, mbi->mods_count, MAX_BOOT_MODS);
 		for(int i=0; i < num_boot_mods; i++) {
 			struct boot_module *bm = &boot_mods[i];
 			bm->start = m_base[i].mod_start;
@@ -503,8 +505,8 @@ int bootmain(multiboot_info_t *mbi, uint32_t magic)
 			printf("  mod %d = [%#lx .. %#lx] -> [%#lx .. %#lx] `%s'\n", i,
 				bm->start, bm->end, bm->load_start, bm->load_end,
 				bm->cmdline);
-			r_start = MIN(uintptr_t, bm->start, r_start);
-			r_end = MAX(uintptr_t, bm->end - 1, r_end);
+			r_start = min_t(uintptr_t, bm->start, r_start);
+			r_end = max_t(uintptr_t, bm->end - 1, r_end);
 		}
 	} else {
 		panic("no multiboot modules found!");
@@ -513,7 +515,7 @@ int bootmain(multiboot_info_t *mbi, uint32_t magic)
 
 	heap_low = r_end;
 	for(int i=0; i < num_boot_mods; i++) {
-		heap_low = MAX(uintptr_t, heap_low, boot_mods[i].load_end + 1);
+		heap_low = max_t(uintptr_t, heap_low, boot_mods[i].load_end + 1);
 	}
 	heap_low = (heap_low + PAGE_SIZE - 1) & ~PAGE_MASK;
 	printf("sbrk() heap starts at %#x\n", heap_low);
