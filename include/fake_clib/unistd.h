@@ -12,6 +12,7 @@ extern int getpid(void);
 
 extern long sysconf(int name);
 
+extern int brk(void *addr);
 extern void *sbrk(intptr_t increment);
 
 
