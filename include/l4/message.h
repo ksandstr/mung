@@ -533,7 +533,7 @@ static inline void L4_Accept(L4_Acceptor_t a) {
 
 static inline L4_Acceptor_t L4_Accepted(void) {
 	L4_Acceptor_t a;
-	L4_StoreMR(0, &a.raw);
+	L4_StoreBR(0, &a.raw);
 	return a;
 }
 
