@@ -148,6 +148,7 @@ static struct ra_page *alloc_ra_page(
 	{
 		/* effect burnination of id=0. */
 		p->freemap[0] &= ~1u;
+		p->n_free--;
 	}
 	bool ok = htable_add(&ra->page_hash, hash_ra_page(p, NULL), p);
 	if(!ok) {
