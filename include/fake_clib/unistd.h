@@ -16,13 +16,12 @@ extern int brk(void *addr);
 extern void *sbrk(intptr_t increment);
 
 
-/* sysconf() names. most of the POSIX ones are missing; this is here only to
- * serve CCAN talloc.
- */
+/* sysconf() names. most of the POSIX ones are missing. */
 enum {
 	_SC_PAGESIZE,
 #define _SC_PAGESIZE _SC_PAGESIZE
 #define _SC_PAGE_SIZE _SC_PAGESIZE
+	_SC_NPROCESSORS_ONLN,
 };
 
 #endif

@@ -68,6 +68,7 @@ long sysconf(int name)
 {
 	switch(name) {
 		case _SC_PAGESIZE: return PAGE_SIZE;
+		case _SC_NPROCESSORS_ONLN: return 1;	/* FIXME: get from KIP */
 		default:
 			// errno = EINVAL;
 			return -1;
