@@ -90,7 +90,12 @@ static inline L4_ThreadId_t L4_MyLocalId(void) {
 	return tid;
 }
 
-/* TODO: L4_ProcessorNo(), L4_ErrorCode_String(),
+
+static inline L4_Word_t L4_ProcessorNo(void) {
+	return L4_VREG_VOLATILE(__L4_Get_UtcbAddress(), L4_TCR_PROCESSORNO);
+}
+
+/* TODO: L4_ErrorCode_String(),
  * L4_XferTimeouts(), L4_Set_XferTimeouts(),
  * (???) L4_WordSizeMask(), L4_Reset_WordSizeMask()
  */
