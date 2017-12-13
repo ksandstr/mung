@@ -119,6 +119,8 @@ struct kmem_cache *kmem_cache_create(
 }
 
 
+#ifdef __KERNEL__
+
 static void *get_new_slab(struct kmem_cache *cache) {
 	return kmem_alloc_new_page();
 }
@@ -127,6 +129,20 @@ static void *get_new_slab(struct kmem_cache *cache) {
 static void free_slab(struct kmem_cache *cache, void *slab) {
 	kmem_free_page(slab);
 }
+
+#else
+
+/* POSIX/C11 versions. */
+
+static void *get_new_slab(struct kmem_cache *cache) {
+	return aligned_alloc(PAGE_SIZE, PAGE_SIZE);
+}
+
+static void free_slab(struct kmem_cache *cache, void *slab) {
+	free(slab);
+}
+
+#endif
 
 
 /* NOTE: this doesn't call the destructor on dangling items! and it never
