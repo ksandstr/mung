@@ -13,7 +13,11 @@
 #include <l4/types.h>
 
 #include <ukernel/slab.h>
+
+#ifdef __KERNEL__
+/* non-kernel stuff should provide size_to_shift(). */
 #include <ukernel/util.h>
+#endif
 
 
 struct ra_page;		/* private to rangealloc.c */

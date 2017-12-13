@@ -6,12 +6,19 @@
 #include <assert.h>
 
 #include <ccan/htable/htable.h>
+#include <ccan/likely/likely.h>
 
 #include <ukernel/mm.h>
-#include <ukernel/bug.h>
 #include <ukernel/slab.h>
 #include <ukernel/util.h>
 #include <ukernel/rangealloc.h>
+
+#ifdef __KERNEL__
+#include <ukernel/bug.h>
+#else
+/* POSIX/C11 compat */
+#define BUG_ON(cond, fmt, ...) assert(!(cond))
+#endif
 
 
 /* rangealloc.flags */
@@ -22,7 +29,7 @@ struct ra_page
 {
 	uintptr_t address;
 	struct ra_page *next;
-	struct page *page;
+	void *pgcookie;	/* <struct page *> in mung; other things elsewhere */
 	short n_free;
 	uint32_t freemap[];
 };
@@ -50,19 +57,28 @@ static int fmap_limbs(const struct rangealloc *ra) {
 }
 
 
-/* allocate and free kernel memory without inadvertently causing recycling of
- * the rangealloc range. this is necessary because free_kern_page() insists on
- * recycling its parameter's vm_addr, where present, in addition to the
- * physical page.
+#ifdef __KERNEL__
+/* page management using mung kernel internals. get_range() is used to get
+ * address space, alloc_vm_page() creates pages within it, and free_vm_page()
+ * releases those pages when done.
  */
+
+#define get_range(size_log2) reserve_heap_range(1ul << (size_log2))
+
 static struct page *alloc_vm_page(uintptr_t address)
 {
 	struct page *p = get_kern_page(address);
+	assert(p->vm_addr == (void *)address);
 	memset(p->vm_addr, 0, PAGE_SIZE);
 	return p;
 }
 
 
+/* free kernel memory without inadvertently causing recycling of the
+ * rangealloc range. this is necessary because free_kern_page() insists on
+ * recycling its parameter's vm_addr, where present, in addition to the
+ * physical page.
+ */
 static void free_vm_page(struct page *p)
 {
 	assert(p->vm_addr != NULL);
@@ -70,6 +86,33 @@ static void free_vm_page(struct page *p)
 	p->vm_addr = NULL;
 	free_kern_page(p);
 }
+
+#else
+/* mundane POSIX/C11 versions. */
+
+static uintptr_t get_range(int size_log2)
+{
+	size_t sz = 1ul << size_log2;
+	void *ptr = aligned_alloc(sz, sz);
+	if(ptr == NULL) {
+		printf("rangealloc: aligned_alloc() failed\n");
+		abort();
+	}
+	return (uintptr_t)ptr;
+}
+
+
+static void *alloc_vm_page(uintptr_t address) {
+	void *ptr = (void *)address;
+	memset(ptr, '\0', PAGE_SIZE);
+	return ptr;
+}
+
+static void free_vm_page(void *cookie) {
+	memset(cookie, '\0', PAGE_SIZE);
+}
+
+#endif
 
 
 struct rangealloc *ra_create(
@@ -85,7 +128,7 @@ struct rangealloc *ra_create(
 	struct rangealloc *ra = kmem_cache_alloc(ra_slab);
 	if(ra == NULL) return NULL;
 
-	uintptr_t start = reserve_heap_range(1 << range_log2);
+	uintptr_t start = get_range(range_log2);
 	BUG_ON(start == 0, "can't start rangealloc at address 0");
 	*ra = (struct rangealloc){
 		.range = L4_FpageLog2(start, range_log2),
@@ -136,8 +179,7 @@ static struct ra_page *alloc_ra_page(
 	struct ra_page *p = kmem_cache_alloc(ra->meta_slab);
 	p->address = address;
 	p->n_free = PAGE_SIZE >> ra->ob_size_log2;
-	p->page = alloc_vm_page(address);
-	assert(p->page->vm_addr == (void *)address);
+	p->pgcookie = alloc_vm_page(address);
 	if(fmap_limbs(ra) == 1) {
 		p->freemap[0] = (1u << p->n_free) - 1;
 	} else {
@@ -152,7 +194,7 @@ static struct ra_page *alloc_ra_page(
 	}
 	bool ok = htable_add(&ra->page_hash, hash_ra_page(p, NULL), p);
 	if(!ok) {
-		free_vm_page(p->page);
+		free_vm_page(p->pgcookie);
 		kmem_cache_free(ra->meta_slab, p);
 		p = NULL;
 	}
@@ -164,7 +206,7 @@ static struct ra_page *alloc_ra_page(
 static void free_ra_page(struct rangealloc *ra, struct ra_page *p)
 {
 	htable_del(&ra->page_hash, hash_ra_page(p, NULL), p);
-	free_vm_page(p->page);
+	free_vm_page(p->pgcookie);
 	kmem_cache_free(ra->meta_slab, p);
 }
 
