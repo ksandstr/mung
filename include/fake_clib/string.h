@@ -82,8 +82,10 @@ extern double strtod(const char *nptr, char **endptr);
 #ifdef _GNU_SOURCE
 #if defined(__GNUC__) && defined(__OPTIMIZE__)
 #define ffsl(__l) __builtin_ffsl((__l))
+#define ffsll(__ll) __builtin_ffsll((__ll))
 #else
 extern int ffsl(long int __l) __attribute__((__const__));
+extern int ffsll(long long int __ll) __attribute__((__const__));
 #endif
 #endif
 

@@ -518,3 +518,13 @@ int ffsl(long int __l)
 	/* TODO: add bit magic version as well */
 	return __builtin_ffsl(__l);
 }
+
+
+#ifdef ffsll
+#undef ffsll
+#endif
+int ffsll(long long int __ll)
+{
+	/* TODO: see above */
+	return __builtin_ffsll(__ll);
+}
