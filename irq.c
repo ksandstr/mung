@@ -61,7 +61,6 @@ static inline bool irq_in_kernel(const struct x86_exregs *frame) {
 
 static COLD struct thread *int_spurious(int irqn)
 {
-	printf("%s: irqn=%d\n", __func__, irqn);
 	BUG_ON(irqn >= first_user_threadno(),
 		"irqn=%d >= first_user_threadno=%d !!",
 		irqn, (int)first_user_threadno());
