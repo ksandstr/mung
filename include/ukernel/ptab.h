@@ -1,10 +1,9 @@
 
 /* somewhat abstracted access to page table structures. the microkernel will
- * only support exactly one page table format which is selected at compile
- * time.
+ * only support exactly one page table format, selected at compile time.
  *
- * prototypes are "static inline" because everything here is implemented
- * inline in the per-format source (e.g. pt_i386.c).
+ * prototypes are "static inline" because of dirty preprocessor tricks; see
+ * pt_i386.c for example.
  */
 
 #ifndef SEEN_UKERNEL_PTAB_H
@@ -27,7 +26,7 @@ struct space;
 
 /* iteration context. retains metadata pointers for pagetable pages, or
  * address space reservations, or whatever. these are connected to a
- * particular address space, and must not be retained across any space_*()
+ * particular address space and must not be retained across any space_*()
  * call.
  */
 struct pt_iter;
@@ -41,17 +40,20 @@ static inline void pt_iter_destroy(struct pt_iter *iter);
 /* examine a pagetable entry for a given address. returns 0 when not present.
  * if there's a chance that physical page #0 would actually become mapped at
  * this address, the caller should disambiguate with pt_page_present().
+ *
+ * if @access_p != NULL, the access mask is copied and cleared according to
+ * @is_up. if @is_up is true, the access mask and @below will be OR'd into the
+ * "side" bits in each PTE; otherwise, "side" bits will be stored in
+ * *@side_access_p and also cleared.
+ *
+ * if @access_p == NULL, any access masks won't be affected.
  */
 static inline uint32_t pt_probe(
 	struct pt_iter *iter,
-	bool *upper_present_p,		/* optional */
-	int *access_p,				/* optional, clears bits if set */
-	uintptr_t addr);
+	int *access_p, int *side_access_p,
+	uintptr_t addr, bool is_up, int below);
 
-#define pt_get_pgid(iter, upp, addr) pt_probe((iter), (upp), NULL, (addr))
-
-
-/* write a pagetable entry. rights mask per L4_Rights().
+/* write a pagetable entry. rights mask per L4_Rights(). clears "side".
  *
  * NOTE: this cannot be used to clear a page table entry; use pt_clear_page
  * instead.
@@ -63,17 +65,17 @@ static inline uint32_t pt_probe(
  */
 static inline bool pt_set_page(
 	struct pt_iter *iter,
-	uintptr_t addr,
-	uint32_t pgid,
-	int rights);
+	uintptr_t addr, uint32_t pgid, int rights);
 
-/* clears a page table entry, skipping and returning false if upper level is
- * missing.
+/* change rights of a page table entry. retains "side", frame number, and
+ * access bits.
  */
-static inline bool pt_clear_page(struct pt_iter *it, uintptr_t addr);
+static inline void pt_set_rights(
+	struct pt_iter *iter, uintptr_t addr, int rights);
 
-/* test whether an upper-level directory entry is present. */
-static inline bool pt_upper_present(struct pt_iter *iter, uintptr_t addr);
+/* clears a page table entry, clearing every field. */
+static inline void pt_clear_page(struct pt_iter *it, uintptr_t addr);
+
 static inline bool pt_page_present(struct pt_iter *iter, uintptr_t addr);
 
 

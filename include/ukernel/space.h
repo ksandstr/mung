@@ -26,6 +26,7 @@
 
 
 struct thread;
+struct pt_iter;
 
 
 /* allocated in space.c's utcb_page_slab, except for kernel_space, where
@@ -121,22 +122,16 @@ extern struct utcb_page *space_get_utcb_page(struct space *sp, uint16_t ppos);
  */
 extern void space_remove_redirector(struct thread *t);
 
-/* generate and prefill a second-level page table. if one is already present,
- * no-op and return false.
+/* pass an initialized iterator on @sp in @sp_iter to utilize a previous page
+ * table lookup, or leave NULL.
  */
-extern bool space_prefill_upper(struct space *sp, L4_Word_t addr);
-
 extern size_t space_memcpy_from(
-	struct space *sp,
 	void *dest,
-	L4_Word_t address,
-	size_t size);
+	struct space *sp, L4_Word_t address, size_t size,
+	struct pt_iter *sp_iter);
 
 /* returns false on OOM */
-extern bool space_add_ioperm(
-	struct space *sp,
-	L4_Word_t base_port,
-	int size);
+extern bool space_add_ioperm(struct space *sp, L4_Word_t base_port, int size);
 
 
 /* UTCB is accessed by the wrapper to sync ESI and MR0. */
@@ -154,6 +149,9 @@ extern SYSCALL L4_Word_t sys_spacecontrol(
 /* pages reserved before htable_add() can be used, are added to the list.
  * later kmain() calls space_finalize_kernel() to add those to kernel_space's
  * ptab_pages hash.
+ *
+ * XXX: space_finalize_kernel() might be removed. update this bit to match
+ * once it's been decided.
  */
 extern void init_spaces(struct list_head *resv_list);
 

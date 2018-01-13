@@ -12,21 +12,16 @@
 /* TODO: change this per pagetable format, i.e. derive it from constants in
  * <ukernel/ptab.h> .
  */
-#define MAX_ENTRIES_PER_GROUP 1024	/* 4 MiB in 4 KiB pages */
-#define GROUP_SIZE (PAGE_SIZE * MAX_ENTRIES_PER_GROUP)
+#define PAGES_PER_GROUP 1024	/* 4 MiB in 4 KiB pages */
+#define GROUP_SIZE (PAGE_SIZE * PAGES_PER_GROUP)
+#define GROUP_MASK (GROUP_SIZE - 1)
 
 /* map_group->addr accessors. note that MG_FLAGS() doesn't shift. */
-#define MG_START(grp) ((grp)->addr & ~(PAGE_SIZE * MAX_ENTRIES_PER_GROUP - 1))
-#define MG_N_ALLOC_LOG2(grp) (((grp)->addr >> 15) & 0xf)
-#define MG_N_ENTRIES(grp) (int)((grp)->addr & 0x7fff)
-#define MG_FLAGS(grp) ((grp)->addr & 0x380000)
+#define MG_START(grp) ((grp)->addr & ~GROUP_MASK)
+#define MG_N_MAPS(grp) (((grp)->addr & 0x3ff) + 1)
+#define MG_N_ALLOC_LOG2(grp) (((grp)->addr >> 10) & 0x1f)
 
-/* MG_FLAGS() bits. */
-#define MGF_ROOT	0x080000	/* kernel_space only; no entries present. */
-#define MGF__SPARE1	0x100000
-#define MGF__SPARE2	0x200000
-
-/* the @mode parameter's flags for mapdb_unmap_fpage(). */
+/* @mode flags for mapdb_unmap(). */
 #define UM_IMMEDIATE	0x1
 #define UM_RECURSIVE	0x2
 #define UM_GET_ACCESS	0x4
@@ -35,90 +30,34 @@
 struct space;
 
 
-struct map_entry
-{
-	/* @range == L4_nilpage indicates an empty slot in map_group. */
-	L4_Fpage_t range;		/* incl. L4 permission bits */
-	uint32_t first_page_id;
-
-	/* a child entry's reference into its parent.
-	 *
-	 * an entry's @range is always at most as large as its parent's entry.
-	 * toplevel entries' size is limited by group size alone.
-	 *
-	 * special values:
-	 *   - when !defined, there is no parent. this appears at boot in sigma0,
-	 *   and entries whose immediate last parent has been granted away (e.g.
-	 *   as granted by sigma0)
-	 *   - when misc & 2, the entry represents a kernel special range such as
-	 *   the UTCB or KIP area, and is not subject to unmapping, access
-	 *   querying, mapping on top of, or map/granting out of.
-	 */
-	L4_Word_t parent;
-
-	/* stored access and flags field.
-	 *
-	 * the lowest 6 bits store the "up" and "side" access fields. the format
-	 * particulars are private to mapdb.c . the upper 10 bits are unused for
-	 * the time being.
-	 *
-	 * the CPU provides momentary access values in the actual page table, from
-	 * where mapdb_unmap_fpage() reads-and-clears them if the @get_access
-	 * parameter is set. depending on whether it's processing a child entry of
-	 * the primary, that function will also accumulate the momentary value in
-	 * either the "up" or "side" subfield of ->access, read-and-clear the
-	 * other accumulator, and output its value combined with the momentary
-	 * value.
-	 */
-	uint16_t sa_flags;
-
-	/* there may be fewer actual children of this map_entry; num_children only
-	 * tracks whether "child" or "children" is to be used, and how many words
-	 * are allocated under "children" when num_children > 1.
-	 *
-	 * empties may show up as a !defined ref, or a reference to a map_group
-	 * that either doesn't exist, isn't valid, has no map_entry at that index,
-	 * or the mapping doesn't reference the correct physical page in this
-	 * map_entry. invalid children will be replaced with a tombstone at
-	 * dereference.
-	 *
-	 * "children" is also used to verify that the previous mapping was made
-	 * from this entry at this address, as required by the L4.X2 criteria on
-	 * when a map/grant extends the privileges of an existing mapping.
-	 */
-	uint16_t num_children;	/* (at most 4096; upper 4 bits redundant) */
-	union {
-		L4_Word_t child;		/* when num_children <= 1 */
-		L4_Word_t *children;	/* otherwise (malloc()'d) */
-	};
-};
-
-
+/* per-space tracking structure that corresponds to the 2M/4M penultimate
+ * level page directory. page frame IDs are stored in the lowest-level page
+ * table with "side" access bits in the 3 ignored bits of 32-bit/PAE page
+ * table entries.
+ */
 struct map_group
 {
-	/* `addr' encodes the group's start address at its architecture-dependent
-	 * size. the 21/22 lowest bits contain, high to low: flags [3 bits],
-	 * n_alloc_log2 [4 bits], and n_entries [15 bits]. use MG_START(),
-	 * MG_N_ALLOC_LOG2(), MG_N_ENTRIES(), and MG_FLAGS() to extract the named
-	 * component.
+	/* the group's vm address is addr & ~GROUP_MASK. lowest 10 bits are the
+	 * number of active maps in this group minus one. bits 15..11 are
+	 * n_alloc_log2. bits 20..16 left spare. use MG_START(), MG_N_MAPS(), and
+	 * MG_N_ALLOC_LOG2() to extract the named field.
 	 *
-	 * XXX: on x86, this encoding leaves 5 or 6 of the high bits of
-	 * `n_entries' for other uses.
-	 *
-	 * `n_entries' gives the number of valid entries under `entries'.
-	 * 1 << n_alloc_log2 gives the amount of space under `entries' iff
-	 * n_alloc_log2 > 0.
-	 *
-	 * n_alloc_log2 == 0 is not valid.
-	 *
-	 * 1 << n_alloc_log2 <= MAX_ENTRIES_PER_GROUP.
-	 *
-	 * TODO: move these into an invariant check in mapdb.c .
+	 * n_alloc_log2 == 0 indicates that the group has no child references, and
+	 * that `children' and `c_aux' are invalid.
 	 */
 	L4_Word_t addr;
-	struct map_entry *entries;
+
 	struct page *ptab_page;
 	struct space *space;
+
+	uint32_t *parent;	/* per map; [GROUP_SIZE / PAGE_SIZE]. */
+
+	/* child reference storage. these have length 1 << MG_N_ALLOC_LOG2(grp)
+	 * and are allocated consecutively, with the malloc() return value used
+	 * for `children'. see mapdb.c for details of format etc.
+	 */
+	uint32_t *children;
+	uint16_t *c_aux;
 };
 
 
@@ -129,31 +68,36 @@ extern void init_mapdb(void);
 extern void mapdb_init(struct space *sp);
 extern void mapdb_destroy(struct space *sp);
 
-/* map page rights covered by *@src_page in @from into @to at @dest_addr.
+/* returns 0 if a map_group can't be found for @address, -ENOENT if the map's
+ * parent group can't be found, or a positive rights mask otherwise. fills
+ * *@pgid_p with the page frame number when not NULL. from non-mapdb.c
+ * callers, @g must be NULL.
+ */
+extern int mapdb_query(
+	uint32_t *pgid_p,
+	struct space *sp, struct map_group *g, uintptr_t address);
+
+/* map page rights covered by @src_page in @from into @to at @dest_addr.
  * @dest_addr must be aligned to @src_page.size .
  *
- * on success, sets @src_page->rights to the OR mask of rights that would've
- * been granted by this mapping operation (which doesn't happen in the rights
- * extension case, but is ignored). the return value will be nonnegative.
+ * for holes in @src_page, the corresponding mapping in the destination range
+ * is removed with the same semantics as in the non-hole case. exempt pages
+ * may not be mapped from, or over, using this function; instead, maps
+ * involving exempt pages are ignored 0 is returned.
  *
- * on failure, returns negative errno.
- *
- * special ranges may not be mapped from, or over, using this function;
- * instead, such maps are ignored and the rights value set to 0.
+ * on success, returns the inclusive mask of rights granted from component
+ * pages of @src_page in @from. on failure, returns negative errno.
  */
-extern int mapdb_map_pages(
-	struct space *from,
-	struct space *to,
-	L4_Fpage_t *src_page,
-	L4_Word_t dest_addr);
+extern int mapdb_map(
+	struct space *from, L4_Fpage_t src_page,
+	struct space *to, L4_Word_t dest_addr);
 
-/* revokes access rights for bits given and in the mappings covered by @fpage.
- * if a covered mapping ends up with no rights at all, it is removed and its
- * children are moved to its parent (if any remain after recursion).
+/* revokes access rights for bits given and in the pages covered by @fpage.
+ * if a page ends up with no rights at all, it is removed and its children are
+ * moved to its parent (if any remain after recursion).
  *
- * if @immediate is true, the mappings in @db covered by @fpage will be
- * affected. thus triples of (@immediate, @recursive, @get_access) correspond
- * to L4.X2 unmap operations like this:
+ * the @mode parameter's immediate, recursive, and get_access flags correspond
+ * to L4.X2 unmap variations like this:
  *   (true, true, true) = flush
  *   (true, false, false) = grant
  *   (false, true, true) = unmap
@@ -163,85 +107,47 @@ extern int mapdb_map_pages(
  *   (false, true, false) = unmap w/o access read (not used)
  *
  * returns the inclusive mask of access bits of the physical pages actually
- * covered by @fpage since the last call to mapdb_unmap_fpage(). if @recursive
- * is set, this also covers child mappings' access bits. destructive
- * examination of page tables is compensated by storing access bits in struct
- * map_entry as appropriate to recursion. (see comment above the field
- * declaration.)
+ * covered by @fpage since the last call to mapdb_unmap() iff access querying
+ * was requested in @mode. if recursion is enabled, this includes child
+ * mappings' access bits. destructive examination of page tables is
+ * compensated by storing access bits in mapdb structures as appropriate to
+ * recursion.
  *
- * special mappings (KIP, UTCB pages) aren't affected by mapdb_unmap_fpage()
- * in its regular forms. however, when (@fpage.address & 0xc00) == 0x800 &&
- * !@recursive && @fpage.rights == full, special mappings will be removed if
- * they're contained within @fpage, and fragmented if they are larger.
- * regardless of this setting, the access bits of special mappings don't
+ * exempt pages (KIP, UTCB pages) aren't affected by mapdb_unmap() in its
+ * regular forms. however, when (@fpage.address & 0xc00) == 0x800 &&
+ * !recursive && @fpage.rights == full, exempt pages within @fpage will be
+ * removed. regardless of this setting, the access bits of exempt pages don't
  * contribute to the return value. when the special form isn't used, the
  * denormal bits in @fpage.address must be zero.
- *
- * if @get_access is set, stored access bits will be recursively retrieved
- * for @fpage and cleared in @db's corresponding entries. if not, access bits
- * will be neither examined nor altered.
- *
- * notably, !@get_access && @fpage.rights == 0 is a no-op.
  */
-extern int mapdb_unmap_fpage(
-	struct space *db,
-	L4_Fpage_t fpage,
-	unsigned mode);
+extern int mapdb_unmap(struct space *db, L4_Fpage_t fpage, unsigned mode);
 
-static inline void mapdb_erase_special(struct space *db, L4_Fpage_t fpage) {
+/* special interface for removing KIP, UTCB, and other exempt pages. */
+static inline int mapdb_erase_exempt(struct space *sp, L4_Fpage_t fpage)
+{
 	fpage = L4_FpageLog2(L4_Address(fpage) | 0x800, L4_SizeLog2(fpage));
 	L4_Set_Rights(&fpage, L4_FullyAccessible);
-	mapdb_unmap_fpage(db, fpage, UM_IMMEDIATE);
+	return mapdb_unmap(sp, fpage, UM_IMMEDIATE);
 }
 
 
-/* get-cmp function for struct space's ptab_groups. */
-static inline bool cmp_group_addr(const void *cand, void *keyptr) {
-	const struct map_group *g = cand;
-	return MG_START(g) == *(uint32_t *)keyptr;
-}
+/* ptab_groups lookup assist for arch_x86.c and space.c . */
+extern struct map_group *find_group(struct space *sp, uintptr_t addr);
 
 
-/* access from the pagefault handler. returns NULL when the entry doesn't
- * exist.
- */
-extern struct map_entry *mapdb_probe(struct space *db, uintptr_t addr);
-
-/* map_entry accessor */
-static inline uint32_t mapdb_page_id_in_entry(
-	const struct map_entry *m,
-	uintptr_t addr)
-{
-	assert(!L4_IsNilFpage(m->range));
-	return m->first_page_id + ((addr - L4_Address(m->range)) >> PAGE_BITS);
-}
-
-/* writes 1 << PT_UPPER_WIDTH entries into the page table using pt_*()
- * primitives. doesn't alter positions that aren't present. returns number of
- * last-level table entries written.
- */
-extern int mapdb_fill_page_table(struct space *db, uintptr_t addr);
-
-
-/* add mapping as indicated for @fpage, referencing @parent. this is a
- * low-level call that can only be used safely from outside of mapdb.c by
- * setting @parent to 2 or 0 (special and root mappings, respectively);
- * anything else will introduce an invalid parent reference and blow the
- * invariants.
+/* add parentless maps covering @fpage in @sp. this is used for adding memory
+ * to sigma0 on bootup, and for placing UTCB, KIP, and other exempt pages in
+ * an address space.
  *
- * L4_Size(@fpage) may be at most GROUP_SIZE.
+ * L4_Size(@fpage) may be at most GROUP_SIZE. @is_exempt should be true for
+ * pages that mapdb will ignore when mapping out of, and will refuse to unmap,
+ * flush, or overwrite; and false for ordinary root maps.
  *
  * returns negative errno on failure, idempotent on retry; or nonnegative on
  * success.
- *
- * *@fpage_group_p will be filled in with the map_group pointer for @fpage in
- * @sp iff @fpage_group_p != NULL.
  */
-extern int mapdb_add_map(
-	struct space *sp,
-	struct map_group **fpage_group_p,
-	L4_Word_t parent,		/* 0 for immutables */
-	L4_Fpage_t fpage,
-	uint32_t first_page_id);
+extern int mapdb_put(
+	struct space *sp, L4_Fpage_t fpage, uint32_t first_page_id,
+	bool is_exempt);
 
 #endif

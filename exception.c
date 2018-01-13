@@ -111,7 +111,7 @@ void isr_exn_ud_bottom(struct x86_exregs *regs)
 	/* see if it's a LOCK NOP. (this is why the "syscall" is so slow.) */
 	struct thread *current = get_current_thread();
 	uint8_t buf[2];
-	size_t n = space_memcpy_from(current->space, buf, regs->eip, 2);
+	size_t n = space_memcpy_from(buf, current->space, regs->eip, 2, NULL);
 	if(n == 2 && buf[0] == 0xf0 && buf[1] == 0x90) {
 		/* it is L4_KernelInterface(). */
 		const L4_KernelInterfacePage_t *kip = kip_mem;
@@ -576,8 +576,8 @@ static void kdb_print_string(struct x86_exregs *regs)
 	struct thread *current = get_current_thread();
 
 	char sbuf[512];
-	size_t n = space_memcpy_from(current->space, sbuf, regs->r.eax,
-		sizeof(sbuf));
+	size_t n = space_memcpy_from(sbuf, current->space, regs->r.eax,
+		sizeof(sbuf), NULL);
 	sbuf[MIN(size_t, n, sizeof(sbuf) - 1)] = '\0';
 	int len = strlen(sbuf);
 	assert(len <= n);
@@ -641,7 +641,7 @@ static bool kdb_op(struct x86_exregs *regs)
 		L4_Word_t w[2];
 		uint8_t b[8];
 	} mem;
-	size_t n = space_memcpy_from(current->space, mem.b, regs->eip, 8);
+	size_t n = space_memcpy_from(mem.b, current->space, regs->eip, 8, NULL);
 	if(n < 8) {
 		printf("KDB: can't memcpy 8 bytes from %#lx (got %u)\n",
 			regs->eip, (unsigned)n);
@@ -655,7 +655,7 @@ static bool kdb_op(struct x86_exregs *regs)
 		/* copy out at most 256 bytes of KDB entry string */
 		L4_Word_t strptr = mem.w[1];
 		char strbuf[257];
-		n = space_memcpy_from(current->space, strbuf, strptr, 256);
+		n = space_memcpy_from(strbuf, current->space, strptr, 256, NULL);
 		strbuf[MIN(size_t, n, 256)] = '\0';
 		if(strstarts(strbuf, "mung ") && strends(strbuf, " do nothing")) {
 			printf("#KDB entry ignored\n");
@@ -711,7 +711,7 @@ static void handle_io_fault(struct thread *current, struct x86_exregs *regs)
 	save_user_ex(regs);
 
 	uint8_t insn_buf[16], *insn = insn_buf;
-	size_t n = space_memcpy_from(current->space, insn_buf, regs->eip, 16);
+	size_t n = space_memcpy_from(insn_buf, current->space, regs->eip, 16, NULL);
 	if(n == 0) {
 		printf("can't read instructions at %#lx; stopping thread\n",
 			regs->eip);
@@ -981,17 +981,9 @@ void isr_exn_pf_bottom(struct x86_exregs *regs)
 	struct thread *current = get_current_thread();
 
 	if(unlikely(!CHECK_FLAG(regs->error, 4)) && catch_pf_ok) {
-		if(likely(fault_addr < KERNEL_SEG_START)
-			&& current != NULL
-			&& space_prefill_upper(current->space, fault_addr))
-		{
-			/* lazy-mode kernel pf repair */
-			return;
-		} else {
-			catch_pf_ok = false;
-			longjmp(catch_pf_env, fault_addr);
-			assert(false);
-		}
+		catch_pf_ok = false;
+		longjmp(catch_pf_env, fault_addr);
+		assert(false);
 	}
 
 #if 0
@@ -1032,36 +1024,6 @@ void isr_exn_pf_bottom(struct x86_exregs *regs)
 		repeat_count = 0;
 	}
 #endif
-
-	struct pt_iter it;
-	pt_iter_init(&it, current->space);
-	if(fault_addr < KERNEL_SEG_START && !pt_upper_present(&it, fault_addr)) {
-		if(space_prefill_upper(current->space, fault_addr)) {
-			assert(pt_upper_present(&it, fault_addr));
-			pt_iter_destroy(&it);
-			return_from_exn();
-			return;
-		} else {
-			/* fall out into the fault-generating part. */
-			assert(!pt_upper_present(&it, fault_addr));
-		}
-	}
-
-#ifdef DEBUG_ME_HARDER
-	const struct map_entry *e = mapdb_probe(current->space, fault_addr);
-	if(e != NULL && CHECK_FLAG_ALL(L4_Rights(e->range), fault_access)) {
-		printf("#PF fault_addr=%#lx, eip=%#lx\n", fault_addr, regs->eip);
-		printf("    mapdb_id=%u, ptab_id=%u\n",
-			mapdb_page_id_in_entry(e, fault_addr),
-			pt_get_pgid(&it, NULL, fault_addr));
-
-		panic("inconsistent mapping database or page table");
-	}
-
-	repeat_count = 0;
-#endif
-
-	pt_iter_destroy(&it);
 
 	save_user_ex(regs);
 	void *utcb = thread_get_utcb(current);

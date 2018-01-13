@@ -17,9 +17,8 @@
 
 uint32_t *x86_get_ptab(struct space *sp, uint32_t page_addr)
 {
-	uint32_t addr = page_addr & ~(PAGE_SIZE * MAX_ENTRIES_PER_GROUP - 1);
-	struct map_group *g = htable_get(&sp->ptab_groups, int_hash(addr),
-		&cmp_group_addr, &addr);
+	uint32_t addr = page_addr & ~(PAGE_SIZE * PAGES_PER_GROUP - 1);
+	struct map_group *g = find_group(sp, addr);
 	if(unlikely(g == NULL) || g->ptab_page == NULL) return NULL;
 
 #ifndef NDEBUG

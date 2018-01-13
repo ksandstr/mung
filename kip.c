@@ -526,12 +526,18 @@ void make_kip(
 	kip_pos += ver_len + 1 + sizeof(*kdesc);
 
 	/* feature strings, immediately following kdesc->VersionString */
+	static const char *const features[] = {
 #ifndef NDEBUG
-	int teh_funnay = strscpy(mem + kip_pos, "zomgwallhax",
-		PAGE_SIZE - kip_pos) + 1;
-	if(teh_funnay < 0) panic("ran out of space for feature strings!");
-	kip_pos += teh_funnay;
+		"zomgwallhax",	/* for tests to discover */
 #endif
+		"holeunmap",	/* mapping empties unmaps pages in destination */
+	};
+	for(int i=0; i < NUM_ELEMENTS(features); i++) {
+		int spent = strscpy(mem + kip_pos, features[i],
+			PAGE_SIZE - kip_pos) + 1;
+		if(spent < 0) panic("ran out of space for feature strings!");
+		kip_pos += spent;
+	}
 	memcpy(mem + kip_pos++, "", 1);		/* terminator */
 
 	/* TODO: fill this in */

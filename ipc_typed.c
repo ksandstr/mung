@@ -29,6 +29,7 @@
 #include <ukernel/thread.h>
 #include <ukernel/sched.h>
 #include <ukernel/space.h>
+#include <ukernel/ptab.h>
 #include <ukernel/mapdb.h>
 #include <ukernel/ipc.h>
 
@@ -180,9 +181,9 @@ static int apply_io_mapitem(
 }
 
 
-/* returns the return value of mapdb_map_pages(), i.e. a mask of rights that
- * were given across the entire segment that was mapped. so if the MapItem's
- * page is RWX, but the sender's mapdb has only RX, the return value is RX.
+/* returns the return value of mapdb_map(), i.e. a mask of rights that were
+ * given across the entire segment that was mapped. so if the MapItem's page
+ * is RWX, but the sender's mapdb has only RX, the return value is RX.
  * modifies m->SndFpage to indicate where the map took effect in the
  * destination space, including the map window size.
  *
@@ -199,6 +200,7 @@ static int apply_mapitem(
 	/* parameter validation */
 	if(unlikely(source->space == dest->space
 		|| L4_IsNilFpage(map_page)
+		|| L4_SizeLog2(map_page) < PAGE_BITS
 		|| L4_IsNilFpage(wnd)))
 	{
 		goto noop;
@@ -272,17 +274,16 @@ static int apply_mapitem(
 		goto noop;
 	}
 
-	int n = mapdb_map_pages(source->space,
-		dest->space, &map_page, L4_Address(wnd));
+	int n = mapdb_map(source->space, map_page, dest->space, L4_Address(wnd));
 	if(unlikely(n < 0)) {
 		/* TODO: address this somehow */
-		panic("mapdb_map_pages() failed in typed transfer!");
+		panic("mapdb_map() failed in typed transfer!");
 	}
 
 	int given = L4_Rights(map_page);
 	if(is_grant && given != 0) {
 		assert((L4_Address(map_page) & 0xc00) == 0);
-		mapdb_unmap_fpage(source->space, map_page, UM_IMMEDIATE);
+		mapdb_unmap(source->space, map_page, UM_IMMEDIATE);
 	}
 
 	m->X.snd_fpage.X.s = wnd.X.s;
@@ -411,38 +412,36 @@ end:
  * in address space that's never used, regardless of actual data size.
  */
 static int stritem_faults(
-	L4_Fpage_t *faults,
-	size_t faults_len,
+	L4_Fpage_t *faults, size_t faults_len,
 	struct space *sp,
 	const struct stritem_iter *ref_iter,
 	int access,
 	int max_fail)
 {
+	assert(access > 0);
+
 	int n_faults = 0;
 	struct stritem_iter it = *ref_iter;
-	/* this loop works by brute fucking force. the groups-and-entries format
-	 * is too much of a hassle to do right the first time around.
+	/* note the O(n) loop wrt string item length. this exists purely for the
+	 * idea that a vm server can pump a number of pre-transfer faults from a
+	 * client, turn those into reads from a backing swap device, and have them
+	 * execute concurrently.
 	 */
 	L4_Word_t addr = it.ptr & ~PAGE_MASK;
 	while(addr < it.ptr + it.len) {
-		struct map_entry *e = mapdb_probe(sp, addr);
-		if(e == NULL || !CHECK_FLAG_ALL(L4_Rights(e->range), access)) {
+		uint32_t pgid;
+		int rights = mapdb_query(&pgid, sp, NULL, addr);
+		if(pgid == 0 || !CHECK_FLAG_ALL(rights, access)) {
 			if(n_faults < faults_len) {
 				L4_Fpage_t f = L4_FpageLog2(addr, PAGE_BITS);
-				/* (TODO: if e != NULL, set access to the bits that weren't
-				 * present in e->range's rights
-				 */
-				L4_Set_Rights(&f, access);
+				L4_Set_Rights(&f, access & ~rights);
 				faults[n_faults] = f;
 			}
 			n_faults++;
-			if(max_fail >= 0 && n_faults > max_fail) return n_faults;
-
-			addr += PAGE_SIZE;
-		} else {
-			addr = L4_Address(e->range) + L4_Size(e->range);
+			if(max_fail >= 0 && n_faults > max_fail) break;
 		}
 
+		addr += PAGE_SIZE;
 		if(addr >= it.ptr + it.len && stritem_next(&it)) {
 			/* next segment. */
 			addr = it.ptr;
@@ -631,6 +630,9 @@ static int copy_interspace_stritem(L4_Fpage_t *fault_p, struct ipc_state *st)
 	assert(st->str_off >= 0);
 
 	struct space *dest_space = st->to->space, *src_space = st->from->space;
+	struct pt_iter dest_space_iter, src_space_iter;
+	pt_iter_init(&dest_space_iter, dest_space);
+	pt_iter_init(&src_space_iter, src_space);
 	/* this exploits the memcpy_from() fast path under active receive. it's a
 	 * no-op in active send.
 	 */
@@ -652,18 +654,18 @@ static int copy_interspace_stritem(L4_Fpage_t *fault_p, struct ipc_state *st)
 			(L4_Word_t)dst_iter->ptr);
 #endif
 
-		/* TODO: avoid repeated probe */
+		/* TODO: avoid repeated probe? */
 		uintptr_t dest_page = (dst_iter->ptr + d_off) & ~PAGE_MASK;
-		struct map_entry *e = mapdb_probe(dest_space, dest_page);
-		if(e == NULL || !CHECK_FLAG(L4_Rights(e->range), L4_Writable)) {
+		uint32_t d_page = 0;
+		int rights = mapdb_query(&d_page, dest_space, NULL, dest_page);
+		if(!CHECK_FLAG(rights, L4_Writable)) {
 			/* pop a write fault */
 			*fault_p = L4_FpageLog2(dest_page, PAGE_BITS);
 			L4_Set_Rights(fault_p, L4_Readable | L4_Writable);
-			TRACE("ipc: write fault at %#lx:%#lx\n", L4_Address(*fault_p),
-				L4_Size(*fault_p));
+			TRACE("ipc: write fault at %#lx:%#lx\n",
+				L4_Address(*fault_p), L4_Size(*fault_p));
 			goto fault;
 		}
-		uint32_t d_page = mapdb_page_id_in_entry(e, dest_page);
 		if(d_page != copy_page) {
 			put_supervisor_page(copy_dst, d_page);
 			copy_page = d_page;
@@ -676,8 +678,8 @@ static int copy_interspace_stritem(L4_Fpage_t *fault_p, struct ipc_state *st)
 		assert(d_pos >= 0 && seg >= 0);
 		assert(d_pos + seg <= PAGE_SIZE);
 
-		size_t n = space_memcpy_from(src_space, (void *)(copy_dst + d_pos),
-			src_iter->ptr + s_off, seg);
+		size_t n = space_memcpy_from((void *)(copy_dst + d_pos), src_space,
+			src_iter->ptr + s_off, seg, &src_space_iter);
 		s_off += n;
 		d_off += n;
 		st->str_off += n;
@@ -708,6 +710,8 @@ end:
 	put_supervisor_page(copy_dst, 0);
 	free_heap_page(copy_dst);
 	space_switch(old_space);
+	pt_iter_destroy(&dest_space_iter);
+	pt_iter_destroy(&src_space_iter);
 	return rc;
 
 fault:
@@ -775,14 +779,6 @@ static int copy_intraspace_stritem(L4_Fpage_t *fault_p, struct ipc_state *st)
 
 			uncatch_pf();
 		}
-
-#ifndef NDEBUG
-		/* enforce consistency wrt mapdb */
-		struct map_entry *e = mapdb_probe(sp, fault_addr);
-		assert(e == NULL
-			|| !CHECK_FLAG(L4_Rights(e->range),
-				is_write ? L4_Writable : L4_Readable));
-#endif
 
 		*fault_p = L4_FpageLog2(fault_addr & ~PAGE_MASK, PAGE_BITS);
 		L4_Set_Rights(fault_p, L4_Readable | (is_write ? L4_Writable : 0));
