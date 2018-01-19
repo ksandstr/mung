@@ -1019,24 +1019,14 @@ void isr_exn_pf_bottom(struct x86_exregs *regs)
 
 	int fault_access = L4_Readable;		/* the cache always reads. */
 	if(CHECK_FLAG(regs->error, 2)) fault_access |= L4_Writable;
-	/* TODO: is there some way to catch this explicitly e.g. with NX-enabled
-	 * PTEs?
-	 *
-	 * see also the x86 hack in mapdb_add_map().
-	 */
 	if(regs->eip == fault_addr) fault_access |= L4_eXecutable;
 
-#ifndef NDEBUG
+#ifdef DEBUG_ME_HARDER
 	static uintptr_t last_fault = ~0;
 	static int repeat_count = 0;
-	if(last_fault == fault_addr && ++repeat_count == 10) {
+	if(last_fault == fault_addr && ++repeat_count == 1000) {
 		printf("WARNING: faulted many times on faddr=%#lx, fip=%#lx\n",
 			fault_addr, regs->eip);
-		save_user_ex(regs);
-		thread_halt(current);
-		assert(current->status == TS_STOPPED);
-		return_to_scheduler();
-		assert(false);
 	} else if(last_fault != fault_addr) {
 		last_fault = fault_addr;
 		repeat_count = 0;
@@ -1057,7 +1047,7 @@ void isr_exn_pf_bottom(struct x86_exregs *regs)
 		}
 	}
 
-#ifndef NDEBUG
+#ifdef DEBUG_ME_HARDER
 	const struct map_entry *e = mapdb_probe(current->space, fault_addr);
 	if(e != NULL && CHECK_FLAG_ALL(L4_Rights(e->range), fault_access)) {
 		printf("#PF fault_addr=%#lx, eip=%#lx\n", fault_addr, regs->eip);
