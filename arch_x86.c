@@ -64,6 +64,7 @@ void x86_free_ptab(struct map_group *g)
 	assert(CHECK_FLAG(*pde, PDIR_PRESENT));
 	assert(g->ptab_page->id == *pde >> 12);
 	*pde = 0;
+	if(g->space == current_space) x86_flush_tlbs();
 
 	free_kern_page(g->ptab_page);
 	g->ptab_page = NULL;
