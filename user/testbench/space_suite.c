@@ -1000,6 +1000,112 @@ static void helpful_assistant(size_t map_size, L4_ThreadId_t p_tid)
 
 /* tcase "panic" */
 
+static int fanout_child(int maps_count, L4_ThreadId_t parent_tid)
+{
+	void *arena = aligned_alloc(PAGE_SIZE, maps_count * PAGE_SIZE);
+	if(arena == NULL) {
+		diag("%s: can't alloc arena!", __func__);
+		exit(1);
+	}
+
+	int aoff = 0, rc = 0, step = maps_count / 4;
+	for(;;) {
+		L4_Fpage_t wnd = L4_FpageLog2(
+			(L4_Word_t)arena + aoff * PAGE_SIZE, PAGE_BITS);
+		L4_Set_Rights(&wnd, L4_FullyAccessible);
+		L4_Accept(L4_MapGrantItems(wnd));
+		L4_MsgTag_t tag = L4_Receive_Timeout(parent_tid, TEST_IPC_DELAY);
+		if(L4_IpcFailed(tag)) {
+			diag("child's receive failed, ec=%#lx", L4_ErrorCode());
+			continue;
+		} else if(L4_Label(tag) == QUIT_LABEL) {
+			break;
+		} else if(L4_TypedWords(tag) > 0) {
+			L4_MapItem_t mi;
+			L4_StoreMRs(1 + L4_UntypedWords(tag), 2, mi.raw);
+			if(!L4_IsMapItem(mi)) {
+				diag("child didn't get a mapitem? tag=%#lx", tag.raw);
+				rc |= 1;
+			} else {
+				L4_Word_t ret = *(L4_Word_t *)(arena + aoff * PAGE_SIZE);
+				aoff++;
+				if(aoff % step == 0) diag("child got page, aoff'=%d", aoff);
+				L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 1 }.raw);
+				L4_LoadMR(1, ret);
+				tag = L4_Reply(parent_tid);
+				if(L4_IpcFailed(tag)) {
+					diag("child reply failed, ec=%#lx", L4_ErrorCode());
+					rc |= 4;
+				}
+			}
+		} else {
+			diag("out-of-band IPC to child? tag=%#lx", tag.raw);
+			rc |= 2;
+		}
+	}
+
+	return rc;
+}
+
+/* creates a large number of mappings from a single mapped page to stress the
+ * mapping database out. mostly about whether the kernel survives since
+ * performance benchmarks are fickle.
+ *
+ * variables:
+ *   - [is_big] whether fanout is fuckhuge or relatively modest
+ */
+START_LOOP_TEST(huge_fanout, iter, 0, 1)
+{
+	const bool is_big = !!(iter & 1);
+	diag("is_big=%s", btos(is_big));
+	plan_tests(4);
+
+	const int maps_count = !is_big ? 50 : 5000;
+	diag("maps_count=%d", maps_count);
+
+	L4_ThreadId_t parent_tid = L4_Myself(), child_tid;
+	int cpid = fork_tid(&child_tid);
+	if(cpid == 0) exit(fanout_child(maps_count, parent_tid));
+
+	void *page = aligned_alloc(PAGE_SIZE, PAGE_SIZE);
+	fail_if(page == NULL);
+	memset(page, 0, PAGE_SIZE);
+	strscpy(page, "qwertyuiop", PAGE_SIZE);
+	L4_Fpage_t fp = L4_FpageLog2((L4_Word_t)page, PAGE_BITS);
+	L4_Set_Rights(&fp, L4_FullyAccessible);
+
+	/* creation. */
+	bool ipc_ok = true, content_ok = true;
+	for(int i=0; i < maps_count; i++) {
+		L4_MsgTag_t tag = { .X.t = 2 };
+		L4_MapItem_t mi = L4_MapItem(fp, 0);
+		L4_LoadMR(0, tag.raw);
+		L4_LoadMRs(1, 2, mi.raw);
+		tag = L4_Call_Timeouts(child_tid, TEST_IPC_DELAY, TEST_IPC_DELAY);
+		if(L4_IpcFailed(tag)) {
+			ipc_ok = false;
+			diag("parent ipc failed; i=%d ec=%#lx", i, L4_ErrorCode());
+			continue;
+		}
+		L4_Word_t first; L4_StoreMR(1, &first);
+		if(first != *(L4_Word_t *)page) {
+			diag("return value wasn't the right one; i=%d, first=%#lx",
+				i, first);
+			content_ok = false;
+		}
+	}
+	pass("fanout didn't crash kernel");
+	ok1(ipc_ok);
+	ok1(content_ok);
+
+	send_quit(child_tid);
+	int st, dead = wait(&st);
+	fail_if(dead != cpid);
+	if(!ok1(st == 0)) diag("child returned st=%d", st);
+}
+END_TEST
+
+
 /* case where a large entry is being mapped over a smaller entry, or a number
  * thereof.
  *
@@ -1136,6 +1242,7 @@ static Suite *space_suite(void)
 	{
 		TCase *tc = tcase_create("panic");
 		tcase_add_test(tc, mapdb_shrimps);
+		tcase_add_test(tc, huge_fanout);
 		suite_add_tcase(s, tc);
 	}
 
