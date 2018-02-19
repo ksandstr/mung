@@ -44,6 +44,8 @@ struct cmd_opt {
 static size_t hash_forkserv_page(const void *key, void *priv);
 
 
+L4_KernelInterfacePage_t *the_kip;
+
 static L4_ThreadId_t forkserv_pager, forkserv_tid;
 static L4_Fpage_t forkserv_utcb_area;
 static struct htable forkserv_pages = HTABLE_INITIALIZER(forkserv_pages,
@@ -272,7 +274,7 @@ static void forkserv_pager_fn(void *param UNUSED)
 /* returns the raw command line. */
 static const char *start_forkserv(void)
 {
-	L4_KernelInterfacePage_t *kip = L4_GetKernelInterface();
+	L4_KernelInterfacePage_t *kip = the_kip;
 	L4_BootInfo_t *bootinfo = (L4_BootInfo_t *)L4_BootInfo(kip);
 
 	L4_BootRec_t *rec = L4_BootInfo_FirstEntry(bootinfo);
@@ -491,7 +493,7 @@ static void transfer_to_forkserv(void)
 	 * the latter is assumed rather than determined, but it's also the size
 	 * used by mung kmain.c .
 	 */
-	const L4_KernelInterfacePage_t *kip = L4_GetKernelInterface();
+	L4_KernelInterfacePage_t *kip = the_kip;
 	int n = forkserv_as_cfg(forkserv_tid, 1,
 		get_mgr_tid().raw,
 		L4_FpageLog2((L4_Word_t)kip, kip->KipAreaInfo.X.s),
@@ -631,7 +633,7 @@ static void invoke_ktest(bool describe)
 
 static void print_boot_info(void)
 {
-	L4_KernelInterfacePage_t *kip = L4_GetKernelInterface();
+	L4_KernelInterfacePage_t *kip = the_kip;
 	if(kip == NULL || memcmp(&kip->magic, "L4\346K", 4) != 0) {
 		printf("L4.X2 microkernel not found!\n");
 		return;
@@ -717,6 +719,7 @@ static int suite_spec_by_priority_fn(const void *ap, const void *bp) {
 
 int main(void)
 {
+	the_kip = L4_GetKernelInterface();
 	printf("hello, world!\n");
 	print_boot_info();
 	calibrate_delay_loop();

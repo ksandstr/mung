@@ -13,6 +13,7 @@
 #include <ccan/autodata/autodata.h>
 
 #include <l4/types.h>
+#include <l4/kip.h>
 #include <muidl.h>
 
 #include "common-defs.h"
@@ -180,6 +181,8 @@ extern void run_benchmarks(void);
 
 
 /* from testbench.c */
+extern L4_KernelInterfacePage_t *the_kip;
+
 extern void add_fs_tid(L4_Word_t space_id, L4_ThreadId_t tid);
 
 
@@ -304,6 +307,8 @@ extern void *xjoin_thread(L4_ThreadId_t other);
 extern void next_tick(void);
 
 extern void fault_own_pages(void);
+
+extern bool has_feature(const char *name);
 
 
 /* (actually in sched_suite.c) */

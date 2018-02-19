@@ -312,7 +312,7 @@ START_TEST(illegal_access_test)
 END_TEST
 
 
-/* tcase "ctl" */
+/* tcase "api" */
 
 START_TEST(spacectl_basic)
 {
@@ -419,6 +419,77 @@ START_TEST(spacectl_iface)
 	res = L4_ThreadControl(tid, L4_nilthread, L4_nilthread,
 		L4_nilthread, (void *)-1);
 	fail_if(res != 1, "cleanup threadctl failed, ec=%#lx", L4_ErrorCode());
+}
+END_TEST
+
+
+/* mung-specific behaviour: MapItems and GrantItems where the range has
+ * empties, i.e. memory where there's no mapped page, should map empties into
+ * the destination. this is permitted by a close reading of the MapItem spec
+ * in section 5.2, and makes much sense for passing mappings along in an IPC
+ * redirector.
+ */
+START_TEST(overmap_empty)
+{
+	if(!has_feature("holeunmap")) {
+		plan_skip_all("feature `holeunmap' not present");
+		return;
+	}
+
+	plan_tests(3);
+
+	L4_ThreadId_t parent_tid = L4_Myself(), child_tid;
+	int cpid = fork_tid(&child_tid);
+	if(cpid == 0) {
+		void *data = aligned_alloc(PAGE_SIZE, PAGE_SIZE);
+		fail_if(data == NULL);
+		memset(data, 0x2d, PAGE_SIZE);
+		L4_Fpage_t p = L4_FpageLog2((L4_Word_t)data, PAGE_BITS);
+		L4_Set_Rights(&p, L4_Writable | L4_Readable);
+		L4_MapItem_t mi = L4_MapItem(p, 0);
+		L4_LoadMR(0, (L4_MsgTag_t){ .X.t = 2 }.raw);
+		L4_LoadMRs(1, 2, mi.raw);
+		L4_Call_Timeouts(parent_tid, TEST_IPC_DELAY, TEST_IPC_DELAY);
+
+		void *empty = aligned_alloc(PAGE_SIZE, PAGE_SIZE);
+		fail_if(empty == NULL);
+		L4_Fpage_t e = L4_FpageLog2((L4_Word_t)empty, PAGE_BITS);
+		L4_Set_Rights(&e, L4_FullyAccessible);
+		L4_FlushFpage(e);
+		mi = L4_MapItem(e, 0);
+		L4_LoadMR(0, (L4_MsgTag_t){ .X.t = 2 }.raw);
+		L4_LoadMRs(1, 2, mi.raw);
+		L4_Call_Timeouts(parent_tid, TEST_IPC_DELAY, TEST_IPC_DELAY);
+
+		exit(0);
+	}
+
+	void *arena = aligned_alloc(PAGE_SIZE, PAGE_SIZE);
+	memset(arena, 0xc3, PAGE_SIZE);
+	L4_Fpage_t a_page = L4_FpageLog2((L4_Word_t)arena, PAGE_BITS);
+
+	volatile uint8_t *mem = arena;
+	L4_FlushFpage(a_page);
+	ok(mem[0] == 0xc3, "memory remains after flush");
+
+	L4_Set_Rights(&a_page, L4_FullyAccessible);
+	L4_Acceptor_t acc = L4_MapGrantItems(a_page);
+	L4_Accept(acc);
+	L4_MsgTag_t tag = L4_Receive_Timeout(child_tid, TEST_IPC_DELAY);
+	ok(L4_IpcSucceeded(tag) && mem[0] != 0xc3, "got page from child");
+	L4_LoadMR(0, 0);
+	L4_Reply(child_tid);
+
+	L4_Accept(acc);
+	tag = L4_Receive_Timeout(child_tid, TEST_IPC_DELAY);
+	ok(L4_IpcSucceeded(tag) && mem[0] == 0xc3, "got empty from child");
+	L4_LoadMR(0, 0);
+	L4_Reply(child_tid);
+
+	int st, dead = wait(&st);
+	fail_if(dead != cpid);
+
+	free(arena);
 }
 END_TEST
 
@@ -1033,6 +1104,7 @@ static Suite *space_suite(void)
 		tcase_set_fork(tc, false);
 		tcase_add_test(tc, spacectl_basic);
 		tcase_add_test(tc, spacectl_iface);
+		tcase_add_test(tc, overmap_empty);
 		suite_add_tcase(s, tc);
 	}
 

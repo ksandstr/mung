@@ -3,9 +3,11 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <string.h>
+#include <ccan/str/str.h>
 
 #include <l4/types.h>
 #include <l4/ipc.h>
+#include <l4/kip.h>
 
 #include <ukernel/util.h>
 
@@ -164,4 +166,17 @@ void next_tick(void)
 	do {
 		/* sit & spin */
 	} while(start.raw == L4_SystemClock().raw);
+}
+
+
+bool has_feature(const char *name)
+{
+	assert(the_kip != NULL);
+	L4_KernelDesc_t *kdesc = (void *)the_kip + the_kip->KernelVerPtr;
+	const char *str = kdesc->VersionString + strlen(kdesc->VersionString) + 1;
+	while(*str != '\0') {
+		if(streq(str, name)) return true;
+		str += strlen(str) + 1;
+	}
+	return false;
 }

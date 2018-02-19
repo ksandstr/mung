@@ -149,7 +149,8 @@ static struct helper_work *helper_queue = NULL;
 static L4_Word_t max_vaddr, phys_mem_top, brk_pos = 0, phys_alloc_pos = 0;
 static bool pump_done = false;
 static int32_t root_space_id = -1;
-static L4_KernelInterfacePage_t *the_kip;
+
+L4_KernelInterfacePage_t *the_kip;
 
 
 static size_t hash_word(const void *elem, void *priv) {
@@ -2070,8 +2071,8 @@ static void start_helper_thread(void)
 
 int main(void)
 {
-	fault_own_pages();
 	the_kip = L4_GetKernelInterface();
+	fault_own_pages();
 	L4_Set_ExceptionHandler(L4_Pager());
 	console_tid = L4_Pager();
 	fpager_tid = L4_Pager();
