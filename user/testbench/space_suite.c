@@ -1106,6 +1106,76 @@ START_LOOP_TEST(huge_fanout, iter, 0, 1)
 END_TEST
 
 
+/* map an empty page over the last page in a 4M segment.
+ *
+ * variables:
+ *   - [last_page] whether the page that gets mapped over is, in fact, the
+ *     last page in that group.
+ */
+START_LOOP_TEST(last_page_empty_overmap, iter, 0, 1)
+{
+	if(!has_feature("holeunmap")) {
+		plan_skip_all("feature `holeunmap' not present");
+		return;
+	}
+
+	const size_t group_size = 4 * 1024 * 1024;
+	diag("group_size=%#lx", (unsigned long)group_size);
+	const bool last_page = !!(iter & 1);
+	diag("last_page=%s", btos(last_page));
+
+	plan_tests(3);
+
+	L4_ThreadId_t parent_tid = L4_Myself(), child_tid;
+	int cpid = fork_tid(&child_tid);
+	if(cpid == 0) {
+		void *empty = aligned_alloc(PAGE_SIZE, PAGE_SIZE);
+		diag("empty=%p", empty);
+		fail_if(empty == NULL);
+		memset(empty, 0xff, PAGE_SIZE);
+		L4_Fpage_t e = L4_FpageLog2((L4_Word_t)empty, PAGE_BITS);
+		L4_Set_Rights(&e, L4_FullyAccessible);
+		L4_FlushFpage(e);
+		L4_MapItem_t mi = L4_MapItem(e, 0);
+		L4_LoadMR(0, (L4_MsgTag_t){ .X.t = 2 }.raw);
+		L4_LoadMRs(1, 2, mi.raw);
+		L4_Call_Timeouts(parent_tid, TEST_IPC_DELAY, TEST_IPC_DELAY);
+
+		exit(0);
+	}
+
+	void *arena = aligned_alloc(group_size, group_size);
+	diag("arena=%p", arena);
+	memset(arena, 0xc3, group_size);
+	if(last_page) {
+		/* flush all but one page. */
+		for(size_t i = PAGE_SIZE; i < group_size; i += PAGE_SIZE) {
+			L4_Fpage_t p = L4_FpageLog2((L4_Word_t)arena + i, PAGE_BITS);
+			L4_Set_Rights(&p, L4_FullyAccessible);
+			L4_FlushFpage(p);
+		}
+	}
+
+	/* receive on top of the (perhaps) single remaining page. */
+	L4_Fpage_t a_page = L4_FpageLog2((L4_Word_t)arena, PAGE_BITS);
+	L4_Set_Rights(&a_page, L4_FullyAccessible);
+	L4_Acceptor_t acc = L4_MapGrantItems(a_page);
+	L4_Accept(acc);
+	L4_MsgTag_t tag = L4_Receive_Timeout(child_tid, TEST_IPC_DELAY);
+	pass("still alive");
+	ok(L4_IpcSucceeded(tag), "receive from child");
+	ok1(L4_TypedWords(tag) == 2);
+	L4_LoadMR(0, 0);
+	L4_Reply(child_tid);
+
+	int st, dead = wait(&st);
+	fail_if(dead != cpid);
+
+	free(arena);
+}
+END_TEST
+
+
 /* case where a large entry is being mapped over a smaller entry, or a number
  * thereof.
  *
@@ -1243,6 +1313,7 @@ static Suite *space_suite(void)
 		TCase *tc = tcase_create("panic");
 		tcase_add_test(tc, mapdb_shrimps);
 		tcase_add_test(tc, huge_fanout);
+		tcase_add_test(tc, last_page_empty_overmap);
 		suite_add_tcase(s, tc);
 	}
 
