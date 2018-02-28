@@ -1082,7 +1082,7 @@ END_TEST
 static void fault_to_given_pager_fn(void *param UNUSED)
 {
 	const size_t mem_size = 8192;
-	uint8_t *memory = valloc(mem_size);
+	uint8_t *memory = aligned_alloc(PAGE_SIZE, mem_size);
 	memset(memory, 0, mem_size);
 	diag("test memory is at %p", memory);
 

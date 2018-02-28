@@ -612,7 +612,7 @@ static void add_mapitem(L4_StringItem_t **si_p)
 {
 	const size_t n_bytes = 8192;
 	/* just a slice of the heap, then. */
-	void *something = valloc(n_bytes);
+	void *something = aligned_alloc(PAGE_SIZE, n_bytes);
 	memset(something, '\0', n_bytes);
 
 	L4_MapItem_t mi = L4_MapItem(
@@ -843,7 +843,7 @@ START_TEST(echo_long_xferfault)
 	uint32_t seed = seed_bins[2];
 
 	const size_t test_len = 24 * 1024 + 1;
-	char *echostr = valloc(test_len);
+	char *echostr = aligned_alloc(PAGE_SIZE, test_len);
 	fail_if(echostr == NULL);
 	random_string(echostr, test_len, &seed);
 	fail_unless(strlen(echostr) == test_len - 1);
@@ -860,7 +860,7 @@ START_TEST(echo_long_xferfault)
 	L4_Set_Rights(&echo_page, L4_FullyAccessible);
 	L4_FlushFpage(echo_page);
 
-	char *replybuf = valloc(test_len * 2);
+	char *replybuf = aligned_alloc(PAGE_SIZE, test_len * 2);
 	fail_if(replybuf == NULL);
 	L4_StringItem_t got_si;
 	echo(test_tid, replybuf, test_len * 2, &got_si, echostr, test_len - 1);
@@ -889,7 +889,8 @@ START_TEST(echo_with_hole)
 	const size_t buf_size = 16 * 1024;
 	const char *echostr = "what did the pope say to the bear?";
 
-	char *replybuf = valloc(buf_size), *sendbuf = valloc(buf_size);
+	char *replybuf = aligned_alloc(PAGE_SIZE, buf_size),
+		*sendbuf = aligned_alloc(PAGE_SIZE, buf_size);
 	memset(replybuf, 0, buf_size);
 	memset(sendbuf, 0, buf_size);
 	char *sendstr = &sendbuf[19];
@@ -1046,13 +1047,13 @@ static L4_Word_t faulting_echo(
 		^ 0xb0a7face;
 
 	const size_t test_len = 11 * 1024 + 1;
-	char *echostr = valloc(test_len);
+	char *echostr = aligned_alloc(PAGE_SIZE, test_len);
 	fail_if(echostr == NULL);
 	random_string(echostr, test_len, &seed);
 	int echo_len = strlen(echostr);
 	fail_unless(strlen(echostr) == test_len - 1);
 
-	char *replybuf = valloc(test_len * 2);
+	char *replybuf = aligned_alloc(PAGE_SIZE, test_len * 2);
 	fail_if(replybuf == NULL);
 
 	if(do_unmap_send) {
@@ -1506,8 +1507,9 @@ static void str_receiver_fn(void *param_ptr)
 		}
 	} else {
 		for(int i=0; i < p->n_bufs; i++) {
-			if(buf_size >= PAGE_SIZE) bufs[i] = valloc(buf_size);
-			else bufs[i] = malloc(buf_size);
+			bufs[i] = buf_size >= PAGE_SIZE
+				? aligned_alloc(PAGE_SIZE, buf_size)
+				: malloc(buf_size);
 			fail_if(bufs[i] == NULL, "failed to allocate %u bytes (i=%d)",
 				(unsigned)buf_size, i);
 			memset(bufs[i], 0, buf_size);

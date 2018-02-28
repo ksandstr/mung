@@ -2567,7 +2567,7 @@ static void send_typed_items(void)
 	L4_MsgTag_t tag = L4_Wait(&sender);
 	IPC_FAIL(tag);
 
-	void *memory = valloc(mem_size);
+	void *memory = aligned_alloc(PAGE_SIZE, mem_size);
 	memset(memory, 1, mem_size);
 	diag("sender's memory is at %p", memory);
 
@@ -2615,7 +2615,7 @@ START_TEST(c_bit_in_typed_words)
 	}
 
 	const size_t wnd_size = 4096;
-	uint8_t *memory = valloc(wnd_size),
+	uint8_t *memory = aligned_alloc(PAGE_SIZE, wnd_size),
 		*buffer = malloc(16 * 1024);
 	memset(memory, 0, wnd_size);
 	memset(buffer, 0, 16 * 1024);
@@ -2683,7 +2683,7 @@ struct lipc_receiver_param {
 static void lipc_receiver_fn(void *param_ptr)
 {
 	struct lipc_receiver_param *p = param_ptr;
-	void *arena = valloc(1 << 12);
+	void *arena = aligned_alloc(PAGE_SIZE, 1 << 12);
 	L4_Fpage_t a_page = L4_FpageLog2((L4_Word_t)arena, 12);
 	L4_Set_Rights(&a_page, L4_FullyAccessible);
 	L4_Accept(L4_MapGrantItems(a_page));
@@ -2810,7 +2810,7 @@ START_LOOP_TEST(basic_invalid_lipc, iter, 0, 7)
 	diag("n_inputs=%d, not_ltid=%s, not_never=%s, has_typed=%s",
 		n_inputs, btos(not_ltid), btos(not_never), btos(has_typed));
 
-	void *memory = valloc(1 << 12);
+	void *memory = aligned_alloc(PAGE_SIZE, 1 << 12);
 	struct lipc_receiver_param *rparam = malloc(sizeof(*rparam));
 	*rparam = (struct lipc_receiver_param){
 		.reply_with_lipc = false,
@@ -2880,7 +2880,7 @@ START_LOOP_TEST(mapgrant_address, iter, 0, 3)
 		L4_Word_t raw[2];
 	} t;
 
-	uint8_t *map_mem = valloc(PAGE_SIZE);
+	uint8_t *map_mem = aligned_alloc(PAGE_SIZE, PAGE_SIZE);
 	memset(map_mem, 1, PAGE_SIZE);
 	L4_ThreadId_t child_tid, parent_tid = L4_Myself();
 	int child = fork_tid(&child_tid);
@@ -2941,7 +2941,7 @@ static bool send_mapgrant_to(
 	bool send_nilpage,
 	bool send_grant)
 {
-	void *send_mem = valloc(PAGE_SIZE);
+	void *send_mem = aligned_alloc(PAGE_SIZE, PAGE_SIZE);
 	assert(((uintptr_t)send_mem & (PAGE_SIZE - 1)) == 0);
 	memset(send_mem, 0x5f, PAGE_SIZE);
 
@@ -3034,7 +3034,7 @@ START_LOOP_TEST(mapgrant_effect_clause, iter, 0, 15)
 		}
 	}
 
-	volatile uint8_t *recv_mem = valloc(PAGE_SIZE);
+	volatile uint8_t *recv_mem = aligned_alloc(PAGE_SIZE, PAGE_SIZE);
 	memset((void *)recv_mem, 0xaa, PAGE_SIZE);
 	uint8_t old_value = recv_mem[0];
 	L4_Fpage_t rwnd;
@@ -3323,7 +3323,7 @@ START_LOOP_TEST(forbid_map_over_special, iter, 0, 1)
 	}
 
 	/* map a page of frothy piss. */
-	char *mapz0r = valloc(PAGE_SIZE);
+	char *mapz0r = aligned_alloc(PAGE_SIZE, PAGE_SIZE);
 	uint32_t seed = 0xbeefc0de;
 	random_string(mapz0r, PAGE_SIZE, &seed);
 	L4_Fpage_t map_page = L4_FpageLog2((L4_Word_t)mapz0r, PAGE_BITS);
@@ -3658,7 +3658,7 @@ START_LOOP_TEST(big_pf_stomp, iter, 0, 1)
 	L4_ThreadId_t old_pager = L4_Pager(),
 		helper = xstart_thread(&big_reply_pager, param);
 
-	uint8_t *fault_mem = valloc(PAGE_SIZE);
+	uint8_t *fault_mem = aligned_alloc(PAGE_SIZE, PAGE_SIZE);
 	assert(((L4_Word_t)fault_mem & PAGE_MASK) == 0);
 	memset(fault_mem, 1, PAGE_SIZE);
 	uint32_t seed = initial_seed;

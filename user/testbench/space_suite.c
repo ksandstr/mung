@@ -244,7 +244,7 @@ START_TEST(illegal_access_test)
 	plan_tests(4);
 
 	/* base case 0: test access that isn't illegal. */
-	void *mem = valloc(16 * 1024);
+	void *mem = aligned_alloc(PAGE_SIZE, 16 * 1024);
 	memset(mem, 0, 16 * 1024);
 	uintptr_t ret = cause_segv_at((uintptr_t)mem + 711);
 	if(!ok(ret == 0, "legal access is legal")) {
@@ -504,7 +504,7 @@ START_TEST(simple_flush)
 	plan_tests(8);
 
 	const size_t mem_size = 3 * 4096;
-	void *ptr = valloc(mem_size);
+	void *ptr = aligned_alloc(PAGE_SIZE, mem_size);
 	memset(ptr, 0, mem_size);
 
 	bool ok = poke(pg_poker, (L4_Word_t)ptr, poke_val);
@@ -557,7 +557,7 @@ START_LOOP_TEST(partial_flush, iter, 0, 1)
 	plan_tests(4);
 
 	const size_t mem_size = 3 * 4096;
-	void *ptr = valloc(mem_size);
+	void *ptr = aligned_alloc(PAGE_SIZE, mem_size);
 	memset(ptr, 0, mem_size);
 
 	L4_Fpage_t ptr_page = L4_FpageLog2((L4_Word_t)ptr, 12);
@@ -742,7 +742,7 @@ START_TEST(local_access)
 {
 	plan_tests(3);
 
-	char *testmem = valloc(PAGE_SIZE);
+	char *testmem = aligned_alloc(PAGE_SIZE, PAGE_SIZE);
 	memset(testmem, 0, PAGE_SIZE);
 	diag("testmem=%p", testmem);
 	L4_Fpage_t pg = L4_FpageLog2((L4_Word_t)testmem, PAGE_BITS);
@@ -794,7 +794,7 @@ START_TEST(parent_access)
 {
 	plan_tests(2);
 
-	char *testmem = valloc(PAGE_SIZE);
+	char *testmem = aligned_alloc(PAGE_SIZE, PAGE_SIZE);
 	memset(testmem, 0, PAGE_SIZE);
 	diag("testmem=%p", testmem);
 	L4_Fpage_t pg = L4_FpageLog2((L4_Word_t)testmem, PAGE_BITS);
@@ -825,7 +825,7 @@ START_LOOP_TEST(access_interference, iter, 0, 1)
 
 	plan_tests(4);
 
-	char *testmem = valloc(PAGE_SIZE);
+	char *testmem = aligned_alloc(PAGE_SIZE, PAGE_SIZE);
 	memset(testmem, 0, PAGE_SIZE);
 	L4_Fpage_t pg = L4_FpageLog2((L4_Word_t)testmem, PAGE_BITS);
 	diag("pg=%#lx:%#lx", L4_Address(pg), L4_Size(pg));

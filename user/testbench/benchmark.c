@@ -190,7 +190,8 @@ static void bench_idl_ipc(const char *desc, L4_ThreadId_t partner)
 	 */
 	static const int str_sizes[] = { 31, 511, 2047, 8191, 16 * 1024 - 1 };
 	uint32_t seed = 0xb0a7face;
-	char *sendbuf = valloc(65536), *replybuf = valloc(65536);
+	char *sendbuf = aligned_alloc(PAGE_SIZE, 65536),
+		*replybuf = aligned_alloc(PAGE_SIZE, 65536);
 	for(int mode = 0; mode < 2; mode++) {
 		for(int size_ix = 0; size_ix < NUM_ELEMENTS(str_sizes); size_ix++) {
 			const size_t ss = str_sizes[size_ix];
