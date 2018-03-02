@@ -78,6 +78,10 @@
 #define AUX_INDEX(x) ((x) & 0x3ff)
 #define AUX_RIGHTS(x) (((x) >> 10) & 0x7)
 #define AUX_UP(x) (((x) >> 13) & 0x7)
+#define AUX_IS_AVAIL(x) (AUX_UP((x)) == 0)
+/* ctors */
+#define AUX_TOMBSTONE AUX(0, 0, 1)
+#define AUX_BUCKETPTR(ix) AUX((ix), 0, 6)
 
 /* maximum probe depth in childref storage. */
 #define MAX_PROBE_DEPTH 15
@@ -275,7 +279,7 @@ static void ref_del(struct ref_iter *it, struct map_group *g)
 	} else {
 		int ix = it->pos & it->mask;
 		g->children[ix] = REF_TOMBSTONE;
-		g->c_aux[ix] = AUX(0, 0, 1);
+		g->c_aux[ix] = AUX_TOMBSTONE;
 	}
 }
 
@@ -494,7 +498,7 @@ static int probe_add(
 		if(rights == 0) {
 			if(shares == NULL) return slot;
 			if(first < 0) first = slot;
-			if(AUX_UP(c_aux[slot]) == 0) return first;	/* end of chain */
+			if(AUX_IS_AVAIL(c_aux[slot])) return first;	/* end of chain */
 		} else if(shares != NULL && AUX_INDEX(c_aux[slot]) == parent_ix) {
 			assert(*n_shares_p < MAX_SHARE_CHAIN);
 			shares[(*n_shares_p)++] = slot;
@@ -571,7 +575,7 @@ static struct child_bucket *make_bucket(
 		b->cs[i] = g->children[slot];
 		b->aux[i] = g->c_aux[slot];
 		g->children[slot] = REF_TOMBSTONE;
-		g->c_aux[slot] = AUX(0, 0, 1);
+		g->c_aux[slot] = AUX_TOMBSTONE;
 	}
 	b->cs[n_shares] = childref;
 	b->aux[n_shares] = aux;
