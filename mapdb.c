@@ -1052,8 +1052,8 @@ static int unmap_page(struct map_group **g_p, int ix, int mode)
 	}
 
 	/* the flush case. */
-	if(immediate && !CHECK_FLAG(mode, UM_CHILD)) {
-		/* find our childptr where applicable, and remove access. */
+	if(!CHECK_FLAG(mode, UM_CHILD) && immediate && unmap_rights > 0) {
+		/* find our childptr (where applicable) & remove access. */
 		TRACE("%s: flushing unmap_rights=%#x\n", __func__, unmap_rights);
 		int remain;
 		if(IS_ROOT(g->parent[ix])) {

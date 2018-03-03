@@ -30,10 +30,11 @@
 struct space;
 
 
-/* per-space tracking structure that corresponds to the 2M/4M penultimate
- * level page directory. page frame IDs are stored in the lowest-level page
- * table with "side" access bits in the 3 ignored bits of 32-bit/PAE page
- * table entries.
+/* per-space tracking structure corresponding 1:1 to the 2M/4M last-level page
+ * table. page frame IDs are stored in the page table.
+ *
+ * "side" access bits are stored in the 3 ignored bits of 32-bit/PAE page
+ * table entries. see pt_probe() spec in <ukernel/ptab.h> about that.
  */
 struct map_group
 {
