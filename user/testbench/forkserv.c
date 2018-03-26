@@ -129,8 +129,9 @@ static void handle_pf(L4_Word_t addr, L4_Word_t ip, L4_MapItem_t *page_ptr);
 static void handle_exit(int32_t status);
 
 
-/* thread_hash is hashed by threadno, but compared for equality with full TID
- * (i.e. word_cmp().) this is for handle_add_tid()'s overwrite function.
+/* thread_hash is keyed by ThreadNo; the version field is ignored. this
+ * supports handle_add_tid()'s overwrite part, and
+ * thread:panic:version_switcheroo.
  */
 static struct htable
 	thread_hash = HTABLE_INITIALIZER(thread_hash, &hash_threadno, NULL),
@@ -170,9 +171,15 @@ static size_t hash_threadno(const void *elem, void *priv) {
 }
 
 
+static bool threadno_cmp(const void *pa, void *pb) {
+	const L4_ThreadId_t *a = pa, *b = pb;
+	return L4_ThreadNo(*a) == L4_ThreadNo(*b);
+}
+
+
 static struct fs_thread *get_thread(L4_ThreadId_t tid) {
 	return htable_get(&thread_hash, int_hash(L4_ThreadNo(tid)),
-		&word_cmp, &tid);
+		&threadno_cmp, &tid);
 }
 
 
@@ -804,7 +811,9 @@ static void handle_pf(
 	L4_ThreadId_t from = muidl_get_sender();
 	struct fs_space *sp = get_space_by_tid(from);
 	if(sp == NULL) {
-		printf("source %#lx isn't known\n", from.raw);
+		from = L4_GlobalIdOf(from);
+		printf("forkserv: source %lu:%lu isn't known\n", L4_ThreadNo(from),
+			L4_Version(from));
 		goto no_reply;
 	}
 
