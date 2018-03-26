@@ -34,13 +34,7 @@ static struct thread *send_preempt_exception(struct thread *t);
 
 static struct rb_root sched_tree = { };
 
-/* per-schedqueue attributes. */
-
-/* wakeup time in microseconds since boot. applicable iff
- * current_thread->u0.partner != NULL.
- */
-static uint64_t sched_chain_timeout = 0;
-
+/* per-schedqueue data. */
 struct thread *current_thread = NULL;
 
 /* these control the timer interrupt. write with irqs disabled only. */
