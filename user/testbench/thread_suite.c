@@ -1755,6 +1755,118 @@ START_TEST(tid_stomp)
 END_TEST
 
 
+static void pop_interrupt_to(L4_ThreadId_t dest)
+{
+	L4_ThreadId_t old_exh = L4_ExceptionHandler();
+	L4_Set_ExceptionHandler(dest);
+	asm volatile ("int $99" ::: "memory");
+	L4_Set_ExceptionHandler(old_exh);
+}
+
+
+static void flip_thread_version(
+	L4_ThreadId_t sender, L4_MsgTag_t frame_tag, L4_Word_t *frame)
+{
+	sender = L4_GlobalIdOf(sender);
+	L4_ThreadId_t new_tid = L4_GlobalId(L4_ThreadNo(sender),
+		L4_Version(sender) ^ 0x3f00);
+	assert((L4_Version(new_tid) & 0x3f) != 0);
+	L4_Word_t res = L4_ThreadControl(new_tid, L4_Myself(), L4_nilthread,
+		L4_nilthread, (void *)-1);
+	if(res != 1) {
+		diag("renaming threadctl failed, ec=%lu", L4_ErrorCode());
+		return;
+	}
+	diag("starting new_tid=%lu:%lu",
+		L4_ThreadNo(new_tid), L4_Version(new_tid));
+	void *stk = aligned_alloc(PAGE_SIZE, PAGE_SIZE);
+	L4_Word_t *sp = (L4_Word_t *)(stk + PAGE_SIZE - 16 + 4);
+	*(--sp) = L4_Myself().raw;
+	*(--sp) = 0xabadc0de;
+	L4_Start_SpIp(new_tid, (L4_Word_t)sp, (L4_Word_t)&pop_interrupt_to);
+	L4_MsgTag_t tag = L4_Receive_Timeout(new_tid, L4_TimePeriod(2000));
+	if(L4_IpcFailed(tag)) {
+		diag("%s: can't get exception message, ec=%lu",
+			__func__, L4_ErrorCode());
+		return;
+	}
+	/* load the old frame and pass it down. */
+	L4_LoadMR(0, (L4_MsgTag_t){ .X.u = frame_tag.X.u }.raw);
+	L4_LoadMRs(1, frame_tag.X.u, frame);
+	tag = L4_Reply(new_tid);
+	if(L4_IpcFailed(tag)) {
+		diag("exn reply failed, ec=%lu", L4_ErrorCode());
+		return;
+	}
+
+	free(stk);
+}
+
+
+static void rename_helper_fn(void *param_ptr)
+{
+	bool running = true;
+	while(running) {
+		L4_ThreadId_t sender;
+		L4_MsgTag_t tag = L4_Wait(&sender);
+		for(;;) {
+			if(L4_IpcFailed(tag)) {
+				diag("%s: ipc failed, ec=%#lx", __func__, L4_ErrorCode());
+				break;
+			}
+
+			bool reply;
+			if((L4_Label(tag) & 0xfff0) == 0xffb0) {
+				L4_Word_t frame[64];
+				L4_StoreMRs(1, tag.X.u, frame);
+				frame[0] += 2;	/* skip over int $nn */
+				flip_thread_version(sender, tag, frame);
+				reply = false;
+			} else if(L4_Label(tag) == QUIT_LABEL) {
+				running = false;
+				break;
+			} else {
+				diag("%s: sender=%lu:%lu, tag=%#lx", __func__,
+					L4_ThreadNo(sender), L4_Version(sender), tag.raw);
+				reply = false;
+			}
+			if(!reply) break;
+
+			tag = L4_ReplyWait(sender, &sender);
+		}
+	}
+}
+
+
+/* tid_stomp ][: the stompening */
+START_TEST(version_switcheroo)
+{
+	plan_tests(3);
+
+	L4_ThreadId_t first = L4_MyGlobalId();
+	diag("first=%lu:%lu", L4_ThreadNo(first), L4_Version(first));
+
+	L4_ThreadId_t helper = xstart_thread(&rename_helper_fn, NULL);
+	diag("helper=%lu:%lu", L4_ThreadNo(first), L4_Version(first));
+	L4_Sleep(L4_TimePeriod(2000));
+	pop_interrupt_to(helper);
+
+	L4_ThreadId_t second = L4_MyGlobalId();
+	diag("second=%lu:%lu", L4_ThreadNo(second), L4_Version(second));
+	ok1(!L4_SameThreads(first, second));
+
+	pop_interrupt_to(helper);
+	L4_ThreadId_t third = L4_MyGlobalId();
+	diag("third=%lu:%lu", L4_ThreadNo(third), L4_Version(third));
+	ok1(!L4_SameThreads(second, third));
+	ok1(L4_SameThreads(third, first));
+
+	send_quit(helper);
+	xjoin_thread(helper);
+}
+END_TEST
+
+
 START_TEST(reuse_utcb_pages)
 {
 	plan_tests(4);
@@ -1887,14 +1999,16 @@ static Suite *thread_suite(void)
 		suite_add_tcase(s, tc);
 	}
 
+	/* cases that would panic the microkernel. generally through asserts. */
 	{
 		TCase *tc = tcase_create("panic");
 		tcase_set_fork(tc, false);
 		tcase_add_test(tc, tid_stomp);
+		tcase_add_test(tc, version_switcheroo);
 		suite_add_tcase(s, tc);
 	}
 
-	/* tests suggested by implementation details. */
+	/* tests suggested by implementation detail. */
 	{
 		TCase *tc = tcase_create("impl");
 		tcase_add_test(tc, reuse_utcb_pages);
