@@ -1521,10 +1521,10 @@ enum ipc_mode {
 };
 
 
-static void ipc_sender_fn(void)
+static void ipc_sender_fn(L4_ThreadId_t parent_tid)
 {
-	L4_ThreadId_t caller, target;
-	L4_MsgTag_t tag = L4_Wait_Timeout(TEST_IPC_DELAY, &caller);
+	L4_ThreadId_t target;
+	L4_MsgTag_t tag = L4_Receive_Timeout(parent_tid, TEST_IPC_DELAY);
 	if(L4_IpcFailed(tag)) {
 		diag("%s: initial wait failed, ec=%#lx", __func__, L4_ErrorCode());
 		return;
@@ -1554,15 +1554,28 @@ static void ipc_sender_fn(void)
 	L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 2 }.raw);
 	L4_LoadMR(1, tag.raw);
 	L4_LoadMR(2, ec);
-	tag = L4_Send_Timeout(caller, TEST_IPC_DELAY);
+	tag = L4_Send_Timeout(parent_tid, TEST_IPC_DELAY);
 	if(L4_IpcFailed(tag)) {
 		diag("%s: reply failed, ec=%#lx", __func__, L4_ErrorCode());
 	}
 }
 
 
-static void ipc_peer_fn(bool succeed, enum ipc_mode mode, L4_ThreadId_t oth)
+struct ipc_peer_param {
+	bool succeed;
+	enum ipc_mode mode;
+	L4_ThreadId_t oth;
+};
+
+
+static void ipc_peer_fn(void *param_ptr)
 {
+	struct ipc_peer_param *param = param_ptr;
+	bool succeed = param->succeed;
+	enum ipc_mode mode = param->mode;
+	L4_ThreadId_t oth = param->oth;
+	free(param);
+
 	L4_ThreadId_t sender;
 	L4_MsgTag_t tag;
 	switch(mode) {
@@ -1589,7 +1602,7 @@ static void ipc_peer_fn(bool succeed, enum ipc_mode mode, L4_ThreadId_t oth)
 			break;
 	}
 	if(!succeed) {
-		/* ensure measurement before process exit */
+		/* ensure measurement before exit */
 		L4_Sleep(A_SHORT_NAP);
 	}
 }
@@ -1622,22 +1635,20 @@ START_LOOP_TEST(err_on_lost_peer, iter, 0, 8)
 
 	plan_tests(3);
 
-	L4_ThreadId_t oth;
+	L4_ThreadId_t parent = L4_Myself(), oth;
 	int oth_pid = fork_tid(&oth);
 	if(oth_pid == 0) {
-		ipc_sender_fn();
+		ipc_sender_fn(parent);
 		diag("client exiting");
 		exit(0);
 	}
 
-	L4_ThreadId_t peer_tid;
-	int peer_pid = fork_tid(&peer_tid);
-	if(peer_pid == 0) {
-		ipc_peer_fn(loss_mode == 0, ipc_mode, oth);
-		diag("peer exiting");
-		exit(0);
-	}
-	diag("oth_pid=%d, peer_pid=%d", oth_pid, peer_pid);
+	struct ipc_peer_param *param = malloc(sizeof(*param));
+	param->succeed = loss_mode == 0;
+	param->mode = ipc_mode;
+	param->oth = oth;
+	L4_ThreadId_t peer_tid = xstart_thread(&ipc_peer_fn, param);
+	diag("oth_pid=%d", oth_pid);
 	const L4_ThreadId_t old_peer_tid = peer_tid;
 	diag("oth=%lu:%lu, peer_tid=%lu:%lu",
 		L4_ThreadNo(oth), L4_Version(oth),
@@ -1648,12 +1659,12 @@ START_LOOP_TEST(err_on_lost_peer, iter, 0, 8)
 	L4_LoadMR(2, ipc_mode);
 	L4_MsgTag_t tag = L4_Send(oth);
 	IPC_FAIL(tag);
+	if(ipc_mode == CALL) {
+		/* ensure that sender's call gets to the receive phase */
+		L4_Sleep(A_SHORT_NAP);
+	}
 	switch(loss_mode) {
 		case 2: {
-			if(ipc_mode == CALL) {
-				/* ensure that sender's call gets to the receive phase */
-				L4_Sleep(A_SHORT_NAP);
-			}
 			/* swap out its version bits. this kills the cat. */
 			L4_ThreadId_t new_tid = L4_GlobalId(L4_ThreadNo(peer_tid),
 				(L4_Version(peer_tid) + 123) | 13);
@@ -1669,14 +1680,10 @@ START_LOOP_TEST(err_on_lost_peer, iter, 0, 8)
 		}
 
 		case 1: {
-			/* deletion. accomplished by an ordinary wait() on the peer
-			 * process.
-			 */
-			int st, dead = wait(&st);
-			if(dead != peer_pid) {
-				diag("lm1: dead=%d, peer_pid=%d", dead, peer_pid);
-			}
+			/* deletion. */
+			kill_thread(peer_tid);
 			fail_if(thr_exists(peer_tid));
+			peer_tid = L4_nilthread;
 			break;
 		}
 
@@ -1703,7 +1710,7 @@ START_LOOP_TEST(err_on_lost_peer, iter, 0, 8)
 	imply_ok1(loss_mode > 0, (oth_ec >> 1) == 2);
 
 	if(loss_mode == 2) {
-		/* reinstate the peer, and cause it to exit immediately. */
+		/* reinstate the peer & let it terminate. */
 		diag("reinstating v%lu (new was v%lu)",
 			L4_Version(old_peer_tid), L4_Version(peer_tid));
 		L4_Word_t res = L4_ThreadControl(old_peer_tid, peer_tid,
@@ -1711,18 +1718,19 @@ START_LOOP_TEST(err_on_lost_peer, iter, 0, 8)
 		fail_if(res != 1, "reinstating tc failed, res=%lu, ec=%#lx",
 			res, L4_ErrorCode());
 		peer_tid = old_peer_tid;
-		int n = forkserv_send_bol(L4_Pager(), peer_tid.raw,
-			(L4_Word_t)&exit, (L4_Word_t)&tag);
-		fail_if(n != 0, "send_bol: n=%d", n);
+		L4_Start(peer_tid);
 	}
 
-	/* TODO: add a wait_all() utility somewhere */
-	for(int i=0; i < (loss_mode != 1 ? 2 : 1); i++) {
-		int st, dead = wait(&st);
-		if(dead != oth_pid && dead != peer_pid) {
+	int dead;
+	do {
+		int st;
+		dead = wait(&st);
+		if(dead != oth_pid) {
 			diag("dead=%d, oth_pid=%d (?)", dead, oth_pid);
 		}
-	}
+	} while(dead != oth_pid);
+
+	if(!L4_IsNilThread(peer_tid)) xjoin_thread(peer_tid);
 }
 END_TEST
 
