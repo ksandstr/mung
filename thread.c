@@ -1236,8 +1236,15 @@ SYSCALL L4_Word_t sys_threadcontrol(
 			if(dest->utcb_pos >= 0) {
 				void *utcb = thread_get_utcb(dest);
 				L4_VREG(utcb, L4_TCR_MYGLOBALID) = dest->id;
+				if(!post_exn_fail(dest)) {
+					/* userspace Ipc status is "canceled in receive phase". */
+					L4_VREG(utcb, L4_TCR_ERRORCODE) = 1 | (3 << 1);
+					L4_VREG(utcb, L4_TCR_MR(0)) =
+						(L4_MsgTag_t){ .X.flags = 0x8 }.raw;
+				}
 			}
 			cancel_ipc_to(stale_tid, 2 << 1);	/* "lost partner" */
+			assert(hook_empty(&dest->post_exn_call));
 
 			if(CHECK_FLAG(dest->flags, TF_INTR)) int_kick(dest);
 
