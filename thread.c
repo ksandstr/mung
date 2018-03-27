@@ -1267,6 +1267,7 @@ SYSCALL L4_Word_t sys_threadcontrol(
 	}
 
 	assert(dest != NULL);
+	assert(dest->space != NULL);
 	struct space *sp = dest->space;
 	void *dest_utcb = NULL;
 	if(!L4_IsNilThread(scheduler)) {
@@ -1275,6 +1276,7 @@ SYSCALL L4_Word_t sys_threadcontrol(
 		dest->scheduler.raw = sched->id;
 	}
 
+	int old_utcb_pos = dest->utcb_pos;
 	if(utcb_loc != ~0ul) {
 		assert(!L4_IsNilThread(spacespec));
 		bool created = dest->utcb_pos < 0;
@@ -1310,7 +1312,7 @@ SYSCALL L4_Word_t sys_threadcontrol(
 	}
 
 	/* activation condition. */
-	if(dest->utcb_pos >= 0 && dest->space != NULL) {
+	if(old_utcb_pos < 0 && dest->utcb_pos >= 0) {
 		if(dest_utcb == NULL) dest_utcb = thread_get_utcb(dest);
 		assert(L4_IsNilThread(pager)
 			|| pager.raw == L4_VREG(dest_utcb, L4_TCR_PAGER));
