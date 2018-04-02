@@ -58,10 +58,8 @@ extern struct rangealloc *ra_create(
 extern void ra_disable_id_0(struct rangealloc *ra);
 
 extern void ra_free(struct rangealloc *ra, void *ptr);
-extern void *ra_alloc(struct rangealloc *ra, long id)
-	__attribute__((malloc));
-extern void *ra_zalloc(struct rangealloc *ra, long id)
-	__attribute__((malloc));
+extern void *ra_alloc(struct rangealloc *ra, long id);
+extern void *ra_zalloc(struct rangealloc *ra, long id);
 
 /* unsafe conversions. use catch_pf() to manage. */
 #define ra_ptr2id(ra, ptr) \
