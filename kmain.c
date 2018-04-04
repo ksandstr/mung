@@ -547,7 +547,7 @@ void kmain(void *bigp, unsigned int magic)
 	struct thread *roottask = NULL;
 	if(roottask_mod.high >= PAGE_SIZE) {
 		roottask = spawn_kernel_server(THREAD_ID(next_user_tno++, 1),
-			&roottask_mod, s0_thread, 16, false);
+			&roottask_mod, s0_thread, size_to_shift(UTCB_SIZE * 1024), false);
 		roottask->pri = 253;
 		roottask->space->flags |= SF_PRIVILEGE;
 		printf("roottask [%#lx .. %#lx] created as %lu:%lu.\n",

@@ -296,7 +296,9 @@ static void copy_tcrs(void *dst, const void *src)
 }
 
 
-/* FIXME: this isn't atomic on reserved_gdt_ptr_seg() failure. */
+/* FIXME: this isn't atomic on reserved_gdt_ptr_seg() failure.
+ * TODO: @excl is a bizarre old wart that could also get removed.
+ */
 int thread_set_utcb(struct thread *t, L4_Word_t start, bool excl)
 {
 	assert(t->space != NULL);
