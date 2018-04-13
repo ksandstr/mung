@@ -296,10 +296,8 @@ static void copy_tcrs(void *dst, const void *src)
 }
 
 
-/* FIXME: this isn't atomic on reserved_gdt_ptr_seg() failure.
- * TODO: @excl is a bizarre old wart that could also get removed.
- */
-int thread_set_utcb(struct thread *t, L4_Word_t start, bool excl)
+/* FIXME: this isn't atomic on reserved_gdt_ptr_seg() failure. */
+int thread_set_utcb(struct thread *t, L4_Word_t start)
 {
 	assert(t->space != NULL);
 	assert(t->utcb_pos < 0 || t->utcb_page != NULL);
@@ -313,7 +311,7 @@ int thread_set_utcb(struct thread *t, L4_Word_t start, bool excl)
 	assert(page < NUM_UTCB_PAGES(sp->utcb_area));
 	struct utcb_page *up = space_get_utcb_page(sp, page);
 	if(up == NULL) return -ENOMEM;
-	if(excl && CHECK_FLAG(up->occmap, 1 << slot)) {
+	if(CHECK_FLAG(up->occmap, 1 << slot)) {
 		/* invalid destination: thread present. */
 		return -EEXIST;
 	}
@@ -1293,7 +1291,7 @@ SYSCALL L4_Word_t sys_threadcontrol(
 			goto bad_utcb;
 		}
 
-		int n = thread_set_utcb(dest, utcb_loc, true);
+		int n = thread_set_utcb(dest, utcb_loc);
 		if(n < 0) {
 			if(n == -ENOMEM) goto out_of_mem;
 			if(n == -EEXIST) goto bad_utcb;

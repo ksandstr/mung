@@ -365,7 +365,7 @@ static COLD struct thread *spawn_kernel_server(
 	t->space = sp;
 	t->scheduler = L4_GlobalId(TID_THREADNUM(t->id), TID_VERSION(t->id));
 	assert(t->utcb_pos < 0 && t->utcb_page == NULL);
-	int n = thread_set_utcb(t, L4_Address(sp->utcb_area), true);
+	int n = thread_set_utcb(t, L4_Address(sp->utcb_area));
 	BUG_ON(n != 0, "thread_set_utcb() failed, n=%d", n);
 	t->ts_len = L4_Never;
 	void *u_base = thread_get_utcb(t);

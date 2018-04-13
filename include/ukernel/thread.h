@@ -208,9 +208,9 @@ extern struct thread *thread_new(thread_id tid);
 
 extern void thread_set_spip(struct thread *t, L4_Word_t sp, L4_Word_t ip);
 /* returns 0 on success; -ENOMEM on out of memory or GDT slots; and -EEXIST
- * iff @excl && @start is already occupied by another thread in @t->space.
+ * when @start is already occupied by another thread in @t->space.
  */
-extern int thread_set_utcb(struct thread *t, L4_Word_t start, bool excl);
+extern int thread_set_utcb(struct thread *t, L4_Word_t start);
 
 /* schedules a stopped thread with a cleared TF_HALT bit. this status only
  * occurs in freshly-created threads.
