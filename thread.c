@@ -1152,13 +1152,10 @@ SYSCALL L4_Word_t sys_threadcontrol(
 
 	struct thread *dest = thread_find(dest_tid.raw);
 	assert(dest == NULL || dest->space != NULL);
+	struct thread *sched = resolve_tid_spec(current->space, scheduler);
 	if(!L4_IsNilThread(spacespec) && dest == NULL) {
 		/* thread creation */
-		if(unlikely(L4_IsNilThread(scheduler))) goto invd_sched;
-
-		/* validate the scheduler before space/thread creation. */
-		struct thread *sched = resolve_tid_spec(current->space, scheduler);
-		if(unlikely(sched == NULL)) goto invd_sched;
+		if(L4_IsNilThread(scheduler) || sched == NULL) goto invd_sched;
 
 		struct space *sp = space_find(spacespec.raw);
 		bool new_space = false;
@@ -1280,7 +1277,6 @@ SYSCALL L4_Word_t sys_threadcontrol(
 	struct space *sp = dest->space;
 	void *dest_utcb = NULL;
 	if(!L4_IsNilThread(scheduler)) {
-		struct thread *sched = resolve_tid_spec(current->space, scheduler);
 		if(unlikely(sched == NULL)) goto invd_sched;
 		dest->scheduler.raw = sched->id;
 	}
