@@ -918,6 +918,45 @@ START_TEST(version_stomp)
 END_TEST
 
 
+/* try to create a thread with an invalid UTCB location, then try to delete
+ * that thread ID, then try to create it again.
+ */
+START_TEST(create_with_invalid_utcb)
+{
+	L4_KernelInterfacePage_t *kip = L4_GetKernelInterface();
+	plan_tests(8);
+	todo_start("known issue");
+
+	/* get a known unused TID. */
+	L4_ThreadId_t dest_tid = xstart_thread(&exit_thread, NULL);
+	L4_Word_t old_utcb = L4_LocalIdOf(dest_tid).raw & ~(L4_UtcbSize(kip) - 1);
+	dest_tid = L4_GlobalIdOf(dest_tid);
+	xjoin_thread(dest_tid);
+	diag("dest_tid=%lu:%lu", L4_ThreadNo(dest_tid), L4_Version(dest_tid));
+
+	ok1(!thr_exists(dest_tid));
+	L4_Word_t res = L4_ThreadControl(dest_tid, L4_Myself(),
+		L4_Myself(), L4_Pager(), (void *)0x666);
+	ok(res != 1, "create w/ utcb=0x666 fails");
+	ok(!thr_exists(dest_tid), "... and didn't create thread");
+	res = L4_ThreadControl(dest_tid, L4_nilthread, L4_nilthread,
+		L4_nilthread, (void *)-1);
+	ok(res == 1, "... so delete looks idempotent");
+
+	ok1(!thr_exists(dest_tid));
+	res = L4_ThreadControl(dest_tid, L4_Myself(),
+		L4_Myself(), L4_Pager(), (void *)old_utcb);
+	if(!ok(res == 1, "create w/ valid utcb")) {
+		diag("ec=%lu", L4_ErrorCode());
+	}
+	ok(thr_exists(dest_tid), "... created thread");
+	res = L4_ThreadControl(dest_tid, L4_nilthread, L4_nilthread,
+		L4_nilthread, (void *)-1);
+	ok(res == 1, "... deleted thread");
+}
+END_TEST
+
+
 /* tcase "exregs" */
 
 /* test that ExchangeRegisters which sets the halt bit causes the read-out
@@ -1950,7 +1989,7 @@ static Suite *thread_suite(void)
 	/* tests on the ThreadControl system call. */
 	{
 		TCase *tc = tcase_create("ctl");
-		tcase_set_fork(tc, false);	/* must be run in privileged space */
+		tcase_set_fork(tc, false);	/* needs wheel bit */
 		tcase_add_test(tc, threadctl_basic);
 		tcase_add_test(tc, privilege);
 		tcase_add_test(tc, thread_id_validity);
@@ -1962,6 +2001,7 @@ static Suite *thread_suite(void)
 		tcase_add_test(tc, modify_self);
 		/* TODO: add modify_other */
 		tcase_add_test(tc, version_stomp);
+		tcase_add_test(tc, create_with_invalid_utcb);
 		suite_add_tcase(s, tc);
 	}
 
