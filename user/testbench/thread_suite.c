@@ -925,7 +925,6 @@ START_TEST(create_with_invalid_utcb)
 {
 	L4_KernelInterfacePage_t *kip = L4_GetKernelInterface();
 	plan_tests(8);
-	todo_start("known issue");
 
 	/* get a known unused TID. */
 	L4_ThreadId_t dest_tid = xstart_thread(&exit_thread, NULL);

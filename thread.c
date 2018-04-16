@@ -1097,7 +1097,9 @@ static void drop_redir_to(struct thread *t)
 }
 
 
-/* FIXME: make this function atomic on error! */
+/* TODO: this doesn't clean up properly in various cases, such as thread
+ * motion between address spaces.
+ */
 SYSCALL L4_Word_t sys_threadcontrol(
 	L4_ThreadId_t dest_tid,
 	L4_ThreadId_t pager,
@@ -1108,6 +1110,7 @@ SYSCALL L4_Word_t sys_threadcontrol(
 	assert(check_thread_module(0));
 
 	L4_Word_t ec = 0, result = 0, utcb_loc = (L4_Word_t)utcblocation;
+	bool created = false;
 	struct thread *current = get_current_thread();
 	void *utcb = thread_get_utcb(current);
 	if(unlikely(!CHECK_FLAG(current->space->flags, SF_PRIVILEGE))) {
@@ -1155,8 +1158,8 @@ SYSCALL L4_Word_t sys_threadcontrol(
 		/* thread creation */
 		if(L4_IsNilThread(scheduler) || sched == NULL) goto invd_sched;
 
-		struct space *sp = space_find(spacespec.raw);
 		bool new_space = false;
+		struct space *sp = space_find(spacespec.raw);
 		if(sp == NULL) {
 			if(spacespec.raw != dest_tid.raw) goto invd_space;
 			sp = space_new();
@@ -1170,6 +1173,7 @@ SYSCALL L4_Word_t sys_threadcontrol(
 			goto out_of_mem;
 		}
 		dest->space = sp;
+		created = true;
 		assert(dest->utcb_pos < 0);
 		assert(dest->utcb_page == NULL);
 
@@ -1255,13 +1259,14 @@ SYSCALL L4_Word_t sys_threadcontrol(
 				dest_tid) == dest);
 		}
 
+		/* TODO: move this up to make failure behave atomically. */
 		if(spacespec.raw != dest_tid.raw
 			&& spacespec.raw != old_tid.raw)
 		{
 			struct space *to_sp = space_find(spacespec.raw);
 			if(unlikely(to_sp == NULL)) goto invd_space;
 			else if(to_sp != dest->space) {
-				/* FIXME: combine this with the TID stomp */
+				/* TODO: implement it */
 				panic("TODO: movement of threads between spaces");
 			}
 		}
@@ -1282,7 +1287,7 @@ SYSCALL L4_Word_t sys_threadcontrol(
 	int old_utcb_pos = dest->utcb_pos;
 	if(utcb_loc != ~0ul) {
 		assert(!L4_IsNilThread(spacespec));
-		bool created = dest->utcb_pos < 0;
+		bool first = dest->utcb_pos < 0;
 
 		/* set utcb_pos. */
 		if(!ADDR_IN_FPAGE(sp->utcb_area, utcb_loc)
@@ -1298,7 +1303,7 @@ SYSCALL L4_Word_t sys_threadcontrol(
 			NOT_REACHED;
 		}
 
-		if(created) {
+		if(first) {
 			dest_utcb = thread_get_utcb(dest);
 			L4_VREG(dest_utcb, L4_TCR_PAGER) = dest->u0.pager.raw;
 			dest->u0.pager = L4_nilthread;
@@ -1343,6 +1348,7 @@ SYSCALL L4_Word_t sys_threadcontrol(
 end:
 	if(result == 0) {
 		L4_VREG(utcb, L4_TCR_ERRORCODE) = ec;
+		if(created) thread_destroy(dest);
 	}
 
 	assert(check_thread_module(0));
