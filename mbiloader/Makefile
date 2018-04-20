@@ -17,7 +17,7 @@ clean:
 
 
 distclean:
-	@rm -rf .deps
+	@rm -rf .deps mbiloader
 
 
 mbiloader: mbiloader.ld crt0.o mbiloader.o plat_pc.o

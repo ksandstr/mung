@@ -17,7 +17,7 @@ clean:
 
 distclean:
 	+@make -C testbench distclean
-	@rm -rf .deps
+	@rm -rf .deps sigma0
 
 
 sigma0: sigma0.ld crt0.o sigma0.o syscalls.o ccan-list.o

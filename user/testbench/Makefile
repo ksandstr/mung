@@ -29,10 +29,6 @@ check:
 	@tests/run_all.pl
 
 
-covercheck:
-	@PERL5OPT=-MDevel::Cover tests/run_all.pl
-
-
 testbench: testbench.ld crt0.o testbench.o dlmalloc.o heap.o \
 		process.o thread.o tsd.o mutex.o \
 		delay.o exn-store.o log.o tap.o test.o util.o ll.o \
