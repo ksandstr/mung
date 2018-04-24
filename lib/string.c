@@ -443,8 +443,8 @@ char *strchr(const char *s, int c)
 char *strrchr(const char *s, int c)
 {
 	const char *t = s + strlen(s);
-	while(*t != c && t != s) t--;
-	return t != s ? (char *)t : NULL;
+	while(*t != c && t > s) t--;
+	return t >= s ? (char *)t : NULL;
 }
 
 
