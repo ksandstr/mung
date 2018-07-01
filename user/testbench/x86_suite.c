@@ -51,6 +51,34 @@ static inline void x86_fpu_setcw(uint16_t new_cw) {
 }
 
 
+static inline uint32_t x86_get_eflags(void) {
+	uint32_t output;
+	__asm__ __volatile__ (
+		"\tpushf\n"
+		"\tpopl %0\n"
+		: "=g" (output));
+	return output;
+}
+
+
+static inline bool x86_irq_is_enabled(void) {
+	uint16_t flags = x86_get_eflags();
+	return CHECK_FLAG(flags, 1 << 9);	/* interrupt enable */
+}
+
+
+static inline void x86_irq_disable(void) {
+	assert(x86_irq_is_enabled());
+	asm volatile ("cli" ::: "memory");
+}
+
+
+static inline void x86_irq_enable(void) {
+	assert(!x86_irq_is_enabled());
+	asm volatile ("sti" ::: "memory");
+}
+
+
 /* a helper thread that sleeps for 2 ms, then alters the FPU rounding mode. */
 static void sleep_and_twiddle(void *param UNUSED)
 {
@@ -262,6 +290,35 @@ START_TEST(rdtsc_smoketest)
 
 	diag("difference=%u cycles", (unsigned)(end - start));
 	diag("backtoback=%u cycles", (unsigned)(mid - start));
+}
+END_TEST
+
+
+/* test whether the cli/sti instructions are allowed, and try to provoke the
+ * kernel into crashing if they are.
+ */
+START_TEST(cli_smoketest)
+{
+	plan_tests(2);
+
+	ok(x86_irq_is_enabled(), "interrupts enabled at start");
+
+	int child = fork();
+	if(child == 0) {
+		diag("child is %lu:%lu",
+			L4_ThreadNo(L4_Myself()), L4_Version(L4_Myself()));
+		x86_irq_disable();
+		const size_t chunk = 16 * 1024;
+		void *ptr = malloc(chunk);
+		memset(ptr, 0x69, chunk);	/* the sex number */
+		free(ptr);
+		x86_irq_enable();
+		exit(0);
+	}
+
+	int st, dead = wait(&st);
+	fail_unless(dead == child);
+	ok(x86_irq_is_enabled(), "interrupts enabled after child");
 }
 END_TEST
 
@@ -768,6 +825,7 @@ static struct Suite *x86_suite(void)
 		tcase_add_test(tc, mmx_smoketest);
 		tcase_add_test(tc, sse_smoketest);
 		tcase_add_test(tc, rdtsc_smoketest);
+		tcase_add_test(tc, cli_smoketest);
 		suite_add_tcase(s, tc);
 	}
 
