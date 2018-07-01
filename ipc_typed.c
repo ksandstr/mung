@@ -197,12 +197,8 @@ static int apply_mapitem(
 	L4_Fpage_t map_page = L4_MapItemSndFpage(*m),
 		wnd = { .raw = L4_VREG(d_base, L4_TCR_BR(0)) & ~0xfUL };
 
-	/* parameter validation */
-	if(unlikely(source->space == dest->space
-		|| L4_IsNilFpage(map_page)
-		|| L4_SizeLog2(map_page) < PAGE_BITS
-		|| L4_IsNilFpage(wnd)))
-	{
+	/* early-exits */
+	if(unlikely(source->space == dest->space || L4_IsNilFpage(wnd))) {
 		goto noop;
 	}
 
@@ -229,6 +225,11 @@ static int apply_mapitem(
 		} else {
 			return apply_io_mapitem(source, s_base, dest, d_base, *m, wnd);
 		}
+	} else if(unlikely(L4_IsNilFpage(map_page)
+		|| L4_SizeLog2(map_page) < PAGE_BITS))
+	{
+		/* further validation */
+		goto noop;
 	}
 
 	bool is_cas = wnd.raw == L4_CompleteAddressSpace.raw;
