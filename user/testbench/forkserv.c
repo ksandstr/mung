@@ -919,6 +919,35 @@ no_reply:
 }
 
 
+static void handle_iopf(
+	L4_ThreadId_t sender,
+	L4_MsgTag_t tag, L4_Fpage_t iofp, L4_Word_t eip)
+{
+	assert(L4_IsIoFpage(iofp));
+#if PF_TRACING
+	printf("forkserv: iofp=%#lx:%#lx, eip=%#lx\n",
+		L4_IoFpagePort(iofp), L4_IoFpageSize(iofp), eip);
+#endif
+
+	/* forward the fault to our own pager. */
+	L4_LoadMR(0, tag.raw);
+	L4_LoadMR(1, iofp.raw);
+	L4_LoadMR(2, 0xdeadbeef);
+	L4_Accept(L4_MapGrantItems(L4_IoFpageLog2(0, 16)));
+	L4_MsgTag_t tt = L4_Call(L4_Pager());
+	if(L4_IpcFailed(tt)) {
+		printf("%s: can't forward iopf: ec=%lu\n", __func__, L4_ErrorCode());
+		return;
+	}
+	L4_Accept(L4_UntypedWordsAcceptor);
+	tt = L4_Reply(sender);
+	if(L4_IpcFailed(tt)) {
+		printf("%s: can't send iopf reply: ec=%lu\n", __func__,
+			L4_ErrorCode());
+	}
+}
+
+
 /* FIXME: threads added like this have an implicit UTCB allocated for them, but
  * use some other UTCB address configured by their actual creator. this may
  * cause fuckups when forkserv's thread creation function is called from the
@@ -1873,6 +1902,17 @@ static void forkserv_dispatch_loop(void)
 		if(status == MUIDL_UNKNOWN_LABEL) {
 			L4_ThreadId_t sender = muidl_get_sender();
 			L4_MsgTag_t tag = muidl_get_tag();
+			/* I/O faults */
+			if((tag.X.label & 0xfff0) == 0xff80
+				&& tag.X.u == 2 && tag.X.t == 0)
+			{
+				L4_Fpage_t iofp;
+				L4_Word_t eip;
+				L4_StoreMR(1, &iofp.raw);
+				L4_StoreMR(2, &eip);
+				handle_iopf(sender, tag, iofp, eip);
+				continue;
+			}
 			switch(tag.X.label) {
 				case FSHELPER_CHOPCHOP_DONE:
 					/* check the queue for our armless friend. */
@@ -1917,8 +1957,8 @@ static void forkserv_dispatch_loop(void)
 				}
 
 				default:
-					printf("forkserv: unknown label %#x from %lu:%lu\n",
-						muidl_get_tag().X.label, L4_ThreadNo(sender),
+					printf("forkserv: unknown label %#lx from %lu:%lu\n",
+						L4_Label(tag), L4_ThreadNo(sender),
 						L4_Version(sender));
 			}
 		} else if(status != 0 && !MUIDL_IS_L4_ERROR(status)) {

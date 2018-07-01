@@ -58,6 +58,10 @@ static L4_Word_t utcb_base;
 
 static void mgr_thread_fn(L4_ThreadId_t first_client);
 
+static void t_end_thread(
+	L4_ThreadId_t tid,
+	int join_status, int exit_status, L4_Word_t result);
+
 
 static L4_ThreadId_t tid_of(int t) {
 	return L4_GlobalId(base_tnum + t, abs(threads[t].version));
@@ -710,14 +714,24 @@ static void t_arch_exn(
 	L4_Word_t *edi_p, L4_Word_t *esi_p, L4_Word_t *ebp_p, L4_Word_t *esp_p,
 	L4_Word_t *ebx_p, L4_Word_t *edx_p, L4_Word_t *ecx_p, L4_Word_t *eax_p)
 {
-	/* no idea what to do. previously we'd halt the sender, so let's do that
-	 * here as well.
-	 */
 	L4_ThreadId_t sender = L4_GlobalIdOf(muidl_get_sender());
-	printf("%s: exception from %lu:%lu; eip=%#lx, eflags=%#lx\n", __func__,
-		L4_ThreadNo(sender), L4_Version(sender),
-		*eip_p, *eflags_p);
-	muidl_raise_no_reply();
+	switch(*exception_no_p >> 1) {
+		case 6:	/* #UD */
+			/* come on a lucky thread and start the hearse
+			 * from now on things indeed are getting worse
+			 */
+			t_end_thread(sender, 1, 6, *eip_p);
+			break;
+
+		default:
+			/* this is the test environment, so halt the thread, whatever, see
+			 * if i care.
+			 */
+			printf("%s: exception_no=%lu from %lu:%lu; eip=%#lx, eflags=%#lx\n",
+				__func__, *exception_no_p, L4_ThreadNo(sender), L4_Version(sender),
+				*eip_p, *eflags_p);
+			muidl_raise_no_reply();
+	}
 }
 
 
@@ -801,12 +815,12 @@ static void t_add_thread(L4_Word_t arg_tid)
 }
 
 
-/* not a service call despite naming. */
+/* not a service call despite naming.
+ * FIXME: rename to end_mgrt() or some such.
+ */
 static void t_end_thread(
 	L4_ThreadId_t tid,
-	int join_status,
-	int exit_status,
-	L4_Word_t result)
+	int join_status, int exit_status, L4_Word_t result)
 {
 	tid = L4_GlobalIdOf(tid);
 	assert(L4_ThreadNo(tid) - base_tnum < MAX_THREADS);

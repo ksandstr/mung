@@ -768,6 +768,14 @@ static void handle_io_fault(struct thread *current, struct x86_exregs *regs)
 
 		/* TODO: string variants */
 
+		/* forbidden instructions reported as though #UD.
+		 * FIXME: there are likely more. test each in x86_suite first.
+		 */
+		case 0xfa:	/* CLI */
+		case 0xfb:	/* STI */
+			return_from_ud(current, regs);
+			assert(false);
+
 		default:
 			/* FIXME: see callsite in isr_exn_gp_bottom() */
 			printf("unknown instruction %#02x in I/O fault at %#lx\n",

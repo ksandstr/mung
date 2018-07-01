@@ -28,6 +28,8 @@
 #define NUM_SEED_PAGES 12
 #define PAGE_BUCKETS 20		/* word size - 12 */
 
+#define PF_TRACING 0
+
 
 struct track_page
 {
@@ -130,7 +132,7 @@ static int sigma0_ipc_loop(void *kip_base)
 				L4_Word_t ip, addr;
 				L4_StoreMR(1, &addr);
 				L4_StoreMR(2, &ip);
-#if 0
+#if PF_TRACING
 				printf("pf in %d:%d (ip %#lx, addr %#lx)\n",
 					from.global.X.thread_no, from.global.X.version,
 					ip, addr);
@@ -197,11 +199,11 @@ static int sigma0_ipc_loop(void *kip_base)
 					printf("I/O fault didn't deliver I/O fpage? what.\n");
 					break;
 				}
-				/* just map it.
-				 *
-				 * TODO: keep track of ports that've been mapped and refuse
-				 * double mappings.
-				 */
+#if PF_TRACING
+				printf("iopf: port=%#lx:%#lx\n",
+					L4_IoFpagePort(iofp), L4_IoFpageSize(iofp));
+#endif
+				/* just map it. FIXME: only map each port once. */
 				L4_MapItem_t map = L4_MapItem(
 					L4_IoFpageLog2(L4_IoFpagePort(iofp),
 						L4_IoFpageSizeLog2(iofp)), 0);

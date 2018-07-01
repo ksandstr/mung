@@ -230,10 +230,10 @@ struct thread *thread_new(thread_id tid)
 
 		/* x86 malarkey for non-kernel threads. */
 		.ctx = {
-			/* IOPL 3 (peon), interrupts enabled. also a reserved, constant
-			 * bit is set.
+			/* IOPL 0 (noblman swerve), interrupts enabled. also a reserved,
+			 * constant bit is set.
 			 */
-			.eflags = (3 << 12) | (1 << 9) | (1 << 1),
+			.eflags = (0 << 12) | (1 << 9) | (1 << 1),
 		},
 	};
 	hook_init(&t->post_exn_call, NULL);

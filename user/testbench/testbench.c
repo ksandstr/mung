@@ -201,12 +201,24 @@ static void forkserv_pager_fn(void *param UNUSED)
 					printf("I/O fault didn't deliver I/O fpage? what.\n");
 					break;
 				}
-				printf("iopf in %#lx, port range %#lx:%lu\n", from.raw,
-					L4_IoFpagePort(iofp), L4_IoFpageSizeLog2(iofp));
-				/* ... could forward the fault to sigma0, but why bother?
-				 * forkserv won't do anything more than a debug printf()
-				 * anyway.
+				assert(L4_IsGlobalId(from));
+				printf("iopf from=%lu:%lu range=%#lx:%#lx\n",
+					L4_ThreadNo(from), L4_Version(from),
+					L4_IoFpagePort(iofp), L4_IoFpageSize(iofp));
+				/* forward the fault to sigma0 because forkserv does the same
+				 * through us.
 				 */
+				L4_LoadMR(0, tag.raw);
+				L4_LoadMR(1, iofp.raw);
+				L4_LoadMR(2, 0xdeadbeef);
+				L4_Accept(L4_MapGrantItems(L4_IoFpageLog2(0, 16)));
+				L4_MsgTag_t tt = L4_Call(L4_Pager());
+				if(L4_IpcFailed(tt)) {
+					printf("can't forward iopf: ec=%lu\n", L4_ErrorCode());
+					break;
+				}
+				L4_Accept(L4_UntypedWordsAcceptor);
+				/* now reply to our client. */
 				L4_Set_Rights(&iofp, L4_FullyAccessible);
 				L4_MapItem_t map = L4_MapItem(iofp, 0);
 				L4_Set_Rights(&map.X.snd_fpage, L4_FullyAccessible);

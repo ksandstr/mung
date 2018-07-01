@@ -369,6 +369,9 @@ int fork(void)
 			goto child_fail;
 		}
 		task_pid = val;
+
+		/* allow #UD handling in the first child thread. */
+		L4_Set_ExceptionHandler(get_mgr_tid());
 	}
 	if(param_ptr != NULL) {
 		free(param_ptr->stk_top);	/* also destroys param */
