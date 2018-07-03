@@ -40,6 +40,7 @@
 /* IDL bits */
 #include "forkserv-defs.h"
 #include "threadmgr-defs.h"
+#include "l4x2-defs.h"
 
 
 #define TPS_SHIFT 6
@@ -777,10 +778,7 @@ static void handle_send_page(L4_Word_t phys_addr, int32_t space_id)
 /* it'd be nice if this part could communicate with the outside world without
  * a pager thread in testbench. such as via a serial port.
  */
-static void handle_pf(
-	L4_Word_t addr,
-	L4_Word_t ip,
-	L4_MapItem_t *page_ptr)
+static void handle_pf(L4_Word_t addr, L4_Word_t ip, L4_MapItem_t *page_ptr)
 {
 	assert(invariants("pf"));
 
@@ -919,31 +917,21 @@ no_reply:
 }
 
 
-static void handle_iopf(
-	L4_ThreadId_t sender,
-	L4_MsgTag_t tag, L4_Fpage_t iofp, L4_Word_t eip)
+static void handle_iopf(L4_Fpage_t iofp, L4_Word_t eip, L4_MapItem_t *ports_out)
 {
 	assert(L4_IsIoFpage(iofp));
+
 #if PF_TRACING
 	printf("forkserv: iofp=%#lx:%#lx, eip=%#lx\n",
 		L4_IoFpagePort(iofp), L4_IoFpageSize(iofp), eip);
 #endif
 
 	/* forward the fault to our own pager. */
-	L4_LoadMR(0, tag.raw);
-	L4_LoadMR(1, iofp.raw);
-	L4_LoadMR(2, 0xdeadbeef);
-	L4_Accept(L4_MapGrantItems(L4_IoFpageLog2(0, 16)));
-	L4_MsgTag_t tt = L4_Call(L4_Pager());
-	if(L4_IpcFailed(tt)) {
-		printf("%s: can't forward iopf: ec=%lu\n", __func__, L4_ErrorCode());
-		return;
-	}
-	L4_Accept(L4_UntypedWordsAcceptor);
-	tt = L4_Reply(sender);
-	if(L4_IpcFailed(tt)) {
-		printf("%s: can't send iopf reply: ec=%lu\n", __func__,
-			L4_ErrorCode());
+	int n = __l4x2_handle_x86_io_fault(L4_IoFpageLog2(0, 16),
+		L4_Pager(), iofp, 0xdeadbeef, ports_out);
+	if(n != 0) {
+		printf("%s: can't forward iopf: n=%d\n", __func__, n);
+		muidl_raise_no_reply();
 	}
 }
 
@@ -1879,6 +1867,7 @@ static void forkserv_dispatch_loop(void)
 {
 	static const struct fork_serv_vtable vtable = {
 		.handle_fault = &handle_pf,
+		.handle_x86_io_fault = &handle_iopf,
 		.as_cfg = &handle_as_cfg,
 		.set_mgr_tid = &handle_set_mgr_tid,
 		.send_page = &handle_send_page,
@@ -1902,17 +1891,6 @@ static void forkserv_dispatch_loop(void)
 		if(status == MUIDL_UNKNOWN_LABEL) {
 			L4_ThreadId_t sender = muidl_get_sender();
 			L4_MsgTag_t tag = muidl_get_tag();
-			/* I/O faults */
-			if((tag.X.label & 0xfff0) == 0xff80
-				&& tag.X.u == 2 && tag.X.t == 0)
-			{
-				L4_Fpage_t iofp;
-				L4_Word_t eip;
-				L4_StoreMR(1, &iofp.raw);
-				L4_StoreMR(2, &eip);
-				handle_iopf(sender, tag, iofp, eip);
-				continue;
-			}
 			switch(tag.X.label) {
 				case FSHELPER_CHOPCHOP_DONE:
 					/* check the queue for our armless friend. */

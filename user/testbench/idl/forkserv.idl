@@ -4,7 +4,7 @@
 
 
 [StubPrefix(forkserv)]
-interface ForkServ: L4X2::FaultHandler
+interface ForkServ: L4X2::FaultHandler, L4X2::X86IOFaultHandler
 {
 	/* forkserv initialization calls. */
 	[Label(0x6143)]		/* "aC" */
