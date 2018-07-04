@@ -58,7 +58,7 @@ static L4_Word_t utcb_base;
 
 static void mgr_thread_fn(L4_ThreadId_t first_client);
 
-static void t_end_thread(
+static void end_mgrt(
 	L4_ThreadId_t tid,
 	int join_status, int exit_status, L4_Word_t result);
 
@@ -356,10 +356,9 @@ static void thread_wrapper(L4_ThreadId_t parent)
 			__func__, L4_ErrorCode());
 		goto end;
 	}
-	L4_Word_t fn, param, tnum;
+	L4_Word_t fn, param;
 	L4_StoreMR(1, &fn);
 	L4_StoreMR(2, &param);
-	L4_StoreMR(3, &tnum);	/* TODO: not used -- remove. */
 
 	(*(void (*)(void *))fn)((void *)param);
 
@@ -517,10 +516,9 @@ L4_ThreadId_t start_thread_long(
 		abort();
 	}
 
-	L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 3 }.raw);
+	L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 2 }.raw);
 	L4_LoadMR(1, (L4_Word_t)fn);
 	L4_LoadMR(2, (L4_Word_t)param);
-	L4_LoadMR(3, t);
 	L4_MsgTag_t tag = L4_Send(tid);
 	if(L4_IpcFailed(tag)) {
 		printf("%s: initial IPC failed, ErrorCode %#lx\n", __func__,
@@ -717,10 +715,16 @@ static void t_arch_exn(
 	L4_ThreadId_t sender = L4_GlobalIdOf(muidl_get_sender());
 	switch(*exception_no_p >> 1) {
 		case 6:	/* #UD */
-			/* come on a lucky thread and start the hearse
+			/* come on lucky thread and start the hearse
 			 * from now on things indeed are getting worse
 			 */
-			t_end_thread(sender, 1, 6, *eip_p);
+			end_mgrt(sender, 1, 6, *eip_p);
+			break;
+
+		/* other fatal exceptions */
+		case 5:	/* #BR */
+		case 4: /* #OF */
+			end_mgrt(sender, 1, 5, *eip_p);
 			break;
 
 		default:
@@ -790,7 +794,7 @@ static bool t_get_preempt_record(
 static void t_add_thread(L4_Word_t arg_tid)
 {
 	L4_ThreadId_t sender;
-	if(muidl_supp_get_context() != NULL		/* false iff called before dispatch */
+	if(muidl_supp_get_context() != NULL	/* false iff called before dispatch */
 		&& (sender = muidl_get_sender(), !L4_IsLocalId(sender))
 		&& !L4_SameThreads(sender, L4_Pager()))
 	{
@@ -815,10 +819,7 @@ static void t_add_thread(L4_Word_t arg_tid)
 }
 
 
-/* not a service call despite naming.
- * FIXME: rename to end_mgrt() or some such.
- */
-static void t_end_thread(
+static void end_mgrt(
 	L4_ThreadId_t tid,
 	int join_status, int exit_status, L4_Word_t result)
 {
@@ -874,7 +875,7 @@ static void t_exit_thread(L4_Word_t result)
 		return;
 	}
 
-	t_end_thread(sender, 0, 0, result);
+	end_mgrt(sender, 0, 0, result);
 
 	muidl_raise_no_reply();
 }
@@ -896,7 +897,7 @@ static void t_segv(L4_Word_t a_dead_tid, L4_Word_t fault_addr)
 #endif
 
 	/* 1 per ThreadMgr join_thread spec */
-	t_end_thread(dead_tid, 1, (fault_addr & ~0xf) | 7, fault_addr);
+	end_mgrt(dead_tid, 1, (fault_addr & ~0xf) | 7, fault_addr);
 }
 
 
