@@ -1,5 +1,5 @@
 #!/usr/bin/perl
-use Modern::Perl;
+use Modern::Perl '2014';
 use Getopt::Long;
 
 # script that, given a sequence of pairs of test name and optional iteration

@@ -1,5 +1,5 @@
 #!/usr/bin/perl
-use Modern::Perl '2015';
+use Modern::Perl '2014';
 
 # script that, given a test name, finds the corresponding test ID for use with
 # the "runonly" testbench syntax.
