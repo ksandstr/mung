@@ -185,8 +185,9 @@ static bool closed_wait(struct thread *waiter, struct thread *sender)
 
 #include <ukernel/invariant.h>
 
+#if 0
 /* check that @at is a valid wakeup time per all conversions of L4_Time_t to
- * raw microseconds.
+ * raw microseconds. FIXME: useful, but not used.
  */
 static bool is_wakeup_valid(uint64_t at)
 {
@@ -201,6 +202,7 @@ static bool is_wakeup_valid(uint64_t at)
 	int64_t diff = at - now;
 	return diff <= (1ull << 31) * 1023;
 }
+#endif
 
 
 static bool check_sched_module(void)
@@ -236,25 +238,6 @@ static bool check_sched_module(void)
 			inv_pop();
 		}
 		inv_pop();
-	}
-
-	/* invariants of sched_chain_timeout wrt current_thread */
-	if(current_thread != NULL && current_thread->u0.partner != NULL) {
-		inv_ok1(is_wakeup_valid(sched_chain_timeout));
-
-		int degree = 1;
-		for(struct thread *t = current_thread->u0.partner;
-			t != NULL;
-			t = t->u0.partner, degree++)
-		{
-			/* FIXME: our vsnprintf() doesn't support long long types. it
-			 * should. once it does, fix this shit.
-			 */
-			inv_push("partner (degree=%d), wakeup=%#lx", degree,
-				(L4_Word_t)t->wakeup_time);
-			inv_ok1(sched_chain_timeout <= t->wakeup_time);
-			inv_pop();
-		}
 	}
 
 	return true;
