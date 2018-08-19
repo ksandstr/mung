@@ -597,8 +597,9 @@ static void kdb_print_string(struct x86_exregs *regs)
 	}
 #endif
 
-	printf("KDB[%lu:%lu|PrintString]: %s\n",
-		TID_THREADNUM(current->id), TID_VERSION(current->id), sbuf);
+	printf("KDB[%lu:%lu|PrintString(%#lx)]: %s\n",
+		TID_THREADNUM(current->id), TID_VERSION(current->id),
+		regs->r.eax, sbuf);
 	check_trace_control(sbuf);
 }
 
