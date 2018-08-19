@@ -38,7 +38,10 @@ extern int atexit(void (*function)(void));
 extern char *getenv(const char *name);
 
 extern int atoi(const char *nptr);
-
+extern long int strtol(const char *nptr, char **endptr, int base);
+extern long long int strtoll(const char *nptr, char **endptr, int base);
+extern unsigned long int strtoul(const char *nptr, char **endptr, int base);
+extern double strtod(const char *nptr, char **endptr);
 
 extern void qsort(
 	void *data, size_t count, size_t size,

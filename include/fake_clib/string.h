@@ -74,10 +74,6 @@ extern char *strpbrk(const char *s, const char *a)
 extern size_t strspn(const char *s, const char *accept);
 extern size_t strcspn(const char *s, const char *reject);
 
-extern long int strtol(const char *nptr, char **endptr, int base);
-extern long long int strtoll(const char *nptr, char **endptr, int base);
-extern double strtod(const char *nptr, char **endptr);
-
 
 #ifdef _GNU_SOURCE
 #if defined(__GNUC__) && defined(__OPTIMIZE__)
