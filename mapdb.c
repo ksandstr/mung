@@ -166,7 +166,7 @@ static struct map_group *group_from_id(long id)
 static inline void ref_set_aux(
 	struct ref_iter *it, struct map_group *g, int newval)
 {
-	assert(newval != 0);	/* use ref_del() instead */
+	assert(AUX_RIGHTS(newval) != 0); /* use ref_del() instead */
 
 	if(it->b_aux != NULL) {
 		it->b_aux[it->bpos] = newval;
@@ -493,20 +493,30 @@ static int probe_add(
 	size_t mask = sz - 1, hash = int_hash(parent_ix);
 	int pos = hash & mask, first = -1;
 	for(int end = pos + min_t(int, sz, MAX_PROBE_DEPTH); pos < end; pos++) {
-		int slot = pos & mask,
-			rights = AUX_RIGHTS(c_aux[slot]);
-		if(rights == 0) {
-			if(shares == NULL) return slot;
-			if(first < 0) first = slot;
-			if(AUX_IS_AVAIL(c_aux[slot])) return first;	/* end of chain */
-		} else if(shares != NULL && AUX_INDEX(c_aux[slot]) == parent_ix) {
+		int slot = pos & mask, aux = c_aux[slot];
+		if(AUX_RIGHTS(aux) == 0) {
+			/* tombstone, bucket, or empty. */
+			if(AUX_UP(aux) == 6) {
+				/* bucket. */
+				if(AUX_INDEX(aux) == parent_ix) {
+					/* ours! */
+					assert(shares == NULL || *n_shares_p == 0);
+					return slot;
+				}
+			} else {
+				assert(aux == AUX_TOMBSTONE || AUX_IS_AVAIL(aux));
+				if(first < 0) first = slot; /* free slot of some kind. */
+				if(AUX_IS_AVAIL(aux)) return first; /* end of chain. */
+			}
+		} else if(shares != NULL && AUX_INDEX(aux) == parent_ix) {
 			assert(*n_shares_p < MAX_SHARE_CHAIN);
 			shares[(*n_shares_p)++] = slot;
 		}
 	}
-	TRACE("%s: max depth hit w/ sz=%u, hash=%#x\n", __func__,
-		(unsigned)sz, (unsigned)hash);
-	return -1;
+	TRACE("%s: max depth hit w/ sz=%u, hash=%#x, first=%d\n",
+		__func__, (unsigned)sz, (unsigned)hash, first);
+	assert(first < 0 || AUX_RIGHTS(c_aux[first]) == 0);
+	return first;
 }
 
 
@@ -525,6 +535,7 @@ static bool grow_children_array(struct map_group *g)
 		old_size = 1u << MG_N_ALLOC_LOG2(g);
 	}
 	unsigned new_size = 1u << new_scale;
+	assert(new_size > old_size);
 
 	uint32_t *new_children = calloc(new_size,
 		sizeof(uint32_t) + sizeof(uint16_t));
@@ -633,7 +644,7 @@ static bool add_child(
 				childref, aux);
 			slot = shares[0];
 			g->children[slot] = ra_ptr2id(child_bucket_ra, b) << 3 | REF_BUCKET;
-			g->c_aux[slot] = AUX(parent_ix, 0, 7);
+			g->c_aux[slot] = AUX_BUCKETPTR(parent_ix);
 		} else if(slot >= 0 && IS_BUCKET(g->children[slot])) {
 			struct child_bucket *b = ra_id2ptr(child_bucket_ra,
 				g->children[slot] >> 3);
@@ -1041,6 +1052,7 @@ static int unmap_page(struct map_group **g_p, int ix, int mode)
 			/* pass immediate and recursive access data up to parent. */
 			pg = get_child(&p_it, &p_aux, g->parent[ix],
 				REF(ix, ra_ptr2id(map_group_ra, g)));
+			assert(AUX_RIGHTS(p_aux) > 0);
 			p_aux |= rwx_seen << 13;
 			ref_set_aux(&p_it, pg, p_aux);
 		}
