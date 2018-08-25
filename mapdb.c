@@ -360,6 +360,7 @@ static bool check_map_group(struct map_group *g)
 	inv_push("g=%p (id=%u): start=%#lx, n_alloc=%d, n_maps=%lu",
 		g, ra_ptr2id(map_group_ra, g),
 		MG_START(g), 1 << MG_N_ALLOC_LOG2(g), MG_N_MAPS(g));
+	inv_ok1(g->parent != NULL);
 	int map_count = 0;
 	for(int i=0; i < PAGES_PER_GROUP; i++) {
 		uint32_t p = g->parent[i];
@@ -376,9 +377,13 @@ static bool check_map_group(struct map_group *g)
 		inv_imply1(IS_ROOT(p),
 			REF_ROOT_RIGHTS(p) > 0 || MG_N_MAPS(g) == 1);
 
+		/* non-root maps should have a corresponding child pointer in the
+		 * indicated parent.
+		 */
 		if(IS_REF(p)) {
 			if(unlikely(catch_pf() != 0)) {
 				inv_ok(false, "caught pagefault on parent group");
+				NOT_REACHED;
 			}
 			struct map_group *pg = ra_id2ptr(map_group_ra, REF_GROUP_ID(p));
 			inv_ok1(is_group_valid(pg));
@@ -393,13 +398,79 @@ static bool check_map_group(struct map_group *g)
 			inv_ok1(AUX_INDEX(aux) == REF_INDEX(p));
 		}
 
-		/* TODO: check child references etc. */
 		inv_pop();
 	}
 	inv_log("map_count=%d", map_count);
 	inv_ok1(map_count == MG_N_MAPS(g));
 
+	inv_push("child array, structural");
+	inv_imply1(MG_N_ALLOC_LOG2(g) == 0,
+		g->children == NULL && g->c_aux == NULL);
+	inv_imply1(MG_N_ALLOC_LOG2(g) > 0,
+		g->children != NULL && g->c_aux != NULL);
 	inv_pop();
+
+	if(MG_N_ALLOC_LOG2(g) > 0) {
+		inv_push("child array, logical");
+		/* each child index may appear either not at all, in at most
+		 * MAX_SHARE_CHAIN simple child pointers, or exactly once as a bucket.
+		 */
+		uint8_t seen[PAGES_PER_GROUP];
+		for(int i=0; i < NUM_ELEMENTS(seen); i++) seen[i] = 0;
+		for(int i=0, lim = 1 << MG_N_ALLOC_LOG2(g); i < lim; i++) {
+			uint32_t c = g->children[i];
+			int ix = AUX_INDEX(g->c_aux[i]);
+			inv_push("c=%#x, aux=%#x, ix=%d", c, g->c_aux[i], ix);
+			inv_imply1(IS_BUCKET(c), !(seen[ix] & 1));
+			inv_ok1(!(seen[ix] & 2));
+			if(IS_REF(c)) seen[ix] |= 1;
+			if(IS_BUCKET(c)) seen[ix] |= 2;
+			inv_pop();
+		}
+		inv_pop();
+
+		inv_push("child array, reference");
+		/* deference all child pointers. they should be valid. */
+		for(int i=0, lim = 1 << MG_N_ALLOC_LOG2(g); i < lim; i++) {
+			uint32_t cv = g->children[i], *c;
+			uint16_t auxv = g->c_aux[i], *aux;
+			inv_log("cv=%#x, auxv=%#x", cv, auxv);
+			int sublim;
+			if(IS_REF(cv)) {
+				c = &cv;
+				aux = &auxv;
+				sublim = 1;
+			} else if(IS_BUCKET(cv)) {
+				struct child_bucket *b = ra_id2ptr(child_bucket_ra, cv >> 3);
+				inv_ok1(b->cs != NULL);
+				inv_ok1(b->aux == (uint16_t *)&b->cs[1 << b->alloc_log2]);
+				c = b->cs;
+				aux = b->aux;
+				sublim = b->max + 1;
+			} else {
+				inv_ok1(IS_NULL(cv) || IS_ROOT(cv) || cv == REF_TOMBSTONE);
+				continue;
+			}
+
+			for(int j=0; j < sublim; j++) {
+				cv = c[j];
+				auxv = aux[j];
+				if(cv == 0) continue;
+				inv_ok1(IS_REF(cv));
+				inv_push("child group id is %u", REF_GROUP_ID(cv));
+				struct map_group *cg = ra_id2ptr(map_group_ra,
+					REF_GROUP_ID(cv));
+				inv_ok1(is_group_valid(cg));
+				int cv_ix = REF_INDEX(cv);
+				inv_ok1(IS_REF(cg->parent[cv_ix]));
+				inv_ok1(REF_INDEX(cg->parent[cv_ix]) == AUX_INDEX(auxv));
+				inv_pop();
+			}
+		}
+		inv_pop();
+	}
+
+	inv_pop();	/* for g=... */
 	return true;
 
 inv_fail:
@@ -970,6 +1041,7 @@ static int unmap_page(struct map_group **g_p, int ix, int mode)
 		"    immediate=%s, recursive=%s, get_access=%s\n",
 		__func__, g, MG_START(g), ix, mode,
 		btos(immediate), btos(recursive), btos(get_access));
+	assert(check_map_group(g));
 
 	struct pt_iter it;
 	pt_iter_init_group(&it, g);
