@@ -21,6 +21,9 @@
 #include "defs.h"
 
 
+#define DEBUG_SERIALIZER 0
+
+
 /* special mutex states */
 #define MTX_UNOWNED ((L4_Word_t)0)
 #define MTX_DEAD (~MTX_UNOWNED)
@@ -329,7 +332,7 @@ retry:
 			goto retry;
 		}
 	}
-#ifdef DEBUG_ME_HARDER
+#if DEBUG_SERIALIZER
 	printf("%s: calling serializer from tid=%lu:%lu (return address %p)\n",
 		__func__, L4_ThreadNo(L4_Myself()), L4_Version(L4_Myself()),
 		__builtin_return_address(0));
@@ -374,7 +377,7 @@ int mtx_unlock(mtx_t *mtx)
 	}
 	assert(CHECK_FLAG(prev, MTX_CONFLICT));
 
-#ifdef DEBUG_ME_HARDER
+#if DEBUG_SERIALIZER
 	printf("%s: calling serializer from tid=%lu:%lu (return address %p)\n",
 		__func__, L4_ThreadNo(L4_Myself()), L4_Version(L4_Myself()),
 		__builtin_return_address(0));
