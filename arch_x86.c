@@ -88,12 +88,8 @@ void call_on_stack(void (*fn)(void *), void *stack)
  */
 int _deep_call(void (*fn)(void *), void *paramptr)
 {
-	void *stkbase;
-	int n = posix_memalign(&stkbase, KERNEL_STACK_SIZE, KERNEL_STACK_SIZE);
-	if(unlikely(n != 0)) {
-		if(n == ENOMEM) return -n;
-		else panic("deep_call() posix_memalign failed");
-	}
+	void *stkbase = aligned_alloc(KERNEL_STACK_SIZE, KERNEL_STACK_SIZE);
+	if(unlikely(stkbase == NULL)) return -ENOMEM;
 
 	uintptr_t top = ((uintptr_t)stkbase + PAGE_SIZE - 16) & ~0xful;
 	/* FIXME: there may be some SSE fail in here. it should get fixed before
