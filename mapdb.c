@@ -916,11 +916,31 @@ int mapdb_map(
 				panic("can't handle reparent_children() failure");
 			}
 
-			struct ref_iter opg_it;
-			int dummy;
-			struct map_group *opg = get_child(&opg_it, &dummy,
-				d_parent, REF(to_ix, g_dst_id));
-			ref_del(&opg_it, opg);
+			if(unlikely(IS_ROOT(d_parent))) {
+				/* check that children exist for this mapping. */
+				bool found = false;
+				struct ref_iter dp_it;
+				for_each_child(&dp_it, g_dst, to_ix, c, aux) {
+					found = true;
+					break;
+				}
+				if(!found) {
+					/* warn a brotha. */
+					printf("WARNING: orphaning root pgid=%u (phys=%#x) in overmap!\n",
+						d_pgid, (uintptr_t)d_pgid << PAGE_BITS);
+					panic("strict mode -- let's not proceed");
+				} else {
+					/* this is so rare that it's usually an error. */
+					printf("NOTE: root pgid=%u was mapped over\n", d_pgid);
+				}
+			} else {
+				assert(IS_REF(d_parent));
+				struct ref_iter opg_it;
+				int dummy;
+				struct map_group *opg = get_child(&opg_it, &dummy,
+					d_parent, REF(to_ix, g_dst_id));
+				ref_del(&opg_it, opg);
+			}
 
 			d_parent = 0;
 			d_rights = 0;
