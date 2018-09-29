@@ -12,7 +12,8 @@
 #include <l4/types.h>
 
 
-typedef _Atomic volatile L4_Word_t mtx_t;
+typedef _Atomic L4_Word_t mtx_t;
+typedef _Atomic L4_Word_t cnd_t;
 
 enum {
 	mtx_plain = 0,
@@ -63,6 +64,18 @@ extern int mtx_lock(mtx_t *mtx);
 extern int mtx_trylock(mtx_t *mtx);
 extern int mtx_timedlock(mtx_t *mtx, const struct timespec *ts);
 extern int mtx_unlock(mtx_t *mtx);
+
+
+/* C11 condition variables. */
+
+extern int cnd_init(cnd_t *cond);
+extern int cnd_signal(cnd_t *cond);
+extern int cnd_broadcast(cnd_t *cond);
+extern int cnd_wait(cnd_t *cond, mtx_t *mutex);
+extern int cnd_timedwait(
+	cnd_t *cond, mtx_t *mutex,
+	const struct timespec *timeo);
+extern void cnd_destroy(cnd_t *cond);
 
 
 /* C11 explicit per-thread data. (not implemented in mung or its testbench
