@@ -166,9 +166,9 @@ _sysenter_top:
 	movl 8(%esi), %esi	# ->kip_area
 	andl $0xfffffc00, %esi	# ... address
 	addl sysexit_epilogs, %esi	# + no-restore epilog offset
-	movl %edi, THREAD_CTX_OFF(%ebx)
-	movl %esi, THREAD_CTX_OFF+32(%ebx)
-	movl %ebp, THREAD_CTX_OFF+12(%ebx)
+	movl %edi, THREAD_CTX_OFF(%ebx)		# caller %edi
+	movl %esi, THREAD_CTX_OFF+32(%ebx)	# caller %eip
+	movl %ebp, THREAD_CTX_OFF+12(%ebx)	# caller %esp
 
 	# utcb validation. compare %edi to utcb_top, and to utcb_area +
 	# UTCB_SIZE / 2.
@@ -192,12 +192,12 @@ _sysenter_top:
 	movzbl irq_defer_active, %ecx
 	test %cl, %cl
 	jz 11f
-	# make caller's frame valid for return_from_irq() nonlocal exit
-	movl %ebp, THREAD_CTX_OFF+12(%ebx)	# caller %esp
-	movl %esi, THREAD_CTX_OFF+32(%ebx)	# caller %eip
+	# stash sys_ipc return value for nonlocal exit
+	movl %eax, THREAD_CTX_OFF+28(%ebx)	# caller %eax
 	pushl %ebx
 	call return_from_irq
 	addl $4, %esp
+	movl THREAD_CTX_OFF+28(%ebx), %eax	# unstash %eax
 
 11:	movl %ebp, %ecx		# OUT caller %esp
 	movl %esi, %edx		# OUT epilog %eip
