@@ -159,7 +159,9 @@ static int sigma0_ipc_loop(void *kip_base)
 			} else if((tag.X.label & 0xfff0) == 0xffa0
 				&& tag.X.t == 0 && (tag.X.u == 2 || tag.X.u == 3))
 			{
-				/* s0 user protocol: fpage request */
+				/* s0 user protocol: fpage request (as from L4_Sigma0_GetPage,
+				 * L4_Sigma0_GetAny)
+				 */
 				L4_Fpage_t req_fpage;
 				L4_Word_t req_attr, req_high;
 				L4_StoreMR(1, &req_fpage.raw);
@@ -284,10 +286,12 @@ static void free_page_range(
 static L4_Fpage_t get_free_page_at(L4_Word_t address, int want_size_log2)
 {
 	assert((address & PAGE_MASK) == 0);
+	assert((address & ((1ul << want_size_log2) - 1)) == 0);
 
 	L4_Fpage_t outfp = L4_FpageLog2(address, want_size_log2);
 	struct track_page *pg = find_page_by_range(outfp);
 	if(pg == NULL) return L4_Nilpage;
+	assert(fpage_overlap(outfp, pg->page));
 
 	L4_Fpage_t page = pg->page;
 	bool dedicated = pg->dedicated, readonly = pg->readonly;
@@ -298,8 +302,13 @@ static L4_Fpage_t get_free_page_at(L4_Word_t address, int want_size_log2)
 	}
 	free_track_page(pg);
 
-	if(L4_Address(page) != address || L4_SizeLog2(page) != want_size_log2) {
-		/* complex case. */
+	if(L4_Address(page) == address && L4_SizeLog2(page) == want_size_log2) {
+		/* simple case; nothing to do. */
+	} else if(L4_SizeLog2(page) < want_size_log2) {
+		/* subpage case. */
+		outfp = page;
+	} else {
+		/* superpage case: release the unwanted part back. */
 		L4_Word_t start_len = address - L4_Address(page);
 		free_page_range(L4_Address(page), start_len, dedicated, readonly);
 		L4_Word_t top = address + (1 << want_size_log2),
