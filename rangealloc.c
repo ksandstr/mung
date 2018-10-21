@@ -181,7 +181,7 @@ static struct ra_page *alloc_ra_page(
 	p->n_free = PAGE_SIZE >> ra->ob_size_log2;
 	p->pgcookie = alloc_vm_page(address);
 	if(fmap_limbs(ra) == 1) {
-		p->freemap[0] = (1u << p->n_free) - 1;
+		p->freemap[0] = p->n_free == 32 ? ~0u : (1 << p->n_free) - 1;
 	} else {
 		for(int i=0; i < fmap_limbs(ra); i++) p->freemap[i] = ~0u;
 	}
