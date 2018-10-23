@@ -132,7 +132,7 @@ extern bool redo_ipc_send_half(struct thread *t);
 /* partner thread of a thread in TS_XFER. accessor of struct ipc_state. */
 extern struct thread *ipc_partner(struct thread *t);
 
-/* used by the scheduler */
+/* used by the scheduler and ExchangeRegisters */
 extern void set_ipc_error_thread(struct thread *t, L4_Word_t ec);
 
 /* used from interrupt delivery */

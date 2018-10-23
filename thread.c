@@ -799,8 +799,7 @@ SYSCALL L4_Word_t sys_exregs(
 			 */
 			if(!post_exn_fail(dest_thread)) {
 				assert(dest_utcb != NULL);
-				L4_VREG(dest_utcb, L4_TCR_ERRORCODE) = 1 | (3 << 1);
-				L4_VREG(dest_utcb, L4_TCR_MR(0)) = (L4_MsgTag_t){ .X.flags = 0x8 }.raw;
+				set_ipc_error_thread(dest_thread, 7);
 			}
 
 			TRACE("%s: aborted receive\n", __func__);
@@ -818,8 +817,7 @@ SYSCALL L4_Word_t sys_exregs(
 			/* "canceled in send phase", but see comment above */
 			if(!post_exn_fail(dest_thread)) {
 				assert(dest_utcb != NULL);
-				L4_VREG(dest_utcb, L4_TCR_ERRORCODE) = 0 | (3 << 1);
-				L4_VREG(dest_utcb, L4_TCR_MR(0)) = (L4_MsgTag_t){ .X.flags = 0x8 }.raw;
+				set_ipc_error_thread(dest_thread, 6);
 			}
 
 			TRACE("%s: aborted send\n", __func__);

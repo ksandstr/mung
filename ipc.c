@@ -279,7 +279,7 @@ static inline void set_ipc_return_thread(struct thread *t, void *utcb)
 }
 
 
-/* exported for sched.c */
+/* exported for sched.c and thread.c */
 void set_ipc_error_thread(struct thread *t, L4_Word_t ec)
 {
 	void *utcb = thread_get_utcb(t);

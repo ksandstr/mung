@@ -1105,7 +1105,6 @@ START_LOOP_TEST(abort_send_or_receive, iter, 0, 7)
 	imply_ok1(sleep_in_recv,
 		CHECK_FLAG(ctl_out, 0x002) && !CHECK_FLAG(ctl_out, 0x004));
 
-	todo_start("WIP");
 	void *retptr = xjoin_thread(sleeper);
 	L4_Clock_t end_time = L4_SystemClock();
 	int diff = end_time.raw - start_time.raw;
