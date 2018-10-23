@@ -1540,13 +1540,16 @@ void receive_and_exit(void *param UNUSED)
 {
 	L4_ThreadId_t sender;
 	L4_MsgTag_t tag = L4_Wait(&sender);
-	IPC_FAIL(tag);
-	sender = L4_GlobalIdOf(sender);
-	diag("%s: got IPC from %lu:%lu (u=%lu, t=%lu)", __func__,
-		L4_ThreadNo(sender), L4_Version(sender),
-		L4_UntypedWords(tag), L4_TypedWords(tag));
-
-	exit_thread("ok!");
+	if(L4_IpcFailed(tag)) {
+		diag("%s: IPC failed, ec=%lu", __func__, L4_ErrorCode());
+		exit_thread("IPC failed!");
+	} else {
+		sender = L4_GlobalIdOf(sender);
+		diag("%s: got IPC from %lu:%lu (u=%lu, t=%lu)", __func__,
+			L4_ThreadNo(sender), L4_Version(sender),
+			L4_UntypedWords(tag), L4_TypedWords(tag));
+		exit_thread("ok!");
+	}
 }
 
 
