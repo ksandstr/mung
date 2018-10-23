@@ -47,7 +47,7 @@ bool thr_exists(L4_ThreadId_t tid) {
 
 static L4_Word_t exregs_ctl(L4_ThreadId_t tid) {
 	L4_Word_t ctl, foo;
-	L4_ThreadId_t dummy, ret = L4_ExchangeRegisters(tid, 0,
+	L4_ThreadId_t dummy, ret = L4_ExchangeRegisters(tid, 0x200,
 		0, 0, 0, 0, L4_nilthread, &ctl, &foo, &foo, &foo, &foo, &dummy);
 	fail_if(L4_IsNilThread(ret), "ec=%#lx", L4_ErrorCode());
 	return ctl;
@@ -1054,6 +1054,77 @@ START_TEST(read_r_bit)
 END_TEST
 
 
+static void send_or_receive_sleeper(void *param_ptr)
+{
+	const L4_Time_t timeout = L4_TimePeriod(10 * 1000);
+	bool sleep_in_recv = (bool)param_ptr;
+	L4_ThreadId_t dummy;
+	L4_MsgTag_t tag;
+	if(sleep_in_recv) {
+		tag = L4_Ipc(L4_nilthread, L4_Myself(),
+			L4_Timeouts(L4_ZeroTime, timeout), &dummy);
+	} else {
+		tag = L4_Ipc(L4_Myself(), L4_nilthread,
+			L4_Timeouts(timeout, L4_ZeroTime), &dummy);
+	}
+	exit_thread((void *)(L4_IpcFailed(tag) ? L4_ErrorCode() : 0));
+}
+
+
+/* test that when a send-phase sleep is aborted by ExchangeRegisters, the
+ * abort-signifying error code is returned, and the same for a receive-phase
+ * sleep.
+ */
+START_LOOP_TEST(abort_send_or_receive, iter, 0, 7)
+{
+	const bool sleep_in_recv = CHECK_FLAG(iter, 1),
+		abort_send = CHECK_FLAG(iter, 2), abort_recv = CHECK_FLAG(iter, 4);
+	diag("sleep_in_recv=%s, abort_send=%s, abort_recv=%s",
+		btos(sleep_in_recv), btos(abort_send), btos(abort_recv));
+	plan_tests(12);
+
+	L4_ThreadId_t sleeper = xstart_thread(&send_or_receive_sleeper,
+		(void *)sleep_in_recv);
+	L4_Clock_t start_time = L4_SystemClock();
+	L4_Sleep(L4_TimePeriod(2 * 1000));
+	iff_ok1(sleep_in_recv, thr_in_recv(sleeper));
+	iff_ok1(!sleep_in_recv, thr_in_send(sleeper));
+
+	L4_Word_t ctl_out, dummy;
+	L4_ThreadId_t dummy_tid, ltid = L4_ExchangeRegisters(sleeper,
+		0x200 | (abort_send ? 0x004 : 0) | (abort_recv ? 0x002 : 0),
+		0, 0, 0, 0, L4_nilthread,
+		&ctl_out, &dummy, &dummy, &dummy, &dummy, &dummy_tid);
+	ok(L4_SameThreads(ltid, sleeper) && L4_IsLocalId(ltid),
+		"exregs return value is valid");
+	/* additionally test that the ctl_out bits reflect the pre-interrupt
+	 * state.
+	 */
+	imply_ok1(!sleep_in_recv,
+		CHECK_FLAG(ctl_out, 0x004) && !CHECK_FLAG(ctl_out, 0x002));
+	imply_ok1(sleep_in_recv,
+		CHECK_FLAG(ctl_out, 0x002) && !CHECK_FLAG(ctl_out, 0x004));
+
+	todo_start("WIP");
+	void *retptr = xjoin_thread(sleeper);
+	L4_Clock_t end_time = L4_SystemClock();
+	int diff = end_time.raw - start_time.raw;
+	L4_Word_t ec = (L4_Word_t)retptr;
+	const bool timeout = (ec & ~1) == 2, aborted = (ec & ~1) == 6;
+	diag("diff=%d, ec=%lu, timeout=%s, aborted=%s", diff, ec,
+		btos(timeout), btos(aborted));
+	ok1(ec != 0);
+	imply_ok1(aborted, diff < 10000);
+	imply_ok1(timeout, diff >= 10000);
+	iff_ok1(sleep_in_recv && abort_recv, ec == 7);
+	iff_ok1(!sleep_in_recv && abort_send, ec == 6);
+	imply_ok(!abort_recv && !abort_send, timeout, "timeout when no abort");
+	imply_ok((sleep_in_recv && !abort_recv) || (!sleep_in_recv && !abort_send),
+		timeout, "timeout when abort doesn't match");
+}
+END_TEST
+
+
 /* actually tests whether a thread is dead, or inactive. these states are
  * entered when e.g. a thread raises an exception but the exception handler
  * thread is either not set or cannot be found.
@@ -2011,6 +2082,7 @@ static Suite *thread_suite(void)
 		tcase_add_test(tc, halt_bit_smoke);
 		tcase_add_test(tc, read_s_bit);
 		tcase_add_test(tc, read_r_bit);
+		tcase_add_test(tc, abort_send_or_receive);
 		suite_add_tcase(s, tc);
 	}
 
