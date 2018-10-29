@@ -1,6 +1,4 @@
 
-#define __KERNEL__
-
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdarg.h>
@@ -295,7 +293,7 @@ static L4_Fpage_t get_free_page_at(L4_Word_t address, int want_size_log2)
 
 	L4_Fpage_t page = pg->page;
 	bool dedicated = pg->dedicated, readonly = pg->readonly;
-	rb_erase(&pg->rb, &pages_by_range);
+	__rb_erase(&pg->rb, &pages_by_range);
 	if(!dedicated) {
 		list_del_from(&free_pages[L4_SizeLog2(pg->page) - PAGE_BITS],
 			&pg->link);
@@ -331,7 +329,7 @@ static L4_Fpage_t get_free_page(int size_log2)
 		if(pg != NULL) break;
 	}
 	if(pg == NULL) return L4_Nilpage;
-	rb_erase(&pg->rb, &pages_by_range);
+	__rb_erase(&pg->rb, &pages_by_range);
 
 	assert(!pg->dedicated);
 	assert(!pg->readonly);
@@ -370,7 +368,7 @@ static struct track_page *insert_track_page_helper(
 static struct track_page *insert_track_page(struct track_page *pg)
 {
 	struct track_page *dupe = insert_track_page_helper(&pages_by_range, pg);
-	if(likely(dupe == NULL)) rb_insert_color(&pg->rb, &pages_by_range);
+	if(likely(dupe == NULL)) __rb_insert_color(&pg->rb, &pages_by_range);
 	return dupe;
 }
 
