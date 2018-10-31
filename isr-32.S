@@ -53,27 +53,21 @@ isr_\name\()_top:
 	.type isr_exn_\name\()_top, @function
 	.align 16,0
 isr_exn_\name\()_top:
-	# what is this rigamarole necessary for? apparently pushal references
-	# data segments (rather than the stack segment replaced by the
-	# interrupt trap), which has the effect of triple-faulting the CPU.
-	# load data segments redundantly to avoid this.
 .ifnb \ecval
 	pushl $\ecval		# used for exceptions that don't push a code
 .endif
-	pushl %eax
+	pushal
+	pushl %ds
+	pushl %es
+	pushl $\vecn
+	pushl %esp
 	movl $(SEG_KERNEL_DATA << 3), %eax
 	movl %eax, %ds
 	movl %eax, %es
-	popl %eax
-	pushal
-	pushl $USER_DATA_SEL	# ds (surrogate)
-	pushl $USER_DATA_SEL	# es (surrogate)
-	pushl $\vecn
-	pushl %esp
 	call isr_exn_\name\()_bottom
-	addl $8, %esp		# pop regs, reason parameters
-	popl %es
+	addl $8, %esp		# pop regs, reason
 	popl %ds
+	popl %es
 	popal
 	addl $4, %esp		# the error code
 	iret
