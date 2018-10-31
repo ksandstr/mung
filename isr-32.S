@@ -23,7 +23,7 @@ isr_\name\()_top:
 	pushl %es
 	pushl $\vecn
 	pushl %esp
-	movl $(SEG_KERNEL_DATA_HIGH << 3), %eax
+	movl $(SEG_KERNEL_DATA << 3), %eax
 	movl %eax, %ds
 	movl %eax, %es
 	call isr_\name\()_bottom
@@ -61,7 +61,7 @@ isr_exn_\name\()_top:
 	pushl $\ecval		# used for exceptions that don't push a code
 .endif
 	pushl %eax
-	movl $(SEG_KERNEL_DATA_HIGH << 3), %eax
+	movl $(SEG_KERNEL_DATA << 3), %eax
 	movl %eax, %ds
 	movl %eax, %es
 	popl %eax
@@ -130,10 +130,10 @@ isr_exn_\name\()_top:
 	.type _sysenter_top, @function
 	.align 16,0
 _sysenter_top:
-	ljmp $(SEG_KERNEL_CODE_HIGH << 3), $1f	# restore kernel %cs, %eip
+	ljmp $(SEG_KERNEL_CODE << 3), $1f	# restore kernel %cs, %eip
 1:	pushl %ebx		# save syscall target
 	andl $0x0fffffff, %esp	# drop back to kernel %ss (EXTRA FUCKY)
-	movl $(SEG_KERNEL_DATA_HIGH << 3), %ebx
+	movl $(SEG_KERNEL_DATA << 3), %ebx
 	movl %ebx, %ss
 	movl %ebx, %ds
 	movl %ebx, %es

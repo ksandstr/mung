@@ -458,7 +458,7 @@ void kmain(void *bigp, unsigned int magic)
 	init_kernel_tss(&kernel_tss);
 
 	setup_gdt();
-	setup_idt(SEG_KERNEL_CODE, 15);		/* XT-PIC, for now */
+	setup_idt(15);		/* XT-PIC, for now */
 
 	/* set MP. clear EMulation, NoExceptions, TaskSwitch. */
 	x86_alter_cr0(~(X86_CR0_EM | X86_CR0_NE | X86_CR0_TS), X86_CR0_MP);
@@ -514,8 +514,7 @@ void kmain(void *bigp, unsigned int magic)
 	x86_irq_disable();
 
 	go_high();
-	setup_gdt();
-	setup_idt(SEG_KERNEL_CODE_HIGH, max_irq);
+	setup_idt(max_irq);
 	setup_cr4();
 
 	/* then unmap the low space by chucking its directories. */

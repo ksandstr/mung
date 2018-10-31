@@ -1,6 +1,7 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+#include <ccan/compiler/compiler.h>
 
 #include <ukernel/gdt.h>
 #include <ukernel/idt.h>
@@ -39,14 +40,14 @@ static inline void set_idt_gate(
 	} while(false)
 
 
-void setup_idt(int code_seg, int max_irq)
+COLD void setup_idt(int max_irq)
 {
 	static struct idt_entry ints[256];
 	for(int i=0; i < 256; i++) {
 		ints[i] = (struct idt_entry){ /* all zero */ };
 	}
 
-	int code_sel = code_seg << 3;
+	const int code_sel = SEG_KERNEL_CODE << 3;
 	EXN_GATE(ints, code_sel, 0, de);	/* divide error */
 	EXN_GATE(ints, code_sel, 3, int3);	/* int3 (KDB) */
 	EXN_GATE(ints, code_sel, 6, ud);	/* invalid opcode */

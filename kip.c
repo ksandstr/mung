@@ -417,7 +417,7 @@ void make_kip(
 		 * CPU, possibly per space if smallspaces are involved
 		 */
 		extern void _sysenter_top();
-		x86_wrmsr(IA32_SYSENTER_CS, SYSENTER_CS_SEG << 3);
+		x86_wrmsr(IA32_SYSENTER_CS, SEG_KERNEL_CODE << 3);
 		x86_wrmsr(IA32_SYSENTER_EIP,
 			(L4_Word_t)&_sysenter_top + KERNEL_SEG_START);
 		x86_wrmsr(IA32_SYSENTER_ESP, kernel_tss.esp0 + KERNEL_SEG_START);

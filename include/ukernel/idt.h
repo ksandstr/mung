@@ -21,7 +21,7 @@ struct idt_entry {
 } __attribute__((packed));
 
 
-extern void setup_idt(int code_seg_id, int max_irq);
+extern void setup_idt(int max_irq);
 
 
 #endif

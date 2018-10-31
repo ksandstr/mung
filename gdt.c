@@ -104,6 +104,7 @@ COLD void dump_gdt(struct gdt_desc *gd)
 COLD void setup_gdt(void)
 {
 	assert(sizeof(struct gdt_entry) == 8);
+	assert(!is_kernel_high);
 
 	for(int i=0; i < NUM_GDT_ENTRIES; i++) {
 		gdt_array[i] = (struct gdt_entry){ };
@@ -116,21 +117,8 @@ COLD void setup_gdt(void)
 	gdt_array[SEG_KERNEL_DATA] = GDT_ENTRY(0, 0xfffff,
 		DESC_A_PRESENT | DESC_A_RW | DESC_A_SYSTEM, DESC_F_SZ | DESC_F_GR);
 	gdt_array[SEG_KERNEL_TSS] = GDT_ENTRY(
-		KERNEL_TO_LINEAR((intptr_t)&kernel_tss), sizeof(kernel_tss),
+		(intptr_t)&kernel_tss, sizeof kernel_tss,
 		DESC_A_PRESENT | DESC_A_TSS_32BIT, DESC_F_SZ);
-
-	/* special segments that make kernel code and data appear at low
-	 * addresses, even though they are at the top of the linear address space.
-	 *
-	 * note that the data segment allows access to userspace pages when
-	 * KERNEL_SEG_START is added to the address with wraparound semantics.
-	 */
-	gdt_array[SEG_KERNEL_CODE_HIGH] = GDT_ENTRY(KERNEL_SEG_START,
-		KERNEL_SEG_SIZE >> PAGE_BITS,
-		DESC_A_PRESENT | DESC_A_RW | DESC_A_SYSTEM | DESC_A_EX,
-		DESC_F_SZ | DESC_F_GR);
-	gdt_array[SEG_KERNEL_DATA_HIGH] = GDT_ENTRY(KERNEL_SEG_START, 0xfffff,
-		DESC_A_PRESENT | DESC_A_RW | DESC_A_SYSTEM, DESC_F_SZ | DESC_F_GR);
 
 	/* user space. */
 	gdt_array[SEG_USER_CODE] = GDT_ENTRY(0, 0xfffff,
@@ -142,7 +130,7 @@ COLD void setup_gdt(void)
 
 	struct gdt_desc gd = {
 		.limit = sizeof(gdt_array) - 1,
-		.base = KERNEL_TO_LINEAR((intptr_t)gdt_array),
+		.base = (intptr_t)gdt_array,
 	};
 
 #if 0
@@ -152,20 +140,18 @@ COLD void setup_gdt(void)
 
 	asm volatile ("lgdt %0" :: "m" (gd) : "memory");
 	asm volatile ("ltr %%ax" :: "a" (SEG_KERNEL_TSS * 8) : "memory");
-	if(!is_kernel_high) {
-		asm volatile (
-			"\tljmp %0,$1f\n"
-			"1:\n"
-			:: "i" (SEG_KERNEL_CODE * 8));
-		asm volatile (
-			"\tmov %0, %%ds\n"
-			"\tmov %0, %%es\n"
-			"\tmov %0, %%fs\n"
-			"\tmov %0, %%gs\n"
-			"\tmov %0, %%ss\n"
-			:: "r" (SEG_KERNEL_DATA * 8)
-			: "memory");
-	}
+	asm volatile (
+		"\tljmp %0,$1f\n"
+		"1:\n"
+		:: "i" (SEG_KERNEL_CODE * 8));
+	asm volatile (
+		"\tmov %0, %%ds\n"
+		"\tmov %0, %%es\n"
+		"\tmov %0, %%fs\n"
+		"\tmov %0, %%gs\n"
+		"\tmov %0, %%ss\n"
+		:: "r" (SEG_KERNEL_DATA * 8)
+		: "memory");
 }
 
 
@@ -175,22 +161,41 @@ COLD void go_high(void)
 		__func__, KERNEL_SEG_START, KERNEL_SEG_START + KERNEL_SEG_SIZE - 1,
 		KERNEL_SEG_SIZE, KERNEL_SEG_SIZE / (1024 * 1024));
 
-	const int data_sel = SEG_KERNEL_DATA_HIGH << 3,
-		code_sel = SEG_KERNEL_CODE_HIGH << 3;
+	assert(!is_kernel_high);
+	assert(!x86_irq_is_enabled());
 
-	kernel_tss.ss0 = data_sel;
+	/* special segments that make kernel code and data appear at low
+	 * addresses, even though they are at the top of the linear address space.
+	 *
+	 * note that the data segment allows access to userspace pages when
+	 * KERNEL_SEG_START is added to the address with wraparound semantics.
+	 */
+	gdt_array[SEG_KERNEL_CODE] = GDT_ENTRY(KERNEL_SEG_START,
+		KERNEL_SEG_SIZE >> PAGE_BITS,
+		DESC_A_PRESENT | DESC_A_RW | DESC_A_SYSTEM | DESC_A_EX,
+		DESC_F_SZ | DESC_F_GR);
+	gdt_array[SEG_KERNEL_DATA] = GDT_ENTRY(KERNEL_SEG_START, 0xfffff,
+		DESC_A_PRESENT | DESC_A_RW | DESC_A_SYSTEM, DESC_F_SZ | DESC_F_GR);
+	gdt_array[SEG_KERNEL_TSS] = GDT_ENTRY(
+		(intptr_t)&kernel_tss + KERNEL_SEG_START, sizeof kernel_tss,
+		DESC_A_PRESENT | DESC_A_TSS_32BIT, DESC_F_SZ);
+
+	struct gdt_desc gd = {
+		.limit = sizeof(gdt_array) - 1,
+		.base = (intptr_t)gdt_array + KERNEL_SEG_START,
+	};
+	asm volatile ("lgdt %0" :: "m" (gd) : "memory");
 	asm volatile (
 		"\tljmp %0,$1f\n"
 		"1:\n"
-		:: "i" (code_sel));
+		:: "i" (SEG_KERNEL_CODE * 8));
 	asm volatile (
 		"\tmov %0, %%ds\n"
 		"\tmov %0, %%es\n"
 		"\tmov %0, %%fs\n"
 		"\tmov %0, %%gs\n"
 		"\tmov %0, %%ss\n"
-		:: "r" (data_sel)
-		: "memory");
+		:: "r" (SEG_KERNEL_DATA * 8) : "memory");
 
 	is_kernel_high = true;		/* the muthafuckin' d-a-e */
 }
