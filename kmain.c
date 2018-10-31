@@ -344,7 +344,7 @@ static void add_mem_to_sigma0(const L4_KernelInterfacePage_t *kip)
 /* NOTE: the resulting first thread is not started. */
 static COLD struct thread *spawn_kernel_server(
 	L4_Word_t thread_id,
-	const L4_KernelRootServer_t *s0,
+	const L4_KernelRootServer_t *mod,
 	struct thread *pager,
 	int utcb_size_log2,
 	bool premap)	/* may only be true while sigma0_space == NULL */
@@ -373,12 +373,12 @@ static COLD struct thread *spawn_kernel_server(
 
 	if(premap) {
 		/* create idempotent mappings of kernel server memory. */
-		assert((s0->low & PAGE_MASK) == 0);
-		assert((s0->high & PAGE_MASK) == 0xfff);
-		add_id_maps(t->space, s0->low, s0->high);
+		assert((mod->low & PAGE_MASK) == 0);
+		assert((mod->high & PAGE_MASK) == 0xfff);
+		add_id_maps(t->space, mod->low, mod->high);
 	}
 
-	thread_set_spip(t, s0->sp, s0->ip);
+	thread_set_spip(t, mod->sp, mod->ip);
 
 	return t;
 }
