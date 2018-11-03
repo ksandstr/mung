@@ -45,7 +45,7 @@ testbench: testbench.ld crt0.o testbench.o dlmalloc.o heap.o \
 	@$(LD) $(LDFLAGS) -static -o $@ -b elf32-i386 -T testbench.ld \
 		$(filter %.o,$^) $(LIBS) \
 		-L $(CFGDIR)/lib -lukernel_util -ll4 \
-		-L /usr/lib32 -lm \
+		-L /usr/lib32 -L /usr/lib/i386-linux-gnu -lm \
 		$(shell gcc $(CFLAGS) -print-libgcc-file-name)
 
 ipc_suite.o: ipc_suite.c ipc-suite-defs.h
