@@ -40,7 +40,11 @@ COLD void __set_trampoline_once(void *tptr, void *fnaddr)
 	*(uint8_t *)tptr = 0xe9;	/* jmp rel32 */
 	*(uint32_t *)(tptr + 1) = (uintptr_t)fnaddr - ((uintptr_t)tptr + 5);
 
-	asm volatile ("clflush (%0)" :: "r" (tptr) : "memory");
+	/* there was a CLFLUSH here, but it was unrelated to cache invalidation
+	 * due to self-modifying code, and only a legal instruction when supported
+	 * by CPUID bits besides. seemingly, x86 invalidates the L1I on data
+	 * write, which is fine.
+	 */
 
 	assert(*(uint8_t *)tptr == 0xe9);
 }
