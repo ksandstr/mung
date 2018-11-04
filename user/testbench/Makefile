@@ -53,7 +53,7 @@ x86_suite.o: x86_suite.c x86-suite-defs.h
 thread.o: thread.c threadmgr-defs.h
 heap.o: heap.c forkserv-defs.h common-defs.h
 benchmark.o: benchmark.c benchmark-defs.h
-testbench.o: testbench.c common-defs.h
+testbench.o: testbench.c common-defs.h forkserv-defs.h
 forkserv.o: forkserv.c forkserv-defs.h threadmgr-defs.h l4x2-defs.h
 
 
