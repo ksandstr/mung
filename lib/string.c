@@ -83,6 +83,9 @@ static inline int until_page(const void *ptr) {
 }
 
 
+/* memcpy_forward() requires that @dst and @src are either disjoint, or that
+ * @dst starts at least a word behind @src.
+ */
 #ifdef __i386__
 /* via uClibc */
 static void *memcpy_forward(void *dst, const void *src, size_t len)
@@ -144,20 +147,38 @@ void *memcpy(void *dst, const void *src, size_t len) {
 
 void *memmove(void *dst, const void *src, size_t len)
 {
-	if(dst + min_t(size_t, len, 32) < src || dst >= src + len
-		|| dst + len < src)
-	{
-		/* strictly forward OK, or no overlap */
+	char tempbuf[256];
+	if(dst >= src + len || dst + min_t(size_t, len, 8) <= src) {
+		/* disjoint, or @dst starts at least a margin before @src. */
 		return memcpy_forward(dst, src, len);
+	} else if(dst > src && dst - src > len / 2) {
+		/* two chunks back to front, no bounce. */
+		size_t distance = dst - src;
+		memcpy_forward(dst + len - distance, src + len - distance, distance);
+		memcpy_forward(dst, src, len - distance);
+	} else if(dst > src && dst - src > sizeof tempbuf) {
+		/* multiple chunks back to front, no bounce. */
+		size_t done = 0, chunk = dst - src;
+		while(done < len) {
+			size_t seg = min_t(size_t, chunk, len - done);
+			assert(done + seg <= len);
+			memcpy_forward(dst + len - done - seg,
+				src + len - done - seg, seg);
+			done += seg;
+		}
 	} else {
-		/* the brute force solution */
-		void *buf = malloc(len);
-		if(buf == NULL) abort();	/* FIXME, somehow */
-		memcpy(buf, src, len);
-		memcpy(dst, buf, len);
-		free(buf);
-		return dst;
+		/* multiple chunks back to front using tempbuf. */
+		size_t done = 0;
+		while(done < len) {
+			size_t seg = min_t(size_t, sizeof tempbuf, len - done);
+			assert(done + seg <= len);
+			memcpy_forward(tempbuf, src + len - done - seg, seg);
+			memcpy_forward(dst + len - done - seg, tempbuf, seg);
+			done += seg;
+		}
 	}
+
+	return dst;
 }
 
 

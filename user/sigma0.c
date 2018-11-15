@@ -515,7 +515,7 @@ void kmem_free_page(void *ptr) {
 }
 
 
-/* linkables for memmove(), strdup() */
+/* for strdup(), which nothing in sigma0 calls */
 void *malloc(size_t n) {
 	abort();
 }
