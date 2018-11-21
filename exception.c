@@ -533,6 +533,8 @@ static void kdb_print_char(struct x86_exregs *regs) {
 
 static void check_trace_control(const char *str)
 {
+/* NDEBUG disables tracing, so trace enable/disable becomes irrelevant. */
+#ifndef NDEBUG
 	static const char *const opts[] = {
 		[TRID_SCHED] = "sched",
 		[TRID_THREAD] = "thread",
@@ -542,8 +544,6 @@ static void check_trace_control(const char *str)
 		[TRID_IRQ] = "irq",
 	};
 
-/* NDEBUG disables tracing, so trace enable/disable becomes irrelevant. */
-#ifndef NDEBUG
 	bool found = false, enable = false;
 	if(strstr(str, "[[mung-trace-enable") != NULL) {
 		found = true;

@@ -1,4 +1,5 @@
 
+#include <stdio.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -968,7 +969,12 @@ int mapdb_map(
 			TRACE("%s: expanding rights from %#x to %#x\n", __func__,
 				d_rights, d_rights | map_rights);
 			struct ref_iter p_it;
-			int aux;
+			/* (get w/ the program, compiler: accessing a potentially
+			 * undefined variable implies that the part where it was assigned
+			 * must have been executed, as it is here, complete w/ an assert
+			 * for the return value.)
+			 */
+			int aux = 0;
 			struct map_group *foo = get_child(&p_it, &aux, d_parent,
 				REF(to_ix, g_dst_id));
 			assert(foo == g_src);
@@ -1132,7 +1138,7 @@ static int unmap_page(struct map_group **g_p, int ix, int mode)
 	/* process access data for the page at hand. */
 	struct ref_iter p_it;
 	struct map_group *pg = NULL;
-	int p_aux;
+	int p_aux = 0;	/* fuck you, gcc. pg != NULL => get_child() set p_aux. */
 	uintptr_t page_addr = MG_START(g) + ix * PAGE_SIZE;
 	if(get_access) {
 		int my = 0, side = 0;
@@ -1310,7 +1316,7 @@ int mapdb_query(
 		rights = REF_ROOT_RIGHTS(p_ref);
 	} else if(IS_REF(p_ref)) {
 		struct ref_iter it;
-		int aux;
+		int aux = 0;
 		get_child(&it, &aux, p_ref, REF(ix, ra_ptr2id(map_group_ra, g)));
 		rights = AUX_RIGHTS(aux);
 	} else {
