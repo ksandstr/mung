@@ -83,56 +83,6 @@ static struct ipc_state *dup_state(struct ipc_state *old_st, size_t st_size)
 }
 
 
-/* string item iterators.
- *
- * TODO: these should be moved into the library for separate unit testing.
- */
-static void stritem_first(
-	struct stritem_iter *it,
-	L4_StringItem_t *si,
-	int n_words)		/* at most this many under @si */
-{
-	assert(L4_IsStringItem(si));
-	assert(n_words >= 0 && n_words < 64);
-
-	it->words = (L4_Word_t *)si;
-	it->hdr = 0;
-	it->sub = 1;
-	it->max = n_words - 1;
-	it->ptr = (uintptr_t)si->X.str.substring_ptr[0];
-	it->len = si->X.string_length;
-}
-
-
-static bool stritem_next(struct stritem_iter *it)
-{
-	if(it->hdr + it->sub > it->max) {
-		/* out of range */
-		return false;
-	}
-
-	L4_StringItem_t *si = (L4_StringItem_t *)&it->words[it->hdr];
-	assert(L4_IsStringItem(si));
-	if(it->sub >= L4_Substrings(si) && !L4_CompoundString(si)) {
-		/* simple string items are the most common. */
-		return false;
-	} else if(it->sub < L4_Substrings(si)) {
-		it->ptr = (uintptr_t)si->X.str.substring_ptr[it->sub++];
-		assert(it->len == si->X.string_length);
-		return true;
-	} else if(L4_CompoundString(si)) {
-		L4_StringItem_t *next = (void *)&si->X.str.substring_ptr[it->sub];
-		it->hdr = next->raw - it->words;
-		it->sub = 0;
-		it->len = next->X.string_length;
-		return stritem_next(it);
-	} else {
-		/* end of compound string. */
-		return false;
-	}
-}
-
-
 /* NOTE: this treats I/O ports as inclusive. this is good enough; exclusive
  * (i.e. refusing to pass ranges that aren't all present) would just be
  * another hassle.

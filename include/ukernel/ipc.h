@@ -154,18 +154,6 @@ extern void *send_pf_ipc(
 
 /* from ipc_typed.c */
 
-struct stritem_iter
-{
-	/* outputs */
-	L4_Word_t ptr, len;
-
-	/* state */
-	L4_Word_t *words;
-	uint8_t hdr, sub;
-	int8_t max;			/* -1 .. 63 */
-};
-
-
 struct fault_peer {
 	L4_Fpage_t *faults;
 	uint16_t num, pos;	/* at most 4M per strxfer = 1024 pages /peer */

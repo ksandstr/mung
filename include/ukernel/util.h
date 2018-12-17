@@ -133,7 +133,30 @@ extern bool is_stack_safe(size_t margin);
 extern void call_on_stack(void (*fn)(void *), void *sp);
 
 
-/* from l4util.c */
+
+
+/* from lib/stritem.c: convenient access to string items. calls to
+ * stritem_{first,next}() set @it->ptr and @it->len to the position of the
+ * respective substring, which must exist for stritem_first() and may not
+ * exist for stritem_next() (signaled by return value).
+ */
+
+struct stritem_iter
+{
+	/* outputs */
+	L4_Word_t ptr, len;
+
+	/* state */
+	L4_Word_t *words;
+	int hdr, sub, max;	/* max ∈ [-1, 64) */
+};
+
+/* at most @n_words under @si */
+extern void stritem_first(
+	struct stritem_iter *it,
+	L4_StringItem_t *si, int n_words);
+extern bool stritem_next(struct stritem_iter *it);
+
 extern size_t stritemlen(L4_StringItem_t *si);
 
 
