@@ -114,6 +114,7 @@ void run_all_tests(void)
 	SUITE(heap);
 	SUITE(memdesc);
 	SUITE(string);
+	SUITE(stritem);
 }
 
 
