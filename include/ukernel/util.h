@@ -9,12 +9,17 @@
 #include <string.h>
 
 #include <ccan/typesafe_cb/typesafe_cb.h>
+#include <ccan/minmax/minmax.h>
+#include <ccan/array_size/array_size.h>
 
 #include <l4/types.h>
 #include <l4/message.h>
 
 
-#define NUM_ELEMENTS(array) (sizeof((array)) / sizeof((array)[0]))
+/* NOTE: NUM_ELEMENTS() is deprecated in favour of CCAN array_size. see
+ * comment for MIN() and MAX(), below.
+ */
+#define NUM_ELEMENTS(array) ARRAY_SIZE((array))
 
 #define CHECK_FLAG(mask, bit) ({ \
 		assert(__builtin_popcount((bit)) == 1); \
@@ -25,8 +30,14 @@
 
 #define PURE __attribute__((pure))
 
-#define MIN(t, a, b) ({ t __a = (a), __b = (b); __a < __b ? (t)__a : (t)__b; })
-#define MAX(t, a, b) ({ t __a = (a), __b = (b); __a > __b ? (t)__a : (t)__b; })
+/* NOTE: MIN() and MAX() are deprecated in favour of CCAN minmax. replacing
+ * them all at once would be too much style churn, so they'll instead be
+ * replaced whenever some nearby code is touched & that this was done
+ * indicated in the changelog.
+ */
+#define MIN(t, a, b) min_t(t, (a), (b))
+#define MAX(t, a, b) max_t(t, (a), (b))
+
 #define SWAP(t, a, b) do { t __tmp = (a); (a) = (b); (b) = __tmp; } while(0)
 
 #define BETWEEN(low, high, x) ((low) <= (x) && (x) <= (high))
@@ -49,7 +60,6 @@
 #define ALIGN_TO_SHIFT(addr, shift) ((addr) & ~((1 << (shift)) - 1))
 #define ALIGN_TO_SIZE(addr, size) ALIGN_TO_SHIFT((addr), size_to_shift((shift)))
 
-/* printf() utility macro */
 #define btos(x) (!!(x) ? "true" : "false")
 
 
@@ -67,10 +77,10 @@
  */
 #define for_page_range(_start, _end, _addr, _sizelog2) \
 	for(L4_Word_t _E = (_end) & ~PAGE_MASK, _A = (_addr) = (_start) & ~PAGE_MASK, \
-			_S = (_sizelog2) = MIN(unsigned, ffsl(_A) - 1, MSB(_E - _A)); \
+			_S = (_sizelog2) = min_t(unsigned, ffsl(_A) - 1, MSB(_E - _A)); \
 		_A < _E; \
 		(_addr) = (_A += (1 << _S)), \
-			(_sizelog2) = _S = MIN(unsigned, ffsl(_A) - 1, MSB(_E - _A)))
+			(_sizelog2) = _S = min_t(unsigned, ffsl(_A) - 1, MSB(_E - _A)))
 
 
 static inline int size_to_shift(size_t size) {
@@ -107,7 +117,7 @@ static inline L4_Time_t point_to_period(L4_Clock_t base, L4_Time_t pt)
 
 static inline bool fpage_overlap(L4_Fpage_t a, L4_Fpage_t b)
 {
-	L4_Word_t mask = ~((1ul << MAX(int, L4_SizeLog2(a), L4_SizeLog2(b))) - 1);
+	L4_Word_t mask = ~((1ul << max_t(int, L4_SizeLog2(a), L4_SizeLog2(b))) - 1);
 	return ((a.raw ^ b.raw) & mask) == 0;
 }
 
