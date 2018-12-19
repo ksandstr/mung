@@ -1,6 +1,7 @@
 
 /* tests concerning the Ipc system call, with the exception of anything
- * related to string transfers (which is tested in string_suite.c instead).
+ * related to string transfers which is broad enough to be tested in
+ * string_suite.c instead.
  */
 
 #include <stdio.h>
@@ -42,7 +43,9 @@ struct helper_ctx
 };
 
 
-/* TODO: this could very well come out one day. */
+/* TODO: this could very well come out one day, but it's complicated because
+ * posix_memalign() was a huge fuckup.
+ */
 static void *alloc_aligned(void **base_p, size_t size, size_t alignment) {
 	assert(POPCOUNT(alignment) == 1);
 	*base_p = aligned_alloc(alignment, size);
@@ -2670,7 +2673,7 @@ END_TEST
 
 /* tcase "lipc" */
 static const L4_Word_t lipc_inputs[] = {
-	0xdeadbeef, 0xcafebabe, 0xdb00b1e5, 0xd00dc0de,
+	0xdeadbeef, 0xcafebabe, 0xab00b1e5, 0xd00dc0de,
 	0x98765432, 0x12345678, 0x7055face, 0xb00760d5,
 };
 
