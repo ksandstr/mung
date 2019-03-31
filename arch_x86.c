@@ -15,23 +15,6 @@
 #include <ukernel/x86.h>
 
 
-uint32_t *x86_get_ptab(struct space *sp, uint32_t page_addr)
-{
-	uint32_t addr = page_addr & ~(PAGE_SIZE * PAGES_PER_GROUP - 1);
-	struct map_group *g = find_group(sp, addr);
-	if(unlikely(g == NULL) || g->ptab_page == NULL) return NULL;
-
-#ifndef NDEBUG
-	uint32_t *pdir_mem = sp->pdirs->vm_addr;
-	if(pdir_mem == NULL) pdir_mem = map_vm_page(sp->pdirs, VM_SYSCALL);
-	uint32_t pde = pdir_mem[page_addr >> 22];
-	assert((pde >> 12) == g->ptab_page->id);
-#endif
-
-	return map_vm_page(g->ptab_page, VM_SYSCALL);
-}
-
-
 int x86_alloc_ptab(struct map_group *g)
 {
 	struct space *sp = g->space;

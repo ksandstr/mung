@@ -156,25 +156,6 @@ static inline void x86_flush_tlbs(void) {
 }
 
 
-/* invalidates a page in the LINEAR (pre-segmentation) ADDRESS SPACE. thus
- * once the kernel is in its own segment, a wrap should be applied to
- * translate from pre-seg to post-seg addresses.
- *
- * (INVLPG is valid since the 80486, and this microkernel won't support the
- * 386, so no specialcasing.)
- */
-static inline void x86_invalidate_page(uintptr_t address)
-{
-	if(likely(is_kernel_high)) {
-		__asm__ __volatile__ ("invlpg (%0)"
-			:: "r" (address - KERNEL_SEG_START)
-			: "memory");
-	} else {
-		x86_flush_tlbs();
-	}
-}
-
-
 static inline void x86_set_eflags(uint32_t mask) {
 	__asm__ __volatile__ (
 		"\tpushf\n"
@@ -395,11 +376,6 @@ static inline void mm_orl(uintptr_t address, uint32_t mask) {
 /* from arch_x86.c (being the True and Proper module for this header to
  * describe)
  */
-
-/* get a pointer to a mapped last-level page table for @ptab_addr in @sp. if
- * none exists, returns NULL. return value is valid until kernel exit.
- */
-extern uint32_t *x86_get_ptab(struct space *sp, uintptr_t ptab_addr);
 
 /* allocate @g->ptab_page and map it. */
 struct map_group;

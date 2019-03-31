@@ -111,7 +111,7 @@ void isr_exn_ud_bottom(struct x86_exregs *regs)
 	/* see if it's a LOCK NOP. (this is why the "syscall" is so slow.) */
 	struct thread *current = get_current_thread();
 	uint8_t buf[2];
-	size_t n = space_memcpy_from(buf, current->space, regs->eip, 2, NULL);
+	size_t n = space_memcpy_from(buf, PTI_SPACE(current->space), regs->eip, 2);
 	if(n == 2 && buf[0] == 0xf0 && buf[1] == 0x90) {
 		/* it is L4_KernelInterface(). */
 		const L4_KernelInterfacePage_t *kip = kip_mem;
@@ -576,8 +576,8 @@ static void kdb_print_string(struct x86_exregs *regs)
 	struct thread *current = get_current_thread();
 
 	char sbuf[512];
-	size_t n = space_memcpy_from(sbuf, current->space, regs->r.eax,
-		sizeof(sbuf), NULL);
+	size_t n = space_memcpy_from(sbuf, PTI_SPACE(current->space),
+		regs->r.eax, sizeof(sbuf));
 	sbuf[MIN(size_t, n, sizeof(sbuf) - 1)] = '\0';
 	int len = strlen(sbuf);
 	assert(len <= n);
@@ -642,7 +642,8 @@ static bool kdb_op(struct x86_exregs *regs)
 		L4_Word_t w[2];
 		uint8_t b[8];
 	} mem;
-	size_t n = space_memcpy_from(mem.b, current->space, regs->eip, 8, NULL);
+	size_t n = space_memcpy_from(mem.b,
+		PTI_SPACE(current->space), regs->eip, 8);
 	if(n < 8) {
 		printf("KDB: can't memcpy 8 bytes from %#lx (got %u)\n",
 			regs->eip, (unsigned)n);
@@ -656,7 +657,7 @@ static bool kdb_op(struct x86_exregs *regs)
 		/* copy out at most 256 bytes of KDB entry string */
 		L4_Word_t strptr = mem.w[1];
 		char strbuf[257];
-		n = space_memcpy_from(strbuf, current->space, strptr, 256, NULL);
+		n = space_memcpy_from(strbuf, PTI_SPACE(current->space), strptr, 256);
 		strbuf[MIN(size_t, n, 256)] = '\0';
 		if(strstarts(strbuf, "mung ") && strends(strbuf, " do nothing")) {
 			printf("#KDB entry ignored\n");
@@ -712,7 +713,8 @@ static void handle_io_fault(struct thread *current, struct x86_exregs *regs)
 	save_user_ex(regs);
 
 	uint8_t insn_buf[16], *insn = insn_buf;
-	size_t n = space_memcpy_from(insn_buf, current->space, regs->eip, 16, NULL);
+	size_t n = space_memcpy_from(insn_buf,
+		PTI_SPACE(current->space), regs->eip, 16);
 	if(n == 0) {
 		printf("can't read instructions at %#lx; stopping thread\n",
 			regs->eip);

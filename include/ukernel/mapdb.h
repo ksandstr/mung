@@ -132,7 +132,7 @@ static inline int mapdb_erase_exempt(struct space *sp, L4_Fpage_t fpage)
 }
 
 
-/* ptab_groups lookup assist for arch_x86.c and space.c . */
+/* ptab_groups lookup assist for ptab_*.c and space.c . */
 extern struct map_group *find_group(struct space *sp, uintptr_t addr);
 
 

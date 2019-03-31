@@ -60,7 +60,7 @@ tags: $(shell find . -iname "*.[ch]" -or -iname "*.p[lm]")
 
 
 ia32-kernel: linker.ld loader.o kmain.o kip.o cpu.o heap.o thread.o \
-		ktest.o trace.o \
+		ktest.o trace.o ptab_32bit.o \
 		sched.o exception.o space.o ipc.o ipc_typed.o mapdb.o arch_x86.o \
 		acpi.o gdt.o idt.o irq.o pic.o apic.o isr.o timer.o context.o \
 		rangealloc.o dlmalloc.o tap.o ccan-htable.o ccan-list.o

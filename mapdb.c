@@ -808,8 +808,7 @@ int mapdb_put(
 	}
 	assert(g_is_new || check_map_group(g));
 
-	struct pt_iter it;
-	pt_iter_init_group(&it, g);
+	pt_iter_t it; pt_iter_init_group(&it, g);
 	int first_ix = (L4_Address(fpage) - MG_START(g)) / PAGE_SIZE;
 	uint32_t parent = REF_ROOT(L4_Rights(fpage))
 		| (is_exempt ? REF_EXEMPT_BIT : 0);
@@ -822,7 +821,6 @@ int mapdb_put(
 		pt_set_page(&it, addr, first_page_id + i, L4_Rights(fpage));
 		g->parent[first_ix + i] = parent;
 	}
-	pt_iter_destroy(&it);
 	assert(check_map_group(g));
 
 	return 0;
@@ -863,7 +861,7 @@ int mapdb_map(
 	L4_Word_t addr = L4_Address(map_page);
 	int n_pages = L4_Size(map_page) / PAGE_SIZE;
 	struct map_group *g_src = find_group(from_space, addr), *g_dst = NULL;
-	struct pt_iter it_dst = { };
+	pt_iter_t it_dst;
 	uintptr_t g_dst_end = 0;
 	int g_dst_id = 0, g_src_id = ra_ptr2id(map_group_ra, g_src);
 	for(int i=0; i < n_pages; i++, addr += PAGE_SIZE, dest_addr += PAGE_SIZE) {
@@ -884,7 +882,6 @@ int mapdb_map(
 			assert(dst_is_new || check_map_group(g_dst));
 			g_dst_end = MG_START(g_dst) + GROUP_SIZE;
 			g_dst_id = ra_ptr2id(map_group_ra, g_dst);
-			if(i > 0) pt_iter_destroy(&it_dst);
 			pt_iter_init_group(&it_dst, g_dst);
 		}
 
@@ -1006,14 +1003,12 @@ int mapdb_map(
 
 		if(kill_dst) {
 			g_dst_end = 0;
-			pt_iter_destroy(&it_dst);
 			destroy_group(g_dst);
 		} else {
 			g_dst->parent[to_ix] = d_parent;
 			assert(check_map_group(g_dst));
 		}
 	}
-	pt_iter_destroy(&it_dst);
 
 	return given;
 }
@@ -1069,8 +1064,7 @@ static int unmap_page(struct map_group **g_p, int ix, int mode)
 		btos(immediate), btos(recursive), btos(get_access));
 	assert(check_map_group(g));
 
-	struct pt_iter it;
-	pt_iter_init_group(&it, g);
+	pt_iter_t it; pt_iter_init_group(&it, g);
 	int rwx_seen = 0;	/* access query accumulator */
 	if(g->children == NULL) recursive = false;
 	bool destroy_g = false;
@@ -1113,7 +1107,7 @@ static int unmap_page(struct map_group **g_p, int ix, int mode)
 				destroy_group(c_grp);
 				aux = 0;
 			} else {
-				struct pt_iter c_it; pt_iter_init_group(&c_it, c_grp);
+				pt_iter_t c_it; pt_iter_init_group(&c_it, c_grp);
 				uintptr_t addr = MG_START(c_grp) + REF_INDEX(c) * PAGE_SIZE;
 				if(remain != 0) {
 					pt_set_rights(&c_it, addr, remain);
@@ -1127,7 +1121,6 @@ static int unmap_page(struct map_group **g_p, int ix, int mode)
 					pt_clear_page(&c_it, addr);
 					aux = 0;
 				}
-				pt_iter_destroy(&c_it);
 			}
 		}
 
@@ -1203,7 +1196,6 @@ static int unmap_page(struct map_group **g_p, int ix, int mode)
 	}
 
 end:
-	pt_iter_destroy(&it);
 	if(destroy_g) {
 		assert(check_map_group(g));
 		destroy_group(g);
@@ -1263,6 +1255,7 @@ int mapdb_unmap(struct space *sp, L4_Fpage_t range, unsigned arg_mode)
 		ix = (L4_Address(range) - MG_START(g)) / PAGE_SIZE,
 		n_pages = L4_Size(range) / PAGE_SIZE;
 	assert(!CHECK_FLAG(mode, UM_CHILD));
+	pt_iter_t g_it; pt_iter_init_group(&g_it, g);
 	for(int i=0; i < n_pages; i++, ix++) {
 		uint32_t p = g->parent[ix];
 		if(likely(IS_REF(p)) || (IS_ROOT(p) && !IS_EXEMPT(p))) {
@@ -1276,9 +1269,7 @@ int mapdb_unmap(struct space *sp, L4_Fpage_t range, unsigned arg_mode)
 				destroy_group(g);
 				g = NULL;
 			} else {
-				struct pt_iter it; pt_iter_init_group(&it, g);
-				pt_clear_page(&it, MG_START(g) + ix * PAGE_SIZE);
-				pt_iter_destroy(&it);
+				pt_clear_page(&g_it, MG_START(g) + ix * PAGE_SIZE);
 				g->parent[ix] = 0;
 				g->addr--;
 				assert(MG_N_MAPS(g) < PAGES_PER_GROUP);
@@ -1304,10 +1295,7 @@ int mapdb_query(
 
 	if(pgid_p != NULL) {
 		/* grab page# under a possible htable_get() cost. */
-		struct pt_iter it;
-		pt_iter_init_group(&it, g);
-		*pgid_p = pt_probe(&it, NULL, NULL, address, false, 0);
-		pt_iter_destroy(&it);
+		*pgid_p = pt_probe(PTI_GROUP(g), NULL, NULL, address, false, 0);
 	}
 
 	int rights, ix = (address - MG_START(g)) >> PAGE_BITS;

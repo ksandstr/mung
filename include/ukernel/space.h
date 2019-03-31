@@ -26,7 +26,7 @@
 
 
 struct thread;
-struct pt_iter;
+union pt_iter_u;
 
 
 /* allocated in space.c's utcb_page_slab, except for kernel_space, where
@@ -122,13 +122,10 @@ extern struct utcb_page *space_get_utcb_page(struct space *sp, uint16_t ppos);
  */
 extern void space_remove_redirector(struct thread *t);
 
-/* pass an initialized iterator on @sp in @sp_iter to utilize a previous page
- * table lookup, or leave NULL.
- */
+/* @sp_iter designates the source space. */
 extern size_t space_memcpy_from(
 	void *dest,
-	struct space *sp, L4_Word_t address, size_t size,
-	struct pt_iter *sp_iter);
+	union pt_iter_u *sp_iter, L4_Word_t address, size_t size);
 
 /* returns false on OOM */
 extern bool space_add_ioperm(struct space *sp, L4_Word_t base_port, int size);

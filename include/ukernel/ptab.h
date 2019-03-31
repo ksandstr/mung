@@ -1,9 +1,6 @@
 
 /* somewhat abstracted access to page table structures. the microkernel will
  * only support exactly one page table format, selected at compile time.
- *
- * prototypes are "static inline" because of dirty preprocessor tricks; see
- * pt_i386.c for example.
  */
 
 #ifndef SEEN_UKERNEL_PTAB_H
@@ -11,9 +8,11 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+#include <alloca.h>
 
 
 struct space;
+struct map_group;
 
 /* the following constants are defined per page table format:
  *
@@ -21,21 +20,45 @@ struct space;
  *   the size and # of bits occupied by the upper-level table entry, i.e. the
  *   one that points to the lowest-level tables. mask includes all lower-order
  *   bits. each page in the upper table contains 1 << width entries.
+ *
+ * FIXME: consider replacing each of those with something cleaner.
  */
 
+#define PT_UPPER_WIDTH 10
+#define PT_UPPER_BITS 22
+#define PT_UPPER_SIZE (1 << PT_UPPER_BITS)
+#define PT_UPPER_MASK (PT_UPPER_SIZE - 1)
 
-/* iteration context. retains metadata pointers for pagetable pages, or
- * address space reservations, or whatever. these are connected to a
- * particular address space and must not be retained across any space_*()
- * call.
+
+/* iteration context for efficient querying in loops. must be provided for
+ * even one-off callsites, but see PTI_SPACE() and PTI_GROUP(). invalidated by
+ * any call to space.c .
  */
-struct pt_iter;
+typedef union pt_iter_u {
+	struct map_group *grp;
+	struct space *sp;
+} pt_iter_t;
 
 
-static inline void pt_iter_init(struct pt_iter *iter, struct space *sp);
-static inline void pt_iter_init_group(
-	struct pt_iter *iter, struct map_group *grp);
-static inline void pt_iter_destroy(struct pt_iter *iter);
+/* initialization. ..._group() dereferences @grp to get its first page table
+ * pointer. there is no destructor.
+ */
+extern void pt_iter_init(pt_iter_t *it, struct space *sp);
+extern void pt_iter_init_group(pt_iter_t *it, struct map_group *grp);
+
+/* temporary iterators backed with alloca(), giving purists something to cry
+ * about.
+ */
+#define PTI_SPACE(sp) \
+	({ pt_iter_t *__it = alloca(sizeof *__it); \
+	   pt_iter_init(__it, (sp)); \
+	   __it; })
+#define PTI_GROUP(grp) \
+	({ pt_iter_t *__it = alloca(sizeof *__it); \
+	   pt_iter_init_group(__it, (grp)); \
+	   __it; })
+
+extern struct space *pti_space(const pt_iter_t *iter);
 
 /* examine a pagetable entry for a given address. returns 0 when not present.
  * if there's a chance that physical page #0 would actually become mapped at
@@ -48,8 +71,8 @@ static inline void pt_iter_destroy(struct pt_iter *iter);
  *
  * if @access_p == NULL, any access masks won't be affected.
  */
-static inline uint32_t pt_probe(
-	struct pt_iter *iter,
+extern uint32_t pt_probe(
+	pt_iter_t *it,
 	int *access_p, int *side_access_p,
 	uintptr_t addr, bool is_up, int below);
 
@@ -63,27 +86,19 @@ static inline uint32_t pt_probe(
  * PT_UPPER_SIZE) & ~PT_UPPER_MASK, i.e. to the start of the next upper-level
  * structure, with equivalent results.
  */
-static inline bool pt_set_page(
-	struct pt_iter *iter,
+extern bool pt_set_page(
+	pt_iter_t *it,
 	uintptr_t addr, uint32_t pgid, int rights);
 
 /* change rights of a page table entry. retains "side", frame number, and
  * access bits.
  */
-static inline void pt_set_rights(
-	struct pt_iter *iter, uintptr_t addr, int rights);
+extern void pt_set_rights(pt_iter_t *it, uintptr_t addr, int rights);
 
 /* clears a page table entry, clearing every field. */
-static inline void pt_clear_page(struct pt_iter *it, uintptr_t addr);
+extern void pt_clear_page(pt_iter_t *it, uintptr_t addr);
 
-static inline bool pt_page_present(struct pt_iter *iter, uintptr_t addr);
-
-
-/* TODO: switch according to pagetable format. */
-#undef IN_PTAB_IMPL
-#define IN_PTAB_IMPL 1
-#include "pt_i386.c"
-#undef IN_PTAB_IMPL
+extern bool pt_page_present(pt_iter_t *it, uintptr_t addr);
 
 
 #endif

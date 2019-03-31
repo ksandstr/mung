@@ -516,22 +516,17 @@ static size_t space_memcpy_from_fast(
 
 size_t space_memcpy_from(
 	void *dest,
-	struct space *sp, L4_Word_t address, size_t size,
-	struct pt_iter *sp_iter)
+	union pt_iter_u *sp_iter, L4_Word_t address, size_t size)
 {
 	if(size == 0) return 0;
 
+	struct space *sp = pti_space(sp_iter);
 	if(sp == current_space) {
 		size_t ret = space_memcpy_from_fast(sp, dest, address, size);
 		if(likely(ret > 0)) return ret;
 	}
 
 	/* the long ungrateful slog */
-	struct pt_iter my_iter;
-	if(sp_iter == NULL) {
-		pt_iter_init(&my_iter, sp);
-		sp_iter = &my_iter;
-	}
 	uintptr_t heap_addr = reserve_heap_page();
 	size_t pos = 0;
 	while(pos < size) {
@@ -548,7 +543,6 @@ size_t space_memcpy_from(
 	}
 	put_supervisor_page(heap_addr, 0);
 	free_heap_page(heap_addr);
-	if(sp_iter == &my_iter) pt_iter_destroy(&my_iter);
 
 	return pos;
 }

@@ -581,7 +581,7 @@ static int copy_interspace_stritem(L4_Fpage_t *fault_p, struct ipc_state *st)
 	assert(st->str_off >= 0);
 
 	struct space *dest_space = st->to->space, *src_space = st->from->space;
-	struct pt_iter dest_space_iter, src_space_iter;
+	pt_iter_t dest_space_iter, src_space_iter;
 	pt_iter_init(&dest_space_iter, dest_space);
 	pt_iter_init(&src_space_iter, src_space);
 	/* this exploits the memcpy_from() fast path under active receive. it's a
@@ -629,8 +629,8 @@ static int copy_interspace_stritem(L4_Fpage_t *fault_p, struct ipc_state *st)
 		assert(d_pos >= 0 && seg >= 0);
 		assert(d_pos + seg <= PAGE_SIZE);
 
-		size_t n = space_memcpy_from((void *)(copy_dst + d_pos), src_space,
-			src_iter->ptr + s_off, seg, &src_space_iter);
+		size_t n = space_memcpy_from((void *)(copy_dst + d_pos),
+			&src_space_iter, src_iter->ptr + s_off, seg);
 		s_off += n;
 		d_off += n;
 		st->str_off += n;
@@ -661,8 +661,6 @@ end:
 	put_supervisor_page(copy_dst, 0);
 	free_heap_page(copy_dst);
 	space_switch(old_space);
-	pt_iter_destroy(&dest_space_iter);
-	pt_iter_destroy(&src_space_iter);
 	return rc;
 
 fault:

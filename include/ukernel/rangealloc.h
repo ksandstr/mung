@@ -69,6 +69,9 @@ extern void *ra_zalloc(struct rangealloc *ra, long id);
 
 extern void *ra_id2ptr_safe(struct rangealloc *ra, long id);
 
+/* is @ptr within @ra? this works for pointers into objects as well. */
+#define ra_has_ptr(ra, ptr) (((uintptr_t)(ptr) & ~(ra)->and_mask) == (ra)->or_mask)
+
 /* iteration over all allocated objects. robust against ra_free() from inside
  * the loop iff htable_del() is robust for htable_iter. (so yes, for now.)
  */

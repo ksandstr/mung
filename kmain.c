@@ -106,6 +106,19 @@ uint64_t ksystemclock(void) {
 }
 
 
+/* TODO: unify with invlpg in ptab_32bit.c, one day */
+static inline void reload_ptab(uintptr_t address)
+{
+	if(likely(is_kernel_high)) {
+		__asm__ __volatile__ ("invlpg (%0)"
+			:: "r" (address - KERNEL_SEG_START)
+			: "memory");
+	} else {
+		x86_flush_tlbs();
+	}
+}
+
+
 void put_supervisor_page(uintptr_t addr, uint32_t page_id)
 {
 	assert(kernel_space != NULL);
@@ -165,10 +178,10 @@ void put_supervisor_page(uintptr_t addr, uint32_t page_id)
 			| PT_PRESENT | PT_RW | PT_GLOBAL;
 	}
 
-	x86_invalidate_page(l_addr);
+	reload_ptab(l_addr);
 	if(unlikely(!is_kernel_high) && addr < KERNEL_SEG_SIZE) {
 		/* invalidate the reflected page as well. */
-		x86_invalidate_page(addr + KERNEL_SEG_START);
+		reload_ptab(addr + KERNEL_SEG_START);
 	}
 
 	if(alloc_next) {
