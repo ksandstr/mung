@@ -49,7 +49,7 @@ a few Perl packages (names from the Debian repository):
 To run the benchmark suite (perhaps with a `-DNDEBUG` somewhere in config.mk),
 use
 
-    mung$ make && TESTBENCH_OPTS="notest=1 bench=1" ./run.sh -nographic
+    mung$ make && TESTBENCH_OPTS="notest=1 bench=1" ./run.sh -display none
 
 Note that this doesn't cause qemu to exit once it's done; the user should
 supply a ctrl-c at the end.
