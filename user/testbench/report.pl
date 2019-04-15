@@ -18,7 +18,9 @@ use Mung::TextReport;
 
 
 my $TOPLEVEL = ".";
--f "$TOPLEVEL/run.sh" || die "can't find run.sh in path `$TOPLEVEL'";
+if(!$ENV{TEST_CMDLINE}) {
+	-f "$TOPLEVEL/run.sh" || die "can't find run.sh in path `$TOPLEVEL'";
+}
 
 $SIG{PIPE} = "IGNORE";		# and smoke it.
 $| = 1;
@@ -38,7 +40,8 @@ my $do_ktest = $ENV{KTEST} || 0;
 push @test_args, (meta => 1) if $do_meta && !$do_ktest;
 push @test_args, (ktest => 1) if $do_ktest;
 
-my $module = Mung::ProcessModule->new(command => './run.sh -display none');
+my $module = Mung::ProcessModule->new(
+	command => $ENV{TEST_CMDLINE} // './run.sh -display none');
 my $sink = Mung::Sink->new(output => Mung::TTYOutput->new);
 my $ctrl = Mung::Ctrl->new(@ctrl_param, sink => $sink);
 $sink->on_complete_fn(sub { $ctrl->completed($_[0], $_[1]->iter); });
