@@ -10,7 +10,7 @@ typedef struct jmp_buf_s {
 	uint32_t regs[6];		/* ebx, esi, edi, ebp, eip, esp */
 } jmp_buf[1];
 
-extern int setjmp(jmp_buf env);
+extern __attribute__((__returns_twice__)) int setjmp(jmp_buf env);
 extern NORETURN void longjmp(jmp_buf env, int val);
 
 
