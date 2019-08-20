@@ -6,7 +6,7 @@
 #include <threads.h>
 
 #include <ccan/str/str.h>
-#include <ccan/crc/crc.h>
+#include <ccan/crc32c/crc32c.h>
 #include <ccan/talloc/talloc.h>
 
 #include <l4/types.h>

@@ -11,7 +11,7 @@
 
 #include <ccan/compiler/compiler.h>
 #include <ccan/hash/hash.h>
-#include <ccan/crc/crc.h>
+#include <ccan/crc32c/crc32c.h>
 #include <ccan/endian/endian.h>
 #include <ccan/talloc/talloc.h>
 

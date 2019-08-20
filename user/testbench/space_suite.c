@@ -11,7 +11,7 @@
 #include <ctype.h>
 
 #include <ccan/compiler/compiler.h>
-#include <ccan/crc/crc.h>
+#include <ccan/crc32c/crc32c.h>
 
 #include <l4/types.h>
 #include <l4/ipc.h>
