@@ -37,20 +37,9 @@ __L4_ProcessorControl:	call __L4__syscall_setup
 __L4__syscall_setup:
 	subl $5, (%esp)			/* return to the same stub */
 	pushal
-/* are we here in state 0? if so, go to state 1 and proceed. */
-	xorl %eax, %eax
-	movl $1, %ecx
-	lock cmpxchgl %ecx, __L4__syscall_spinlock
-	je 3f
-/* if not, wait until state 2 (i.e. other CPU has finished). */
-4:	movl __L4__syscall_spinlock, %eax
-	cmpl $2, %eax
-	je 5f
-	pause
-	jmp 4b
 
-3:	lock
-	nop
+	lock
+	nop		# ia32 magic GetKernelInterface
 	xorl %ecx, %ecx
 	jmp 2f
 1:	movzwl __L4__syscall_table+4(%ecx), %ebx	# ebx = offset index in kip
@@ -64,11 +53,8 @@ __L4__syscall_setup:
 2:	movl __L4__syscall_table(%ecx), %edi	# edi = stub address
 	testl %edi, %edi
 	jne 1b
-/* sync memory writes and indicate completion */
-	movl $1, %eax
-	movl $2, %ecx
-	lock cmpxchgl %ecx, __L4__syscall_spinlock
-5:	popal
+
+	popal
 	ret
 
 
@@ -89,6 +75,3 @@ __L4__syscall_table:
 	ENTRY(ThreadControl, 0xd4)
 	ENTRY(ProcessorControl, 0xd8)
 	.long 0
-
-	.align 64,0
-__L4__syscall_spinlock:	.long 0
