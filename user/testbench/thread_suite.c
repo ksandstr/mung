@@ -956,6 +956,33 @@ START_TEST(create_with_invalid_utcb)
 END_TEST
 
 
+/* create a thread with an UTCB location, the modify that same thread while
+ * specifying the same UTCB location. this should have the same effect as
+ * (void *)-1 for the latter.
+ */
+START_LOOP_TEST(modify_with_same_utcb, iter, 0, 1)
+{
+	const bool wildcard = !!(iter & 1);
+	diag("wildcard=%s", btos(wildcard));
+	plan_tests(1);
+	if(!wildcard) todo_start("known borked");
+
+	L4_KernelInterfacePage_t *kip = L4_GetKernelInterface();
+	L4_ThreadId_t dest_tid = xstart_thread(&exit_thread, NULL);
+	void *utcb = wildcard ? (void *)-1
+		: (void *)(L4_LocalIdOf(dest_tid).raw & ~(L4_UtcbSize(kip) - 1));
+	diag("dest_tid[local]=%#lx, utcb=%p", L4_LocalIdOf(dest_tid).raw, utcb);
+	/* switch scheduler to current thread. */
+	L4_Word_t res = L4_ThreadControl(dest_tid, dest_tid, L4_Myself(),
+		L4_nilthread, utcb), ec = L4_ErrorCode();
+	if(!ok(res != 0, "scheduler-setting ThreadControl")) {
+		diag("ErrorCode=%lu", ec);
+	}
+	xjoin_thread(dest_tid);
+}
+END_TEST
+
+
 /* tcase "exregs" */
 
 /* test that ExchangeRegisters which sets the halt bit causes the read-out
@@ -2074,6 +2101,7 @@ static Suite *thread_suite(void)
 		/* TODO: add modify_other */
 		tcase_add_test(tc, version_stomp);
 		tcase_add_test(tc, create_with_invalid_utcb);
+		tcase_add_test(tc, modify_with_same_utcb);
 		suite_add_tcase(s, tc);
 	}
 
