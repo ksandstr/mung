@@ -965,7 +965,6 @@ START_LOOP_TEST(modify_with_same_utcb, iter, 0, 1)
 	const bool wildcard = !!(iter & 1);
 	diag("wildcard=%s", btos(wildcard));
 	plan_tests(1);
-	if(!wildcard) todo_start("known borked");
 
 	L4_KernelInterfacePage_t *kip = L4_GetKernelInterface();
 	L4_ThreadId_t dest_tid = xstart_thread(&exit_thread, NULL);

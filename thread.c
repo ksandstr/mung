@@ -306,8 +306,9 @@ int thread_set_utcb(struct thread *t, L4_Word_t start)
 
 	struct space *sp = t->space;
 
-	int new_pos = (start - L4_Address(sp->utcb_area)) / UTCB_SIZE,
-		page = new_pos / UTCB_PER_PAGE, slot = new_pos % UTCB_PER_PAGE;
+	int new_pos = (start - L4_Address(sp->utcb_area)) / UTCB_SIZE;
+	if(new_pos == t->utcb_pos) return 0;	/* no effect */
+	int page = new_pos / UTCB_PER_PAGE, slot = new_pos % UTCB_PER_PAGE;
 	assert(page < NUM_UTCB_PAGES(sp->utcb_area));
 	struct utcb_page *up = space_get_utcb_page(sp, page);
 	if(up == NULL) return -ENOMEM;
@@ -327,32 +328,33 @@ int thread_set_utcb(struct thread *t, L4_Word_t start)
 	}
 	assert(t->utcb_ptr_seg == 0);
 
-	if(new_pos != t->utcb_pos) {
-		/* FIXME: allocate old_utcb in the heap & copy TCRs via it to avoid
-		 * the old one vanishing when it's the last in the old UTCB page.
-		 */
-		void *old_utcb = NULL;
-		if(t->utcb_pos >= 0) {
-			old_utcb = thread_get_utcb(t);
-			space_remove_thread(sp, t);
-		}
-		t->utcb_page = up;
-		t->utcb_pos = new_pos;
-		space_add_thread(sp, t);
-		up->occmap &= ~hold_mask;
-
-		int offset = new_pos - (page * UTCB_PER_PAGE);
-		assert(up->pg->vm_addr != NULL);
-		void *utcb_mem = up->pg->vm_addr + offset * UTCB_SIZE;
-		memset(utcb_mem, 0, UTCB_SIZE);
-		if(old_utcb != NULL) {
-			copy_tcrs(utcb_mem + 256, old_utcb);
-		}
-		L4_VREG(utcb_mem + 256, L4_TCR_MYGLOBALID) = t->id;
-		*(L4_Word_t *)(utcb_mem + 256 + TCR_UTCB_PTR * 4) = start + 256;
-
-		assert(thread_get_utcb(t) == utcb_mem + 256);
+	/* TODO: allocate old_utcb in the heap & copy TCRs via it to work around
+	 * the old one vanishing when it's the last in the old UTCB page. then
+	 * remove the hold_mask trickery, which leaves empty utcb pages in the
+	 * tree. (very minor.)
+	 */
+	void *old_utcb = NULL;
+	if(t->utcb_pos >= 0) {
+		old_utcb = thread_get_utcb(t);
+		space_remove_thread(sp, t);
 	}
+	t->utcb_page = up;
+	t->utcb_pos = new_pos;
+	space_add_thread(sp, t);
+	assert(CHECK_FLAG(up->occmap, hold_mask));
+	up->occmap &= ~hold_mask;
+
+	int offset = new_pos - (page * UTCB_PER_PAGE);
+	assert(up->pg->vm_addr != NULL);
+	void *utcb_mem = up->pg->vm_addr + offset * UTCB_SIZE;
+	memset(utcb_mem, 0, UTCB_SIZE);
+	if(old_utcb != NULL) {
+		copy_tcrs(utcb_mem + 256, old_utcb);
+	}
+	L4_VREG(utcb_mem + 256, L4_TCR_MYGLOBALID) = t->id;
+	*(L4_Word_t *)(utcb_mem + 256 + TCR_UTCB_PTR * 4) = start + 256;
+
+	assert(thread_get_utcb(t) == utcb_mem + 256);
 
 	assert(start == L4_Address(sp->utcb_area) + UTCB_SIZE * t->utcb_pos);
 	if(likely(sp != kernel_space)) {
