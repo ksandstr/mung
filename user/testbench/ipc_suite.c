@@ -10,6 +10,9 @@
 #include <stdlib.h>
 #include <stdint.h>
 #include <stdbool.h>
+#include <errno.h>
+#include <sys/types.h>
+#include <sys/wait.h>
 
 #include <ccan/compiler/compiler.h>
 #include <ccan/hash/hash.h>
@@ -1755,6 +1758,91 @@ START_LOOP_TEST(cancel_virtualsender, iter, 0, 15)
 		end_vs_pair(&p);
 		subtest_end();
 	}
+}
+END_TEST
+
+
+/* tests presence and absence of the closed_propagation feature without a
+ * redirector, i.e. whether the microkernel permits or forbids propagation
+ * on the basis of closed wait alone rather than requiring the propagator to
+ * be in the same address space as either the virtual sender or recipient.
+ *
+ * variables:
+ *   - active/passive send in the propagation step
+ */
+START_LOOP_TEST(propagation_on_closed_wait, iter, 0, 1)
+{
+	const bool closed_prop = has_feature("closed_propagation"),
+		active_send = !!(iter & 1);
+	diag("feature: closed_propagation=%s", btos(closed_prop));
+	diag("variable: active_send=%s", btos(active_send));
+	plan_tests(10);
+	if(closed_prop) todo_start("feature reported but not implemented");
+
+	L4_ThreadId_t parent = L4_Myself(), orig, prop;
+	int c_prop = fork_subtest_start("propagator") {
+		L4_LoadMR(0, 0); L4_Send_Timeout(parent, TEST_IPC_DELAY);
+		plan_tests(2);
+		/* receive from anythread, attempt to propagate to parent */
+		L4_ThreadId_t sender;
+		L4_MsgTag_t tag = L4_Wait_Timeout(TEST_IPC_DELAY, &sender);
+		L4_Word_t ec = L4_ErrorCode();
+		skip_start(!ok(L4_IpcSucceeded(tag), "got message"), 1,
+			"no message, ec=%lu", ec)
+		{
+			if(active_send) L4_Sleep(A_SHORT_NAP);
+			tag = (L4_MsgTag_t){ };
+			L4_Set_Propagation(&tag);
+			L4_Set_VirtualSender(sender);
+			L4_LoadMR(0, tag.raw);
+			tag = L4_Send_Timeout(parent, TEST_IPC_DELAY);
+			ec = L4_ErrorCode();
+			if(!ok1(L4_IpcSucceeded(tag))) {
+				diag("ec=%lu", ec);
+			}
+		} skip_end;
+	} fork_subtest_end;
+	L4_MsgTag_t tag = L4_Wait_Timeout(TEST_IPC_DELAY, &prop);
+	fail_if(L4_IpcFailed(tag), "prop sync failed, ec=%lu", L4_ErrorCode());
+
+	int c_orig = fork_subtest_start("originator") {
+		L4_LoadMR(0, 0); L4_Send_Timeout(parent, TEST_IPC_DELAY);
+		plan_tests(1);
+		L4_Set_VirtualSender(L4_nilthread);
+		L4_LoadMR(0, 0);
+		L4_MsgTag_t tag = L4_Call_Timeouts(prop, L4_Never, TEST_IPC_DELAY);
+		/* this one is not in the L4.X2 spec; we'll fill in ActualSender even
+		 * if the returned tag doesn't indicate propagation when a
+		 * propagation-turned receive phase was matched.
+		 */
+		L4_ThreadId_t actual = L4_ActualSender();
+		iff_ok1(L4_IpcSucceeded(tag) && L4_SameThreads(actual, parent),
+			closed_prop);
+	} fork_subtest_end;
+	tag = L4_Wait_Timeout(TEST_IPC_DELAY, &orig);
+	fail_if(L4_IpcFailed(tag), "orig sync failed, ec=%lu", L4_ErrorCode());
+
+	if(!active_send) L4_Sleep(A_SHORT_NAP);
+	L4_Set_VirtualSender(L4_nilthread);
+	L4_ThreadId_t sender;
+	tag = L4_Wait_Timeout(TEST_IPC_DELAY, &sender);
+	L4_ThreadId_t actual = L4_ActualSender();
+	ok1(L4_IpcSucceeded(tag));
+	iff_ok1(L4_IpcPropagated(tag), closed_prop);
+	imply_ok1(L4_IpcPropagated(tag), L4_SameThreads(actual, prop));
+	imply_ok1(closed_prop, L4_SameThreads(sender, orig));
+	imply_ok1(!closed_prop, L4_SameThreads(sender, prop));
+
+	/* send a reply; the propagator won't wait for a reply, but the originator
+	 * will, and furthermore its closed wait will have been turned.
+	 */
+	L4_LoadMR(0, 0);
+	tag = L4_Reply(sender);
+	imply_ok1(closed_prop, L4_IpcSucceeded(tag));
+	imply_ok1(!closed_prop, L4_IpcFailed(tag) && L4_ErrorCode() == 2);
+
+	fork_subtest_ok1(c_prop);
+	fork_subtest_ok1(c_orig);
 }
 END_TEST
 
@@ -3830,6 +3918,7 @@ static Suite *ipc_suite(void)
 		tcase_add_test(tc, propagation_no_turn_fromspec);
 		tcase_add_test(tc, propagation_in_active_receive);
 		tcase_add_test(tc, cancel_virtualsender);
+		tcase_add_test(tc, propagation_on_closed_wait);
 		suite_add_tcase(s, tc);
 	}
 
