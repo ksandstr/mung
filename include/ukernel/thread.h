@@ -38,6 +38,7 @@ typedef L4_Word_t thread_id;
 #define TF_REDIR	0x20 /* has ever been made redirector of any space */
 #define TF_REDIR_WAIT 0x40 /* in SEND_WAIT but redirector blocked */
 #define TF_PREEMPT	0x80 /* sends a preempt exception at reschedule */
+#define TF_FROM_TURN 0x100 /* FromSpec turned by propagation */
 
 /* thread states (<struct thread>.status); see also sched_status_str() */
 #define TS_STOPPED 0
@@ -82,7 +83,7 @@ struct thread
 	 */
 	struct space *space;
 
-	uint8_t flags;
+	uint16_t flags;
 	uint8_t status, pri, sens_pri;
 
 	struct x86_ctx ctx;

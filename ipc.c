@@ -158,6 +158,7 @@ static bool check_ipc_module(void)
 			{ TF_REDIR, "redir" },
 			{ TF_REDIR_WAIT, "redir_wait" },
 			{ TF_PREEMPT, "preempt" },
+			{ TF_FROM_TURN, "from_turn" },
 		};
 		char flagstr[100] = "";
 		size_t flagstrlen = 0;
@@ -179,6 +180,10 @@ static bool check_ipc_module(void)
 			L4_ThreadNo(t->ipc_from), L4_Version(t->ipc_from),
 			L4_ThreadNo(t->ipc_to), L4_Version(t->ipc_to));
 		inv_log("  ->flags={%s}, ->status=%s", flagstr, sched_status_str(t));
+
+		/* TF_FROM_TURN should only ever be set in receive-phase states. */
+		inv_imply1(t->flags & TF_FROM_TURN,
+			t->status == TS_RECV_WAIT || t->status == TS_R_RECV);
 
 		/* string transfers that're waiting for either the other thread's
 		 * pagefaults, or for the transfer to proceed via scheduling.
@@ -642,6 +647,7 @@ void cancel_ipc_from(struct thread *t)
 		if(in_recv_wait(t)) {
 			remove_recv_wait(t);
 			t->status = 0x42;	/* a dummy */
+			t->flags &= ~TF_FROM_TURN;
 			assert(!in_recv_wait(t));
 		}
 	}
@@ -768,6 +774,8 @@ static bool ipc_send_half(
 		/* FIXME: also check interrupt propagation */
 		if(vs != NULL && (self->space == vs->space
 			|| self->space == dest->space
+			|| (vs->ipc_from.raw == self_id.raw
+				&& (vs->status == TS_R_RECV || vs->status == TS_RECV_WAIT))
 			|| has_redir_chain(vs, self)))
 		{
 			sender = vs;
@@ -898,9 +906,10 @@ static bool ipc_send_half(
 		}
 		assert(!redirected || saved_dest != NULL);
 
+		/* simplify the recv_wait/r_recv difference */
 		if(in_recv_wait(dest)) {
 			remove_recv_wait(dest);
-			dest->status = TS_R_RECV;	/* a more curiouser dummy */
+			dest->status = TS_R_RECV;
 			assert(!in_recv_wait(dest));
 		}
 
@@ -945,7 +954,7 @@ static bool ipc_send_half(
 				L4_VREG(dest_utcb, L4_TCR_VA_SENDER) = tid_return(dest,
 					self).raw;
 
-				/* turn a closed FromSpec when applicable */
+				/* turn VirtualSender's closed-waiting FromSpec when applicable */
 				if((vs->status == TS_R_RECV || vs->status == TS_RECV_WAIT)
 					&& (vs->ipc_from.raw == np_self_id.raw
 						|| (vs->ipc_from.raw == np_self_lid.raw
@@ -953,6 +962,7 @@ static bool ipc_send_half(
 				{
 					bool twiddle = in_recv_wait(vs);
 					if(twiddle) remove_recv_wait(vs);
+					vs->flags |= TF_FROM_TURN;
 					vs->ipc_from.raw = dest->id;
 					if(vs->u0.partner == self) vs->u0.partner = dest;
 					if(twiddle) insert_recv_wait(vs);
@@ -962,6 +972,12 @@ static bool ipc_send_half(
 				assert(L4_IpcRedirected(*tag));
 				L4_VREG(dest_utcb, L4_TCR_INTENDEDRECEIVER) = tid_return(
 					dest, saved_dest).raw;
+			}
+			if(dest->flags & TF_FROM_TURN) {
+				dest->flags &= ~TF_FROM_TURN;
+				L4_VREG(dest_utcb, L4_TCR_VA_SENDER) = tid_return(dest, self).raw;
+				TRACE("%s: ActualSender set for turned FromSpec in act.send.\n",
+					__func__);
 			}
 			dest->ipc_from = tid_return(dest, sender);
 			set_ipc_return_thread(dest, dest_utcb);
@@ -975,6 +991,8 @@ static bool ipc_send_half(
 			assert(dest->ipc == NULL
 				|| dest->ipc->xferto_at == 0
 				|| dest->ipc->xferto_at > ksystemclock());
+
+			dest->flags &= ~TF_FROM_TURN;
 		}
 
 		return true;
@@ -1710,13 +1728,40 @@ bool ipc_recv_half(struct thread *self, void *self_utcb)
 		/* whodunnit */
 		self->ipc_from = send_tid;
 		L4_MsgTag_t *tag = (L4_MsgTag_t *)&L4_VREG(self_utcb, L4_TCR_MR(0));
+		/* propagated sender? */
 		if(L4_IpcPropagated(*tag)) {
 			TRACE("%s: propagated to %lu:%lu from %lu:%lu as %lu:%lu\n",
 				__func__, TID_THREADNUM(self->id), TID_VERSION(self->id),
 				TID_THREADNUM(from->id), TID_VERSION(from->id),
 				L4_ThreadNo(self->ipc_from), L4_Version(self->ipc_from));
 			L4_VREG(self_utcb, L4_TCR_VA_SENDER) = tid_return(self, from).raw;
+
+			/* turn VirtualSender's closed-waiting FromSpec when
+			 * applicable
+			 */
+			struct thread *vs = get_tcr_thread(from,
+				from_utcb, L4_TCR_VA_SENDER);
+			if(likely(vs != NULL) /* (vregs are user writable in wait) */
+				&& (vs->status == TS_R_RECV || vs->status == TS_RECV_WAIT)
+				&& (vs->ipc_from.raw == from->id
+					|| (vs->space == from->space
+						&& vs->ipc_from.raw == get_local_id(from).raw)))
+			{
+				bool twiddle = in_recv_wait(vs);
+				if(twiddle) remove_recv_wait(vs);
+				vs->flags |= TF_FROM_TURN;
+				vs->ipc_from.raw = self->id;
+				if(vs->u0.partner == from) vs->u0.partner = self;
+				if(twiddle) insert_recv_wait(vs);
+			}
 		}
+		if(self->flags & TF_FROM_TURN) {
+			self->flags &= ~TF_FROM_TURN;
+			L4_VREG(self_utcb, L4_TCR_VA_SENDER) = tid_return(self, from).raw;
+			TRACE("%s: ActualSender set for turned FromSpec in act.recv.\n",
+				__func__);
+		}
+		/* redirection? */
 		if(r_sender != NULL) {
 			tag->X.flags |= 0x2;	/* redirection */
 			L4_VREG(self_utcb, L4_TCR_INTENDEDRECEIVER) = r_sender->ipc_to.raw;
@@ -1730,7 +1775,7 @@ bool ipc_recv_half(struct thread *self, void *self_utcb)
 			}
 		}
 
-		/* userspace IPC state transition to the receive phase. */
+		/* update sender's scheduling status */
 		if(L4_IsNilThread(from->ipc_from)) {
 			/* no receive phase. */
 			TRACE("%s: ... sender becomes ready.\n", __func__);
@@ -1747,6 +1792,7 @@ bool ipc_recv_half(struct thread *self, void *self_utcb)
 			sq_update_thread(from);
 			might_preempt(from);
 		}
+
 		if(!post_exn_ok(self, from)) {
 			/* post-IPC exception hooks may start another IPC operation right
 			 * away, so check this only in the ordinary path.
@@ -1754,6 +1800,7 @@ bool ipc_recv_half(struct thread *self, void *self_utcb)
 			assert(IS_READY(from->status)
 				|| (CHECK_FLAG(from->flags, TF_HALT)
 					&& from->status == TS_STOPPED));
+
 			set_ipc_return_regs(&self->ctx.r, self, self_utcb);
 			TRACE("%s: ... receiver was in userspace\n", __func__);
 		} else {
@@ -1793,6 +1840,7 @@ SYSCALL L4_Word_t sys_ipc(
 	TRACE("%s: current=%lu:%lu, to=%#lx, fromspec=%#lx, timeouts=%#lx, mr0=%#lx\n",
 		__func__, TID_THREADNUM(current->id), TID_VERSION(current->id),
 		to.raw, from.raw, timeouts, mr0);
+
 	/* TODO: carry mr0 into ipc_send_half() explicitly */
 	L4_VREG(utcb, L4_TCR_MR(0)) = mr0;
 

@@ -1777,7 +1777,6 @@ START_LOOP_TEST(propagation_on_closed_wait, iter, 0, 1)
 	diag("feature: closed_propagation=%s", btos(closed_prop));
 	diag("variable: active_send=%s", btos(active_send));
 	plan_tests(10);
-	if(closed_prop) todo_start("feature reported but not implemented");
 
 	L4_ThreadId_t parent = L4_Myself(), orig, prop;
 	int c_prop = fork_subtest_start("propagator") {

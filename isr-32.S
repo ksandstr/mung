@@ -117,7 +117,7 @@ isr_exn_\name\()_top:
 # instructions.
 
 #define UTCB_SIZE 512		/* FIXME: get this from an asm header */
-#define THREAD_CTX_OFF (4 + 4)
+#define THREAD_CTX_OFF (4 + 2 + 3)
 #define THREAD_FLAGS_OFF 4
 
 	.global _sysenter_top
@@ -176,9 +176,9 @@ _sysenter_top:
 	jb 3f			# if %edi < %ebx, halt & schedule
 
 	movl current_thread, %ebx
-	orb $0x10, THREAD_FLAGS_OFF(%ebx)	# set TF_SYSCALL
+	orw $0x10, THREAD_FLAGS_OFF(%ebx)	# set TF_SYSCALL
 	call sys_ipc		# OUT %eax=retval
-	andb $0xef, THREAD_FLAGS_OFF(%ebx)	# clear TF_SYSCALL
+	andw $0xffef, THREAD_FLAGS_OFF(%ebx)	# clear TF_SYSCALL
 
 	# check for and process interrupts that occurred while IRQ processing
 	# was soft disabled.
@@ -281,7 +281,7 @@ _sysenter_lipc_fast:
 	leal 0x10000000(%edi), %esi
 	pushl %esi		# caller UTCB in kernel space
 	# pass to, fromspec, timeouts as-is
-	orb $0x10, THREAD_FLAGS_OFF(%ebx)	# set TF_SYSCALL
+	orw $0x10, THREAD_FLAGS_OFF(%ebx)	# set TF_SYSCALL
 	call sys_lipc		# OUT %eax=from (retval)
 
 	# we get here because Lipc's fallback to Ipc failed or returned
@@ -291,7 +291,7 @@ _sysenter_lipc_fast:
 	#   %eax = sys_ipc() return value, %ebx = current_thread,
 	#   %ebp = caller %esp,
 	#   %esi = caller UTCB in kernelspace, %edi = caller UTCB in userspace
-	andb $0xef, THREAD_FLAGS_OFF(%ebx)	# clear TF_SYSCALL
+	andw $0xffef, THREAD_FLAGS_OFF(%ebx)	# clear TF_SYSCALL
 
 	# check for and process interrupts that occurred while IRQ processing
 	# was soft disabled.

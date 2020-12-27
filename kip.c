@@ -530,6 +530,7 @@ void make_kip(
 		"zomgwallhax",	/* for tests to discover */
 #endif
 		"holeunmap",	/* mapping empties unmaps pages in destination */
+		"closed_propagation",	/* allow propagation from closed waiter */
 	};
 	for(int i=0; i < NUM_ELEMENTS(features); i++) {
 		int spent = strscpy(mem + kip_pos, features[i],
