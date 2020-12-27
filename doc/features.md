@@ -21,6 +21,16 @@ both are undesirable for a redirector which may pass tens of percent of all
 IPC traffic in the system.
 
 
+closed\_propagation
+===================
+
+The microkernel will permit propagation where otherwise forbidden if the
+virtual sender is in a closed wait to the actual sender. This occurs
+regardless of whether virtual sender and propagator, or virtual sender and
+recipient are in the same address space, or if the propagator is in the
+virtual sender's redirection chain.
+
+
 zomgwallhax
 ===========
 
