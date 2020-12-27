@@ -10,7 +10,7 @@ CFLAGS=-O2 -Wall -march=native -std=gnu99 -m32 \
 	-D_GNU_SOURCE -D__KERNEL__ -DENABLE_SELFTEST \
 	-mno-avx -mno-sse2 -fno-pic -fuse-ld=gold \
 	-fno-builtin -nostdlib \
-	-Wno-frame-address \
+	-Wno-frame-address -Wno-address-of-packed-member \
 	#-DDEBUG_ME_HARDER #-D_L4_DEBUG_ME_HARDER #-DCCAN_LIST_DEBUG
 
 MUIDL:=$(abspath $(MUIDL_DIR)/muidl)
