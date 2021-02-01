@@ -274,9 +274,17 @@ void unref_vm_page(struct page *pg)
 
 
 static bool page_is_available(
-	const L4_KernelConfigurationPage_t *kcp,
+	L4_KernelConfigurationPage_t *kcp,
 	L4_Word_t addr)
 {
+	if((addr & ~PAGE_MASK) == (L4_BootInfo(kcp) & ~PAGE_MASK)) {
+		/* keep the KCP's original BootInfo available. this is super fucky but
+		 * that's the way she goes: another shred of memory for roottask to be
+		 * aware of, or stomp, or whatever.
+		 */
+		return false;
+	}
+
 	struct memdescbuf mdb = {
 		.ptr = (void *)kcp + kcp->MemoryInfo.MemDescPtr,
 		.size = kcp->MemoryInfo.n, .len = kcp->MemoryInfo.n,
@@ -293,22 +301,33 @@ static bool page_is_available(
  * the kernel sbrk() heap will be positioned at the closest 2-MiB mark after
  * the last reserved page.
  */
-void init_kernel_heap(void *kcp_base, uintptr_t first_addr)
+void init_kernel_heap(void *kcp_base, uintptr_t first_addr, size_t total_ram)
 {
-	const L4_KernelConfigurationPage_t *kcp = kcp_base;
+	L4_KernelConfigurationPage_t *kcp = kcp_base;
 
-	/* grab early pages from conventional memory that's not reserved by a
-	 * bootloader-defined object.
+	/* grab at least N_FIRST_PAGES from conventional memory that's not
+	 * reserved by a bootloader-defined object, and then reserve further
+	 * physical pages up to 1/96th of physical RAM for other microkernel use.
+	 * the fudge factor is strong with this one.
 	 */
 	L4_Word_t next_addr = (first_addr + PAGE_SIZE - 1) & ~PAGE_MASK;
-	int got = 0;
-	while(got < N_FIRST_PAGES) {
-		if(next_addr > (64 * 1024 * 1024)) {
-			/* stop at the 64 MiB mark. */
+	int n_pages = 0;
+	while(n_pages < N_FIRST_PAGES || n_pages * PAGE_SIZE < total_ram / 96) {
+		if(next_addr > (512 * 1024 * 1024)) {
+			/* stop at the 512 MiB mark. */
 			panic("init_kernel_heap limit reached");
 		}
 		if(page_is_available(kcp, next_addr)) {
-			struct page *pg = &first_pages[got++];
+			struct page *pg;
+			if(n_pages < N_FIRST_PAGES) pg = &first_pages[n_pages];
+			else {
+				assert(mm_page_cache != NULL);
+				pg = kmem_cache_alloc(mm_page_cache);
+			}
+			if(++n_pages == N_FIRST_PAGES) {
+				/* initialize page slab for further reservations. */
+				mm_page_cache = KMEM_CACHE_NEW("mm_page_cache", struct page);
+			}
 			*pg = (struct page){
 				.id = next_addr >> PAGE_BITS,
 				.vm_addr = (void *)next_addr,
@@ -319,11 +338,10 @@ void init_kernel_heap(void *kcp_base, uintptr_t first_addr)
 		}
 		next_addr += PAGE_SIZE;
 	}
-	assert(got == N_FIRST_PAGES);
+	assert(n_pages >= N_FIRST_PAGES);
 	printf("uppermost reserved byte is at %#x\n", (unsigned)next_addr - 1);
 
-	/* initialize page slab & return. */
-	mm_page_cache = KMEM_CACHE_NEW("mm_page_cache", struct page);
+	/* initialize the rest of the heap tracking stuff. */
 	free_as_cache = KMEM_CACHE_NEW("free_as_cache", struct as_free);
 	free_as_tree = RB_ROOT;
 
@@ -331,11 +349,6 @@ void init_kernel_heap(void *kcp_base, uintptr_t first_addr)
 	heap_pos = (next_addr + heap_start_align) & ~(heap_start_align - 1);
 	printf("kernel VM heap starts at %#lx\n", (L4_Word_t)heap_pos);
 
-	int n_pages = 0;
-	struct page *cur;
-	list_for_each(&k_free_pages, cur, link) {
-		n_pages++;
-	}
 	L4_Word_t siz = n_pages * PAGE_SIZE;
 	printf("... total kernel reservation is %lu KiB (~%lu MiB).\n",
 		siz / 1024, (siz + 1024 * 512) / (1024 * 1024));
@@ -345,9 +358,17 @@ void init_kernel_heap(void *kcp_base, uintptr_t first_addr)
 /* iterates over initial memory grabbed in init_kernel_heap(). */
 void _heap_for_each_init_page(void (*fn)(struct page *, void *), void *priv)
 {
+	struct page *cur;
 	for(int i=0; i < N_FIRST_PAGES; i++) {
-		struct page *cur = &first_pages[i];
-		assert(CHECK_FLAG(cur->flags, PAGEF_INITMEM));
+		cur = &first_pages[i];
+		assert(cur->flags & PAGEF_INITMEM);
+		(*fn)(cur, priv);
+	}
+	list_for_each(&k_free_pages, cur, link) {
+		if(~cur->flags & PAGEF_INITMEM) continue;
+		if(cur >= &first_pages[0] && cur < &first_pages[N_FIRST_PAGES]) {
+			continue;
+		}
 		(*fn)(cur, priv);
 	}
 }
@@ -357,16 +378,11 @@ struct page *get_kern_page(uintptr_t vm_addr)
 {
 	assert((vm_addr & PAGE_MASK) == 0);
 	assert(!list_empty(&k_free_pages));
-	/* (get from tail of list, as that's where the idempotent heap is during
-	 * early boot. otherwise there is a chance of endless recursion through
-	 * put_supervisor_page()'s not finding the page directory for the vm heap.
-	 * [... more recently though, .next seems to work just as well.])
-	 */
 	struct page *p;
 	do {
-		p = container_of(k_free_pages.n.prev, struct page, link);
-		list_del(&p->link);
+		p = list_pop(&k_free_pages, struct page, link);
 		n_free_pages--;
+		assert((n_free_pages > 0) == !list_empty(&k_free_pages));
 		/* don't return pages with a physical address below 0x100000, as these
 		 * are special on the x86 (video memory, etc)
 		 */

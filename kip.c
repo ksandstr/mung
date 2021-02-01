@@ -300,8 +300,9 @@ static COLD void modify_kernel_memdescs(
 	 */
 	if(kcp->BootInfo != 0) {
 		L4_BootInfo_t *binf = (void *)kcp + (kcp->BootInfo & PAGE_MASK);
-		if(L4_BootInfo_Valid(binf) && binf->first_entry != 0) {
-			L4_BootRec_t *rec = (void *)binf + binf->first_entry;
+		assert(L4_BootInfo_Valid(binf));
+		if(binf->first_entry != 0) {
+			L4_BootRec_t *rec = L4_BootInfo_FirstEntry(binf);
 			for(int i=0; i < binf->num_entries; i++) {
 				ok &= export_bootmodule(mdb, rec);
 				if(rec->offset_next == 0) break;
@@ -328,10 +329,8 @@ static COLD void modify_kernel_memdescs(
 
 /* compose a 32-bit little-endian kernel interface page. */
 void make_kip(
-	void *mem,
-	L4_Word_t kern_start, L4_Word_t kern_end,
-	int max_irq,
-	L4_Time_t sched_prec)
+	void *mem, L4_Word_t kern_start, L4_Word_t kern_end,
+	int max_irq, L4_Time_t sched_prec)
 {
 	/* copy the KCP's memorydescs into a buffer so that we can modify them to
 	 * indicate e.g. the ia32 kernel high segment, kernel memory reservations,

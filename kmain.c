@@ -283,7 +283,7 @@ static void add_id_maps(struct space *sp, L4_Word_t start, L4_Word_t end)
 				printf("%s: n=%d!!!\n", __func__, n);
 				panic("argh");
 			}
-		} while(++l < (1 << s) / GROUP_SIZE);
+		} while(++l < (1u << s) / GROUP_SIZE);
 	}
 }
 
@@ -310,10 +310,20 @@ static void add_mem_to_sigma0(const L4_KernelInterfacePage_t *kip)
 	int b_subs = 0, arch_subs = 0;
 	for(int i=0; i < mdb.len; i++) {
 #ifdef DEBUG_ME_HARDER
-		printf("i=%02d\t%s range=[%#lx, %#lx], type=%#lx\n",
+		size_t sz = L4_MemoryDescHigh(&mdb.ptr[i]) - L4_MemoryDescLow(&mdb.ptr[i]) + 1;
+		char sizestr[20], suffix = 'B';
+		if(sz > 1024 * 1024 * 1024 && (sz & 0xc0000000) == 0) {
+			sz >>= 30; suffix = 'G';
+		} else if(sz > 1024 * 1024) {
+			sz >>= 20; suffix = 'M';
+		} else if(sz > 1024) {
+			sz >>= 10; suffix = 'K';
+		}
+		snprintf(sizestr, sizeof sizestr, "%lu%c", (unsigned long)sz, suffix);
+		printf("i=%02d\t%s range=[%#lx, %#lx], type=%#lx, size=%s\n",
 			i, L4_IsMemoryDescVirtual(&mdb.ptr[i]) ? "virt" : "phys",
 			L4_MemoryDescLow(&mdb.ptr[i]), L4_MemoryDescHigh(&mdb.ptr[i]),
-			L4_MemoryDescType(&mdb.ptr[i]));
+			L4_MemoryDescType(&mdb.ptr[i]), sizestr);
 #endif
 		L4_Word_t t = L4_MemoryDescType(&mdb.ptr[i]);
 		if((t & 0xf) == L4_BootLoaderSpecificMemoryType) {
@@ -440,7 +450,7 @@ void kmain(void *bigp, unsigned int magic)
 	extern char _start, _end;
 	L4_Word_t kern_start = (L4_Word_t)&_start & ~PAGE_MASK,
 		kern_end = (L4_Word_t)&_end | PAGE_MASK;
-	init_kernel_heap(kcp_base, kern_end + 1);
+	init_kernel_heap(kcp_base, kern_end + 1, mem_after_1m * 1024);
 
 	scan_cpuid();
 	if(!CHECK_FLAG(get_features()->edx, 1)) panic("math is hard!");
@@ -460,10 +470,6 @@ void kmain(void *bigp, unsigned int magic)
 	/* (see comment for init_spaces().) */
 	init_mapdb();
 	mapdb_init(kernel_space);
-#if 0
-	/* FIXME: if this need be resurrected, bring it back. otherwise don't. */
-	space_finalize_kernel(kernel_space, &resv_page_list);
-#endif
 
 	/* NOTE: malloc(), free(), etc. are only available from this line down. */
 

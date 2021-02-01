@@ -22,11 +22,8 @@ extern struct sysexit_offs sysexit_epilogs;
  * as a reserved range before the first dedicated range.
  */
 extern void make_kip(
-	void *mem,
-	L4_Word_t kern_start,
-	L4_Word_t kern_end,
-	int max_irq,
-	L4_Time_t sched_prec);
+	void *mem, L4_Word_t kern_start, L4_Word_t kern_end,
+	int max_irq, L4_Time_t sched_prec);
 
 
 /* friendly neighbourhood accessors */

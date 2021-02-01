@@ -99,8 +99,10 @@ extern void *map_vm_page(struct page *pg, int duration);
 extern void unref_vm_page(struct page *p);
 
 
-/* kernel heap initialization. reserves memory starting from @first_addr. */
-extern void init_kernel_heap(void *kcp_base, uintptr_t first_addr);
+/* kernel heap initialization. reserves memory starting from @first as a
+ * percentage of @total.
+ */
+extern void init_kernel_heap(void *kcp, uintptr_t first, size_t total);
 
 extern void _heap_for_each_init_page(
 	void (*fn)(struct page *, void *), void *priv);
