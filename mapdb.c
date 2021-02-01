@@ -329,7 +329,7 @@ static void dump_map_group(struct map_group *g)
 {
 #ifndef NDEBUG
 	L4_ThreadId_t space_id = space_name(g->space);
-	TRACE("%s: group %#lx..%#lx in %lu:%lu (#children<=%lu, #maps=%u):\n",
+	TRACE("%s: group %#lx..%#lx in %lu:%lu (#children<=%lu, #maps=%lu):\n",
 		__func__, MG_START(g), MG_START(g) + GROUP_SIZE - 1,
 		L4_ThreadNo(space_id), L4_Version(space_id),
 		1ul << MG_N_ALLOC_LOG2(g), MG_N_MAPS(g));

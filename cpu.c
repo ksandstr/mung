@@ -95,7 +95,10 @@ COLD void scan_cpuid(void)
 		};
 		printf("  features: ");
 		print_features(id.edx, p01_edx);	/* trad first. */
-		print_features(id.ecx, p01_ecx);
+		if(p01_ecx != 0) {
+			printf(" ");
+			print_features(id.ecx, p01_ecx);
+		}
 		printf("\n");
 	}
 

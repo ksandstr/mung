@@ -166,7 +166,7 @@ static int sigma0_ipc_loop(void *kip_base)
 				L4_StoreMR(2, &req_attr);
 				L4_StoreMR(3, &req_high);
 #ifdef DEBUG_ME_HARDER
-				printf("roottask (tid %d:%d) requested page %#lx:%#lx attr %#lx\n",
+				printf("user tid=%d:%d req=%#lx:%#lx attr=%#lx\n",
 					sender.global.X.thread_no, sender.global.X.version,
 					L4_Address(req_fpage), L4_Size(req_fpage), req_attr);
 #endif
