@@ -288,8 +288,10 @@ static L4_Fpage_t get_free_page_at(L4_Word_t address, int want_size_log2)
 
 	L4_Fpage_t outfp = L4_FpageLog2(address, want_size_log2);
 	struct track_page *pg = find_page_by_range(outfp);
-	if(pg == NULL) return L4_Nilpage;
-	assert(fpage_overlap(outfp, pg->page));
+	assert(pg == NULL || fpage_overlap(outfp, pg->page));
+	if(pg == NULL || L4_SizeLog2(pg->page) < want_size_log2) {
+		return L4_Nilpage;
+	}
 
 	L4_Fpage_t page = pg->page;
 	bool dedicated = pg->dedicated, readonly = pg->readonly;
@@ -302,10 +304,8 @@ static L4_Fpage_t get_free_page_at(L4_Word_t address, int want_size_log2)
 
 	if(L4_Address(page) == address && L4_SizeLog2(page) == want_size_log2) {
 		/* simple case; nothing to do. */
-	} else if(L4_SizeLog2(page) < want_size_log2) {
-		/* subpage case. */
-		outfp = page;
 	} else {
+		assert(L4_SizeLog2(page) > want_size_log2);
 		/* superpage case: release the unwanted part back. */
 		L4_Word_t start_len = address - L4_Address(page);
 		free_page_range(L4_Address(page), start_len, dedicated, readonly);
@@ -314,9 +314,11 @@ static L4_Fpage_t get_free_page_at(L4_Word_t address, int want_size_log2)
 		if(top < pg_top) {
 			free_page_range(top, pg_top - top, dedicated, readonly);
 		}
+		outfp = L4_FpageLog2(L4_Address(outfp), want_size_log2);
 	}
 
 	L4_Set_Rights(&outfp, readonly ? L4_ReadeXecOnly : L4_FullyAccessible);
+	assert(L4_SizeLog2(outfp) == want_size_log2);
 	return outfp;
 }
 
@@ -335,13 +337,15 @@ static L4_Fpage_t get_free_page(int size_log2)
 	assert(!pg->readonly);
 	L4_Fpage_t ret = pg->page;
 	if(L4_SizeLog2(pg->page) > size_log2) {
-		/* release the part we don't need. */
+		/* release the tail part that we don't need. */
 		free_page_range(L4_Address(pg->page) + (1 << size_log2),
 			L4_Size(pg->page) - (1 << size_log2), false, false);
+		ret = L4_FpageLog2(L4_Address(pg->page), size_log2);
 	}
 	free_track_page(pg);
 
 	L4_Set_Rights(&ret, L4_FullyAccessible);
+	assert(L4_SizeLog2(ret) == size_log2);
 	return ret;
 }
 
