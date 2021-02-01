@@ -7,11 +7,13 @@
 #include <ccan/compiler/compiler.h>
 #include <ccan/hash/hash.h>
 #include <ccan/htable/htable.h>
+#include <ccan/minmax/minmax.h>
 
 #include <l4/types.h>
 #include <l4/thread.h>
 #include <l4/ipc.h>
 #include <l4/kip.h>
+#include <l4/sigma0.h>
 #include <l4/syscall.h>
 #include <l4/bootinfo.h>
 #include <l4/kdebug.h>
@@ -30,7 +32,8 @@
  * received from sigma0.
  */
 struct forkserv_page {
-	L4_Word_t address;
+	L4_Word_t address;		/* what forkserv sees */
+	L4_Word_t phys_addr;	/* what sigma0 granted */
 };
 
 
@@ -123,28 +126,7 @@ static bool forkserv_page_cmp(const void *cand, void *key) {
 }
 
 
-static void add_forkserv_pages(L4_Word_t start, L4_Word_t end)
-{
-	for(L4_Word_t addr = start & ~PAGE_MASK;
-		addr <= (end | PAGE_MASK);
-		addr += PAGE_SIZE)
-	{
-		size_t hash = int_hash(addr);
-		void *ptr = htable_get(&forkserv_pages, hash,
-			&forkserv_page_cmp, &addr);
-		if(ptr == NULL) {
-			struct forkserv_page *p = malloc(sizeof(*p));
-			p->address = addr;
-			if(!htable_add(&forkserv_pages, hash, p)) {
-				fprintf(stderr, "htable_add() failed\n");
-				abort();
-			}
-		}
-	}
-}
-
-
-/* FIXME: move this into a generic pager mechanism. the loop has been written
+/* TODO: move this into a generic pager mechanism. the loop has been written
  * and copypasta'd often enough.
  */
 static void forkserv_pager_fn(void *param UNUSED)
@@ -155,7 +137,7 @@ static void forkserv_pager_fn(void *param UNUSED)
 
 		for(;;) {
 			if(L4_IpcFailed(tag)) {
-				printf("forkserv pager: reply/wait failed, ec=%#lx",
+				printf("forkserv pager: reply/wait failed, ec=%#lx\n",
 					L4_ErrorCode());
 				break;
 			}
@@ -171,18 +153,19 @@ static void forkserv_pager_fn(void *param UNUSED)
 					L4_ThreadNo(from), L4_Version(from), fip, faddr);
 #endif
 				/* look it up. */
-				L4_Word_t page_addr = faddr & ~PAGE_MASK;
+				L4_Word_t vaddr = faddr & ~PAGE_MASK;
 				struct forkserv_page *fp = htable_get(&forkserv_pages,
-					int_hash(page_addr), &forkserv_page_cmp, &page_addr);
+					int_hash(vaddr), &forkserv_page_cmp, &vaddr);
 				if(fp != NULL) {
 					/* map it from local memory. */
-					L4_Fpage_t map = L4_FpageLog2(fp->address, PAGE_BITS);
+					L4_Fpage_t map = L4_FpageLog2(fp->phys_addr, PAGE_BITS);
 					L4_Set_Rights(&map, L4_FullyAccessible);
-					L4_MapItem_t mi = L4_MapItem(map, page_addr);
+					assert(fp->address == vaddr);
+					L4_MapItem_t mi = L4_MapItem(map, fp->address);
 					L4_LoadMR(0, (L4_MsgTag_t){ .X.t = 2 }.raw);
 					L4_LoadMR(1, mi.raw[0]);
 					L4_LoadMR(2, mi.raw[1]);
-				} else if(page_addr == 0) {
+				} else if(vaddr == 0) {
 					printf("fpager: null page access from %lu:%lu ip %#lx\n",
 						L4_ThreadNo(from), L4_Version(from), fip);
 					break;
@@ -283,6 +266,27 @@ static void forkserv_pager_fn(void *param UNUSED)
 }
 
 
+static L4_Fpage_t next_s0_page(void)
+{
+	static L4_Word_t next_addr = 8 * 1024 * 1024;
+	L4_Fpage_t fp;
+	do {
+		/* allocate only until the 256M point since at that point there's
+		 * honestly no more RAM around, or the kernel reservation has grown
+		 * right out of control.
+		 */
+		if(next_addr >= 256 * 1024 * 1024) {
+			printf("next_s0_page: won't go past 256M!\n");
+			abort();
+		}
+		fp = L4_Sigma0_GetPage(L4_nilthread,
+			L4_FpageLog2(next_addr, PAGE_BITS));
+		next_addr += PAGE_SIZE;
+	} while(L4_IsNilFpage(fp));
+	return fp;
+}
+
+
 /* returns the raw command line. */
 static const char *start_forkserv(void)
 {
@@ -314,6 +318,8 @@ static const char *start_forkserv(void)
 		abort();
 	}
 
+	fault_pages_in(L4_Module_Start(rec),
+		L4_Module_Start(rec) + L4_Module_Size(rec));
 	forkserv_start = L4_Module_Start(rec);
 	forkserv_end = forkserv_start + L4_Module_Size(rec) - 1;
 	forkserv_pager = start_thread(&forkserv_pager_fn, NULL);
@@ -330,22 +336,45 @@ static const char *start_forkserv(void)
 	}
 	uintptr_t phoff = ee->e_phoff;
 	for(int i=0; i < ee->e_phnum; i++, phoff += ee->e_phentsize) {
-		const Elf32_Phdr *ep = (void *)(forkserv_start + phoff);
+		const Elf32_Phdr *ep = (void *)forkserv_start + phoff;
 		if(ep->p_type != PT_LOAD) continue;	/* skip the GNU stack thing */
 #if 0
-		printf("program header at %p: type %u, offset %u, vaddr %#x, paddr %#x, filesz %#x, memsz %#x\n",
-			ep, ep->p_type, ep->p_offset, ep->p_vaddr, ep->p_paddr, ep->p_filesz,
-			ep->p_memsz);
+		printf("phdr=%p: type=%u offset=%u vaddr=%#x paddr=%#x filesz=%#x, memsz=%#x\n",
+			ep, ep->p_type, ep->p_offset, ep->p_vaddr, ep->p_paddr,
+			ep->p_filesz, ep->p_memsz);
 #endif
 
 		/* map that shit! */
-		memcpy((void *)ep->p_vaddr, (void *)(forkserv_start + ep->p_offset),
-			ep->p_filesz);
-		if(ep->p_filesz < ep->p_memsz) {
-			memset((void *)ep->p_vaddr + ep->p_filesz, 0,
-				ep->p_memsz - ep->p_filesz);
+		for(L4_Word_t off = 0; off < ep->p_memsz; off += PAGE_SIZE) {
+			/* prefer idempotent maps */
+			L4_Fpage_t pg = L4_Sigma0_GetPage(L4_nilthread,
+				L4_FpageLog2(ep->p_vaddr + off, PAGE_BITS));
+			if(L4_IsNilFpage(pg)) {
+				/* ... but in their absence "any old" will do. forkserv
+				 * doesn't care about the physical locations of where its
+				 * process image was loaded, as long as those pages don't turn
+				 * up again in the sigma0 pump which must land idempotently.
+				 */
+				pg = next_s0_page();
+			}
+			void *phys = (void *)L4_Address(pg);
+			if(off < ep->p_filesz) {
+				size_t tail = ep->p_filesz - off;
+				memcpy(phys, (void *)forkserv_start + ep->p_offset + off,
+					min_t(size_t, PAGE_SIZE, tail));
+				if(tail < PAGE_SIZE) {
+					memset(phys + off + tail, '\0', PAGE_SIZE - tail);
+				}
+			} else {
+				memset(phys, '\0', PAGE_SIZE);
+			}
+			struct forkserv_page *f = malloc(sizeof *f);
+			*f = (struct forkserv_page){
+				.address = ep->p_vaddr + off, .phys_addr = L4_Address(pg),
+			};
+			assert((f->address & PAGE_MASK) == 0);
+			htable_add(&forkserv_pages, int_hash(f->address), f);
 		}
-		add_forkserv_pages(ep->p_vaddr, ep->p_vaddr + ep->p_memsz - 1);
 	}
 
 	/* set up the address space & start the main thread. */
@@ -392,31 +421,31 @@ static const char *start_forkserv(void)
 
 
 /* space_id 0 means forkserv's own pages. */
-static void send_one_page(L4_Word_t address, L4_Word_t space_id)
+static void send_one_page(L4_Word_t phys, L4_Word_t virt, int space_id)
 {
-	/* "hey, prepare to receive." */
-	int n = forkserv_send_page_timeout(forkserv_tid, address, space_id,
-		L4_Never);
+	assert(phys == virt || space_id != 1);
+
+	/* first the kiss */
+	int n = forkserv_send_page_timeout(forkserv_tid,
+		virt, space_id, L4_Never);
 	if(n != 0) goto ipcfail;
 
-	L4_Fpage_t page = L4_Fpage(address, PAGE_SIZE);
+	/* then the grant */
+	L4_Fpage_t page = L4_Fpage(phys, PAGE_SIZE);
 	L4_Set_Rights(&page, L4_FullyAccessible);
 	L4_GrantItem_t gi = L4_GrantItem(page, 0);
 	L4_LoadBR(0, L4_CompleteAddressSpace.raw);
 	L4_LoadMR(0, (L4_MsgTag_t){ .X.label = FORKSERV_SEND_PAGE_2,
-		.X.t = 2 }.raw);
-	L4_LoadMR(1, gi.raw[0]);
-	L4_LoadMR(2, gi.raw[1]);
+		.X.u = 1, .X.t = 2 }.raw);
+	L4_LoadMR(1, phys);	/* needed because IPC rewrites SndPage address */
+	L4_LoadMRs(2, 2, gi.raw);
 	L4_MsgTag_t tag = L4_Call(forkserv_tid);
-	if(L4_IpcFailed(tag)) {
-		n = L4_ErrorCode();
-		goto ipcfail;
-	}
+	if(L4_IpcSucceeded(tag)) return;
 
-	return;
+	n = L4_ErrorCode();
 
 ipcfail:
-	printf("IPC failed, n=%d\n", n);
+	printf("%s: IPC failed, n=%d\n", __func__, n);
 	abort();
 }
 
@@ -444,10 +473,9 @@ static void transfer_to_forkserv(void)
 	add_fs_tid(0, forkserv_tid);
 	struct htable_iter it;
 	for(struct forkserv_page *fp = htable_first(&forkserv_pages, &it);
-		fp != NULL;
-		fp = htable_next(&forkserv_pages, &it))
+		fp != NULL; fp = htable_next(&forkserv_pages, &it))
 	{
-		send_one_page(fp->address, 0);
+		send_one_page(fp->phys_addr, fp->address, 0);
 	}
 
 	/* switch it over to sigma0 paging. */
@@ -469,25 +497,21 @@ static void transfer_to_forkserv(void)
 	const int max_pages = 2048;
 	L4_Word_t *page_addrs = malloc(sizeof(L4_Word_t) * max_pages);
 	int num_pages = 0;
-	/* first, fault them in. */
 	volatile uint8_t foo = 0;
 	/* ELF pages */
 	for(L4_Word_t addr = (L4_Word_t)&_start & ~PAGE_MASK;
 		addr < (((L4_Word_t)&_end + PAGE_MASK) & ~PAGE_MASK);
 		addr += PAGE_SIZE)
 	{
-		foo ^= *(const uint8_t *)addr;	/* fault it in. */
+		foo ^= *(const uint8_t *)addr;	/* fault them in as we go. */
 		assert(num_pages < max_pages);
 		page_addrs[num_pages++] = addr;
 	}
 	/* malloc heap */
-	for(L4_Word_t addr = (L4_Word_t)sbrk(0);
-		addr < get_heap_top();
-		addr += PAGE_SIZE)
-	{
-		foo ^= *(const uint8_t *)addr;
+	for(L4_Word_t a = (L4_Word_t)sbrk(0); a < get_heap_top(); a += PAGE_SIZE) {
+		foo ^= *(const uint8_t *)a;		/* that, too. */
 		assert(num_pages < max_pages);
-		page_addrs[num_pages++] = addr;
+		page_addrs[num_pages++] = a;
 	}
 	/* then the send. */
 	add_fs_tid(1, L4_MyGlobalId());
@@ -495,7 +519,9 @@ static void transfer_to_forkserv(void)
 	L4_Set_Pager(forkserv_tid);
 	L4_Set_PagerOf(forkserv_pager, forkserv_tid);
 	use_forkserv_sbrk = true;
-	for(int i=num_pages - 1; i >= 0; --i) send_one_page(page_addrs[i], 1);
+	for(int i=num_pages - 1; i >= 0; --i) {
+		send_one_page(page_addrs[i], page_addrs[i], 1);
+	}
 	free(page_addrs);
 
 	/* inform forkserv of the shape of testbench's address space, i.e. the KIP
@@ -737,7 +763,6 @@ int main(void)
 	calibrate_delay_loop();
 	fault_own_pages();
 
-	/* FIXME: add option to _not_ activate forkserv. */
 	const char *boot_cmdline = start_forkserv();
 	struct htable opts;
 	htable_init(&opts, &rehash_cmd_opt, NULL);

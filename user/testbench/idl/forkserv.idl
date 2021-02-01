@@ -15,7 +15,7 @@ interface ForkServ: L4X2::FaultHandler, L4X2::X86IOFaultHandler
 		in L4X2::Fpage utcb_area);
 
 	[Label(0x7350), StubSendTimeout]		/* "sP" */
-	oneway void send_page(in L4X2::word address, in long space_id);
+	oneway void send_page(in L4X2::word recv_address, in long space_id);
 
 #if 0
 	/* NOTE: due to uncertainty wrt µIDL and grant items, this one doesn't

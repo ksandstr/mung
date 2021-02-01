@@ -13,6 +13,7 @@
 #include <string.h>
 #include <stdint.h>
 #include <stdatomic.h>
+#include <stdbool.h>
 #include <errno.h>
 #include <threads.h>
 #include <ccan/list/list.h>
@@ -344,11 +345,9 @@ static void configure_heap(void)
 static void seed_heap(void)
 {
 	static struct fs_phys_page pp[48];
-	extern char _end;
-	L4_Word_t low_addr = ((L4_Word_t)&_end + PAGE_SIZE - 1) & ~PAGE_MASK;
 	for(int i=0; i < NUM_ELEMENTS(pp); i++) {
-		L4_Fpage_t got = L4_Sigma0_GetPage(L4_nilthread,
-			L4_FpageLog2(low_addr + PAGE_SIZE * i, PAGE_BITS));
+		L4_Fpage_t got = L4_Sigma0_GetAny(L4_nilthread, PAGE_BITS,
+			L4_CompleteAddressSpace);
 		if(L4_IsNilFpage(got)) {
 			printf("%s: i=%d: result is nilpage!\n", __func__, i);
 			abort();
@@ -420,12 +419,39 @@ void *sbrk(intptr_t increment)
 {
 	L4_Word_t prev_break = brk_pos;
 	if(increment < 0) {
-		/* trim. (not tested to work.) */
-		L4_Word_t decrement = (-increment + PAGE_SIZE - 1) & ~PAGE_MASK;
-		brk_pos -= decrement;
+		/* trim. (or rather, don't.) */
+		printf("%s: won't trim (not implemented)\n", __func__);
+		abort();
 	} else if(increment > 0) {
 		/* grow. */
 		increment = (increment + PAGE_SIZE - 1) & ~PAGE_MASK;
+		if(increment == 0) return (void *)prev_break;
+
+		L4_Word_t start = prev_break;
+		static bool first_brk = true;
+		if(first_brk) {
+			/* memory at brk_pos might not be available from sigma0 despite
+			 * there being physical memory at that address. step brk_pos
+			 * forward to 16M offsets until there is; but stop at 256M for
+			 * safety.
+			 */
+			while(brk_pos < 256 * 1024 * 1024) {
+				L4_Fpage_t got = L4_Sigma0_GetPage(L4_nilthread,
+					L4_FpageLog2(brk_pos, PAGE_BITS));
+				if(!L4_IsNilFpage(got)) break;
+				brk_pos = (brk_pos + 16 * 1024 * 1024 - 1) & ~(16 * 1024 * 1024 - 1);
+			}
+			if(brk_pos >= 256 * 1024 * 1024) {
+				printf("%s: can't locate brk heap below 256M\n", __func__);
+				abort();
+			}
+			prev_break = brk_pos;
+			brk_pos += PAGE_SIZE;
+			start = brk_pos;
+			increment -= PAGE_SIZE;
+			first_brk = false;
+			if(increment == 0) return (void *)prev_break;
+		}
 		brk_pos += increment;
 		printf("%s: increment=%lu; allocating %#lx..%#lx\n", __func__,
 			(unsigned long)increment, prev_break, brk_pos - 1);
@@ -441,7 +467,7 @@ void *sbrk(intptr_t increment)
 		if(!pump_done) {
 			/* grab the necessary pages in early (pre-pump) startup. */
 			L4_Word_t addr, size;
-			for_page_range(prev_break, brk_pos, addr, size) {
+			for_page_range(start, brk_pos, addr, size) {
 				L4_Fpage_t got = L4_Sigma0_GetPage(L4_nilthread,
 					L4_FpageLog2(addr, size));
 				if(L4_IsNilFpage(got)) {
@@ -694,7 +720,7 @@ int mtx_unlock(mtx_t *mtx)
 /* this is an oneway operation. the client is expected to complete the
  * transaction with a SEND_PAGE_2 IPC.
  */
-static void handle_send_page(L4_Word_t phys_addr, int32_t space_id)
+static void handle_send_page(L4_Word_t virt_addr, int space_id)
 {
 	const L4_ThreadId_t from = muidl_get_sender();
 
@@ -702,7 +728,7 @@ static void handle_send_page(L4_Word_t phys_addr, int32_t space_id)
 	struct fs_space *sp = get_space(space_id);
 	if(sp == NULL) sp = make_initial_space(space_id);
 	if(space_id == 0) {
-		window = L4_Fpage(phys_addr, PAGE_SIZE);
+		window = L4_Fpage(virt_addr, PAGE_SIZE);
 	} else {
 		if(unlikely(map_range_pos == 0)) {
 			map_range_pos = phys_mem_top + 1;
@@ -722,14 +748,10 @@ static void handle_send_page(L4_Word_t phys_addr, int32_t space_id)
 		} else if((tag.X.label & 0xfff0) == 0xffe0
 			&& tag.X.u == 2 && tag.X.t == 0)
 		{
-			/* intervening pagefault. handle it. */
+			/* handle intervening pagefaults. */
 			L4_Word_t faddr, fip;
 			L4_StoreMR(1, &faddr);
 			L4_StoreMR(2, &fip);
-#if 0
-			printf("%s: inter-send pf, faddr=%#lx, fip=%#lx\n", __func__,
-				faddr, fip);
-#endif
 			muidl_set_tag(tag);
 			L4_MapItem_t map = { };
 			handle_pf(faddr, fip, &map);
@@ -747,12 +769,12 @@ static void handle_send_page(L4_Word_t phys_addr, int32_t space_id)
 		}
 	} while(tag.X.label != FORKSERV_SEND_PAGE_2);
 
-	L4_MapItem_t mi;
-	L4_StoreMRs(1, 2, mi.raw);
+	L4_Word_t phys_addr; L4_StoreMR(1, &phys_addr);
+	L4_MapItem_t mi; L4_StoreMRs(2, 2, mi.raw);
 #if 0
-	printf("got page %#lx:%#lx, offset %#lx, phys_addr %d:%#lx, local %#lx\n",
+	printf("got page=%#lx:%#lx sndbase=%#lx phys=%#lx virt=%#lx space=%d\n",
 		L4_Address(L4_MapItemSndFpage(mi)), L4_Size(L4_MapItemSndFpage(mi)),
-		L4_MapItemSndBase(mi), space_id, phys_addr, L4_Address(window));
+		L4_MapItemSndBase(mi), phys_addr, virt_addr, space_id);
 #endif
 	if(space_id != 0) map_range_pos += L4_Size(window);
 

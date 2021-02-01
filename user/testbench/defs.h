@@ -306,8 +306,6 @@ extern void *xjoin_thread(L4_ThreadId_t other);
 
 extern void next_tick(void);
 
-extern void fault_own_pages(void);
-
 extern bool has_feature(const char *name);
 
 
@@ -323,6 +321,12 @@ extern L4_ThreadId_t start_spinner(
 static inline bool send_quit(L4_ThreadId_t serv) {
 	return __common_quit_timeout((serv), TEST_IPC_DELAY) == 0;
 }
+
+
+/* from ll.c */
+
+extern void fault_pages_in(L4_Word_t start, L4_Word_t end);
+extern void fault_own_pages(void);
 
 
 /* from log.c */
