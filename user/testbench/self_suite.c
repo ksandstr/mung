@@ -1316,7 +1316,7 @@ START_TEST(segv_test)
 	}
 
 	/* and that an illegal access does fail. */
-	uintptr_t ill = (uintptr_t)foo ^ 0x40000000;
+	uintptr_t ill = (uintptr_t)foo | 0xc0000000;
 	tid = xstart_thread(&access_memory_fn, (void *)ill);
 	ec = 0;
 	ret = join_thread_long(tid, L4_TimePeriod(15000), &ec);
@@ -1345,7 +1345,7 @@ START_LOOP_TEST(uncaught_segv_test, iter, 0, 3)
 
 	void *foo = malloc(128);
 	memset(foo, 0x7e, 128);
-	uint8_t *ill = (uint8_t *)((uintptr_t)foo ^ 0x40000000);
+	uint8_t *ill = (uint8_t *)((uintptr_t)foo | 0xc0000000);
 	int child = fork();
 	if(child == 0) {
 		if(!handle_segv) {
