@@ -259,7 +259,7 @@ END_TEST
 START_TEST(kmem_test)
 {
 	plan_tests(3);
-	const int test_size = 100;
+	const int test_size = 8;
 	diag("test_size=%d", test_size);
 
 	void *pages[test_size];
