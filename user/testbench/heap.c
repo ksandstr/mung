@@ -64,8 +64,7 @@ void *sbrk(intptr_t increment)
 	}
 
 	if(increment > 0) {
-		/* FIXME: get smallest physical page size from KIP */
-		increment = (increment + 0xfff) & ~0xfff;
+		increment = (increment + PAGE_SIZE - 1) & ~PAGE_MASK;
 		if(use_forkserv_sbrk) {
 			if(L4_IsNilThread(heap_tid)) {
 				heap_tid = L4_Pager();
@@ -79,10 +78,17 @@ void *sbrk(intptr_t increment)
 			}
 			heap_pos = new_pos;
 		} else {
-			L4_Fpage_t page = L4_Sigma0_GetPage(L4_nilthread,
-				L4_Fpage(heap_pos - increment, increment));
-			if(L4_IsNilFpage(page)) return NULL;
-			heap_pos = L4_Address(page);
+			L4_Word_t addr, s;
+			for_page_range(heap_pos - increment, heap_pos, addr, s) {
+				L4_Fpage_t page = L4_Sigma0_GetPage(L4_nilthread,
+					L4_FpageLog2(addr, s));
+				if(L4_IsNilFpage(page)) {
+					printf("%s: can't get %#lx:%#lx from s0!\n",
+						__func__, addr, 1ul << s);
+					abort();
+				}
+			}
+			heap_pos -= increment;
 		}
 	} else if(increment < 0) {
 		/* TODO: move the allocated heap backward, so that pages aren't
