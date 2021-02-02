@@ -95,9 +95,9 @@ static bool in_recv_wait(struct thread *t) {
 }
 
 
-#ifndef NDEBUG
 static bool verify_recv_wait(struct thread *t)
 {
+#ifndef NDEBUG
 	size_t hash = int_hash(t->ipc_from.raw);
 	struct htable_iter it;
 	for(struct thread *cand = htable_firstval(&recvwait_hash, &it, hash);
@@ -107,8 +107,10 @@ static bool verify_recv_wait(struct thread *t)
 		if(cand == t) return true;
 	}
 	return false;
-}
+#else
+	return true;
 #endif
+}
 
 
 /* module invariants. these mostly concern thread states within hash
