@@ -101,10 +101,9 @@ typedef union {
 #define L4_anylocalthread ((L4_ThreadId_t){ .raw = ~0UL << 6 })
 
 
-static inline L4_ThreadId_t L4_GlobalId(L4_Word_t tnum, L4_Word_t vers) {
-	return (L4_ThreadId_t){ .global = {
-		.X.thread_no = tnum, .X.version = vers } };
-}
+#define L4_GlobalId(tno, vers) \
+	((L4_ThreadId_t){ .global.X = { .thread_no = (tno), \
+		.version = (vers) } })
 
 
 static inline L4_Bool_t L4_IsNilThread(L4_ThreadId_t tid) {
