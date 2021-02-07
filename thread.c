@@ -1102,9 +1102,7 @@ static void drop_redir_to(struct thread *t)
  */
 SYSCALL L4_Word_t sys_threadcontrol(
 	L4_ThreadId_t dest_tid,
-	L4_ThreadId_t pager,
-	L4_ThreadId_t scheduler,
-	L4_ThreadId_t spacespec,
+	L4_ThreadId_t pager, L4_ThreadId_t scheduler, L4_ThreadId_t spacespec,
 	void *utcblocation)
 {
 	assert(check_thread_module(0));
@@ -1113,10 +1111,7 @@ SYSCALL L4_Word_t sys_threadcontrol(
 	bool created = false;
 	struct thread *current = get_current_thread();
 	void *utcb = thread_get_utcb(current);
-	if(unlikely(!CHECK_FLAG(current->space->flags, SF_PRIVILEGE))) {
-		ec = 1;		/* "no privilege" */
-		goto end;
-	}
+	if(unlikely(~current->space->flags & SF_PRIVILEGE)) goto no_priv;
 
 	TRACE("%s: called; dest %lu:%lu, pager %lu:%lu, scheduler %lu:%lu, space %lu:%lu\n",
 		__func__,
@@ -1195,8 +1190,8 @@ SYSCALL L4_Word_t sys_threadcontrol(
 		cancel_pending_receive(dest->space, dead_tid.global,
 			dest->utcb_pos >= 0 ? get_local_id(dest).local
 				: L4_nilthread.local, 5);
-		if(!CHECK_FLAG(dest->flags, TF_HALT)) thread_halt(dest);
-		if(CHECK_FLAG(dest->flags, TF_INTR)) int_kick(dest);
+		if(~dest->flags & TF_HALT) thread_halt(dest);
+		if(dest->flags & TF_INTR) int_kick(dest);
 		post_exn_fail(dest);
 		if(dest->status != TS_STOPPED) {
 			int old_status = dest->status;
@@ -1247,7 +1242,7 @@ SYSCALL L4_Word_t sys_threadcontrol(
 			cancel_ipc_to(stale_tid, 2 << 1);	/* "lost partner" */
 			assert(hook_empty(&dest->post_exn_call));
 
-			if(CHECK_FLAG(dest->flags, TF_INTR)) int_kick(dest);
+			if(dest->flags & TF_INTR) int_kick(dest);
 
 			if(dest->status != TS_READY || dest->total_quantum > 0) {
 				if(dest->status > 1) sq_remove_thread(dest);
@@ -1362,23 +1357,10 @@ dead:
 	result = 1;
 	goto end;
 
-out_of_mem:
-	ec = 8;
-	goto end;
-
-unav_thread:
-	ec = L4_ERROR_INVALID_THREAD;
-	goto end;
-
-invd_space:
-	ec = 3;
-	goto end;
-
-invd_sched:
-	ec = 4;
-	goto end;
-
-bad_utcb:
-	ec = 6;
-	goto end;
+no_priv: ec = L4_ERROR_NO_PRIVILEGE; goto end;
+out_of_mem: ec = L4_ERROR_NO_MEM; goto end;
+unav_thread: ec = L4_ERROR_INVALID_THREAD; goto end;
+invd_space: ec = L4_ERROR_INVALID_SPACE; goto end;
+invd_sched: ec = L4_ERROR_INVALID_SCHEDULER; goto end;
+bad_utcb: ec = L4_ERROR_UTCB_AREA; goto end;
 }
