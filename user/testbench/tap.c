@@ -108,12 +108,13 @@ void tap_reset(void)
 
 void subtest_start(const char *fmt, ...)
 {
+	TRY_INIT;
 	va_list al;
 	va_start(al, fmt);
 	int msglen = vsnprintf(NULL, 0, fmt, al) + 1;
 	va_end(al);
 
-	struct saved_ctx *c = malloc(sizeof(*c) + msglen);
+	struct saved_ctx *c = malloc(sizeof *c + msglen);
 	va_start(al, fmt);
 	vsnprintf(c->testmsg, msglen, fmt, al);
 	va_end(al);
@@ -128,7 +129,7 @@ void subtest_start(const char *fmt, ...)
 	c->expected_tests = expected_tests;
 	c->failed_tests = failed_tests;
 	c->todo_msg = todo_msg;
-	todo_msg = c->todo_msg != NULL ? strdup(c->todo_msg) : NULL;
+	todo_msg = NULL;	/* subtests get a clean slate */
 
 	c->next = save_stack;
 	save_stack = c;
@@ -336,6 +337,7 @@ void plan_tests(unsigned int num_tests)
 
 int diag(const char *fmt, ...)
 {
+	TRY_INIT;
 	print_sub_prefix();
 	va_list al;
 	va_start(al, fmt);
@@ -350,6 +352,7 @@ int diag(const char *fmt, ...)
 
 int skip(unsigned int num_skip, const char *reason, ...)
 {
+	TRY_INIT;
 	char msg[512];
 	va_list al;
 	va_start(al, reason);
@@ -367,6 +370,7 @@ int skip(unsigned int num_skip, const char *reason, ...)
 
 void todo_start(const char *fmt, ...)
 {
+	TRY_INIT;
 	char msg[512];
 	va_list al;
 	va_start(al, fmt);
@@ -396,6 +400,7 @@ void todo_end(void)
 
 int exit_status(void)
 {
+	TRY_INIT;
 	if(no_plan || !have_plan) return failed_tests;
 	else if(expected_tests < num_tests_run) {
 		/* ran too many. return number of unplanned tests */
