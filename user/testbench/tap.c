@@ -290,7 +290,7 @@ void plan_no_plan(void)
 }
 
 
-void plan_skip_all(const char *reason)
+void plan_skip_all(const char *reason, ...)
 {
 	TRY_INIT;
 	if(have_plan) {
@@ -304,7 +304,14 @@ void plan_skip_all(const char *reason)
 
 	print_sub_prefix();
 	printf("1..0");
-	if(reason != NULL) printf(" # Skip %s", reason);
+	if(reason != NULL) {
+		char rbuf[200];
+		va_list args; va_start(args, reason);
+		int l = vsnprintf(rbuf, sizeof rbuf, reason, args);
+		va_end(args);
+		while(rbuf[--l] == '\n') rbuf[l] = '\0';
+		printf(" # Skip %s", rbuf);
+	}
 	printf("\n");
 
 	/* FIXME: do a longjmp-equivalent to the top level. or exit the thread. or

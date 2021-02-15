@@ -137,7 +137,7 @@ extern int _gen_result(
 extern void tap_reset(void);	/* called by the test harness */
 
 extern void plan_no_plan(void);
-extern void plan_skip_all(const char *reason);
+extern void plan_skip_all(const char *reason, ...);
 extern void plan_tests(unsigned int num_tests);
 
 extern int diag(const char *fmt, ...);
