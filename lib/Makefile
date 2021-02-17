@@ -23,7 +23,7 @@ distclean:
 
 
 libukernel_util.a: hash.o string.o vsnprintf.o bsearch.o \
-		slab.o fake_stdio.o ser_io.o rbtree.o inttypes.o \
+		slab.o stdio.o ser_io.o rbtree.o inttypes.o \
 		bug.o invariant.o hook.o stritem.o memdesc.o sort.o \
 		setjmp.o trampoline.o test_util.o $(TEST_OBJS)
 	@echo "  AR $@"

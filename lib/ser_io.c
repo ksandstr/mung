@@ -26,7 +26,7 @@ static bool com_is_fast(int base)
 /* rudimentary serial port output via µiX */
 #define COM_PORT 0x3f8
 
-static void computchar(unsigned char ch)
+void computchar(unsigned char ch)
 {
 	static bool first = true;
 	if(unlikely(first)) {
@@ -48,10 +48,4 @@ static void computchar(unsigned char ch)
 
 	outb(COM_PORT + UART_RDWR, ch);
 	if(ch == '\n') computchar('\r');
-}
-
-
-/* overridden in user/testbench/forkserv.c */
-__attribute__((weak)) void con_putstr(const char *str) {
-	while(*str != '\0') computchar(*(str++));
 }
