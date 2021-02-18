@@ -4,7 +4,7 @@ MUIDL_DIR=$(CFGDIR)/../muidl
 
 LD=ld.gold
 
-CFLAGS=-O2 -Wall -march=native -std=gnu99 -m32 \
+CFLAGS=-O2 -Wall -march=native -std=gnu11 -m32 \
 	-I $(CFGDIR)/include -I $(CFGDIR)/include/fake_clib \
 	-I . -I $(MUIDL_DIR)/include -I $(CCAN_DIR) \
 	-D_GNU_SOURCE -D__KERNEL__ -DENABLE_SELFTEST \

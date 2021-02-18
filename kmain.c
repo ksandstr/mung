@@ -1,6 +1,7 @@
 
 #include <stdio.h>
 #include <stdbool.h>
+#include <stdnoreturn.h>
 #include <string.h>
 #include <assert.h>
 #include <ccan/likely/likely.h>
@@ -48,7 +49,7 @@ uint64_t global_timer_count = 0;
 uint64_t *systemclock_p = NULL;
 
 
-void NORETURN panic(const char *message)
+void noreturn panic(const char *message)
 {
 	printf("PANIC: %s\n", message);
 	while(true) {
@@ -57,7 +58,7 @@ void NORETURN panic(const char *message)
 }
 
 
-void NORETURN __not_reached(const char *file, int line, const char *func)
+void noreturn __not_reached(const char *file, int line, const char *func)
 {
 	printf("NOT_REACHED: %s:%d: function `%s'\n", file, line, func);
 	panic("a `NOT_REACHED' was reached");		/* owie */
@@ -75,13 +76,11 @@ void abort(void)
 }
 
 
-void __assert_failure(
+noreturn void __assert_failure(
 	const char *condition,
-	const char *file,
-	unsigned int line,
-	const char *function)
+	const char *file, int line, const char *func)
 {
-	printf("assert(%s) failed in `%s' (%s:%u)\n", condition, function,
+	printf("assert(%s) failed in `%s' (%s:%u)\n", condition, func,
 		file, line);
 	panic("*** assertion failure");
 }

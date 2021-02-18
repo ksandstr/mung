@@ -3,7 +3,7 @@
 #define SEEN_FAKE_CLIB_STDLIB_H
 
 #include <stddef.h>
-#include <ccan/compiler/compiler.h>
+#include <stdnoreturn.h>
 
 
 extern void *malloc(size_t size) __attribute__((malloc));
@@ -20,8 +20,8 @@ static inline void *aligned_alloc(size_t alignment, size_t size) {
 }
 
 
-extern NORETURN void abort(void);
-extern NORETURN void exit(int status);
+extern noreturn void abort(void);
+extern noreturn void exit(int status);
 
 extern int abs(int j);
 extern long int labs(long int j);

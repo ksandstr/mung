@@ -7,6 +7,7 @@
 #include <stdlib.h>
 #include <stdint.h>
 #include <stdbool.h>
+#include <stdnoreturn.h>
 #include <assert.h>
 #include <unistd.h>
 #include <ccan/compiler/compiler.h>
@@ -216,7 +217,7 @@ extern L4_ThreadId_t start_thread_long(
  * be warned that an out-of-order join_thread() can terribly confuse an
  * unprepared receiver.
  */
-extern NORETURN void exit_thread(void *return_value);
+extern noreturn void exit_thread(void *return_value);
 extern void *join_thread(L4_ThreadId_t tid);
 extern void *join_thread_long(
 	L4_ThreadId_t tid,
@@ -285,7 +286,7 @@ extern bool use_forkserv_sbrk;
 extern int fork(void);
 extern int fork_tid(L4_ThreadId_t *tid_p);	/* fork(), and return child TID */
 extern int wait(int *status);
-extern NORETURN void exit(int status);
+extern noreturn void exit(int status);
 
 extern bool is_privileged(void);
 
@@ -331,7 +332,8 @@ extern void fault_own_pages(void);
 
 /* from log.c */
 
-extern int log_f(const char *fmt, ...);
+extern int log_f(const char *fmt, ...)
+	PRINTF_FMT(1, 2);
 extern void flush_log(bool print);
 
 

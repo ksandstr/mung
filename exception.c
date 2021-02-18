@@ -1,10 +1,9 @@
 
 #include <stdio.h>
 #include <stdint.h>
+#include <stdnoreturn.h>
 #include <setjmp.h>
-
 #include <ccan/likely/likely.h>
-#include <ccan/compiler/compiler.h>
 #include <ccan/str/str.h>
 #include <ccan/container_of/container_of.h>
 
@@ -57,7 +56,8 @@ void isr_exn_de_bottom(struct x86_exregs *regs)
 }
 
 
-static NORETURN void return_from_gp(struct thread *current, struct x86_exregs *regs)
+static noreturn void return_from_gp(
+	struct thread *current, struct x86_exregs *regs)
 {
 	void *utcb = thread_get_utcb(current);
 	struct thread *exh = get_tcr_thread(current, utcb,
@@ -79,7 +79,8 @@ static NORETURN void return_from_gp(struct thread *current, struct x86_exregs *r
 
 
 /* TODO: could this be merged with return_from_gp()? */
-static NORETURN void return_from_ud(struct thread *current, struct x86_exregs *regs)
+static noreturn void return_from_ud(
+	struct thread *current, struct x86_exregs *regs)
 {
 	void *utcb = thread_get_utcb(current);
 	struct thread *exh = get_tcr_thread(current, utcb,

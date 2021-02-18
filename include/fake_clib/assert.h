@@ -2,14 +2,12 @@
 #ifndef _ASSERT_H
 #define _ASSERT_H
 
-#include <ccan/compiler/compiler.h>
+#include <stdnoreturn.h>
 
 
-extern NORETURN void __assert_failure(
+extern noreturn void __assert_failure(
 	const char *condition,
-	const char *file,
-	unsigned int line,
-	const char *function);
+	const char *file, int line, const char *func);
 
 
 #ifndef NDEBUG

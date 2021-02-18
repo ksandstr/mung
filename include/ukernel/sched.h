@@ -4,7 +4,7 @@
 
 #include <stdint.h>
 #include <stdbool.h>
-#include <ccan/compiler/compiler.h>
+#include <stdnoreturn.h>
 
 #include <ukernel/x86.h>
 #include <ukernel/misc.h>
@@ -34,13 +34,13 @@ extern struct thread *kernel_preempt_to;
  * current interrupt or exception context, and resumes execution in the x86
  * frame indicated. "current_thread" is updated.
  */
-extern NORETURN void return_to_scheduler(void);
+extern noreturn void return_to_scheduler(void);
 
 /* same, but used to exit after sending a pf/exn/tqe message. caller should've
  * done the ipc_user() dance beforehand. source is the current thread.
  * @msg_utcb is ipc_user()'s return value.
  */
-extern NORETURN void return_to_ipc(void *msg_utcb, struct thread *target);
+extern noreturn void return_to_ipc(void *msg_utcb, struct thread *target);
 
 /* returns on failure. caller should fall back to return_to_scheduler(). */
 extern void return_to_other(struct thread *next);
@@ -59,7 +59,7 @@ extern void return_from_irq(struct thread *next);
  * successful reply send-phase. parameters implied from current_thread and its
  * ->u0.partner .
  */
-extern NORETURN void return_to_partner(void);
+extern noreturn void return_to_partner(void);
 
 
 /* distinct function for easier transition to SMP. (it'll be under
@@ -74,10 +74,10 @@ static inline struct thread *get_current_thread(void) {
  * save_user_ex() or save_user_regs(), or when the current thread has
  * committed suicide via ThreadControl.
  */
-extern NORETURN void exit_to_scheduler(struct thread *prev);
+extern noreturn void exit_to_scheduler(struct thread *prev);
 
 /* switches into target thread. caller should save exception context. */
-extern NORETURN void exit_to_thread(struct thread *next);
+extern noreturn void exit_to_thread(struct thread *next);
 
 /* called by irq0 handler when preempt_timer_count is hit. convention per
  * set_irq_handler(), but allows !x86_irq_is_enabled().

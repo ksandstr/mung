@@ -9,6 +9,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <stdbool.h>
+#include <stdnoreturn.h>
 #include <assert.h>
 
 #include <ccan/likely/likely.h>
@@ -424,9 +425,9 @@ extern void isr_irq_bottom(struct x86_exregs *regs);
 /* goes back to userspace while restoring all the registers, as when
  * pre-empted by interrupt.
  */
-extern NORETURN void iret_to_ring3(const struct x86_ctx *load, int gs_sel);
+extern noreturn void iret_to_ring3(const struct x86_ctx *load, int gs_sel);
 
 /* NOTE: this doesn't fill in TCR_SYSEXIT_E[CD]X! */
-extern NORETURN void sysexit_to_ring3(const struct x86_ctx *userctx, int gs_sel);
+extern noreturn void sysexit_to_ring3(const struct x86_ctx *userctx, int gs_sel);
 
 #endif

@@ -3,6 +3,7 @@
 #include <stdlib.h>
 #include <stdarg.h>
 #include <stdbool.h>
+#include <stdnoreturn.h>
 #include <string.h>
 #include <ccan/likely/likely.h>
 #include <ccan/list/list.h>
@@ -97,13 +98,11 @@ void abort(void)
 }
 
 
-void __assert_failure(
+noreturn void __assert_failure(
 	const char *condition,
-	const char *file,
-	unsigned int line,
-	const char *function)
+	const char *file, int line, const char *func)
 {
-	printf("assert(%s) failed in `%s' (%s:%u)\n", condition, function,
+	printf("assert(%s) failed in `%s' (%s:%u)\n", condition, func,
 		file, line);
 	abort();
 }

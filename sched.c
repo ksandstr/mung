@@ -1,6 +1,7 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdnoreturn.h>
 #include <ccan/likely/likely.h>
 
 #include <l4/types.h>
@@ -870,7 +871,7 @@ static struct thread *schedule_next_thread(bool *saw_zero_p)
 }
 
 
-NORETURN void exit_to_thread(struct thread *next)
+noreturn void exit_to_thread(struct thread *next)
 {
 	assert(!x86_irq_is_enabled());
 	assert(get_current_thread() == next);
@@ -1007,7 +1008,7 @@ static struct thread *send_preempt_fault(struct thread *t, L4_Clock_t at)
 }
 
 
-static NORETURN void schedule(void *param_ptr)
+static noreturn void schedule(void *param_ptr)
 {
 	assert(get_current_thread() == NULL);
 	struct thread *prev = param_ptr;
@@ -1131,7 +1132,7 @@ again:
 }
 
 
-NORETURN void exit_to_scheduler(struct thread *prev)
+noreturn void exit_to_scheduler(struct thread *prev)
 {
 	assert(x86_irq_is_enabled());
 
@@ -1142,10 +1143,10 @@ NORETURN void exit_to_scheduler(struct thread *prev)
 }
 
 
-/* this function is a NORETURN due to non-local exit. it'll always either go
+/* this function is a noreturn due to non-local exit. it'll always either go
  * into the scheduler (syscall stack to kth) or do a preemption (in r_f_e()).
  */
-NORETURN void return_to_scheduler(void)
+noreturn void return_to_scheduler(void)
 {
 	struct thread *self = get_current_thread();
 	leaving_thread(self);
@@ -1257,7 +1258,7 @@ void return_to_other(struct thread *other)
 }
 
 
-NORETURN void return_to_partner(void)
+noreturn void return_to_partner(void)
 {
 	struct thread *current = get_current_thread(),
 		*other = current->u0.partner;
@@ -1270,7 +1271,7 @@ NORETURN void return_to_partner(void)
 }
 
 
-NORETURN void return_to_ipc(void *msg_utcb, struct thread *target)
+noreturn void return_to_ipc(void *msg_utcb, struct thread *target)
 {
 	struct thread *cur = get_current_thread();
 	assert(!hook_empty(&cur->post_exn_call));

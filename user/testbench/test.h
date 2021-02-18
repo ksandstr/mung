@@ -7,7 +7,7 @@
 #define SEEN_MUNG_TESTBENCH_TEST_H
 
 #include <stdbool.h>
-#include <ccan/compiler/compiler.h>
+#include <stdnoreturn.h>
 
 
 /* imitation of tap.h from libtap by Nik Clayton */
@@ -111,7 +111,7 @@ extern void srunner_describe(SRunner *sr);
 
 
 /* internal API for test exit from _fail_unless() */
-extern NORETURN void exit_on_fail(void);
+extern noreturn void exit_on_fail(void);
 
 /* same for test from __assert_failure() */
 extern bool in_test(void);

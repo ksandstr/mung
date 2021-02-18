@@ -9,7 +9,7 @@
 #define SEEN_UKERNEL_MISC_H
 
 #include <stdint.h>
-#include <ccan/compiler/compiler.h>
+#include <stdnoreturn.h>
 
 #include <l4/types.h>
 
@@ -34,11 +34,9 @@ extern uint64_t *systemclock_p;			/* microseconds */
 
 extern void *syscall_stack;
 
-extern void NORETURN panic(const char *message);
-extern void NORETURN __not_reached(
-	const char *file,
-	int line,
-	const char *func);
+extern void noreturn panic(const char *message);
+extern void noreturn __not_reached(
+	const char *file, int line, const char *func);
 
 /* return the values of global_timer_count, and *systemclock_p, disabling
  * interrupts around the read operation.

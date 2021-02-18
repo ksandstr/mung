@@ -1,17 +1,15 @@
 
 #include <stdio.h>
 #include <stdarg.h>
+#include <stdnoreturn.h>
 
 #include <ukernel/misc.h>
 #include <ukernel/bug.h>
 
 
-NORETURN void bug(
-	const char *file,
-	int line,
-	const char *func,
-	const char *msgfmt,
-	...)
+noreturn void bug(
+	const char *file, int line, const char *func,
+	const char *msgfmt, ...)
 {
 	va_list args;
 	va_start(args, msgfmt);

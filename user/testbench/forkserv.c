@@ -14,6 +14,7 @@
 #include <stdint.h>
 #include <stdatomic.h>
 #include <stdbool.h>
+#include <stdnoreturn.h>
 #include <errno.h>
 #include <threads.h>
 #include <ccan/list/list.h>
@@ -650,13 +651,11 @@ void kmem_free_page(void *ptr)
 }
 
 
-void __assert_failure(
+noreturn void __assert_failure(
 	const char *condition,
-	const char *file,
-	unsigned int line,
-	const char *function)
+	const char *file, int line, const char *func)
 {
-	printf("assert(%s) failed in `%s' (%s:%u)\n", condition, function,
+	printf("assert(%s) failed in `%s' (%s:%u)\n", condition, func,
 		file, line);
 	for(;;) { asm volatile ("int $1"); }
 }

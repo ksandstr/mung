@@ -1,6 +1,7 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdnoreturn.h>
 #include <string.h>
 #include <ctype.h>
 #include <assert.h>
@@ -96,20 +97,18 @@ int sched_yield(void) {
 }
 
 
-void __assert_failure(
+noreturn void __assert_failure(
 	const char *condition,
-	const char *file,
-	unsigned int line,
-	const char *function)
+	const char *file, int line, const char *func)
 {
 	if(in_test()) {
 		printf("Bail out!  %s:%d assert failure `%s'\n",
 			file, line, condition);
 		exit_on_fail();
 	} else {
-		printf("testbench %lu:%lu %s(`%s', `%s', %u, `%s')\n",
+		printf("testbench %lu:%lu %s(`%s', `%s', %d, `%s')\n",
 			L4_ThreadNo(L4_Myself()), L4_Version(L4_Myself()),
-			__func__, condition, file, line, function);
+			__func__, condition, file, line, func);
 		abort();
 		for(;;) { asm volatile("int $1"); }
 	}

@@ -5,6 +5,7 @@
 #include <stdint.h>
 #include <string.h>
 #include <assert.h>
+#include <ccan/compiler/compiler.h>
 
 #include <ukernel/ioport.h>
 #include <ukernel/interrupt.h>

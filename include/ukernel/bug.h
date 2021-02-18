@@ -15,9 +15,9 @@
 #define SEEN_BUG_H
 
 #include <stdlib.h>
-
-#include <ccan/likely/likely.h>
+#include <stdnoreturn.h>
 #include <ccan/compiler/compiler.h>
+#include <ccan/likely/likely.h>
 
 
 /* note that unlike assert(), this doesn't shove the stringified condition
@@ -35,12 +35,9 @@
 	} while(0)
 
 
-extern NORETURN PRINTF_FMT(4, 5) void bug(
-	const char *file,
-	int line,
-	const char *func,
-	const char *fmt,
-	...);
+extern noreturn PRINTF_FMT(4, 5) void bug(
+	const char *file, int line, const char *func,
+	const char *fmt, ...);
 
 
 #ifdef NDEBUG
