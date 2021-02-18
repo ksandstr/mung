@@ -19,6 +19,7 @@
 #include <ukernel/space.h>
 #include <ukernel/cpu.h>
 #include <ukernel/x86.h>
+#include <ukernel/vgacon.h>
 #include <ukernel/acpi.h>
 #include <ukernel/interrupt.h>
 #include <ukernel/timer.h>
@@ -49,29 +50,33 @@ uint64_t global_timer_count = 0;
 uint64_t *systemclock_p = NULL;
 
 
-void noreturn panic(const char *message)
-{
-	printf("PANIC: %s\n", message);
+static noreturn void total_system_halt(void) {
 	while(true) {
+		/* as total as it gets. in a SMP kernel we'd also halt other CPUs. */
 		asm("cli; hlt");
 	}
 }
 
 
+void noreturn panic(const char *message)
+{
+	fprintf(stderr, "PANIC: %s\n", message);
+	total_system_halt();
+}
+
+
 void noreturn __not_reached(const char *file, int line, const char *func)
 {
-	printf("NOT_REACHED: %s:%d: function `%s'\n", file, line, func);
+	fprintf(stderr, "NOT_REACHED: %s:%d: function `%s'\n",
+		file, line, func);
 	panic("a `NOT_REACHED' was reached");		/* owie */
 }
 
 
-void abort(void)
+noreturn void abort(void)
 {
-	/* NOTE: this may crap out if the stack is fucked. the net effect is the
-	 * same.
-	 */
-	printf("abort(3) called from %p via %p\n",
-		__builtin_return_address(0), __builtin_return_address(1));
+	fprintf(stderr, "abort(3) called (returns to %p)\n",
+		__builtin_return_address(0));
 	panic("aborted");
 }
 
@@ -80,9 +85,25 @@ noreturn void __assert_failure(
 	const char *condition,
 	const char *file, int line, const char *func)
 {
-	printf("assert(%s) failed in `%s' (%s:%u)\n", condition, func,
-		file, line);
+	fprintf(stderr, "assert(%s) failed in `%s' (%s:%u)\n",
+		condition, func, file, line);
 	panic("*** assertion failure");
+}
+
+
+static void *map_vgacon_range(void) {
+	for(uintptr_t a = VGA_BASE; a < VGA_BASE + VGA_SIZE; a += PAGE_SIZE) {
+		put_supervisor_page(a, a >> PAGE_BITS);
+	}
+	return (void *)VGA_TEXT_BASE;
+}
+
+
+static long err_write(void *cookie, const char *buf, size_t size)
+{
+	vgacon_write(cookie, buf, size);
+	/* TODO: output on serial port iff not redirected */
+	return fwrite(buf, 1, size, stdout);	/* FIXME: don't do this */
 }
 
 
@@ -471,6 +492,14 @@ void kmain(void *bigp, unsigned int magic)
 	mapdb_init(kernel_space);
 
 	/* NOTE: malloc(), free(), etc. are only available from this line down. */
+	fclose(stderr);
+	stderr = fopencookie(map_vgacon_range(), "wb",
+		(cookie_io_functions_t){ .write = &err_write });
+	if(stderr == NULL) {
+		const char *argh = "can't reset stderr?\n";
+		while(*argh != '\0') computchar(*argh++);
+		total_system_halt();
+	}
 
 	asm volatile ("lldt %%ax" :: "a" (0));
 	init_kernel_tss(&kernel_tss);
