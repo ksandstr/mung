@@ -25,7 +25,8 @@ distclean:
 libukernel_util.a: hash.o string.o vsnprintf.o bsearch.o \
 		slab.o stdio.o ser_io.o rbtree.o inttypes.o \
 		bug.o invariant.o hook.o stritem.o memdesc.o sort.o \
-		setjmp.o trampoline.o test_util.o $(TEST_OBJS)
+		setjmp.o trampoline.o vgacon.o \
+		test_util.o $(TEST_OBJS)
 	@echo "  AR $@"
 	@ar cr $@ $^
 	@echo "  RANLIB $@"
