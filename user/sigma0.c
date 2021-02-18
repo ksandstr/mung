@@ -83,8 +83,19 @@ static bool invariants(void)
 }
 
 
-void con_putstr(const char *str) {
-	L4_KDB_PrintString((char *)str);
+long con_write(void *cookie, const char *buf, size_t size)
+{
+	size_t done = 0;
+	while(done < size) {
+		const char *cpos = memchr(buf + done, '\n', size - done);
+		size_t len = cpos == NULL ? size - done : cpos - (buf + done);
+		char piece[len + 1];
+		memcpy(piece, buf + done, len);
+		piece[len] = '\0';
+		L4_KDB_PrintString(piece);
+		done += len + (cpos == NULL ? 0 : 1);
+	}
+	return done;
 }
 
 
