@@ -262,6 +262,39 @@ end:
 }
 
 
+void *memchr(const void *ptr, int c, size_t size)
+{
+	if(c == '\0') {
+		size_t len = strnlen(ptr, size);
+		return len < size ? (void *)ptr + len : NULL;
+	}
+
+	/* ye olde WAAT, mostly copypasta'd from strnlen() and changed to use
+	 * byte_mask()
+	 */
+	size_t pos = 0;
+	const unsigned char *str = ptr;
+	while(pos < size) {
+		int bytes = min_t(int, size - pos, until_page(&str[pos])),
+			words = bytes / sizeof(uintptr_t);
+		for(; words > 0; words--, pos += sizeof(uintptr_t)) {
+			uintptr_t w = LE32_TO_CPU(*(const uintptr_t *)&str[pos]), z;
+			if(z = byte_mask(w, c), z != 0) {
+				size_t len = pos + ffsl(z) / 8 - 1;
+				assert(str[len] == (unsigned char)c);
+				return (void *)str + len;
+			}
+		}
+
+		for(int tail = bytes % sizeof(uintptr_t); tail > 0; pos++, tail--) {
+			if(str[pos] == (unsigned char)c) return (void *)str + pos;
+		}
+	}
+
+	return NULL;
+}
+
+
 int strncmp(const char *a, const char *b, size_t max)
 {
 	if(a == b) return 0;
