@@ -15,6 +15,7 @@
 
 #include <ukernel/x86.h>
 #include <ukernel/16550.h>
+#include <ukernel/vgacon.h>
 #include <ukernel/mm.h>
 #include <ukernel/memdesc.h>
 #include <ukernel/util.h>
@@ -44,43 +45,6 @@ static struct boot_module boot_mods[MAX_BOOT_MODS];
 static uintptr_t heap_low = 0;
 
 
-/* rudimentary serial port output from µiX (via kmain.c) */
-#define COM_PORT 0x3f8
-
-void computchar(unsigned char ch)
-{
-//	unsigned int iter = 1;
-
-	/* we'll poll the LSR until the transmit register is empty. */
-	while((inb(COM_PORT + UART_LSR) & UART_LSR_ETHR) == 0) {
-#if 0
-		/* yield every 128k iterations. that's far more than the time required
-		 * to transmit one byte even over a 2400bps line.
-		 */
-		if((++iter & (128*1024-1)) == 0) L4_Yield();
-#endif
-	}
-	outb(COM_PORT + UART_RDWR, ch);
-	/* and then poll again until the holding register is empty, i.e. until
-	 * the character has really been transmitted.
-	 *
-	 * (yeah, a proper serial driver would use the FIFO. no, this is quite
-	 * enough for now thank you.)
-	 */
-//	iter = 1;
-	while((inb(COM_PORT + UART_LSR) & UART_LSR_EDHR) == 0) {
-//		if((++iter & (128*1024-1)) == 0) L4_Yield();
-	}
-	if(ch == '\n') computchar('\r');
-}
-
-
-void con_putstr(const char *str)
-{
-	while(*str != '\0') computchar(*(str++));
-}
-
-
 void noreturn panic(const char *message)
 {
 	printf("PANIC: %s\n", message);
@@ -100,6 +64,14 @@ noreturn void __assert_failure(
 	panic("*** assertion failure");
 }
 #endif
+
+
+long con_write(void *cookie, const char *buf, size_t size)
+{
+	for(size_t i=0; i < size; i++) computchar(buf[i]);
+	vgacon_write((void *)VGA_TEXT_BASE, buf, size);
+	return size;
+}
 
 
 void *sbrk(intptr_t increment)
