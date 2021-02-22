@@ -48,14 +48,6 @@ testbench: testbench.ld crt0.o testbench.o dlmalloc.o heap.o \
 		-L /usr/lib32 -L /usr/lib/i386-linux-gnu -lm \
 		$(shell gcc $(CFLAGS) -print-libgcc-file-name)
 
-ipc_suite.o: ipc_suite.c ipc-suite-defs.h
-x86_suite.o: x86_suite.c x86-suite-defs.h
-thread.o: thread.c threadmgr-defs.h
-heap.o: heap.c forkserv-defs.h common-defs.h
-benchmark.o: benchmark.c benchmark-defs.h
-testbench.o: testbench.c common-defs.h forkserv-defs.h
-forkserv.o: forkserv.c forkserv-defs.h threadmgr-defs.h l4x2-defs.h
-
 
 forkserv: forkserv.ld crt0.o forkserv.o dlmalloc.o idlsupp.o tsd.o ll.o \
 		forkserv-service.o forkserv-common.o forkserv-client.o \
@@ -73,28 +65,13 @@ forkserv: forkserv.ld crt0.o forkserv.o dlmalloc.o idlsupp.o tsd.o ll.o \
 	@$(CC) -c -o $@ $< $(CFLAGS) -DUSE_LOCKS=2 -Wno-unused
 
 
-# muidl outputs.
-# TODO: we don't really need to hear first about the services being generated,
-# and then the common bit, the client, and then the defs. there's AS chatter
-# about the first three too.
-#
-# FIXME: change these to vpath stuff and move the rules into toplevel
-# config.mk .
-%-service.s: idl/%.idl
-	@echo "  IDL $< <service>"
-	@$(MUIDL) $(MUIDLFLAGS) --service $<
+# IDL compiler outputs.
 
-%-client.s: idl/%.idl
-	@echo "  IDL $< <client>"
-	@$(MUIDL) $(MUIDLFLAGS) --client $<
+vpath %.idl $(CFGDIR)/idl idl
 
-%-common.s: idl/%.idl
-	@echo "  IDL $< <common>"
-	@$(MUIDL) $(MUIDLFLAGS) --common $<
-
-%-defs.h: idl/%.idl
-	@echo "  IDL $< <defs>"
-	@$(MUIDL) $(MUIDLFLAGS) --defs $<
+%-service.s %-client.s %-common.s %-defs.h: %.idl
+	@echo "  IDL $<"
+	@$(MUIDL) $(MUIDLFLAGS) --service --client --common --defs $<
 
 
 include $(wildcard .deps/*.d)

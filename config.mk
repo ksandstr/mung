@@ -44,5 +44,5 @@ ccan-%.o ::
 	@as --32 -o $@ $<
 
 
-.deps:
+.deps: $(shell $(CFGDIR)/stuff/find-idl-defs.pl)
 	@mkdir -p .deps

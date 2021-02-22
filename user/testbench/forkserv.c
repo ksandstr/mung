@@ -39,7 +39,6 @@
 #include "forkserv.h"
 #include "muidl.h"
 
-/* IDL bits */
 #include "forkserv-defs.h"
 #include "threadmgr-defs.h"
 #include "l4x2-defs.h"

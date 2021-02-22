@@ -4,6 +4,8 @@
  * string_suite.c instead.
  */
 
+#define IPCHELPER_IMPL_SOURCE
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
@@ -26,10 +28,8 @@
 #include <muidl.h>
 
 #include "defs.h"
-#include "forkserv-defs.h"
 #include "test.h"
-
-#define IPCHELPER_IMPL_SOURCE
+#include "forkserv-defs.h"
 #include "ipc-suite-defs.h"
 
 
