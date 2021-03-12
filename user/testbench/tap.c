@@ -40,10 +40,13 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdint.h>
 #include <string.h>
 #include <stdbool.h>
 #include <stdarg.h>
+#include <assert.h>
 #include <ccan/likely/likely.h>
+#include <ccan/htable/htable.h>
 
 #ifndef __KERNEL__
 #include "defs.h"
@@ -67,7 +70,7 @@ struct saved_ctx
 	struct saved_ctx *next;
 	int depth;
 
-	bool no_plan, have_plan, skip_all, todo, test_died;
+	bool no_plan, have_plan, skip_all, todo, test_died, no_plan_closed;
 	int num_tests_run, expected_tests, failed_tests;
 	char *todo_msg;
 
@@ -75,19 +78,41 @@ struct saved_ctx
 };
 
 
-static bool no_plan, have_plan, skip_all, todo, test_died;
-static int num_tests_run, expected_tests, failed_tests;
-static char *todo_msg = NULL;		/* must be valid on first reset */
-static struct saved_ctx *save_stack = NULL;		/* for subtests */
+struct subtest_msg {
+	pid_t pid;
+	char *msg;
+};
+
+
+static size_t rehash_subtest_msg(const void *ptr, void *unused);
+extern uint32_t int_hash(int x);	/* FIXME: get from header */
+
 
 static bool tap_init_done = false;
+
+/* these are reset in tap_reset(). */
+static struct htable subtest_msg_ht = HTABLE_INITIALIZER(
+	subtest_msg_ht, &rehash_subtest_msg, NULL);
+static struct saved_ctx *save_stack = NULL;		/* for subtests */
+
+/* these are saved and restored by the subtest mechanism. */
+static bool no_plan, have_plan, skip_all, todo, test_died, no_plan_closed;
+static int num_tests_run, expected_tests, failed_tests;
+static char *todo_msg = NULL;		/* must be valid on first reset */
 
 
 static void reset_state(void)
 {
 	/* (yeah, I know) */
 	no_plan = have_plan = skip_all = todo = test_died = false;
+	no_plan_closed = false;
 	num_tests_run = expected_tests = failed_tests = 0;
+}
+
+
+static size_t rehash_subtest_msg(const void *ptr, void *unused) {
+	const struct subtest_msg *msg = ptr;
+	return int_hash(msg->pid);
 }
 
 
@@ -103,6 +128,15 @@ void tap_reset(void)
 
 	free(todo_msg);
 	todo_msg = NULL;
+
+	struct htable_iter it;
+	for(struct subtest_msg *ptr = htable_first(&subtest_msg_ht, &it);
+		ptr != NULL; ptr = htable_next(&subtest_msg_ht, &it))
+	{
+		free(ptr->msg);
+		free(ptr);
+	}
+	htable_clear(&subtest_msg_ht);
 }
 
 
@@ -129,6 +163,7 @@ void subtest_start(const char *fmt, ...)
 	c->expected_tests = expected_tests;
 	c->failed_tests = failed_tests;
 	c->todo_msg = todo_msg;
+	c->no_plan_closed = no_plan_closed;
 	todo_msg = NULL;	/* subtests get a clean slate */
 
 	c->next = save_stack;
@@ -138,13 +173,14 @@ void subtest_start(const char *fmt, ...)
 }
 
 
-int subtest_end(void)
+char *subtest_pop(int *rc_p, void **freeptr_p)
 {
 	if(save_stack == NULL) {
 		diag("%s: save_stack == NULL", __func__);
 		abort();
 	}
 
+	close_no_plan();
 	int exst = exit_status();
 	struct saved_ctx *c = save_stack;
 	save_stack = c->next;
@@ -158,13 +194,49 @@ int subtest_end(void)
 	num_tests_run = c->num_tests_run;
 	expected_tests = c->expected_tests;
 	failed_tests = c->failed_tests;
+	no_plan_closed = c->no_plan_closed;
 	free(todo_msg); todo_msg = c->todo_msg;
 
-	int ret = ok(exst == 0, "%s", c->testmsg);
-	if(!ret) diag("subtest exit_status=%d", exst);
-	free(c);
+	if(exst != 0) diag("subtest exit_status=%d", exst);
+	if(rc_p != NULL) *rc_p = exst;
+	if(freeptr_p != NULL) *freeptr_p = c;
+	return c->testmsg;
+}
 
-	return ret;
+
+int subtest_end(void)
+{
+	int rc;
+	void *freeptr;
+	char *msg = subtest_pop(&rc, &freeptr);
+	/* "rc" is value of exit_status(), 0 when all tests passed. */
+	ok(rc == 0, "%s", msg);
+	free(freeptr);
+	return rc;
+}
+
+
+void stash_subtest_msg(pid_t pid, char *msgstr)
+{
+	struct subtest_msg *msg = malloc(sizeof *msg);
+	assert(msg != NULL);
+	msg->pid = pid;
+	msg->msg = msgstr;
+	bool ok = htable_add(&subtest_msg_ht, rehash_subtest_msg(msg, NULL), msg);
+	assert(ok);
+}
+
+
+const char *fetch_subtest_msg(pid_t pid, const char *orelse)
+{
+	size_t hash = int_hash(pid);
+	struct htable_iter it;
+	for(struct subtest_msg *cand = htable_firstval(&subtest_msg_ht, &it, hash);
+		cand != NULL; cand = htable_nextval(&subtest_msg_ht, &it, hash))
+	{
+		if(cand->pid == pid) return cand->msg;
+	}
+	return orelse;
 }
 
 
@@ -177,12 +249,9 @@ static void print_sub_prefix(void)
 
 
 #ifndef __KERNEL__
-void _fail_unless(
-	int result,
-	const char *file,
-	int line,
-	const char *expr,
-	...)
+void _fail_unless( int result,
+	const char *file, int line,
+	const char *expr, ...)
 {
 	if(unlikely(!result)) {
 		va_list ap;
@@ -202,13 +271,9 @@ void _fail_unless(
 #endif
 
 
-int _gen_result(
-	bool ok,
-	const char *func,
-	const char *file,
-	unsigned int line,
-	const char *test_name_fmt,
-	...)
+int _gen_result(bool ok,
+	const char *func, const char *file, unsigned int line,
+	const char *test_name_fmt, ...)
 {
 	TRY_INIT;
 	num_tests_run++;
@@ -417,5 +482,23 @@ int exit_status(void)
 		return failed_tests + expected_tests - num_tests_run;
 	}
 }
+
+
+void close_no_plan(void)
+{
+	if(no_plan_closed) return;
+	if(!have_plan || no_plan) {
+		print_sub_prefix();
+		printf("1..%d\n", num_tests_run);
+		expected_tests = num_tests_run;
+		if(!have_plan) {
+			/* discourage an implicit lazy plan */
+			diag("    No plan until end of test?");
+			have_plan = true;	/* shouldn't plan again. */
+		}
+	}
+	no_plan_closed = true;
+}
+
 
 #endif

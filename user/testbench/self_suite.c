@@ -1834,6 +1834,40 @@ START_LOOP_TEST(conflict_plain_mutex, iter, 0, 1)
 END_TEST
 
 
+/* tcase "subtest" */
+
+START_TEST(basic_fork_subtest)
+{
+	plan_tests(2);
+
+	pid_t sub = fork_subtest_start("hello subtest!") {
+		plan_tests(1);
+		ok(true, "happy");
+	} fork_subtest_end;
+
+	ok(true, "something else");
+	fork_subtest_ok1(sub);
+}
+END_TEST
+
+
+START_TEST(failing_fork_subtest)
+{
+	plan_tests(2);
+
+	pid_t sub = fork_subtest_start("goodbye subtest") {
+		plan_tests(1);
+		ok(false, "sad!");
+	} fork_subtest_end;
+
+	ok(true, "whatever man");
+	int st = fork_subtest_join(sub);
+	ok(WIFEXITED(st) && WEXITSTATUS(st) == 1, "%s exited with status=1",
+		fetch_subtest_msg(sub, "unknown subtest"));
+}
+END_TEST
+
+
 /* tcase "env" */
 
 /* note: this'll examine at most DROP_PAGER_LOG_SIZE pages, which is typically
@@ -2114,6 +2148,14 @@ static Suite *self_suite(void)
 		TCase *tc = tcase_create("pg");
 		tcase_add_checked_fixture(tc, &stats_setup, &stats_teardown);
 		tcase_add_test(tc, stats_delay_test);
+		suite_add_tcase(s, tc);
+	}
+
+	/* tests about the forked subtest syntax. */
+	{
+		TCase *tc = tcase_create("subtest");
+		tcase_add_test(tc, basic_fork_subtest);
+		tcase_add_test(tc, failing_fork_subtest);
 		suite_add_tcase(s, tc);
 	}
 

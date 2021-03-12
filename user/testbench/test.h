@@ -8,6 +8,7 @@
 
 #include <stdbool.h>
 #include <stdnoreturn.h>
+#include <sys/types.h>
 
 
 /* imitation of tap.h from libtap by Nik Clayton */
@@ -46,6 +47,61 @@
 	   (*(test_fn))((param)); \
 	   subtest_end(); \
 	 })
+
+/* forked subtests. copypasta'd from <sneks/test.h>. #include <sys/wait.h> to
+ * make these compile.
+ */
+#define fork_subtest_start(_fmt, ...) ({ \
+		char *_msg = malloc(512); \
+		snprintf(_msg, 512, (_fmt), ##__VA_ARGS__); \
+		int __stc = fork(); \
+		if(__stc == 0) { \
+			subtest_start("%s", _msg); \
+
+#define fork_subtest_end \
+			int _rc; \
+			subtest_pop(&_rc, NULL); \
+			exit(_rc); \
+		} else { \
+			stash_subtest_msg(__stc, _msg); \
+		} \
+		__stc; \
+	})
+
+/* returns the waitpid() status, for WIFEXITED() and the like. when exit
+ * status is 255, propagates bail-out by exit(255)'ing.
+ *
+ * the subtest title can be retrieved with fetch_subtest_msg(_child,
+ * "otherwise").
+ */
+#define fork_subtest_join(_child) ({ \
+		int __st, __dead, __c = (_child); \
+		do { \
+			__dead = waitpid(__c, &__st, 0); \
+		} while(__dead < 0 && errno == EINTR); \
+		fail_unless(__dead == __c); \
+		if(WIFEXITED(__st) && WEXITSTATUS(__st) == 255) { \
+			exit(255); \
+		} \
+		__st; \
+	})
+
+/* joins the forked subtest as a test point in the parent. will eventually
+ * print the test name in the ok-line. returns like ok1(), bails like
+ * fork_subtest_join().
+ */
+#define fork_subtest_ok1(_child) ({ \
+		int __st, __dead, __c = (_child); \
+		do { \
+			__dead = waitpid(__c, &__st, 0); \
+		} while(__dead < 0 && errno == EINTR); \
+		if(WIFEXITED(__st) && WEXITSTATUS(__st) == 255) { \
+			exit(255); \
+		} \
+		ok(__dead == __c \
+			&& WIFEXITED(__st) && WEXITSTATUS(__st) == 0, \
+			fetch_subtest_msg(__c, "unknown subtest")); \
+	})
 
 
 /* Check-style unit testing things */
@@ -119,20 +175,12 @@ extern bool in_test(void);
 
 /* from tap.c */
 
-extern void _fail_unless(
-	int result,
-	const char *file,
-	int line,
-	const char *expr,
-	...);
+extern void _fail_unless(int result,
+	const char *file, int line, const char *expr, ...);
 
-extern int _gen_result(
-	bool ok,
-	const char *func,
-	const char *file,
-	unsigned int line,
-	const char *test_name,
-	...);
+extern int _gen_result(bool ok,
+	const char *func, const char *file, unsigned int line,
+	const char *fmt, ...);
 
 extern void tap_reset(void);	/* called by the test harness */
 
@@ -147,7 +195,11 @@ extern void todo_end(void);
 
 extern void subtest_start(const char *fmt, ...);
 extern int subtest_end(void);
+extern char *subtest_pop(int *rc_p, void **freeptr_p);
+extern void stash_subtest_msg(pid_t pid, char *msg);
+extern const char *fetch_subtest_msg(pid_t pid, const char *orelse);
 
 extern int exit_status(void);
+extern void close_no_plan(void);
 
 #endif

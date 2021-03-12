@@ -7,6 +7,7 @@
 #define EPERM	1	/* operation not permitted */
 #define ENOENT	2	/* no such file or directory */
 #define ESRCH	3	/* no such process */
+#define EINTR	4	/* interrupted system call */
 #define EIO		5	/* i/o error */
 #define E2BIG	7	/* argument list too long */
 #define EBADF	9	/* bad file number */
