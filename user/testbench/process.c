@@ -431,10 +431,19 @@ pid_t fork_tid(L4_ThreadId_t *tid_p)
 }
 
 
-pid_t wait(int *status)
+pid_t waitpid(pid_t pid, int *wstatus, int options)
 {
+	if(pid != -1) {
+		errno = ENOSYS;
+		return -1;
+	}
+	if(options != 0) {
+		errno = EINVAL;
+		return -1;
+	}
+
 	int32_t id;
-	int n = forkserv_wait(L4_Pager(), &id, status);
+	int n = forkserv_wait(L4_Pager(), &id, wstatus);
 	if(n < 0) {
 		/* IPC errors. */
 		errno = -n;
@@ -447,6 +456,11 @@ pid_t wait(int *status)
 		/* wait(2) success. */
 		return id;
 	}
+}
+
+
+pid_t wait(int *wstatus) {
+	return waitpid(-1, wstatus, 0);
 }
 
 
