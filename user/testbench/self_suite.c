@@ -534,6 +534,138 @@ START_LOOP_TEST(wait_more_children, iter, 0, 3)
 END_TEST
 
 
+/* fork a bunch of child processes and then waitpid() on them in sequence.
+ *
+ * variables:
+ *   - [reverse] wait in reverse order
+ *   - [nohang] sleep until all have exited, then use WNOHANG
+ */
+START_LOOP_TEST(multi_child_waitpid, iter, 0, 3)
+{
+	const int num_children = 16;
+	const bool reverse = !!(iter & 1), nohang = !!(iter & 2);
+	diag("num_children=%d, reverse=%s, nohang=%s",
+		num_children, btos(reverse), btos(nohang));
+	plan_tests(num_children);
+
+	todo_start("no waitpid(n != -1, ...)");
+
+	pid_t pids[num_children];
+	for(int i=0; i < num_children; i++) {
+		pid_t c = fork();
+		if(c == 0) {
+			usleep(5 * 1000);
+			exit(i);
+		}
+		pids[i] = c;
+	}
+	if(nohang) usleep(15 * 1000);
+	for(int i=0; i < num_children; i++) {
+		subtest_start("wait for i=%d", i);
+		plan_tests(2);
+		int st, offset = reverse ? num_children - 1 - i : i;
+		pid_t c = pids[offset], n = waitpid(c, &st, nohang ? WNOHANG : 0);
+		if(!ok(n == c, "waited for right PID")) {
+			diag("c=%d, n=%d, errno=%d", c, n, errno);
+		}
+		ok1(WIFEXITED(st) && WEXITSTATUS(st) == offset);
+		subtest_end();
+	}
+
+	/* clean up stragglers */
+	int st;
+	pid_t c;
+	while(c = wait(&st), c > 0 || errno != ECHILD) {
+		if(c >= 0) diag("cleaned up child=%d", c);
+		else {
+			diag("wait(2) failed, errno=%d", errno);
+			break;
+		}
+	}
+}
+END_TEST
+
+
+/* a call to waitpid(2) should return -1 (ECHILD) when there are no children.
+ * (copypasta'd from sneks user/test/process/wait.c, then altered to cover
+ * WNOHANG.)
+ */
+START_LOOP_TEST(empty_wait, iter, 0, 1)
+{
+	const bool nohang = !!(iter & 1);
+	diag("nohang=%s", btos(nohang));
+	plan_tests(2);
+
+	if(nohang) todo_start("no WNOHANG");
+
+	int st, pid = waitpid(-1, &st, nohang ? WNOHANG : 0);
+	ok1(pid == -1);
+	if(!ok1(errno == ECHILD)) diag("errno=%d", errno);
+}
+END_TEST
+
+
+/* a call to waitpid(... WHOHANG) should return 0 when there are children but
+ * they've not entered a waitable state.
+ *
+ * (similar to the test in sneks user/test/process/wait.c .)
+ */
+START_LOOP_TEST(busy_wait, iter, 0, 1)
+{
+	const bool wild = !!(iter & 1);
+	diag("wild=%s", btos(wild));
+	plan_tests(2);
+
+	todo_start("no WNOHANG");
+
+	pid_t c = fork();
+	if(c == 0) {
+		L4_Sleep(L4_TimePeriod(10 * 1000));
+		exit(0);
+	}
+
+	int st;
+	pid_t dead = waitpid(wild ? -1 : c, &st, WNOHANG);
+	if(!ok1(dead == 0)) {
+		diag("dead=%d, errno=%d", dead, errno);
+	}
+	L4_Sleep(L4_TimePeriod(20 * 1000));
+	dead = waitpid(wild ? -1 : c, &st, WNOHANG);
+	if(!ok1(dead == c)) diag("dead=%d, errno=%d", dead, errno);
+
+	wait(&st);	/* clean up */
+}
+END_TEST
+
+
+/* waitpid(..., 0) should return correctly whether the child exits before the
+ * call or after. (active/passive sleeping test.)
+ */
+START_LOOP_TEST(sleeping_wait, iter, 0, 3)
+{
+	const bool active_wait = !!(iter & 1), wild = !!(iter & 2);
+	diag("active_wait=%s, wild=%s", btos(active_wait), btos(wild));
+	plan_tests(2);
+
+	if(!wild) todo_start("no waitpid(n != -1, ...)");
+
+	pid_t c = fork();
+	if(c == 0) {
+		usleep(10 * 1000);
+		exit(0);
+	}
+	if(active_wait) usleep(20 * 1000);
+
+	int st;
+	pid_t n = waitpid(wild ? -1 : c, &st, 0);
+	if(!ok1(n == c)) diag("n=%d, errno=%d", n, errno);
+	ok1(WIFEXITED(st) && WEXITSTATUS(st) == 0);
+
+	wait(&st);	/* clean up on failure */
+}
+END_TEST
+
+
 START_TEST(copy_on_write)
 {
 	plan_tests(3);
@@ -1936,6 +2068,9 @@ static Suite *self_suite(void)
 		suite_add_tcase(s, tc);
 	}
 
+	/* TODO: this should be split into one for forking (e.g. copy-on-write
+	 * semantics), and another for the nontrivial cases of waitpid(2).
+	 */
 	{
 		TCase *tc = tcase_create("fork");
 		tcase_set_fork(tc, false);
@@ -1952,6 +2087,10 @@ static Suite *self_suite(void)
 		tcase_add_test(tc, deeper_fork);
 		tcase_add_test(tc, multi_fork_tid);
 		tcase_add_test(tc, many_fork_sequence);
+		tcase_add_test(tc, multi_child_waitpid);
+		tcase_add_test(tc, empty_wait);
+		tcase_add_test(tc, busy_wait);
+		tcase_add_test(tc, sleeping_wait);
 		tcase_add_test(tc, retain_tsd_on_fork);
 		suite_add_tcase(s, tc);
 	}
