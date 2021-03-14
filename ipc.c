@@ -695,8 +695,7 @@ static inline bool will_redirect(struct thread *t, struct thread *dst)
  * postcond: !@retval -> @self->status \in {SEND_WAIT, XFER, READY, STOPPED}
  */
 static bool ipc_send_half(
-	struct thread *self,
-	void *self_utcb,
+	struct thread *self, void *self_utcb,
 	struct thread **dest_p)
 {
 	/* must look this alive to attempt active send */
@@ -726,11 +725,12 @@ static bool ipc_send_half(
 	}
 	struct thread *dest = *dest_p;
 
-	/* get matching variables, incl. propagation */
-	L4_ThreadId_t self_id = { .raw = self->id }, self_lid = get_local_id(self);
+	/* get matching variables, check propagation */
+	L4_ThreadId_t self_id = { .raw = self->id }, self_lid = get_local_id(self),
+		np_self_id = self_id, np_self_lid = self_lid;
 	bool propagated = false;
 	struct thread *vs = NULL, *sender = self;
-	if(CHECK_FLAG(tag->X.flags, 0x1)) {
+	if(L4_IpcPropagated(*tag)) {
 		/* propagation (sender fakery). */
 		vs = get_tcr_thread(self, self_utcb, L4_TCR_VA_SENDER);
 		/* FIXME: also check interrupt propagation */
@@ -738,19 +738,6 @@ static bool ipc_send_half(
 			|| self->space == dest->space
 			|| has_redir_chain(vs, self)))
 		{
-			/* redirect a closed IPC filter when applicable */
-			if((vs->status == TS_R_RECV || vs->status == TS_RECV_WAIT)
-				&& (vs->ipc_from.raw == self_id.raw
-					|| (vs->ipc_from.raw == self_lid.raw
-						&& vs->space == self->space)))
-			{
-				bool twiddle = in_recv_wait(vs);
-				if(twiddle) remove_recv_wait(vs);
-				vs->ipc_from.raw = dest->id;
-				if(vs->u0.partner == self) vs->u0.partner = dest;
-				if(twiddle) insert_recv_wait(vs);
-			}
-
 			sender = vs;
 			self_id.raw = vs->id;
 			self_lid = get_local_id(vs);
@@ -758,6 +745,7 @@ static bool ipc_send_half(
 		} else {
 			tag->X.flags &= ~0x1;		/* no propagation for you. */
 		}
+		assert(propagated == L4_IpcPropagated(*tag));
 	}
 	assert(!propagated || vs != NULL);
 
@@ -924,6 +912,19 @@ static bool ipc_send_half(
 				assert(L4_IpcPropagated(*tag));
 				L4_VREG(dest_utcb, L4_TCR_VA_SENDER) = tid_return(dest,
 					self).raw;
+
+				/* turn a closed FromSpec when applicable */
+				if((vs->status == TS_R_RECV || vs->status == TS_RECV_WAIT)
+					&& (vs->ipc_from.raw == np_self_id.raw
+						|| (vs->ipc_from.raw == np_self_lid.raw
+							&& vs->space == self->space)))
+				{
+					bool twiddle = in_recv_wait(vs);
+					if(twiddle) remove_recv_wait(vs);
+					vs->ipc_from.raw = dest->id;
+					if(vs->u0.partner == self) vs->u0.partner = dest;
+					if(twiddle) insert_recv_wait(vs);
+				}
 			}
 			if(redirected) {
 				assert(L4_IpcRedirected(*tag));

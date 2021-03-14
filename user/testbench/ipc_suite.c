@@ -2212,7 +2212,6 @@ static void noturn_sleeper(void *param);
 START_TEST(propagation_no_turn_fromspec)
 {
 	plan_tests(5);
-	todo_start("known borkage");
 
 	L4_ThreadId_t sleeper = xstart_thread(&noturn_sleeper, NULL),
 		propagator = xstart_thread(&noturn_propagator, (void *)sleeper.raw);
