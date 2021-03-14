@@ -2140,14 +2140,17 @@ static void call_serv_fn(void *param)
 }
 
 
-/* test the part about propagation where it alters a closed waiter's
- * ipc_from. to wit:
+/* test the part about propagation where it turns a closed waiter's
+ * FromSpec. to wit:
  *
  * - without propagation, test_serv_fn should not be able to reply
  *   to call_serv_fn.
  * - with propagation, it should.
+ *
+ * this does not test any case where the peers are in different address
+ * spaces.
  */
-START_LOOP_TEST(propagation_alter_wait, iter, 0, 1)
+START_LOOP_TEST(propagation_turn_fromspec, iter, 0, 1)
 {
 	plan_tests(2);
 	const bool p_bit = CHECK_FLAG(iter, 1);
@@ -2194,6 +2197,99 @@ START_LOOP_TEST(propagation_alter_wait, iter, 0, 1)
 	free(t);
 }
 END_TEST
+
+
+/* test that propagation does not turn the virtual sender's FromSpec when
+ * propagation criteria are present but the IPC send phase fails. the main
+ * thread calls to a forwarder thread, which tries to propagate to a sleeper
+ * thread; when that propagation fails, it returns the error code to the main
+ * thread which examines the entrails.
+ */
+static void noturn_propagator(void *param);
+static void noturn_sleeper(void *param);
+
+
+START_TEST(propagation_no_turn_fromspec)
+{
+	plan_tests(5);
+	todo_start("known borkage");
+
+	L4_ThreadId_t sleeper = xstart_thread(&noturn_sleeper, NULL),
+		propagator = xstart_thread(&noturn_propagator, (void *)sleeper.raw);
+	L4_Accept(L4_UntypedWordsAcceptor);
+	L4_Set_VirtualSender(L4_nilthread);
+	L4_LoadMR(0, 0);
+	L4_MsgTag_t tag = L4_Call_Timeouts(propagator, L4_Never, TEST_IPC_DELAY);
+	L4_Word_t ec = L4_ErrorCode();
+	L4_ThreadId_t actual = L4_ActualSender();
+	L4_Word_t prop_ec; L4_StoreMR(1, &prop_ec);
+	if(L4_IpcFailed(tag)) diag("call ec=%lu", ec);
+	skip_start(!ok1(L4_IpcSucceeded(tag)), 3, "IPC failed") {
+		ok1(!L4_IpcPropagated(tag));
+		ok1(L4_IsNilThread(actual));
+		ok1(prop_ec == 2);	/* send-phase timeout ErrorCode */
+	} skip_end;
+
+	char *prop_ret = xjoin_thread(propagator);
+	if(!ok(prop_ret == NULL, "propagator")) {
+		diag("status: %s", prop_ret);
+	}
+	xjoin_thread(sleeper);
+}
+END_TEST
+
+
+static void noturn_propagator(void *param)
+{
+	char *failmsg, *what_failed;
+	L4_Word_t ec;
+
+	L4_ThreadId_t sleeper = { .raw = (L4_Word_t)param }, sender;
+	L4_MsgTag_t tag = L4_WaitLocal_Timeout(TEST_IPC_DELAY, &sender);
+	if(L4_IpcFailed(tag)) {
+		ec = L4_ErrorCode();
+		what_failed = "wait";
+		goto fail;
+	}
+
+	sender = L4_GlobalIdOf(sender);
+	diag("propagating for %lu:%lu", L4_ThreadNo(sender), L4_Version(sender));
+	L4_Set_VirtualSender(sender);
+	tag = (L4_MsgTag_t){ .X.u = 1 };
+	L4_Set_Propagation(&tag);
+	L4_LoadMR(0, tag.raw);
+	L4_LoadMR(1, 12345);
+	tag = L4_Send_Timeout(sleeper, A_SHORT_NAP);
+	ec = L4_ErrorCode();
+	if(L4_IpcSucceeded(tag)) {
+		what_failed = "send (succeeded)";
+		goto fail;
+	}
+
+	/* return ec to main thread */
+	L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 1 }.raw);
+	L4_LoadMR(1, ec);
+	tag = L4_Reply(sender);
+	if(L4_IpcSucceeded(tag)) exit_thread(NULL);
+	else {
+		ec = L4_ErrorCode();
+		what_failed = "reply";
+		goto fail;
+	}
+
+	assert(false);
+
+fail:
+	failmsg = malloc(100);
+	snprintf(failmsg, 100, "%s returned ec=%lu", what_failed, ec);
+	exit_thread(failmsg);
+}
+
+
+static void noturn_sleeper(void *param) {
+	L4_Sleep(TEST_IPC_DELAY);
+	L4_Sleep(A_SHORT_NAP);
+}
 
 
 /* test that propagated passive sends can be received with all applicable
@@ -3721,7 +3817,8 @@ static Suite *ipc_suite(void)
 		TCase *tc = tcase_create("propagate");
 		tcase_set_fork(tc, false);
 		tcase_add_test(tc, propagation);
-		tcase_add_test(tc, propagation_alter_wait);
+		tcase_add_test(tc, propagation_turn_fromspec);
+		tcase_add_test(tc, propagation_no_turn_fromspec);
 		tcase_add_test(tc, propagation_in_active_receive);
 		tcase_add_test(tc, cancel_virtualsender);
 		suite_add_tcase(s, tc);
