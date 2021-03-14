@@ -101,6 +101,7 @@ struct fs_thread
 	L4_ThreadId_t tid;
 	struct fs_space *space;
 	struct list_node wait_link;	/* in space->waiting_threads | next == NULL */
+	pid_t wait_pid;		/* child PID being waited on, -1 for any */
 };
 
 
@@ -179,6 +180,13 @@ static size_t hash_threadno(const void *elem, void *priv) {
 static bool threadno_cmp(const void *pa, void *pb) {
 	const L4_ThreadId_t *a = pa, *b = pb;
 	return L4_ThreadNo(*a) == L4_ThreadNo(*b);
+}
+
+
+static bool list_member(struct list_head *list, struct list_node *link) {
+	struct list_node *i = list->n.next;
+	while(i != link && i != &list->n) i = i->next;
+	return i == link;
 }
 
 
@@ -1545,7 +1553,7 @@ static void handle_discontig(L4_Fpage_t page, int32_t grain)
  */
 static void destroy_space(struct fs_space *sp)
 {
-	/* reparent children to space 0. */
+	/* reparent live children to space 0. */
 	struct fs_space *child, *next_space, *zero = get_space(0);
 	list_for_each_safe(&sp->children, child, next_space, child_link) {
 		child->parent_id = 0;
@@ -1561,12 +1569,17 @@ static void destroy_space(struct fs_space *sp)
 	}
 	assert(list_empty(&sp->dead_children));
 
+	htable_del(&space_hash, int_hash(sp->id), &sp->id);
 	free(sp);
 }
 
 
-static int32_t handle_wait(int32_t *status_ptr)
+static int handle_wait(int child_pid, int *wstatus, int options)
 {
+	if(options & ~(WNOHANG)) return -EINVAL;
+	if(child_pid < 0 && child_pid != -1) return -EINVAL;
+	if(child_pid == 0) child_pid = -1;
+
 	L4_ThreadId_t ipc_from = muidl_get_sender();
 	assert(L4_IsGlobalId(ipc_from));
 	struct fs_space *sp = get_space_by_tid(ipc_from);
@@ -1576,24 +1589,54 @@ static int32_t handle_wait(int32_t *status_ptr)
 		return -1;
 	}
 
-	struct fs_space *dead = list_pop(&sp->dead_children,
-		struct fs_space, child_link);
+	struct fs_space *dead, *live;
+	if(child_pid == -1) {
+		dead = list_pop(&sp->dead_children, struct fs_space, child_link);
+		live = NULL;
+	} else {
+		live = get_space(child_pid);
+		if(live == NULL) return -ECHILD;	/* doesn't exist */
+		/* there may be a faster way to do this, in principle, but forkserv
+		 * doesn't need to scale like that.
+		 */
+		if(list_member(&sp->dead_children, &live->child_link)) {
+			dead = live;
+			live = NULL;
+			list_del_from(&sp->dead_children, &dead->child_link);
+		} else if(!list_member(&sp->children, &live->child_link)) {
+			/* b-but the kid is not my son */
+			return -ECHILD;
+		} else {
+			dead = NULL;
+		}
+	}
+
 	if(dead != NULL) {
 		/* immediate success */
+		assert(live == NULL);
 		int id = dead->id;
-		*status_ptr = dead->wait_status;
+		*wstatus = dead->wait_status;
 		destroy_space(dead);
 		return id;
-	} else if(!list_empty(&sp->children)) {
-		/* delayed */
-		struct fs_thread *t = get_thread(ipc_from);
-		assert(t->wait_link.next == NULL);
-		list_add_tail(&sp->waiting_threads, &t->wait_link);
-		muidl_raise_no_reply();
-		return -666;
+	} else if(live != NULL || !list_empty(&sp->children)) {
+		if(options & WNOHANG) {
+			/* not yet waitable. */
+			*wstatus = 0;
+			return 0;
+		} else {
+			/* delayed */
+			struct fs_thread *t = get_thread(ipc_from);
+			assert(t->wait_link.next == NULL);
+			assert(live != NULL || child_pid == -1);
+			assert(live == NULL || child_pid == live->id);
+			t->wait_pid = child_pid;
+			list_add_tail(&sp->waiting_threads, &t->wait_link);
+			muidl_raise_no_reply();
+			return -666;
+		}
 	} else {
 		/* immediate -ECHILD */
-		*status_ptr = 0;
+		*wstatus = 0;
 		return -ECHILD;
 	}
 }
@@ -1678,7 +1721,7 @@ static void handle_exit(int32_t exit_status, bool was_segv)
 }
 
 
-static void exit_common(L4_ThreadId_t target, int32_t wait_status)
+static void exit_common(L4_ThreadId_t target, int wait_status)
 {
 	struct fs_space *sp = get_space_by_tid(target);
 	if(sp == NULL) {
@@ -1689,8 +1732,8 @@ static void exit_common(L4_ThreadId_t target, int32_t wait_status)
 
 	/* chuck threads in a slightly redundant manner, i.e. by killing the ones
 	 * currently in wait(2) first. this enforces a little bit of consistency
-	 * under !NDEBUG, which is good in a test runtime such as per forkserv's
-	 * design.
+	 * under !NDEBUG, which is good in a test environment such as what
+	 * forkserv provides.
 	 */
 	struct fs_thread *t, *next;
 	list_for_each_safe(&sp->waiting_threads, t, next, wait_link) {
@@ -1708,7 +1751,6 @@ static void exit_common(L4_ThreadId_t target, int32_t wait_status)
 	assert(sp != parent);		/* space 0 cannot die */
 
 	/* destroy the virtual memory bits and zombify the address space */
-	htable_del(&space_hash, int_hash(sp->id), &sp->id);
 	struct htable_iter it;
 	for(struct fs_vpage *vp = htable_first(&sp->pages, &it);
 		vp != NULL;
@@ -1729,9 +1771,19 @@ static void exit_common(L4_ThreadId_t target, int32_t wait_status)
 	 * no waiter)
 	 */
 	list_del_from(&parent->children, &sp->child_link);
-	struct fs_thread *wakeup = list_pop(&parent->waiting_threads,
-		struct fs_thread, wait_link);
+	struct fs_thread *wakeup = NULL, *cur;
+	list_for_each(&parent->waiting_threads, cur, wait_link) {
+		if(cur->wait_pid == sp->id) {
+			/* select the first per-PID waiter over wildcards. */
+			wakeup = cur;
+			break;
+		} else if(cur->wait_pid == -1 && wakeup == NULL) {
+			/* select the first wildcard waiter otherwise. */
+			wakeup = cur;
+		}
+	}
 	if(wakeup != NULL) {
+		list_del_from(&parent->waiting_threads, &wakeup->wait_link);
 		wakeup->wait_link.next = NULL;
 
 		L4_Word_t dead_id = sp->id;
@@ -1747,15 +1799,11 @@ static void exit_common(L4_ThreadId_t target, int32_t wait_status)
 		}
 
 		/* if this was the parent's last child, send -ECHILD to other
-		 * waiters.
-		 *
-		 * also, !empty(dead) --> empty(waiting).
+		 * waiters; such as those that waited on @sp and weren't signaled
+		 * because another thread got there first.
 		 */
-		assert(list_empty(&parent->dead_children)
-			|| list_empty(&parent->waiting_threads));
 		if(list_empty(&parent->children)
-			&& list_empty(&parent->dead_children)
-			&& !list_empty(&parent->waiting_threads))
+			&& list_empty(&parent->dead_children))
 		{
 			list_for_each_safe(&parent->waiting_threads,
 				wakeup, next, wait_link)

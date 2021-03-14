@@ -433,27 +433,20 @@ pid_t fork_tid(L4_ThreadId_t *tid_p)
 
 pid_t waitpid(pid_t pid, int *wstatus, int options)
 {
-	if(pid != -1) {
-		errno = ENOSYS;
-		return -1;
-	}
-	if(options != 0) {
-		errno = EINVAL;
-		return -1;
-	}
-
-	int32_t id;
-	int n = forkserv_wait(L4_Pager(), &id, wstatus);
-	if(n < 0) {
-		/* IPC errors. */
+	assert(wstatus != NULL);
+	int id, n = forkserv_wait(L4_Pager(), &id, pid, wstatus, options);
+	if(n > 0) {
+		/* IPC errors. POSIX forbids negative errno values, but luckily we're
+		 * not POSIX.
+		 */
 		errno = -n;
 		return -1;
 	} else if(id < 0) {
-		/* wait(2) errors. */
+		/* waitpid(2) errors. */
 		errno = -id;
 		return -1;
 	} else {
-		/* wait(2) success. */
+		/* waitpid(2) success. */
 		return id;
 	}
 }

@@ -76,7 +76,7 @@ interface ForkServ: L4X2::FaultHandler, L4X2::X86IOFaultHandler
 	 *     and bits 31:6 give the high bits of the segfaulting address.
 	 */
 	[Label(0x7741)]		/* "wA" */
-	long wait([MR(2)] out long status)
+	long wait(in long child_pid, [MR(2)] out long status, in long options)
 		raises(muidl::NoReply);
 
 	[Label(0x2e21)]	/* ".!" */

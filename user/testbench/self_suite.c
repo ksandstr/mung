@@ -548,8 +548,6 @@ START_LOOP_TEST(multi_child_waitpid, iter, 0, 3)
 		num_children, btos(reverse), btos(nohang));
 	plan_tests(num_children);
 
-	todo_start("no waitpid(n != -1, ...)");
-
 	pid_t pids[num_children];
 	for(int i=0; i < num_children; i++) {
 		pid_t c = fork();
@@ -596,8 +594,6 @@ START_LOOP_TEST(empty_wait, iter, 0, 1)
 	diag("nohang=%s", btos(nohang));
 	plan_tests(2);
 
-	if(nohang) todo_start("no WNOHANG");
-
 	int st, pid = waitpid(-1, &st, nohang ? WNOHANG : 0);
 	ok1(pid == -1);
 	if(!ok1(errno == ECHILD)) diag("errno=%d", errno);
@@ -615,8 +611,6 @@ START_LOOP_TEST(busy_wait, iter, 0, 1)
 	const bool wild = !!(iter & 1);
 	diag("wild=%s", btos(wild));
 	plan_tests(2);
-
-	todo_start("no WNOHANG");
 
 	pid_t c = fork();
 	if(c == 0) {
@@ -646,8 +640,6 @@ START_LOOP_TEST(sleeping_wait, iter, 0, 3)
 	const bool active_wait = !!(iter & 1), wild = !!(iter & 2);
 	diag("active_wait=%s, wild=%s", btos(active_wait), btos(wild));
 	plan_tests(2);
-
-	if(!wild) todo_start("no waitpid(n != -1, ...)");
 
 	pid_t c = fork();
 	if(c == 0) {
