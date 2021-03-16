@@ -2100,11 +2100,78 @@ START_LOOP_TEST(propagation, iter, 0, 15)
 END_TEST
 
 
-struct test_serv_param {
-	L4_ThreadId_t sender, as;
+/* test the part about propagation where it turns a closed waiter's FromSpec.
+ * to wit, test_serv_fn should only be able to reply to call_serv_fn when the
+ * call is propagated.
+ *
+ * - variables:
+ *   - use propagation or not
+ *   - active or passive send
+ */
+struct turn_fromspec_param {
+	L4_ThreadId_t sender, as, parent;
 	L4_MsgTag_t reply_tag;
 	L4_Word_t ec;
+	bool active_send;
 };
+
+
+static void test_serv_fn(void *);
+static void call_serv_fn(void *);
+
+
+START_LOOP_TEST(propagation_turn_fromspec, iter, 0, 3)
+{
+	plan_tests(7);
+	const bool p_bit = !!(iter & 1), active_send = !!(iter & 2);
+	diag("p_bit=%s, active_send=%s", btos(p_bit), btos(active_send));
+
+	struct turn_fromspec_param *t = malloc(sizeof *t);
+	*t = (struct turn_fromspec_param){
+		.active_send = active_send, .parent = L4_MyGlobalId(),
+	};
+	L4_ThreadId_t serv_tid = xstart_thread(&test_serv_fn, t),
+		call_tid = xstart_thread(&call_serv_fn, t);
+
+	L4_ThreadId_t sender;
+	if(!active_send) L4_Sleep(A_SHORT_NAP);
+	L4_Accept(L4_UntypedWordsAcceptor);
+	L4_MsgTag_t tag = L4_Wait_Timeout(TEST_IPC_DELAY, &sender);
+	L4_Word_t ec = L4_ErrorCode();
+	skip_start(!ok(L4_IpcSucceeded(tag), "got call"), 1,
+		"didn't get call, ec=%lu", ec)
+	{
+		tag.X.flags = 0;
+		if(p_bit) L4_Set_Propagation(&tag);
+		L4_Set_VirtualSender(sender);
+		L4_LoadMR(0, tag.raw);
+		tag = L4_Send_Timeout(serv_tid, TEST_IPC_DELAY);
+		ec = L4_ErrorCode();
+		if(!ok(L4_IpcSucceeded(tag), "send to test_serv_fn")) {
+			diag("ec=%lu", ec);
+		}
+	} skip_end;
+
+	const char *serv_status = xjoin_thread(serv_tid);
+	ok1(streq(serv_status, "ok!"));
+	if(L4_IpcFailed(t->reply_tag)) {
+		L4_LoadMR(0, 0);
+		L4_Reply(sender);
+	}
+	const char *call_status = xjoin_thread(call_tid);
+	ok1(streq(call_status, "ok!"));
+
+	if(!iff_ok1(p_bit, L4_IpcSucceeded(t->reply_tag))) {
+		diag("t->ec=%#lx", t->ec);
+	}
+	if(!imply_ok1(!p_bit, t->ec == 2)) diag("t->ec=%#lx", t->ec);
+	if(!imply_ok1(p_bit, L4_SameThreads(t->as, L4_Myself()))) {
+		diag("t->as=%lu:%lu", L4_ThreadNo(t->as), L4_Version(t->as));
+	}
+
+	free(t);
+}
+END_TEST
 
 
 /* accepts one IPC call, records where it came from (incl. propagation), then
@@ -2112,15 +2179,17 @@ struct test_serv_param {
  */
 static void test_serv_fn(void *param_ptr)
 {
-	struct test_serv_param *p = param_ptr;
+	struct turn_fromspec_param *p = param_ptr;
 
+	L4_Accept(L4_UntypedWordsAcceptor);
 	L4_MsgTag_t tag = L4_Wait_Timeout(TEST_IPC_DELAY, &p->sender);
-	fail_if(L4_IpcFailed(tag), "ec=%#lx", L4_ErrorCode());
-	if(L4_IpcPropagated(tag)) p->as = L4_ActualSender();
-	else p->as = L4_nilthread;
+	if(L4_IpcFailed(tag)) {
+		diag("%s: wait failed, ec=%lu", __func__, L4_ErrorCode());
+		exit_thread("fail");
+	}
+	p->as = L4_IpcPropagated(tag) ? L4_ActualSender() : L4_nilthread;
 
-	/* disable propagation from this side. */
-	tag.X.flags = 0;
+	tag.X.flags = 0;	/* don't re-propagate. */
 	L4_LoadMR(0, tag.raw);
 	p->reply_tag = L4_Reply(p->sender);
 	p->ec = L4_IpcFailed(p->reply_tag) ? L4_ErrorCode() : 0;
@@ -2132,71 +2201,12 @@ static void test_serv_fn(void *param_ptr)
 /* does one IPC call to a service, then exits. */
 static void call_serv_fn(void *param)
 {
-	L4_ThreadId_t serv = { .raw = (L4_Word_t)param };
+	const struct turn_fromspec_param *p = param;
+	if(p->active_send) L4_Sleep(A_SHORT_NAP);
 	L4_LoadMR(0, 0);
-	L4_Call_Timeouts(serv, L4_Never, TEST_IPC_DELAY);
-
-	exit_thread("ok!");
+	L4_MsgTag_t tag = L4_Call_Timeouts(p->parent, L4_Never, TEST_IPC_DELAY);
+	exit_thread(L4_IpcSucceeded(tag) ? "ok!" : "fail");
 }
-
-
-/* test the part about propagation where it turns a closed waiter's
- * FromSpec. to wit:
- *
- * - without propagation, test_serv_fn should not be able to reply
- *   to call_serv_fn.
- * - with propagation, it should.
- *
- * this does not test any case where the peers are in different address
- * spaces.
- */
-START_LOOP_TEST(propagation_turn_fromspec, iter, 0, 1)
-{
-	plan_tests(2);
-	const bool p_bit = CHECK_FLAG(iter, 1);
-	diag("p_bit=%s", btos(p_bit));
-
-	struct test_serv_param *t = malloc(sizeof(*t));
-
-	memset(t, '\0', sizeof(*t));
-	L4_ThreadId_t serv_tid = xstart_thread(&test_serv_fn, t),
-		call_tid = xstart_thread(&call_serv_fn, (void *)L4_MyGlobalId().raw);
-
-	L4_ThreadId_t sender;
-	L4_MsgTag_t tag = L4_Wait_Timeout(TEST_IPC_DELAY, &sender);
-	fail_unless(L4_IpcSucceeded(tag), "ec=%#lx", L4_ErrorCode());
-	tag.X.flags = 0;
-	if(p_bit) L4_Set_Propagation(&tag);
-	L4_Set_VirtualSender(sender);
-	L4_LoadMR(0, tag.raw);
-	tag = L4_Send_Timeout(serv_tid, TEST_IPC_DELAY);
-	fail_unless(L4_IpcSucceeded(tag), "ec=%#lx", L4_ErrorCode());
-
-	L4_Word_t join_ec;
-	if(join_thread_long(serv_tid, TEST_IPC_DELAY, &join_ec) == NULL) {
-		diag("join(serv_tid) failed, ec=%#lx", join_ec);
-		kill_thread(serv_tid);
-	}
-	if(L4_IpcFailed(t->reply_tag)) {
-		L4_LoadMR(0, 0);
-		L4_Reply(sender);
-	}
-	if(join_thread_long(call_tid, TEST_IPC_DELAY, &join_ec) == NULL) {
-		diag("join(call_tid) failed, ec=%#lx", join_ec);
-		kill_thread(call_tid);
-	}
-
-	fail_unless(!p_bit || L4_SameThreads(t->as, L4_Myself()),
-		"t->as=%lu:%lu", L4_ThreadNo(t->as), L4_Version(t->as));
-
-	if(!iff_ok1(p_bit, L4_IpcSucceeded(t->reply_tag))) {
-		diag("t->ec=%#lx", t->ec);
-	}
-	if(!imply_ok1(!p_bit, t->ec == 2)) diag("t->ec=%#lx", t->ec);
-
-	free(t);
-}
-END_TEST
 
 
 /* test that propagation does not turn the virtual sender's FromSpec when
