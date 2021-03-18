@@ -29,7 +29,7 @@
 
 /* alias for left == right, printed as "iff". */
 #define iff_ok1(left, right) \
-	ok((left) == (right), "%s iff %s", #left, #right)
+	ok(!!(left) == !!(right), "%s iff %s", #left, #right)
 
 #define pass(test, ...) ok(true, (test), ##__VA_ARGS__)
 #define fail(test, ...) ok(false, (test), ##__VA_ARGS__)

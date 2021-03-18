@@ -68,7 +68,7 @@ extern void _inv_report(
 			goto inv_fail; \
 		} \
 	} while(false)
-#define inv_iff1(a, b) inv_ok((a) == (b), "%s iff %s", #a, #b)
+#define inv_iff1(a, b) inv_ok(!!(a) == !!(b), "%s iff %s", #a, #b)
 #define inv_imply1(a, b) inv_ok(!(a) || (b), "%s --> %s", #a, #b)
 
 #define INVCTX_ARG struct _inv_ctx *_ictx
