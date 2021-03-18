@@ -114,24 +114,34 @@ static bool verify_recv_wait(struct thread *t)
 
 
 /* module invariants. these mostly concern thread states within hash
- * tables, but there are some others that're useful as well.
+ * tables.
  */
 #ifndef DEBUG_ME_HARDER
 #define check_ipc_module() true
 #else
 #include <ukernel/invariant.h>
 
+
+static unsigned ptr_count(struct htable *ht, void *ptr)
+{
+	unsigned count = 0;
+	struct htable_iter it;
+	for(void *cand = htable_first(ht, &it);
+		cand != NULL; cand = htable_next(ht, &it))
+	{
+		if(cand == ptr) count++;
+	}
+	return count;
+}
+
+
 static bool check_ipc_module(void)
 {
 	INV_CTX;
 
-	/* for all threads, check correct membership in recvwait_hash and
-	 * sendwait_hash.
-	 */
 	struct ra_iter rai;
 	for(struct thread *t = ra_first(thread_ra, &rai);
-		t != NULL;
-		t = ra_next(thread_ra, &rai))
+		t != NULL; t = ra_next(thread_ra, &rai))
 	{
 		inv_push("t=%lu:%lu (%p), ->ipc_from=%lu:%lu, ->ipc_to=%lu:%lu",
 			TID_THREADNUM(t->id), TID_VERSION(t->id), t,
@@ -157,37 +167,32 @@ static bool check_ipc_module(void)
 			t->ipc->from != t);
 		inv_pop();
 
-		/* check how many times @t occurs in sendwait_hash and
-		 * recvwait_hash.
+		/* check number of occurrences in sendwait_hash, recvwait_hash, and
+		 * redir_wait.
 		 */
-		struct htable_iter it;
-		int sendwait_count = 0;
-		for(struct thread *cand = htable_first(&sendwait_hash, &it);
-			cand != NULL;
-			cand = htable_next(&sendwait_hash, &it))
-		{
-			if(cand == t) sendwait_count++;
-		}
-		inv_log("t->status=%s, sendwait_count=%d",
-			sched_status_str(t), sendwait_count);
-		inv_imply1(
-			t->status == TS_SEND_WAIT && !CHECK_FLAG(t->flags, TF_HALT),
-			sendwait_count == 1);
-		inv_imply1(
-			t->status != TS_SEND_WAIT || CHECK_FLAG(t->flags, TF_HALT),
-			sendwait_count == 0);
+		unsigned sendwait_count = ptr_count(&sendwait_hash, t),
+			recvwait_count = ptr_count(&recvwait_hash, t),
+			redir_count = ptr_count(&redir_wait, t);
+		inv_log("t->status=%s, in_recv_wait(t)=%s",
+			sched_status_str(t), btos(in_recv_wait(t)));
+		inv_log("sendwait_count=%u, recvwait_count=%u, redir_count=%u",
+			sendwait_count, recvwait_count, redir_count);
 
-		int recvwait_count = 0;
-		for(struct thread *cand = htable_first(&recvwait_hash, &it);
-			cand != NULL;
-			cand = htable_next(&recvwait_hash, &it))
-		{
-			if(cand == t) recvwait_count++;
-		}
-		inv_log("in_recv_wait(t)=%s, recvwait_count=%d",
-			btos(in_recv_wait(t)), recvwait_count);
-		inv_imply1(in_recv_wait(t), recvwait_count == 1);
-		inv_imply1(!in_recv_wait(t), recvwait_count == 0);
+		inv_ok1(sendwait_count <= 1);
+		inv_iff1(t->status == TS_SEND_WAIT && (~t->flags & TF_HALT)
+			&& (~t->flags & TF_REDIR_WAIT), sendwait_count == 1);
+
+		inv_ok1(recvwait_count <= 1);
+		inv_iff1(in_recv_wait(t), recvwait_count == 1);
+
+		inv_ok1(redir_count <= 1);
+		inv_iff1(t->status == TS_SEND_WAIT && (t->flags & TF_REDIR_WAIT)
+			&& !L4_IsNilThread(t->u1.waited_redir),
+			redir_count == 1);
+
+		inv_imply1(sendwait_count == 1, recvwait_count + redir_count == 0);
+		inv_imply1(recvwait_count == 1, sendwait_count + redir_count == 0);
+		inv_imply1(redir_count == 1, recvwait_count + sendwait_count == 0);
 
 		inv_pop();
 	}
@@ -195,8 +200,7 @@ static bool check_ipc_module(void)
 	/* recvwait_hash per member. simple enough. */
 	struct htable_iter it;
 	for(struct thread *t = htable_first(&recvwait_hash, &it);
-		t != NULL;
-		t = htable_next(&recvwait_hash, &it))
+		t != NULL; t = htable_next(&recvwait_hash, &it))
 	{
 		inv_push("recvwait_hash: t=%lu:%lu (%p), ->status=%s, ->ipc_from=%lu:%lu",
 			TID_THREADNUM(t->id), TID_VERSION(t->id), t, sched_status_str(t),
@@ -216,8 +220,7 @@ static bool check_ipc_module(void)
 	}
 
 	for(struct thread *t = htable_first(&sendwait_hash, &it);
-		t != NULL;
-		t = htable_next(&sendwait_hash, &it))
+		t != NULL; t = htable_next(&sendwait_hash, &it))
 	{
 		inv_push("sendwait_hash: t=%lu:%lu (%p), ->status=%s, ->ipc_from=%lu:%lu",
 			TID_THREADNUM(t->id), TID_VERSION(t->id), t, sched_status_str(t),
@@ -231,8 +234,7 @@ static bool check_ipc_module(void)
 	}
 
 	for(struct thread *t = htable_first(&redir_wait, &it);
-		t != NULL;
-		t = htable_next(&redir_wait, &it))
+		t != NULL; t = htable_next(&redir_wait, &it))
 	{
 		inv_push("redir_wait: t=%lu:%lu (%p), ->status=%s, ->ipc_from=%lu:%lu",
 			TID_THREADNUM(t->id), TID_VERSION(t->id), t, sched_status_str(t),
@@ -994,7 +996,6 @@ bool redo_ipc_send_half(struct thread *t)
 	assert(t->status == TS_SEND_WAIT);
 	assert(!CHECK_FLAG(t->flags, TF_HALT));
 	assert(!CHECK_FLAG(t->flags, TF_REDIR_WAIT));
-	assert(check_ipc_module());
 
 	/* drop a previous ipc_wait & cancel propagation chaining. */
 	remove_send_wait(t);
