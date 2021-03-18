@@ -143,16 +143,47 @@ static bool check_ipc_module(void)
 	for(struct thread *t = ra_first(thread_ra, &rai);
 		t != NULL; t = ra_next(thread_ra, &rai))
 	{
+		/* NOTE: this could live in a different function. certainly there's
+		 * utility to this elsewhere also.
+		 */
+		static const struct {
+			unsigned bit;
+			const char *name;
+		} flag_names[] = {
+			{ TF_HALT, "halt" },
+			{ TF_SENDER, "sender" },
+			{ TF_INTR, "intr" },
+			{ TF_PRE_RECV, "pre_recv" },
+			{ TF_SYSCALL, "syscall" },
+			{ TF_REDIR, "redir" },
+			{ TF_REDIR_WAIT, "redir_wait" },
+			{ TF_PREEMPT, "preempt" },
+		};
+		char flagstr[100] = "";
+		size_t flagstrlen = 0;
+		for(int i=0; i < ARRAY_SIZE(flag_names); i++) {
+			if(~t->flags & flag_names[i].bit) continue;
+			if(flagstrlen == 0) {
+				assert(sizeof flagstr > strlen(flag_names[i].name));
+				strcpy(flagstr, flag_names[i].name);
+				flagstrlen = strlen(flag_names[i].name);
+			} else {
+				flagstrlen += snprintf(
+					&flagstr[flagstrlen], sizeof flagstr - flagstrlen,
+					", %s", flag_names[i].name);
+			}
+		}
+		flagstr[sizeof flagstr - 1] = '\0';
 		inv_push("t=%lu:%lu (%p), ->ipc_from=%lu:%lu, ->ipc_to=%lu:%lu",
 			TID_THREADNUM(t->id), TID_VERSION(t->id), t,
 			L4_ThreadNo(t->ipc_from), L4_Version(t->ipc_from),
 			L4_ThreadNo(t->ipc_to), L4_Version(t->ipc_to));
+		inv_log("  ->flags={%s}, ->status=%s", flagstr, sched_status_str(t));
 
 		/* string transfers that're waiting for either the other thread's
 		 * pagefaults, or for the transfer to proceed via scheduling.
 		 */
-		inv_push("[TS_XFER checks] t->status=%s, ->ipc=%p",
-			sched_status_str(t), t->ipc);
+		inv_push("[TS_XFER checks] t->ipc=%p", t->ipc);
 		inv_imply1(t->status == TS_XFER, t->ipc != NULL);
 		if(t->status == TS_XFER) {
 			inv_log("ipc->from->id=%lu:%lu, ->to->id=%lu:%lu",
@@ -173,8 +204,7 @@ static bool check_ipc_module(void)
 		unsigned sendwait_count = ptr_count(&sendwait_hash, t),
 			recvwait_count = ptr_count(&recvwait_hash, t),
 			redir_count = ptr_count(&redir_wait, t);
-		inv_log("t->status=%s, in_recv_wait(t)=%s",
-			sched_status_str(t), btos(in_recv_wait(t)));
+		inv_log("in_recv_wait(t)=%s", btos(in_recv_wait(t)));
 		inv_log("sendwait_count=%u, recvwait_count=%u, redir_count=%u",
 			sendwait_count, recvwait_count, redir_count);
 
