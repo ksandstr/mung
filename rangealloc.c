@@ -1,5 +1,5 @@
 
-#include <stdio.h>
+#include <stdlib.h>
 #include <stdint.h>
 #include <stdbool.h>
 #include <string.h>
@@ -7,6 +7,8 @@
 
 #include <ccan/htable/htable.h>
 #include <ccan/likely/likely.h>
+#include <ccan/array_size/array_size.h>
+#include <ccan/minmax/minmax.h>
 
 #include <ukernel/mm.h>
 #include <ukernel/slab.h>
@@ -38,7 +40,7 @@ struct ra_page
 static struct kmem_cache *ra_slab = NULL;
 
 
-static size_t hash_ra_page(const void *ptr, void *priv) {
+static size_t rehash_ra_page(const void *ptr, void *priv) {
 	const struct ra_page *p = ptr;
 	return int_hash(p->address);
 }
@@ -58,6 +60,7 @@ static int fmap_limbs(const struct rangealloc *ra) {
 
 
 #ifdef __KERNEL__
+
 /* page management using mung kernel internals. get_range() is used to get
  * address space, alloc_vm_page() creates pages within it, and free_vm_page()
  * releases those pages when done.
@@ -75,9 +78,8 @@ static struct page *alloc_vm_page(uintptr_t address)
 
 
 /* free kernel memory without inadvertently causing recycling of the
- * rangealloc range. this is necessary because free_kern_page() insists on
- * recycling its parameter's vm_addr, where present, in addition to the
- * physical page.
+ * rangealloc range. otherwise free_kern_page() would recycle its parameter's
+ * vm_addr in addition to the physical page.
  */
 static void free_vm_page(struct page *p)
 {
@@ -88,7 +90,10 @@ static void free_vm_page(struct page *p)
 }
 
 #else
-/* mundane POSIX/C11 versions. */
+
+/* mundane POSIX/C11 versions, assuming lazy VM. */
+
+#include <stdio.h>
 
 static uintptr_t get_range(int size_log2)
 {
@@ -133,7 +138,7 @@ struct rangealloc *ra_create(
 	*ra = (struct rangealloc){
 		.range = L4_FpageLog2(start, range_log2),
 		.ob_size_log2 = size_to_shift((obj_size + align - 1) & ~(align - 1)),
-		.page_hash = HTABLE_INITIALIZER(ra->page_hash, &hash_ra_page, NULL),
+		.page_hash = HTABLE_INITIALIZER(ra->page_hash, &rehash_ra_page, NULL),
 	};
 	ra->and_mask = (L4_Size(ra->range) - 1) & (~0ul << ra->ob_size_log2);
 	ra->or_mask = L4_Address(ra->range) & ~ra->and_mask;
@@ -148,11 +153,9 @@ struct rangealloc *ra_create(
 
 void ra_disable_id_0(struct rangealloc *ra)
 {
-	BUG_ON(!CHECK_FLAG(ra->flags, RAF_DISABLE_0)
-		&& ra->page_hash.elems > 0,
+	BUG_ON((~ra->flags & RAF_DISABLE_0) && ra->page_hash.elems > 0,
 		"%s called after allocation", __func__);
 	ra->flags |= RAF_DISABLE_0;
-	assert(CHECK_FLAG(ra->flags, RAF_DISABLE_0));
 }
 
 
@@ -185,14 +188,12 @@ static struct ra_page *alloc_ra_page(
 	} else {
 		for(int i=0; i < fmap_limbs(ra); i++) p->freemap[i] = ~0u;
 	}
-	if(address == L4_Address(ra->range)
-		&& CHECK_FLAG(ra->flags, RAF_DISABLE_0))
-	{
+	if(address == L4_Address(ra->range) && (ra->flags & RAF_DISABLE_0)) {
 		/* effect burnination of id=0. */
 		p->freemap[0] &= ~1u;
 		p->n_free--;
 	}
-	bool ok = htable_add(&ra->page_hash, hash_ra_page(p, NULL), p);
+	bool ok = htable_add(&ra->page_hash, rehash_ra_page(p, NULL), p);
 	if(!ok) {
 		free_vm_page(p->pgcookie);
 		kmem_cache_free(ra->meta_slab, p);
@@ -205,7 +206,7 @@ static struct ra_page *alloc_ra_page(
 
 static void free_ra_page(struct rangealloc *ra, struct ra_page *p)
 {
-	htable_del(&ra->page_hash, hash_ra_page(p, NULL), p);
+	htable_del(&ra->page_hash, rehash_ra_page(p, NULL), p);
 	free_vm_page(p->pgcookie);
 	kmem_cache_free(ra->meta_slab, p);
 }
@@ -267,7 +268,7 @@ void *ra_alloc(struct rangealloc *ra, long id)
 	long pos = id - ((p->address - L4_Address(ra->range)) >> ra->ob_size_log2),
 		limb = pos / 32, ix = pos % 32;
 	assert(pos >= 0 && pos < (PAGE_SIZE >> ra->ob_size_log2));
-	if(!CHECK_FLAG(p->freemap[limb], 1u << ix)) return NULL;
+	if(~p->freemap[limb] & (1u << ix)) return NULL;
 	p->freemap[limb] &= ~(1u << ix);
 	if(--p->n_free == 0) {
 		*p_head = p->next;
@@ -280,7 +281,7 @@ void *ra_alloc(struct rangealloc *ra, long id)
 	assert(BETWEEN(p->address, p->address + PAGE_SIZE - 1, ret));
 	assert(BETWEEN(p->address, p->address + PAGE_SIZE - 1,
 		ret + (1 << ra->ob_size_log2) - 1));
-	BUG_ON(CHECK_FLAG(ra->flags, RAF_DISABLE_0) && id == 0,
+	BUG_ON((ra->flags & RAF_DISABLE_0) && id == 0,
 		"tried to return id=0 when it's disabled");
 	return (void *)ret;
 }
@@ -305,7 +306,7 @@ void ra_free(struct rangealloc *ra, void *deadptr)
 	long id = ((uintptr_t)deadptr - L4_Address(ra->range)) >> ra->ob_size_log2,
 		pos = id - ((p->address - L4_Address(ra->range)) >> ra->ob_size_log2),
 		limb = pos / 32, ix = pos % 32;
-	BUG_ON(CHECK_FLAG(p->freemap[limb], 1 << ix),
+	BUG_ON(p->freemap[limb] & (1 << ix),
 		"deadptr=%p was already freed", deadptr);
 	p->freemap[limb] |= 1 << ix;
 	p->n_free++;
@@ -335,10 +336,10 @@ void *ra_id2ptr_safe(struct rangealloc *ra, long id)
 	uintptr_t address = (uintptr_t)ptr & ~PAGE_MASK;
 	struct ra_page *p = htable_get(&ra->page_hash, int_hash(address),
 		&cmp_ra_page_to_addr, &address);
-	if(p == NULL) return NULL;
+	if(unlikely(p == NULL)) return NULL;
 	long pos = id - ((p->address - L4_Address(ra->range)) >> ra->ob_size_log2),
 		limb = pos / 32, ix = pos % 32;
-	if(CHECK_FLAG(p->freemap[limb], 1 << ix)) ptr = NULL;
+	if(unlikely(p->freemap[limb] & (1 << ix))) ptr = NULL;
 	return ptr;
 }
 
@@ -346,32 +347,36 @@ void *ra_id2ptr_safe(struct rangealloc *ra, long id)
 void *ra_first(const struct rangealloc *ra, struct ra_iter *it)
 {
 	it->p = htable_first(&ra->page_hash, &it->hti);
-	if(it->p == NULL) return NULL;
-	else {
-		it->pos = -1;
-		return ra_next(ra, it);
-	}
+	it->pos = -1;
+	return ra_next(ra, it);
 }
 
 
 void *ra_next(const struct rangealloc *ra, struct ra_iter *it)
 {
-	assert(it->p != NULL);
-	int n_per_page = PAGE_SIZE >> ra->ob_size_log2;
+	if(it->p == NULL) return NULL;	/* completed */
 
-	if(it->pos >= n_per_page) {
-		it->p = htable_next(&ra->page_hash, &it->hti);
-		if(it->p == NULL) return NULL;
+	const int n_per_page = PAGE_SIZE >> ra->ob_size_log2;
+
+	/* advance. */
+	if(++it->pos == n_per_page) {
+		/* into the next page if previous position was last on page. */
 		it->pos = -1;
+		goto next_page;
 	}
-	for(int i = MIN(int, 0, it->pos) / 32; i < fmap_limbs(ra); i++) {
-		uint32_t limb = ~it->p->freemap[i];
-		if(i == fmap_limbs(ra) - 1) {
-			/* clear the tail bits off. */
+	assert(it->pos < n_per_page);
+
+	/* ignore previously visited bits in the first limb. */
+	uint32_t mask = ~((1u << (it->pos % 32)) - 1);
+	for(int i = it->pos / 32, lim = fmap_limbs(ra); i < lim; i++) {
+		uint32_t limb = mask & ~it->p->freemap[i];
+		mask = ~0u;
+		if(i == lim - 1 && n_per_page % 32 > 0) {
+			/* clear the extra bits. this applies only when n_per_page < 32,
+			 * i.e. for very large objects.
+			 */
 			limb &= (1u << (n_per_page % 32)) - 1;
 		}
-		/* and the previously-visited low bits also. */
-		limb &= ~((1u << ((it->pos + 1) % 32)) - 1);
 		int ix = ffsl(limb);
 		if(ix > 0) {
 			it->pos = i * 32 + ix - 1;
@@ -381,7 +386,8 @@ void *ra_next(const struct rangealloc *ra, struct ra_iter *it)
 		}
 	}
 	if(it->pos == -1) {
-		it->pos = n_per_page;
+next_page:
+		it->p = htable_next(&ra->page_hash, &it->hti);
 		return ra_next(ra, it);
 	}
 
@@ -397,7 +403,17 @@ void *ra_next(const struct rangealloc *ra, struct ra_iter *it)
 #include <ukernel/ktest.h>
 #if KTEST
 
-/* in-kernel tests for rangealloc id2ptr, ptr2id ops. */
+/* in-kernel tests for rangealloc id2ptr, ptr2id ops.
+ *
+ * TODO: tests for iteration esp. when objects are allocated on different
+ * pages at various positions in the per-page bitmaps. this was previously
+ * broken, and it'd be nice to exclude it in the supposedly-fixed ra_next() as
+ * well.
+ *
+ * in general the ra_first()/ra_next() interface is only used from within
+ * invariant tests, so the amount of testing in practice they see is minimal.
+ * this should be compensated for with proper unit tests.
+ */
 
 struct tobj {
 	struct list_node link;
@@ -592,7 +608,7 @@ START_TEST(id2ptr_safe)
 	 * cause page drops. then re-test validity.
 	 */
 	int steps[] = { 345, 456 };
-	for(int j=0; j < NUM_ELEMENTS(steps); j++) {
+	for(int j=0; j < ARRAY_SIZE(steps); j++) {
 		for(size_t i = j * 1000 + steps[j]; i < j * 1000 + steps[j] * 2; i++) {
 			if(tobs[i] == NULL) continue;
 			ra_free(ra, tobs[i]);
@@ -618,12 +634,84 @@ START_TEST(id2ptr_safe)
 END_TEST
 
 
+/* various corner cases of the iterator algorithm. */
+
+struct small_obj {
+	char data[16];
+};
+
+struct large_obj {
+	char data[PAGE_SIZE / 16];
+};
+
+
+static int cmp_int(const void *ap, const void *bp) {
+	return *(const int *)ap - *(const int *)bp;
+}
+
+
+START_LOOP_TEST(iteration, iter, 0, 1)
+{
+	const bool use_large = !!(iter & 1);
+	diag("use_large=%s", btos(use_large));
+	plan_tests(3);
+
+	struct rangealloc *ra = use_large ? RA_NEW(struct large_obj, 1 << 12)
+		: RA_NEW(struct small_obj, 1 << 12);
+	const int per_page = PAGE_SIZE >> ra->ob_size_log2;
+	diag("per_page=%d", per_page);
+
+	int test_ids[] = {
+		0, 1, 2, 3, 5,
+		per_page - 5, per_page - 2, per_page - 1, per_page, per_page + 1,
+		per_page * 2 + 31, per_page * 2 + 32,
+	};
+	const int n_test_ids = ARRAY_SIZE(test_ids);
+	qsort(test_ids, n_test_ids, sizeof test_ids[0], &cmp_int);
+
+	void *ptrs[n_test_ids];
+	bool alloc_ok = true;
+	for(int i=0; i < n_test_ids; i++) {
+		ptrs[i] = ra_alloc(ra, test_ids[i]);
+		if(ptrs[i] == NULL) {
+			diag("failed to allocate id=%d", test_ids[i]);
+			alloc_ok = false;
+		}
+	}
+	ok1(alloc_ok);
+
+	int iter_result[n_test_ids], n_iters = 0;
+	struct ra_iter it;
+	for(void *ptr = ra_first(ra, &it); ptr != NULL; ptr = ra_next(ra, &it)) {
+		if(n_iters < n_test_ids) iter_result[n_iters] = ra_ptr2id(ra, ptr);
+		n_iters++;
+	}
+	skip_start(!ok1(n_iters == n_test_ids), 1,
+		"n_test_ids=%d, n_iters=%d", n_test_ids, n_iters)
+	{
+		qsort(iter_result, min(n_test_ids, n_iters),
+			sizeof iter_result[0], &cmp_int);
+		bool all_equal = true;
+		for(int i=0; i < min(n_test_ids, n_iters); i++) {
+			if(iter_result[i] != test_ids[i]) {
+				diag("iter_result[%d]=%d, test_ids[%d]=%d",
+					i, iter_result[i], i, test_ids[i]);
+				all_equal = false;
+			}
+		}
+		ok1(all_equal);
+	} skip_end;
+}
+END_TEST
+
+
 void ktest_rangealloc(void)
 {
 	RUN(masks);
 	RUN(alloc);
 	RUN(id_casting);
 	RUN(id2ptr_safe);
+	RUN(iteration);
 }
 
 #endif

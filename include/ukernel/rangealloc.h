@@ -1,7 +1,6 @@
 
-/* aligned range allocator for fixed-size items (map_group, thread).
- *
- * replaces the old "policy slab" mechanism.
+/* aligned range allocator for fixed-size items (map_group, thread). provides
+ * a very fast bijective mapping between identifiers and objects.
  */
 
 #ifndef SEEN_UKERNEL_RANGEALLOC_H
@@ -32,12 +31,6 @@ struct rangealloc
 	struct ra_page *partial_head, *full_head;
 
 	struct kmem_cache *meta_slab;
-};
-
-struct ra_iter {
-	struct htable_iter hti;
-	struct ra_page *p;
-	int pos;
 };
 
 
@@ -72,9 +65,20 @@ extern void *ra_id2ptr_safe(struct rangealloc *ra, long id);
 /* is @ptr within @ra? this works for pointers into objects as well. */
 #define ra_has_ptr(ra, ptr) (((uintptr_t)(ptr) & ~(ra)->and_mask) == (ra)->or_mask)
 
+
 /* iteration over all allocated objects. robust against ra_free() from inside
  * the loop iff htable_del() is robust for htable_iter. (so yes, for now.)
+ *
+ * note that this is guaranteed to cover all objects allocated, but not in any
+ * particular order due to the use of an internal hash table. pointers
+ * returned are guaranteed valid per ra_id2ptr_safe(ra_ptr2id(ret)).
  */
+struct ra_iter {
+	struct htable_iter hti;
+	struct ra_page *p;
+	int pos;
+};
+
 extern void *ra_first(const struct rangealloc *ra, struct ra_iter *it);
 extern void *ra_next(const struct rangealloc *ra, struct ra_iter *it);
 
