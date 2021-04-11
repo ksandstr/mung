@@ -460,8 +460,44 @@ bool ipc_resume(struct thread *t)
 	assert(!CHECK_FLAG(source->flags | dest->flags, TF_SENDER));
 
 	if(n == 0) {
-		/* success. */
-		dest->ipc_from.raw = source->id;
+		/* success.
+		 *
+		 * TODO: merge this with the result stuff in ipc_send_half() and
+		 * ipc_recv_half() to reduce duplication.
+		 *
+		 * TODO: tests about propagation, redirection, etc. should be changed
+		 * to include a transfer fault so that they cover also this path.
+		 */
+		struct thread *sender = source;
+		if(L4_IpcPropagated(tag)) {
+			L4_VREG(d_utcb, L4_TCR_VA_SENDER) = tid_return(dest, source).raw;
+			struct thread *vs = get_tcr_thread(source, s_utcb, L4_TCR_VA_SENDER);
+			if(vs != NULL) sender = vs;
+
+			/* turn VirtualSender's closed-waiting FromSpec when applicable */
+			if((vs->status == TS_R_RECV || vs->status == TS_RECV_WAIT)
+				&& (vs->ipc_from.raw == source->id
+					|| (vs->space == source->space
+						&& vs->ipc_from.raw == get_local_id(source).raw)))
+			{
+				bool twiddle = in_recv_wait(vs);
+				if(twiddle) remove_recv_wait(vs);
+				vs->flags |= TF_FROM_TURN;
+				vs->ipc_from.raw = dest->id;
+				if(vs->u0.partner == source) vs->u0.partner = dest;
+				if(twiddle) insert_recv_wait(vs);
+			}
+		}
+		if(L4_IpcRedirected(tag)) {
+			/* FIXME!!!!! this should set dest's IntendedReceiver to the
+			 * destination thread ID saved in ipc_send_half().
+			 */
+		}
+		if(dest->flags & TF_FROM_TURN) {
+			dest->flags &= ~TF_FROM_TURN;
+			L4_VREG(d_utcb, L4_TCR_VA_SENDER) = tid_return(dest, source).raw;
+		}
+		dest->ipc_from = tid_return(dest, sender);
 	} else {
 		/* overflows and xfer timeouts. */
 		assert(n > 0);
