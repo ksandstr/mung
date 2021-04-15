@@ -396,6 +396,10 @@ next_page:
 	assert(BETWEEN(it->p->address, it->p->address + PAGE_SIZE - 1, ret));
 	assert(BETWEEN(it->p->address, it->p->address + PAGE_SIZE - 1,
 		ret + (1 << ra->ob_size_log2) - 1));
+	assert((ret == L4_Address(ra->range)) == (ra_ptr2id(ra, (void *)ret) == 0));
+	if((ra->flags & RAF_DISABLE_0) && unlikely(ret == L4_Address(ra->range))) {
+		return ra_next(ra, it);
+	}
 	return (void *)ret;
 }
 
