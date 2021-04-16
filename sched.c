@@ -403,6 +403,7 @@ static struct thread *enter_tq0_state(struct thread *self)
 		thread_halt(self);
 	} else {
 		L4_Clock_t sw_at = { .raw = ksystemclock() };
+		/* FIXME: handle OOM! */
 		hook_push_front(&self->post_exn_call, &desched_ready, NULL);
 		if(!send_tq_ipc(self, sched, sw_at)) {
 			assert(self->status == TS_SEND_WAIT);

@@ -796,6 +796,7 @@ static void handle_io_fault(struct thread *current, struct x86_exregs *regs)
 	void *utcb = ipc_user(
 		(L4_MsgTag_t){ .raw = ((-8) & 0xfff) << 20 | 0x6 << 16 | 2 },
 		current, cur_utcb, &pager, 3);
+	/* FIXME: handle OOM! */
 	hook_push_back(&current->post_exn_call,
 		&receive_pf_reply, (void *)old_br0);
 	L4_VREG(utcb, L4_TCR_MR(1)) = L4_IoFpage(port, size).raw;
@@ -890,7 +891,7 @@ void *send_exn_ipc(
 	}
 
 	/* back, because BR0 must be restored after save_ipc_regs()' hook function
-	 * completes (if applicable).
+	 * completes (if applicable). FIXME: handle OOM!
 	 */
 	hook_push_back(&t->post_exn_call, &receive_exn_reply, (void *)old_br0);
 
@@ -1049,6 +1050,7 @@ void isr_exn_pf_bottom(struct x86_exregs *regs)
 		L4_Word_t old_br0 = L4_VREG(utcb, L4_TCR_BR(0));
 		void *msg_utcb = send_pf_ipc(current, utcb,
 			fault_addr, regs->eip, fault_access, &dest);
+		/* FIXME: handle OOM! */
 		hook_push_back(&current->post_exn_call,
 			&receive_pf_reply, (void *)old_br0);
 		return_to_ipc(msg_utcb, dest);

@@ -177,6 +177,7 @@ static void restore_saved_regs(
 }
 
 
+/* FIXME: handle OOM from kmem_cache_alloc(), hook_push_back()! */
 void save_ipc_regs(struct thread *t, void *utcb, int n_regs)
 {
 	assert(n_regs >= 0 && n_regs <= NUM_SAVED_REGS);
@@ -613,14 +614,12 @@ bool thread_is_valid(const struct thread *t)
 
 
 static void receive_breath_of_life(
-	struct hook *hook,
-	void *param, uintptr_t code, void *priv UNUSED)
+	struct hook *hook, void *sender, uintptr_t code, struct thread *t)
 {
+	assert(t == container_of(hook, struct thread, post_exn_call));
 	hook_detach(hook);
 
 	if(code == 0) {
-		struct thread *t = container_of(hook, struct thread, post_exn_call),
-			*sender = param;
 		void *utcb = thread_get_utcb(sender);
 		L4_MsgTag_t tag = { .raw = L4_VREG(utcb, L4_TCR_MR(0)) };
 		TRACE("%s: in thread %lu:%lu, tag %#lx\n", __func__,
@@ -1326,8 +1325,8 @@ SYSCALL L4_Word_t sys_threadcontrol(
 			dest->recv_timeout = L4_Never;
 			dest->wakeup_time = ~(uint64_t)0;
 			dest->status = TS_R_RECV;
-			hook_push_back(&dest->post_exn_call, &receive_breath_of_life,
-				NULL);
+			/* FIXME: handle OOM! */
+			hook_push_back(&dest->post_exn_call, &receive_breath_of_life, dest);
 			L4_VREG(dest_utcb, L4_TCR_EXCEPTIONHANDLER) = L4_nilthread.raw;
 
 			assert(dest->u0.partner == NULL);

@@ -537,7 +537,7 @@ static void send_xfer_fault(
 	void *msg_utcb = send_pf_ipc(t, utcb,
 		L4_Address(fault), ip, L4_Rights(fault), &dst);
 	/* (this can cause calls to ipc_send_half() to nest. due to the way IPC
-	 * works in L4.X2, that's completely safe.)
+	 * works in L4.X2, that's completely safe. FIXME: handle OOM!)
 	 */
 	hook_push_back(&t->post_exn_call, &prexfer_ipc_hook, (void *)old_br0);
 	ipc_user_complete(t, msg_utcb, &dst);
