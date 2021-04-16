@@ -5,7 +5,6 @@
 #include <assert.h>
 #include <ccan/list/list.h>
 #include <ccan/container_of/container_of.h>
-#include <ccan/likely/likely.h>
 
 #include <ukernel/slab.h>
 #include <ukernel/hook.h>
@@ -19,55 +18,48 @@ struct hook_fn
 {
 	struct list_node link;		/* in struct hook @fn_list */
 	hook_call_t fn;
-	void *dataptr;				/* per entry */
+	void *priv;
 };
 
 
 static struct kmem_cache *hook_fn_slab = NULL;
 
 
-static struct hook_fn *h_fn(hook_call_t fn, void *ptr)
+static struct hook_fn *h_fn(hook_call_t fn, void *priv)
 {
-	assert(hook_fn_slab != NULL);
+	static bool first = true;
+	if(first) {
+		hook_fn_slab = KMEM_CACHE_NEW("hook_fn_slab", struct hook_fn);
+		if(hook_fn_slab == NULL) return NULL;
+		first = false;
+	}
+
 	struct hook_fn *ent = kmem_cache_alloc(hook_fn_slab);
-	ent->fn = fn;
-	ent->dataptr = ptr;
+	if(ent != NULL) *ent = (struct hook_fn){ .fn = fn, .priv = priv };
 	return ent;
 }
 
 
-void hook_init(struct hook *h, void *dataptr)
-{
-	static bool first = true;
-	if(unlikely(first)) {
-		first = false;
-		hook_fn_slab = KMEM_CACHE_NEW("hook_fn_slab", struct hook_fn);
-	}
-
-	list_head_init(&h->fn_list);
-	h->dataptr = dataptr;
-	h->current = NULL;
+struct hook_fn *_hook_push_front(struct hook *h, hook_call_t fn, const void *priv) {
+	struct hook_fn *ret = h_fn(fn, (void *)priv);
+	if(ret != NULL) list_add(&h->fn_list, &ret->link);
+	return ret;
 }
 
 
-void _hook_push_front(struct hook *h, hook_call_t fn, void *dataptr) {
-	list_add(&h->fn_list, &h_fn(fn, dataptr)->link);
-}
-
-
-void _hook_push_back(struct hook *h, hook_call_t fn, void *dataptr) {
-	list_add_tail(&h->fn_list, &h_fn(fn, dataptr)->link);
+struct hook_fn *_hook_push_back(struct hook *h, hook_call_t fn, const void *priv) {
+	struct hook_fn *ret = h_fn(fn, (void *)priv);
+	if(ret != NULL) list_add_tail(&h->fn_list, &ret->link);
+	return ret;
 }
 
 
 int hook_call_front(struct hook *h, void *param, uintptr_t code)
 {
 	int num_called = 0;
-	struct hook_fn *member, *next;
-	list_for_each_safe(&h->fn_list, member, next, link) {
-		assert(member != NULL);
-		h->current = member;
-		(*member->fn)(h, param, code, member->dataptr);
+	struct hook_fn *next;
+	list_for_each_safe(&h->fn_list, h->current, next, link) {
+		(*h->current->fn)(h, param, code, h->current->priv);
 		num_called++;
 
 		if(h->current == NULL) {
@@ -88,16 +80,10 @@ int hook_call_front(struct hook *h, void *param, uintptr_t code)
 
 int hook_call_back(struct hook *h, void *param, uintptr_t code)
 {
-	/* a DIY list_for_each_safe_rev() */
 	int num_called = 0;
-	for(struct list_node *cur = h->fn_list.n.prev, *next = cur->prev;
-		cur->prev != &h->fn_list.n;
-		cur = next, next = cur->prev)
-	{
-		struct hook_fn *member = container_of(cur, struct hook_fn, link);
-		assert(member != NULL);
-		h->current = member;
-		(*member->fn)(h, param, code, member->dataptr);
+	struct hook_fn *next;
+	list_for_each_rev_safe(&h->fn_list, h->current, next, link) {
+		(*h->current->fn)(h, param, code, h->current->priv);
 		num_called++;
 
 		if(h->current == NULL) {
@@ -112,12 +98,11 @@ int hook_call_back(struct hook *h, void *param, uintptr_t code)
 }
 
 
-void hook_detach(struct hook *h)
+void hook_remove(struct hook *h, struct hook_fn *entry)
 {
-	assert(h->current != NULL);
-	assert(h->current != DETACHED);
+	assert(entry != NULL && entry != DETACHED);
 
-	list_del_from(&h->fn_list, &h->current->link);
-	kmem_cache_free(hook_fn_slab, h->current);
-	h->current = DETACHED;
+	if(entry == h->current) h->current = DETACHED;
+	list_del_from(&h->fn_list, &entry->link);
+	kmem_cache_free(hook_fn_slab, entry);
 }
