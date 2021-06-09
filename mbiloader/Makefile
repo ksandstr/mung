@@ -2,7 +2,7 @@
 export CFGDIR:=$(abspath ..)
 include ../config.mk
 
-LDFLAGS=-e_start -N -nostdlib
+LDFLAGS += -e_start -N -nostdlib
 
 # mbiloader runs before exception ISRs have been installed. so it absolutely
 # doesn't support coprocessor contexts.

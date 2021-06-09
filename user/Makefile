@@ -2,7 +2,7 @@
 export CFGDIR:=$(abspath ..)
 include ../config.mk
 
-LDFLAGS=-e_start -N -nostdlib
+LDFLAGS += -e_start -N -nostdlib
 CFLAGS:=$(subst -D__KERNEL__,,$(CFLAGS))
 
 
