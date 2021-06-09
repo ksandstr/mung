@@ -13,6 +13,8 @@ TEST_IDL_OBJS:=$(patsubst idl/%.idl,%-service.o,$(TEST_IDL)) \
 	$(patsubst idl/%.idl,%-client.o,$(TEST_IDL)) \
 	$(patsubst idl/%.idl,%-common.o,$(TEST_IDL))
 
+vpath %.c $(MUIDL_DIR)/share
+
 
 all: testbench forkserv
 
@@ -32,7 +34,7 @@ check:
 testbench: testbench.ld crt0.o testbench.o dlmalloc.o heap.o \
 		process.o thread.o tsd.o mutex.o \
 		delay.o exn-store.o log.o tap.o test.o util.o ll.o \
-		idlsupp.o pg_stats.o pg_drop.o \
+		stritem_support.o idlsupp.o pg_stats.o pg_drop.o \
 		sched_suite.o space_suite.o thread_suite.o string_suite.o \
 		ipc_suite.o self_suite.o type_suite.o redir_suite.o \
 		x86_suite.o interrupt_suite.o meta_suite.o benchmark.o \
