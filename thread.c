@@ -231,10 +231,8 @@ struct thread *thread_new(thread_id tid)
 
 		/* x86 malarkey for non-kernel threads. */
 		.ctx = {
-			/* IOPL 0 (noblman swerve), interrupts enabled. also a reserved,
-			 * constant bit is set.
-			 */
-			.eflags = (0 << 12) | (1 << 9) | (1 << 1),
+			/* IOPL 0 (noblman swerve) */
+			.eflags = (0 << 12) | X86_DEFAULT_USER_EFLAGS,
 		},
 	};
 	hook_init(&t->post_exn_call, NULL);
@@ -1248,15 +1246,14 @@ SYSCALL L4_Word_t sys_threadcontrol(
 			}
 			dest->status = TS_STOPPED;
 			dest->flags = 0;
+			dest->ctx = (struct x86_ctx){ .eflags = X86_DEFAULT_USER_EFLAGS };
 
 			assert(resolve_tid_spec(get_current_thread()->space,
 				dest_tid) == dest);
 		}
 
 		/* TODO: move this up to make failure behave atomically. */
-		if(spacespec.raw != dest_tid.raw
-			&& spacespec.raw != old_tid.raw)
-		{
+		if(spacespec.raw != dest_tid.raw && spacespec.raw != old_tid.raw) {
 			struct space *to_sp = space_find(spacespec.raw);
 			if(unlikely(to_sp == NULL)) goto invd_space;
 			else if(to_sp != dest->space) {

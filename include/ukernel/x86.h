@@ -21,6 +21,10 @@
 #include <ukernel/util.h>
 
 
+/* interrupts enabled, reserved bit set, all other bits clear. */
+#define X86_DEFAULT_USER_EFLAGS ((1u << 9) | (1u << 1))
+
+
 /* CR0 flags (incomplete) */
 #define X86_CR0_MP (1 << 1)
 #define X86_CR0_EM (1 << 2)
