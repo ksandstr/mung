@@ -66,10 +66,11 @@ sub run {
 					$ctl_seen = 1;
 				}
 
-				if(/^\*\*\*.+\bcompleted/) {
+				if(/^\*\*\*\s*/ && /\bcompleted/) {
 					$ctrl->restarted_with() if $test_ids eq 'NEED_PLAN';
 					last;
-				} elsif(/^PANIC:\s*(.+)$/) {
+				} elsif(/^PANIC:\s*/) {
+					my $pmsg = $';
 					# TODO: restart in such a way as to discover the combination of
 					# tests that causes the panic, and report that.
 					#
@@ -78,7 +79,7 @@ sub run {
 					# function entirely; just the error messages need be specialized.
 					my $result;
 					try {
-						$result = $sink->test_panic($1);
+						$result = $sink->test_panic($pmsg);
 					}
 					catch (Mung::Error::TestRestart $exn) {
 						$result = $exn->result;

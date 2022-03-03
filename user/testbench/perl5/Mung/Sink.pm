@@ -241,14 +241,13 @@ sub ctl_line {
 	my $self = shift;
 	my $msg = shift;
 
-	study $msg;
 	if($msg =~ /(begin|end) (suite|tcase|test) [`'](\w+)'(\s+(\w+)\s+(\d+))?/) {
 		my $tag = $5 || '';
 		my $val = $6 && int($6);
 		$self->bracket_line($1, $2, $3, $tag, $val);
-	} elsif($msg =~ /test\s+log:\s*(.+)$/) {
+	} elsif($msg =~ /test\s+log:\s*/) {
 		# capture test log output
-		push @{$self->test->{log}}, $1;
+		push @{$self->test->{log}}, $';
 	} elsif($msg =~ /test [`'](\w+)' failed, rc (-?\d+)/) {
 		# this line is generated from the exit_on_fail() path, via
 		# run_test()'s return value. it's used for passing the TAP return
@@ -309,10 +308,10 @@ sub is_kmsg {
 sub tb_line {
 	my $self = shift;
 	my $tb = shift;
-	if($tb =~ /^\*\*\*\s+(.+)$/) {
+	if($tb =~ /^\*\*\*\s+/) {
 		# control lines
-		$self->ctl_line($1);
-	} elsif(/^testbench abort.*called/) {
+		$self->ctl_line($');
+	} elsif(/^testbench abort/ && /called$/) {
 		$self->status("\n") if $self->suite;
 		die Mung::Error::TestAbort->new(text => "premature test abort!");
 	} elsif(is_kmsg($_)) {
